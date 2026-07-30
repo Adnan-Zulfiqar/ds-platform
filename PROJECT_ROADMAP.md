@@ -81,6 +81,15 @@ in mind. Nothing here is committed to a phase number.
 
 ---
 
+## Technical debt
+
+Tracked separately in [TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md), reviewed at
+each phase boundary. As of `phase-1-complete`: 1 critical, 4 high, 6 medium,
+5 low.
+
+The critical item is that the **deployment path has never been executed** —
+Docker images, Compose, and Nginx are all unbuilt.
+
 ## Deferred technical decisions
 
 Recorded so they are chosen deliberately rather than by accident. Each has a
