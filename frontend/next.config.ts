@@ -1,0 +1,43 @@
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  reactStrictMode: true,
+
+  // Emit a minimal standalone server bundle. The Docker image copies only that
+  // output, which cuts the runtime image from ~1GB to ~150MB and removes
+  // node_modules — and its published vulnerabilities — from the running
+  // container.
+  output: "standalone",
+
+  // Do not advertise the framework and version to every client.
+  poweredByHeader: false,
+
+  eslint: {
+    // Linting runs as its own CI job. Running it again inside `next build`
+    // doubles the work and conflates two different failures in one log.
+    ignoreDuringBuilds: true,
+  },
+
+  typescript: {
+    // Never true. A type error must fail the build — suppressing it here is how
+    // a broken deploy reaches production looking green.
+    ignoreBuildErrors: false,
+  },
+
+  async headers() {
+    // Defence in depth: Nginx sets these at the edge too, but a direct-to-Node
+    // deployment or a local `next start` would otherwise be unprotected.
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        ],
+      },
+    ];
+  },
+};
+
+export default nextConfig;

@@ -1,7 +1,45 @@
-node_modules/
-npm-debug.log*
-.env
-.DS_Store
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
 
-# Local Claude Code settings
+# ---- Node ----
+node_modules/
+.next/
+out/
+next-env.d.ts
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# ---- Test artefacts ----
+playwright-report/
+test-results/
+blob-report/
+
+# ---- Environment ----
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# ---- Logs ----
+backend/logs/*
+!backend/logs/.gitkeep
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Local Claude Code settings ----
 .claude/settings.local.json

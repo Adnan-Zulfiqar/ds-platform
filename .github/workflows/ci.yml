@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref. Without this, pushing three commits in
+# quick succession runs three full pipelines and only the last matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Backend
+  # -------------------------------------------------------------------------
+  backend:
+    name: Backend — lint, types, tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # Real Postgres and Redis rather than mocks. Integration tests that run
+    # against a fake prove only that the fake behaves as expected.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: droppilot
+          POSTGRES_PASSWORD: droppilot
+          POSTGRES_DB: droppilot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      ENVIRONMENT: test
+      POSTGRES_HOST: localhost
+      POSTGRES_USER: droppilot
+      POSTGRES_PASSWORD: droppilot
+      POSTGRES_DB: droppilot_test
+      REDIS_HOST: localhost
+      SECURITY_SECRET_KEY: ci-only-secret-not-used-anywhere-else
+      LOG_JSON_OUTPUT: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Lint and type-check run before tests: they fail in seconds, whereas the
+      # suite takes minutes, so a formatting mistake is reported quickly.
+      - name: Lint (ruff)
+        run: ruff check --output-format=github .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type check (mypy)
+        run: mypy app
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Tests (pytest)
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # Frontend
+  # -------------------------------------------------------------------------
+  frontend:
+    name: Frontend — lint, types, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `npm ci` not `npm install`: installs exactly the lockfile, so CI cannot
+      # silently test a different dependency tree than a developer has locally.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_ENVIRONMENT: test
+
+  # -------------------------------------------------------------------------
+  # Container images
+  # -------------------------------------------------------------------------
+  docker:
+    name: Docker — build images
+    runs-on: ubuntu-latest
+    # Only after the code is known good. Building three images for a branch
+    # that fails linting wastes several minutes per run.
+    needs: [backend, frontend]
+
+    strategy:
+      # Report every broken Dockerfile in one run rather than stopping at the
+      # first.
+      fail-fast: false
+      matrix:
+        image: [backend, worker, frontend]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          # Build only — publishing belongs to a deploy workflow with registry
+          # credentials, which this repository does not yet have.
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

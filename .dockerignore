@@ -1,0 +1,43 @@
+# Everything excluded here stays out of the Docker build context. A smaller
+# context means faster builds and — more importantly — no chance of a local
+# .env or virtualenv being baked into a published image.
+
+.git
+.github
+.gitignore
+
+# Environment files. Critical: a .env copied into an image leaks every secret
+# it contains to anyone who can pull that image.
+.env
+.env.*
+!.env.example
+
+# Python
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/htmlcov
+**/.coverage
+**/coverage.xml
+
+# Node — reinstalled inside the image. Host node_modules may contain platform
+# specific binaries that do not run on Linux.
+**/node_modules
+**/.next
+**/out
+
+# Tests and docs are not needed at runtime
+docs
+**/playwright-report
+**/test-results
+
+# Editors / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+.claude

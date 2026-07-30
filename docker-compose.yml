@@ -1,0 +1,165 @@
+# DropPilot AI — local development stack.
+#
+# Brings up the full topology so that behaviour depending on Redis, RabbitMQ or
+# Postgres is exercised locally rather than discovered in staging.
+#
+# This file targets development. A production deployment would not publish
+# database ports, would not mount source, and would take secrets from a secret
+# manager rather than a .env file.
+
+name: droppilot
+
+services:
+  # ---------------------------------------------------------------------
+  # Data stores
+  # ---------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-droppilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-droppilot}
+      POSTGRES_DB: ${POSTGRES_DB:-droppilot}
+      # Marginally faster and avoids locale-dependent index collation
+      # differences between a developer's machine and CI.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # Published so a local psql or GUI client can connect. Never do this in
+      # an environment reachable from the internet.
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Dependants wait on this, so the API cannot start against a database
+      # that is still initialising and crash-loop.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-droppilot} -d ${POSTGRES_DB:-droppilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [droppilot]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Bound memory with LRU eviction. Without a limit a runaway cache will
+    # consume the host's RAM and take the whole stack down.
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly no
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [droppilot]
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-droppilot}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-droppilot}
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI — http://localhost:15672
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks: [droppilot]
+
+  # ---------------------------------------------------------------------
+  # Application
+  # ---------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # Service names, not localhost: inside the Compose network each service is
+      # resolvable by name, and localhost would refer to the container itself.
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    ports:
+      - "8000:8000"
+    volumes:
+      # Live reload during development. Remove for a production-like run —
+      # mounted source overrides what was built into the image.
+      - ./backend:/app
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks: [droppilot]
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [droppilot]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        # Points at the host-published backend port, because this URL is
+        # resolved by the user's browser — which is outside the Compose network
+        # and cannot resolve the service name `backend`.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_ENVIRONMENT: local
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on: [backend]
+    networks: [droppilot]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on: [backend, frontend]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [droppilot]
+
+volumes:
+  postgres_data:
+  rabbitmq_data:
+
+networks:
+  droppilot:
+    driver: bridge

@@ -1,0 +1,124 @@
+[project]
+name = "droppilot-backend"
+version = "0.1.0"
+description = "DropPilot AI — multi-tenant dropshipping automation platform (backend)"
+requires-python = ">=3.13"
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    # Required by pydantic's EmailStr, which the user schemas use. Pydantic
+    # declares it as an optional extra, so it must be requested explicitly or
+    # schema construction fails at import time.
+    "email-validator>=2.2.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14.0",
+    "asyncpg>=0.30.0",
+    "psycopg[binary]>=3.2.0",
+    "redis>=5.2.0",
+    "celery>=5.4.0",
+    "kombu>=5.4.0",
+    "structlog>=24.4.0",
+    "python-json-logger>=2.0.7",
+    "httpx>=0.28.0",
+    "boto3>=1.35.0",
+    "tenacity>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "types-redis>=4.6.0",
+    "asgi-lifespan>=2.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# --------------------------------------------------------------------------
+# Ruff — linting and formatting.
+# --------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "ASYNC",# flake8-async
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print — no stray print() in production code
+    "RUF",
+]
+ignore = [
+    "S101",   # assert is legitimate inside tests
+    # PEP 695 type-parameter syntax. Declined deliberately rather than as an
+    # oversight: Pydantic and SQLAlchemy generics still interact more predictably
+    # with explicit TypeVars, and `ModelType` is a published name that other
+    # modules annotate against. Revisit once both libraries document PEP 695 as
+    # the recommended form.
+    "UP046",  # Generic class uses Generic[] instead of type parameters
+    "UP047",  # Generic function uses TypeVar instead of type parameters
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]  # hardcoded test credentials are fine
+"alembic/versions/*" = ["E501"]
+
+# --------------------------------------------------------------------------
+# mypy — static type checking.
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "alembic.*"
+ignore_errors = true
+
+# Celery ships no type information, so its decorators and its Task base class
+# are untyped. Relaxing these two checks in the worker package only is narrower
+# than weakening them globally, and keeps the rest of the codebase strict.
+[[tool.mypy.overrides]]
+module = "app.workers.*"
+disallow_untyped_decorators = false
+disallow_subclassing_any = false
+
+# redis-py's async client methods (`script_load`, `evalsha`) are untyped in the
+# shipped stubs. Scoped to the two modules that call them directly.
+[[tool.mypy.overrides]]
+module = ["app.core.redis", "app.middleware.rate_limit"]
+disallow_untyped_calls = false
+
+# --------------------------------------------------------------------------
+# Pytest.
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: fast tests with no external dependencies",
+    "integration: tests requiring Postgres or Redis",
+]
