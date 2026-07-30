@@ -1,0 +1,10 @@
+{
+  "name": "ds-platform",
+  "version": "0.1.0",
+  "description": "A small collection of statistics helpers with no runtime dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  }
+}
