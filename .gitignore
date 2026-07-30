@@ -16,6 +16,9 @@ node_modules/
 .next/
 out/
 next-env.d.ts
+# TypeScript incremental build cache. Machine-specific and regenerated on every
+# build; tracking it produces a diff on every typecheck run.
+*.tsbuildinfo
 npm-debug.log*
 yarn-error.log*
 .pnpm-store/
