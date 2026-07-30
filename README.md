@@ -19,7 +19,8 @@ median([4, 1, 3, 2]);  // 2.5
 ```
 
 Both functions take an array of numbers. `median` does not modify the array you
-pass in.
+pass in. Passing an empty array throws a `RangeError`, since neither statistic
+is defined for zero values.
 
 ## Running the tests
 

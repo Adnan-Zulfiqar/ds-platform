@@ -24,3 +24,11 @@ test("median leaves the caller's array untouched", () => {
   median(values);
   assert.deepEqual(values, [3, 1, 2]);
 });
+
+test("mean rejects an empty list", () => {
+  assert.throws(() => mean([]), RangeError);
+});
+
+test("median rejects an empty list", () => {
+  assert.throws(() => median([]), RangeError);
+});
