@@ -10,7 +10,33 @@ production release.
 
 ## [Unreleased]
 
-Phase 2 — scope not yet defined. No changes.
+Phase 2 — scope not yet defined. No feature work.
+
+### Added
+
+- `CLAUDE.md` — the engineering constitution for this repository
+- `docs/TECHNICAL_DEBT.md` — ranked debt register, each item with a trigger
+- **Login throttle test coverage** (16 tests). The throttle previously had none,
+  while a fixture docstring claimed otherwise. Runs against `fakeredis` so it
+  executes everywhere rather than skipping without a Redis server
+- **Authorization integration tests** (9 tests) covering each role, a token with
+  no roles, a token with only unrecognised roles, and that authorization is
+  decided before resource lookup so a 403 does not leak existence
+
+### Changed
+
+- Both `/api/v1/users` endpoints now require a recognised role via
+  `RequireViewer`. `require_minimum_role` was previously unit-tested but wired
+  to no endpoint
+- Sidebar entries for unbuilt destinations render as disabled "Soon" items
+  instead of linking to routes that returned 404
+- Development branch renamed from `phase-0-foundation` to `develop`
+
+### Fixed
+
+- `frontend/tsconfig.tsbuildinfo` is no longer tracked in git
+- Corrected a docstring in `tests/integration/conftest.py` that claimed test
+  coverage which did not exist
 
 ---
 

@@ -1,6 +1,9 @@
 # Technical debt register
 
 Reviewed 2026-07-31, at `phase-1-complete` (`e3e0b9c`).
+Housekeeping pass applied 2026-07-31 — **H1, H2, and H3 resolved.**
+
+**Current count: 1 critical, 1 high, 6 medium, 5 low.**
 
 Only genuine issues are listed. Items are ranked by the cost of leaving them,
 not by how hard they are to fix. Each has a **trigger** — the point at which it
@@ -39,50 +42,43 @@ job; it has not run because the branch has not opened a pull request.
 
 ## High
 
-### H1 — The login throttle has no test coverage, and a comment claims it does
+### ~~H1 — The login throttle has no test coverage~~ ✅ RESOLVED 2026-07-31
 
-`tests/integration/conftest.py` disables login throttling for **every**
-integration test via an autouse fixture. Its docstring says *"Throttling has its
-own dedicated test."* **No such test exists.**
+`tests/unit/test_login_throttle.py` now covers thresholds, the independence of
+the email and IP dimensions, counter clearing, TTL and lockout extension, key
+privacy, and the fail-open path — 16 tests.
 
-The throttle is the primary defence against credential stuffing on the
-platform's most exposed endpoint. It is currently unexercised by any test, and
-the comment actively misleads the next reader into thinking otherwise.
+They run against `fakeredis` rather than a live server, deliberately: requiring
+real Redis would mean skipping on any machine without one, which is exactly how
+a security control ends up untested in the first place.
 
-**Impact:** a regression in the throttle would pass CI silently.
-**Trigger:** before the first real user account exists.
-**Fix:** write the test — it should opt out of the disabling fixture, make
-`login_max_attempts + 1` failed attempts, and assert a 429 with `Retry-After`.
-It needs Redis, so it belongs in `tests/integration/`. Correct the comment
-either way.
+The false docstring in `tests/integration/conftest.py` is corrected and now
+points at the real coverage.
 
-### H2 — Authorization is built but used nowhere
+### ~~H2 — Authorization is built but used nowhere~~ ✅ RESOLVED 2026-07-31
 
-`require_roles` and `require_minimum_role` are implemented and unit-tested, but
-**no endpoint depends on either**. Every authenticated endpoint is reachable by
-any role, including `viewer`.
+Both user endpoints depend on `RequireViewer`. Nine integration tests cover
+each real role, a token with no roles, a token with only unrecognised roles, and
+that authorization is decided **before** resource lookup — so a 403 does not
+leak whether an id exists.
 
-The unit tests prove the decision logic. They do not prove the wiring —
-dependency ordering, the interaction with `CurrentPrincipal`, or the shape of
-the 403 response — because nothing exercises it end to end.
+`/auth/me` is deliberately left ungated and has a test asserting so: it is the
+endpoint that tells a client which roles it holds, so a role gate would be
+circular.
 
-**Impact:** the first endpoint that needs a role restriction will be relying on
-a path never run against a real request.
-**Trigger:** the first endpoint requiring a role restriction.
-**Fix:** apply `RequireAdmin` to a write endpoint when one exists, with an
-integration test asserting a `viewer` receives 403.
+Note the floor is `viewer` rather than something stricter because reading the
+team roster suits every real role. The check is still meaningful — it rejects a
+validly signed token carrying no recognised role, which is what a user whose
+roles were revoked mid-session presents.
 
-### H3 — Five sidebar links lead to routes that do not exist
+### ~~H3 — Five sidebar links lead to routes that do not exist~~ ✅ RESOLVED 2026-07-31
 
-`layouts/sidebar.tsx` links to `/products`, `/stores`, `/orders`, `/analytics`,
-and `/users`. Only `/dashboard` exists. The other five render the 404 page.
+The navigation manifest carries a `ready` flag. Unbuilt destinations render as
+non-interactive items with a "Soon" badge and `aria-disabled`, with a
+screen-reader equivalent when the sidebar is collapsed.
 
-**Impact:** the application looks broken to anyone clicking around.
-**Trigger:** before any demo or user testing.
-**Fix:** either gate the navigation manifest on a `ready` flag and render
-unbuilt destinations as disabled, or add placeholder pages that state the
-feature is not yet available. The first is preferable — it keeps the
-information architecture visible without pretending.
+Kept visible rather than hidden: the information architecture is part of the
+product, and a 404 reads as broken where a disabled item reads as unfinished.
 
 ### H4 — `is_verified` is never enforced
 
@@ -161,6 +157,14 @@ request volume, not guessing.
 
 **Trigger:** observed abuse, or before opening the API to the public internet.
 **Fix:** apply the login throttle keyed on IP to both.
+
+### M7 — The frontend build cache was tracked in git
+
+`frontend/tsconfig.tsbuildinfo` had been committed since the Phase 0 scaffold.
+It is machine-specific and regenerated on every typecheck, so it produced a
+spurious diff on every run.
+
+**Resolved 2026-07-31** — untracked and added to `.gitignore`.
 
 ### M6 — Dead code: `generate_token_secret`
 

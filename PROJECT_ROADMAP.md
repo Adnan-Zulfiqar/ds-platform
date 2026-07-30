@@ -84,11 +84,20 @@ in mind. Nothing here is committed to a phase number.
 ## Technical debt
 
 Tracked separately in [TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md), reviewed at
-each phase boundary. As of `phase-1-complete`: 1 critical, 4 high, 6 medium,
-5 low.
+each phase boundary.
+
+A housekeeping pass on 2026-07-31 resolved all three actionable High items —
+login throttle coverage, authorization wiring, and dead navigation links.
+
+**Current: 1 critical, 1 high, 6 medium, 5 low.**
 
 The critical item is that the **deployment path has never been executed** —
-Docker images, Compose, and Nginx are all unbuilt.
+Docker images, Compose, and Nginx are all unbuilt. It cannot be closed on this
+machine (no Docker); the CI `docker` job builds all three images, so opening a
+pull request retires it.
+
+The remaining High item (`is_verified` unenforced) is inert until email
+verification is implemented, and is best fixed in that phase.
 
 ## Deferred technical decisions
 
