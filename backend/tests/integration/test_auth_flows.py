@@ -289,6 +289,114 @@ class TestLogout:
         assert (await client.post("/api/v1/auth/refresh", json={})).status_code == 401
 
 
+class TestAuthorization:
+    """The role gate on tenant data, exercised through a real request.
+
+    Unit tests cover the decision logic in `require_minimum_role`. These cover
+    the wiring — dependency ordering, interaction with the principal, and the
+    shape of the 403 — which no unit test can reach.
+    """
+
+    @staticmethod
+    def _token_with_roles(identity: dict[str, Any], roles: list[str]) -> str:
+        """Mint a valid access token carrying a chosen role set.
+
+        Signed with the real key, so this is not a forged token: it is exactly
+        what the server would issue to a user holding those roles. That makes it
+        the right way to test a role a fixture cannot easily create.
+        """
+        import uuid as uuid_module
+        from datetime import UTC, datetime, timedelta
+
+        import jwt
+
+        now = datetime.now(UTC)
+        return jwt.encode(
+            {
+                "sub": identity["user"]["id"],
+                "tid": identity["tenant"]["id"],
+                "typ": "access",
+                "jti": uuid_module.uuid4().hex,
+                "iat": int(now.timestamp()),
+                "exp": int((now + timedelta(minutes=15)).timestamp()),
+                "iss": settings.security.jwt_issuer,
+                "aud": settings.security.jwt_audience,
+                "roles": roles,
+            },
+            settings.security.secret_key.get_secret_value(),
+            algorithm=settings.security.jwt_algorithm,
+        )
+
+    async def test_owner_may_read_users(self, client: AsyncClient) -> None:
+        body = await register(client)
+        response = await client.get("/api/v1/users", headers=auth_header(body))
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("role", ["viewer", "member", "admin", "owner"])
+    async def test_every_real_role_may_read_users(self, client: AsyncClient, role: str) -> None:
+        """Reading the team roster is appropriate for every legitimate role."""
+        body = await register(client)
+        token = self._token_with_roles(body["identity"], [role])
+
+        response = await client.get("/api/v1/users", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+
+    async def test_a_token_with_no_roles_is_refused(self, client: AsyncClient) -> None:
+        """The case the gate exists for.
+
+        A validly signed token carrying no roles — a user whose roles were
+        revoked mid-session — must not read tenant data.
+        """
+        body = await register(client)
+        token = self._token_with_roles(body["identity"], [])
+
+        response = await client.get("/api/v1/users", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 403
+        assert response.json()["code"] == "permission_denied"
+
+    async def test_a_token_with_only_unknown_roles_is_refused(self, client: AsyncClient) -> None:
+        """An unrecognised role must degrade to denial, not to a 500."""
+        body = await register(client)
+        token = self._token_with_roles(body["identity"], ["superuser", "root"])
+
+        response = await client.get("/api/v1/users", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 403
+
+    async def test_authorization_is_decided_before_resource_lookup(
+        self, client: AsyncClient
+    ) -> None:
+        """An unauthorized caller must not learn whether an id exists.
+
+        Both a real and a nonexistent id must return the same 403, or the
+        endpoint leaks existence to callers who are not permitted to ask.
+        """
+        body = await register(client)
+        token = self._token_with_roles(body["identity"], [])
+        headers = {"Authorization": f"Bearer {token}"}
+
+        real_id = body["identity"]["user"]["id"]
+        missing_id = "00000000-0000-4000-8000-000000000000"
+
+        real = await client.get(f"/api/v1/users/{real_id}", headers=headers)
+        missing = await client.get(f"/api/v1/users/{missing_id}", headers=headers)
+
+        assert real.status_code == missing.status_code == 403
+
+    async def test_me_is_not_role_gated(self, client: AsyncClient) -> None:
+        """`/auth/me` must work for any authenticated user, whatever their roles.
+
+        It is the endpoint that tells a client which roles it holds, so gating
+        it by role would be circular — a user with no roles could never discover
+        that fact, and the UI could not render a correct signed-in state.
+        """
+        body = await register(client)
+        token = self._token_with_roles(body["identity"], [])
+
+        response = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+
+
 class TestTenantIsolation:
     async def test_a_user_cannot_see_another_tenants_users(self, client: AsyncClient) -> None:
         """The property the whole architecture exists to guarantee."""

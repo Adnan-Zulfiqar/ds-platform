@@ -265,9 +265,23 @@ def require_minimum_role(
 
 
 #: Common authorization requirements, named for readability at the endpoint.
+#:
+#: Use these rather than `CurrentPrincipal` on any endpoint that has a privilege
+#: requirement. `CurrentPrincipal` alone answers "is this caller authenticated";
+#: it does not answer "may they do this".
 RequireOwner = Annotated[AuthenticatedUser, Depends(require_roles(RoleName.OWNER))]
 RequireAdmin = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.ADMIN))]
 RequireMember = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.MEMBER))]
+
+#: The floor for tenant data access.
+#:
+#: `viewer` is the lowest real role, so this admits every legitimate user. It is
+#: still a meaningful check rather than a no-op: it rejects a token carrying no
+#: roles, or only roles this deployment does not recognise. Such a token is
+#: cryptographically valid — it can be produced by a user whose roles were
+#: revoked mid-session, or by an older token after a role rename — and without
+#: this it would read tenant data unchallenged.
+RequireViewer = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.VIEWER))]
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +343,7 @@ __all__ = [
     "RequireAdmin",
     "RequireMember",
     "RequireOwner",
+    "RequireViewer",
     "RoleRepo",
     "TenantRepo",
     "UserRepo",

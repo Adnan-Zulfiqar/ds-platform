@@ -42,6 +42,11 @@ dev = [
     "mypy>=1.13.0",
     "types-redis>=4.6.0",
     "asgi-lifespan>=2.1.0",
+    # In-process Redis for testing the login throttle and cache behaviour.
+    # Without it those tests need a live Redis and would be skipped on any
+    # machine that lacks one — which is exactly how a security control ends up
+    # untested.
+    "fakeredis>=2.26.0",
 ]
 
 [build-system]

@@ -21,7 +21,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
 
-from app.api.deps import UserRepo
+from app.api.deps import RequireViewer, UserRepo
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.user import UserRead
 
@@ -36,12 +36,18 @@ router = APIRouter(prefix="/users", tags=["users"])
 async def list_users(
     repository: UserRepo,
     params: Annotated[ListQueryParams, Depends(list_query_params)],
+    _authorized: RequireViewer,
 ) -> Page[UserRead]:
     """Return a page of users belonging to the current tenant.
 
-    The tenant filter is not written here — it is applied inside
-    ``TenantScopedRepository``, so this endpoint cannot accidentally return
-    another tenant's users even if the handler is edited carelessly.
+    Two independent protections apply, and neither is written in this function:
+
+    * **Authorization** — ``RequireViewer`` runs as a dependency, before the
+      handler body. Reading the team roster is appropriate for every real role,
+      so the floor is `viewer`; the check still rejects a token carrying no
+      recognised role.
+    * **Tenant isolation** — applied inside ``TenantScopedRepository``, so this
+      endpoint cannot return another tenant's users even if edited carelessly.
     """
     users, total = await repository.list(params)
     return Page[UserRead].build(
@@ -60,11 +66,16 @@ async def list_users(
 async def get_user(
     repository: UserRepo,
     user_id: Annotated[uuid.UUID, Path(description="Identifier of the user to fetch.")],
+    _authorized: RequireViewer,
 ) -> UserRead:
     """Return one user by id.
 
     A user belonging to a different tenant is reported as 404 rather than 403,
     so that identifiers cannot be probed for existence across tenants.
+
+    Note the ordering of the two failure modes: authorization is decided first,
+    so an unauthorized caller receives 403 without the endpoint ever revealing
+    whether the requested id exists.
     """
     user = await repository.get_by_id_or_raise(user_id)
     return UserRead.model_validate(user)

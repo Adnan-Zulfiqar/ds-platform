@@ -145,11 +145,15 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
 
 @pytest.fixture(autouse=True)
 def _disable_login_throttle() -> AsyncGenerator[None]:
-    """Turn off login throttling unless a test opts in.
+    """Turn off login throttling for the HTTP flow tests.
 
     Redis may not be running, and the throttle fails open, so leaving it on
-    would mostly be a no-op — but a test that legitimately makes six failed
-    attempts should not depend on that. Throttling has its own dedicated test.
+    would mostly be a no-op — but a test that legitimately makes several failed
+    attempts should not depend on that.
+
+    The throttle itself is covered by ``tests/unit/test_login_throttle.py``,
+    which runs it against an in-process Redis. An earlier version of this
+    docstring claimed that coverage before it existed; it exists now.
     """
     original = settings.security.rate_limit_enabled
     settings.security.rate_limit_enabled = False
