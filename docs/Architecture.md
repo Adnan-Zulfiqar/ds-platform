@@ -99,12 +99,17 @@ supplies a *different* tenant id it raises rather than silently correcting —
 silently correcting would hide the bug that produced it. `update()` drops
 `tenant_id` entirely: moving a row between tenants is not a supported operation.
 
-### The Phase 0 gap
+### Tenant identity comes from a verified token claim
 
-Tenant identity should come from a verified token claim. Authentication does not
-exist yet, so `resolve_tenant` reads an `X-Tenant-ID` header — client-controlled,
-and therefore not access control. It refuses to operate in a deployed
-environment. When auth lands, only that function's body changes.
+Phase 1 replaced the Phase 0 `X-Tenant-ID` header. The tenant now comes from the
+`tid` claim of a signed access token, verified on every request.
+
+The change was contained to `app/api/deps.py`, exactly as predicted when the
+placeholder was written: no endpoint, service, or repository signature changed,
+because they all depended on bound context rather than on the header. That is
+the payoff of building the seam before the feature.
+
+Full detail in [Authentication.md](Authentication.md).
 
 ---
 
@@ -253,7 +258,11 @@ whatsoever.
 
 | Concern | Mechanism |
 |---|---|
-| Secrets | Environment only; app refuses to boot on a placeholder key in deployed environments |
+| Authentication | JWT access tokens (15 min) + rotating refresh tokens with reuse detection — see [Authentication.md](Authentication.md) |
+| Password storage | Argon2id, NFKC-normalised, transparently rehashed on parameter change |
+| Authorization | Role dependencies (`require_roles`, `require_minimum_role`) resolved before the handler body |
+| Credential brute force | Login throttle on email *and* IP, checked before password verification |
+| Secrets | Environment only; app refuses to boot on a placeholder key in deployed environments, or on a signing key under 32 characters in any environment |
 | SQL injection | Parameterised statements throughout; `sort_by` validated against a per-model allowlist |
 | Search injection | LIKE metacharacters escaped in `_apply_search` |
 | XSS | React escapes by default; strict CSP; no `dangerouslySetInnerHTML` |
@@ -265,9 +274,12 @@ whatsoever.
 | Container hardening | Non-root users, multi-stage builds, no build toolchain at runtime |
 | Data exposure | ORM models never serialised directly; response schemas are explicit allowlists |
 
-**CSRF is prepared, not implemented.** There are no state-changing endpoints
-yet. Once cookie authentication exists, `SameSite=Lax` plus a double-submit
-token is the intended approach.
+**CSRF is prepared, not implemented.** The refresh cookie is `SameSite=Lax` and
+path-scoped to `/api/v1/auth`, and the only cookie-authenticated endpoints are
+refresh and logout — neither performs a damaging state change. A double-submit
+token should be added if cookie authentication is ever extended to mutating
+endpoints. Every other endpoint authenticates with a bearer header, which is not
+attached automatically by the browser and so is not CSRF-exposed.
 
 ---
 
@@ -277,6 +289,9 @@ Recorded so they are chosen deliberately rather than by accident.
 
 | Decision | Trigger to revisit |
 |---|---|
+| RS256 signing | A separate auth service, edge gateway, or third-party token verifier |
+| Breached-password corpus check | Before live customer accounts exist |
+| Multi-factor authentication | Customer or compliance requirement; slots between password verification and token issue |
 | Keyset pagination | Product catalogues approaching millions per tenant |
 | Full-text search (`tsvector` + GIN) | When product search becomes a primary workflow |
 | Read replica for analytics | When reporting queries contend with transactional load |

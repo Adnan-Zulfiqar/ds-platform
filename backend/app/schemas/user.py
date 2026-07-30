@@ -12,7 +12,6 @@ from datetime import datetime
 
 from pydantic import EmailStr, Field
 
-from app.models.user import UserRole
 from app.schemas.base import CamelCaseModel, IdentifiedSchema
 
 
@@ -21,10 +20,14 @@ class UserRead(IdentifiedSchema):
 
     tenant_id: uuid.UUID
     email: EmailStr
-    full_name: str | None
-    role: UserRole
+    first_name: str | None
+    last_name: str | None
+    full_name: str | None = Field(
+        default=None,
+        description="Convenience display name assembled from the name parts.",
+    )
     is_active: bool
-    email_verified_at: datetime | None
+    is_verified: bool
     last_login_at: datetime | None
 
 
@@ -37,26 +40,28 @@ class UserSummary(CamelCaseModel):
 
     id: uuid.UUID
     email: EmailStr
-    full_name: str | None
-    role: UserRole
+    first_name: str | None
+    last_name: str | None
 
 
 class UserCreate(CamelCaseModel):
     """Payload for creating a user.
 
-    Defined now because the shape is settled and the users router needs a
-    documented request contract. The endpoint that consumes it belongs to the
-    auth phase — creating a user requires password hashing and an invitation
-    flow, neither of which exists yet.
+    Consumed by the team-invitation flow, which is a later phase — registration
+    has its own schema in ``app.schemas.auth`` because it creates a tenant too.
 
     ``tenant_id`` is deliberately absent: it is taken from the authenticated
     context, never from the request body. Accepting it here would let a caller
     create a user inside somebody else's tenant.
+
+    ``password`` is absent for the same class of reason: an invited user sets
+    their own password through a signed link, so no administrator ever chooses
+    or transmits it.
     """
 
     email: EmailStr
-    full_name: str | None = Field(default=None, max_length=255)
-    role: UserRole = UserRole.MEMBER
+    first_name: str | None = Field(default=None, max_length=128)
+    last_name: str | None = Field(default=None, max_length=128)
 
 
 class UserUpdate(CamelCaseModel):
@@ -67,8 +72,8 @@ class UserUpdate(CamelCaseModel):
     endpoint rather than riding along in a generic PATCH.
     """
 
-    full_name: str | None = Field(default=None, max_length=255)
-    role: UserRole | None = None
+    first_name: str | None = Field(default=None, max_length=128)
+    last_name: str | None = Field(default=None, max_length=128)
     is_active: bool | None = None
 
 

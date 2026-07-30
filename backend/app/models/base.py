@@ -50,6 +50,25 @@ class Base(DeclarativeBase):
 
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
+    # Fetch server-generated values with RETURNING as part of the INSERT or
+    # UPDATE, rather than leaving the attribute expired for a later lazy load.
+    #
+    # **This is mandatory in an async codebase, not an optimisation.** Columns
+    # with `server_default` or `onupdate` — `created_at` and `updated_at` on
+    # every table here — are expired after a flush. Touching one afterwards
+    # triggers a lazy refresh, which needs IO, and implicit IO in async
+    # SQLAlchemy raises `MissingGreenlet` rather than awaiting.
+    #
+    # Concretely: without this, updating a row and then serialising it through a
+    # response schema crashes. That is exactly the shape of `AuthService.login`,
+    # which stamps `last_login_at` and then returns the user.
+    #
+    # RUF012 wants a ClassVar annotation on a mutable class attribute, but
+    # SQLAlchemy declares `__mapper_args__` as an instance variable on
+    # `DeclarativeBase`, so annotating it that way is a type error. The lint rule
+    # loses to the library's own declaration.
+    __mapper_args__ = {"eager_defaults": True}  # noqa: RUF012
+
     def __repr__(self) -> str:
         identifier = getattr(self, "id", None)
         return f"<{type(self).__name__} id={identifier}>"

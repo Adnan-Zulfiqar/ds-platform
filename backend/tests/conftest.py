@@ -18,9 +18,17 @@ import pytest
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("POSTGRES_HOST", "localhost")
 os.environ.setdefault("POSTGRES_DB", "droppilot_test")
-os.environ.setdefault("SECURITY_SECRET_KEY", "test-only-secret-key")
+# At least 32 characters — the application refuses to start below the RFC 7518
+# minimum for HS256, and that rule must be exercised by the tests, not bypassed.
+os.environ.setdefault("SECURITY_SECRET_KEY", "test-only-secret-key-padded-to-satisfy-length-rule")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("LOG_JSON_OUTPUT", "false")
+# The test client speaks plain HTTP, and a Secure cookie is not sent over an
+# insecure connection — correct browser behaviour, but it would make every
+# refresh-token test fail for a reason unrelated to what it is testing. This
+# mirrors local HTTP development; deployed environments keep the default of
+# true, which `Settings` does not allow to be weakened silently.
+os.environ.setdefault("SECURITY_COOKIE_SECURE", "false")
 # ---------------------------------------------------------------------------
 
 from app.core import context as ctx

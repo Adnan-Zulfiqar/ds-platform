@@ -25,6 +25,12 @@ dependencies = [
     "httpx>=0.28.0",
     "boto3>=1.35.0",
     "tenacity>=9.0.0",
+    # Argon2id password hashing. Chosen over bcrypt: it is memory-hard, so a
+    # GPU or ASIC attacker gains far less advantage per unit of cost, and it has
+    # no 72-byte input truncation.
+    "argon2-cffi>=23.1.0",
+    # JWT encoding and verification.
+    "pyjwt[crypto]>=2.10.0",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +83,11 @@ ignore = [
     "UP046",  # Generic class uses Generic[] instead of type parameters
     "UP047",  # Generic function uses TypeVar instead of type parameters
 ]
+
+[tool.ruff.lint.isort]
+# Without this, `app` and `tests` are grouped with third-party packages, which
+# makes the import blocks useless for telling local code from dependencies.
+known-first-party = ["app", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106"]  # hardcoded test credentials are fine

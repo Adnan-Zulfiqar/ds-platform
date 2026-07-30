@@ -4,16 +4,21 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 
+import {
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+} from "@/lib/auth/token-store";
 import { env } from "@/lib/env";
-import type { ApiErrorResponse } from "@/types/api";
+import type { ApiErrorResponse, AuthResponse } from "@/types/api";
 
 /**
  * The single HTTP client for the application.
  *
  * Components never call `fetch` or `axios` directly. Centralising it here is
  * what makes cross-cutting behaviour — correlation ids, credential handling,
- * error normalisation — apply everywhere instead of being reimplemented, and
- * usually forgotten, at each call site.
+ * error normalisation, transparent token refresh — apply everywhere instead of
+ * being reimplemented, and usually forgotten, at each call site.
  */
 
 /**
@@ -54,6 +59,15 @@ export class ApiError extends Error {
   get isAuthError(): boolean {
     return this.status === 401;
   }
+
+  /** Field-level messages, keyed by field name, for form error display. */
+  get fieldErrors(): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const detail of this.details) {
+      if (detail.field) result[detail.field] = detail.message;
+    }
+    return result;
+  }
 }
 
 function generateRequestId(): string {
@@ -70,32 +84,93 @@ export const apiClient: AxiosInstance = axios.create({
   baseURL: `${env.NEXT_PUBLIC_API_URL}/api/v1`,
   timeout: env.NEXT_PUBLIC_API_TIMEOUT_MS,
   headers: { "Content-Type": "application/json" },
-  // Send cookies cross-origin. The auth phase issues httpOnly cookies, which
-  // are immune to token theft via XSS in a way that localStorage is not.
+  // Required for the refresh cookie to be sent. The cookie is httpOnly, so this
+  // is the only way it reaches the server.
   withCredentials: true,
 });
 
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  // Generated client-side so a trace can be followed from the browser through
-  // the API and into any background job it triggers.
   config.headers.set("X-Request-ID", generateRequestId());
+
+  const token = getAccessToken();
+  if (token) {
+    config.headers.set("Authorization", `Bearer ${token}`);
+  }
   return config;
 });
 
+// ---------------------------------------------------------------------------
+// Transparent token refresh
+// ---------------------------------------------------------------------------
+
+/**
+ * The in-flight refresh, if any.
+ *
+ * **Single-flight is essential, not an optimisation.** A dashboard typically
+ * fires several requests at once; if the access token has expired they all
+ * receive 401 simultaneously. Without this guard each would trigger its own
+ * refresh, and because refresh tokens *rotate*, the first would consume the
+ * token and the rest would present an already-consumed one — which the server
+ * correctly treats as theft and responds to by terminating every session.
+ *
+ * In other words, omitting this does not merely waste requests: it logs the
+ * user out.
+ */
+let refreshInFlight: Promise<boolean> | null = null;
+
+async function refreshAccessToken(): Promise<boolean> {
+  refreshInFlight ??= (async () => {
+    try {
+      // A bare axios call, not `apiClient`: routing it through the instance
+      // would re-enter this interceptor on failure and recurse.
+      const { data } = await axios.post<AuthResponse>(
+        `${env.NEXT_PUBLIC_API_URL}/api/v1/auth/refresh`,
+        {},
+        { withCredentials: true, timeout: env.NEXT_PUBLIC_API_TIMEOUT_MS },
+      );
+      setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+      return true;
+    } catch {
+      // The refresh token is expired, revoked, or absent. The session is over.
+      clearAccessToken();
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+/** Endpoints that must never trigger a refresh attempt. */
+const NO_REFRESH_PATHS = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/logout"];
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<ApiErrorResponse>) => {
-    // A response with the standard envelope: use the server's own code.
+  async (error: AxiosError<ApiErrorResponse>) => {
+    const config = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined;
+
     if (error.response) {
+      const status = error.response.status;
       const body = error.response.data;
+      const isAuthEndpoint = NO_REFRESH_PATHS.some((path) => config?.url?.includes(path));
+
+      // One refresh attempt, then one retry. `_retried` prevents a loop when
+      // the retried request also returns 401.
+      if (status === 401 && config && !config._retried && !isAuthEndpoint) {
+        config._retried = true;
+        if (await refreshAccessToken()) {
+          return apiClient(config);
+        }
+      }
+
       return Promise.reject(
         new ApiError({
           code: body?.code ?? "http_error",
-          message: body?.message ?? `Request failed with status ${error.response.status}.`,
-          status: error.response.status,
+          message: body?.message ?? `Request failed with status ${status}.`,
+          status,
           details: body?.details,
-          requestId:
-            body?.requestId ?? error.response.headers["x-request-id"] ?? null,
+          requestId: body?.requestId ?? error.response.headers["x-request-id"] ?? null,
         }),
       );
     }

@@ -41,19 +41,71 @@ export interface Page<T> {
   meta: PageMeta;
 }
 
-export type UserRole = "owner" | "admin" | "member" | "viewer";
+export type RoleName = "owner" | "admin" | "member" | "viewer";
 
 export interface User {
   id: string;
   tenantId: string;
   email: string;
+  firstName: string | null;
+  lastName: string | null;
   fullName: string | null;
-  role: UserRole;
   isActive: boolean;
-  emailVerifiedAt: string | null;
+  isVerified: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type TenantStatus = "trial" | "active" | "suspended" | "cancelled";
+
+export interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+  status: TenantStatus;
+  timezone: string;
+  defaultCurrency: string;
+}
+
+/** Who the caller is, which tenant they belong to, and what they may do. */
+export interface AuthenticatedIdentity {
+  user: User;
+  tenant: Tenant;
+  roles: RoleName[];
+}
+
+export interface TokenResponse {
+  accessToken: string;
+  tokenType: string;
+  /** Access token lifetime in seconds. */
+  expiresIn: number;
+  /**
+   * Absent for browser clients: the refresh token lives in an httpOnly cookie
+   * that JavaScript cannot read, which is the point.
+   */
+  refreshToken: string | null;
+  accessExpiresAt: string;
+  refreshExpiresAt: string;
+}
+
+export interface AuthResponse {
+  identity: AuthenticatedIdentity;
+  tokens: TokenResponse;
+}
+
+export interface LoginPayload {
+  email: string;
+  password: string;
+  rememberMe?: boolean;
+}
+
+export interface RegisterPayload {
+  companyName: string;
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 /** Query parameters accepted by every list endpoint. */

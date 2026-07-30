@@ -24,6 +24,41 @@ from uuid import UUID
 _tenant_id: ContextVar[UUID | None] = ContextVar("tenant_id", default=None)
 _user_id: ContextVar[UUID | None] = ContextVar("user_id", default=None)
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
+_principal: ContextVar[AuthenticatedUser | None] = ContextVar("principal", default=None)
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedUser:
+    """The verified identity behind the current request.
+
+    A value object, not an ORM entity. Holding plain values rather than a
+    ``User`` instance keeps ``core`` free of any dependency on ``models`` — the
+    invariant that lets every other layer import from here — and means the
+    principal cannot lazily trigger database IO when something reads an
+    attribute of it deep inside a service.
+
+    Frozen because identity must not change mid-request. Code that could
+    reassign ``tenant_id`` on the principal would be one bug away from a
+    cross-tenant write.
+    """
+
+    user_id: UUID
+    tenant_id: UUID
+    email: str
+    roles: frozenset[str]
+    is_active: bool = True
+    is_verified: bool = False
+
+    def has_role(self, role: str) -> bool:
+        return role in self.roles
+
+    def has_any_role(self, *roles: str) -> bool:
+        return bool(self.roles.intersection(roles))
+
+    def __repr__(self) -> str:
+        # Email is deliberately omitted: this repr reaches logs and exception
+        # output, and personal data should not travel there incidentally.
+        return f"<AuthenticatedUser user_id={self.user_id} tenant_id={self.tenant_id}>"
 
 
 class MissingTenantContextError(RuntimeError):
@@ -72,6 +107,37 @@ def set_request_id(request_id: str | None) -> Token[str | None]:
 
 def get_request_id() -> str | None:
     return _request_id.get()
+
+
+def set_principal(principal: AuthenticatedUser | None) -> Token[AuthenticatedUser | None]:
+    """Bind the authenticated identity, and the ids derived from it.
+
+    Tenant and user ids are set here rather than by the caller so the three
+    cannot disagree. A principal whose ``tenant_id`` differed from the bound
+    tenant context would mean repositories filtering by one tenant while
+    authorization checked another.
+    """
+    if principal is not None:
+        set_tenant_id(principal.tenant_id)
+        set_user_id(principal.user_id)
+    return _principal.set(principal)
+
+
+def get_principal() -> AuthenticatedUser | None:
+    return _principal.get()
+
+
+def require_principal() -> AuthenticatedUser:
+    """Return the bound principal, raising if the request is unauthenticated.
+
+    Raises rather than returning ``None`` for the same reason as
+    :func:`require_tenant_id`: an unauthenticated request must never be
+    mistaken for an authorised one by code that forgot a null check.
+    """
+    principal = _principal.get()
+    if principal is None:
+        raise MissingTenantContextError("No authenticated principal bound to the current context.")
+    return principal
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,3 +195,4 @@ def clear_context() -> None:
     set_tenant_id(None)
     set_user_id(None)
     set_request_id(None)
+    _principal.set(None)

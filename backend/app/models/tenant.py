@@ -56,7 +56,21 @@ class Tenant(IdentifiedBase, SoftDeleteMixin):
     )
 
     status: Mapped[TenantStatus] = mapped_column(
-        Enum(TenantStatus, name="tenant_status", native_enum=True, validate_strings=True),
+        Enum(
+            TenantStatus,
+            name="tenant_status",
+            native_enum=True,
+            validate_strings=True,
+            # Persist the member *value* ("trial"), not the member *name*
+            # ("TRIAL"), which is SQLAlchemy's default and does not match the
+            # lowercase labels the migration creates. Without this every insert
+            # fails with `invalid input value for enum tenant_status: "TRIAL"`.
+            #
+            # Values are chosen over names deliberately: they are what appears
+            # in API responses and in the database, so a rename of the Python
+            # member should not silently rewrite stored data.
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
         nullable=False,
         default=TenantStatus.TRIAL,
         index=True,

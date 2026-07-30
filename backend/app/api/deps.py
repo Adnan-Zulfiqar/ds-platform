@@ -4,27 +4,43 @@ This module is where concrete implementations are wired to the abstractions the
 rest of the application depends on. Endpoints declare what they need as a
 parameter; nothing constructs its own database session or repository.
 
-Keeping the wiring in one file means swapping an implementation — a different
-cache, a read-replica session for reporting — is a change here rather than a
-change at every call site.
+**Phase 1 replaced the identity source.** Phase 0 read the tenant from an
+``X-Tenant-ID`` header, which was client-controlled and therefore not access
+control. It now comes from the verified claims of a signed access token. As
+predicted when that placeholder was written, the change is confined to this
+module: no endpoint, service, or repository signature changed, because they all
+already depended on the abstraction rather than on the header.
+
+The resolution chain:
+
+    Request → Bearer token → verified claims → AuthenticatedUser
+            → bound context → repository tenant filtering
 """
 
 from __future__ import annotations
 
-import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.context import set_tenant_id
-from app.core.exceptions import AuthenticationError, NotFoundError, PermissionDeniedError
+from app.core.context import AuthenticatedUser, set_principal
+from app.core.exceptions import (
+    AuthenticationError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.core.logging import get_logger
 from app.core.redis import CacheClient
+from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
+from app.models.role import RoleName
 from app.models.tenant import Tenant
+from app.models.user import User
+from app.repositories.refresh_token import RefreshTokenRepository
+from app.repositories.role import RoleRepository
 from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
 
@@ -60,83 +76,233 @@ Cache = Annotated[CacheClient, Depends(get_cache)]
 
 
 # ---------------------------------------------------------------------------
-# Tenant resolution
+# Authentication
 # ---------------------------------------------------------------------------
 
+# auto_error=False so a missing header reaches our own handler and produces the
+# standard error envelope. Left at the default, FastAPI would emit its own
+# response shape and clients would need a second error parser for this one case.
+_bearer_scheme = HTTPBearer(auto_error=False, description="JWT access token.")
 
-async def resolve_tenant(
-    request: Request,
-    session: DbSession,
-    x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
-) -> Tenant:
-    """Resolve and bind the tenant for this request.
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)]
 
-    **Phase 0 limitation — read this before deploying.**
 
-    The authoritative source of tenant identity is the authenticated principal:
-    the tenant claim inside a verified access token. Authentication does not
-    exist yet, so that source is unavailable.
+async def get_current_principal(
+    request: Request, credentials: BearerCredentials
+) -> AuthenticatedUser:
+    """Verify the access token and bind the authenticated identity.
 
-    Until it does, the tenant is read from an ``X-Tenant-ID`` header. A header is
-    client-controlled, so this is *not* an access control mechanism — anyone
-    could name any tenant. It exists so that the tenant-scoping machinery is
-    real and exercised by tests from the start rather than being bolted on later.
+    **No database read.** Identity and roles come from the token's signed
+    claims, so an authenticated request costs one signature verification rather
+    than a query. That is what makes stateless tokens worth using.
 
-    Two safeguards keep the gap from becoming a production breach:
+    The cost is bounded staleness: a user deactivated, deleted, or stripped of a
+    role mid-session keeps their existing access until the token expires —
+    fifteen minutes by default. Refresh re-reads both from the database, so the
+    window never exceeds one access-token lifetime.
 
-    * The header path refuses to operate in a deployed environment, so shipping
-      this as-is fails loudly instead of leaking data silently.
-    * When the auth phase lands it replaces the body of this function only. Every
-      endpoint and repository already depends on the abstraction, so nothing
-      else has to change.
+    Where that window is unacceptable — deleting a user, changing a password —
+    revoke the refresh tokens as well, which ends the session at the next
+    refresh. Endpoints needing the live database row depend on
+    :func:`get_current_user` instead.
     """
-    if settings.environment.is_deployed:
-        # Defensive: this branch is unreachable in a correctly built deployment
-        # because the auth phase replaces this resolver. If it is ever reached,
-        # something is badly wrong and the safe response is to refuse.
-        logger.error("header_tenant_resolution_attempted_in_deployed_environment")
-        raise AuthenticationError("Tenant resolution requires authentication in this environment.")
+    if credentials is None or not credentials.credentials:
+        raise AuthenticationError("An access token is required to use this endpoint.")
 
-    if not x_tenant_id:
-        raise AuthenticationError(
-            "X-Tenant-ID header is required until authentication is implemented."
+    claims = decode_token(credentials.credentials, expected_type=TokenType.ACCESS)
+
+    principal = AuthenticatedUser(
+        user_id=claims.user_id,
+        tenant_id=claims.tenant_id,
+        # The token carries no email claim — it is personal data and would be
+        # written into every log line and error report that includes a decoded
+        # token. Endpoints that need it read the user record.
+        email="",
+        roles=frozenset(claims.roles),
+    )
+
+    # Binds tenant and user context as a single step, so the three can never
+    # disagree. Everything downstream reads from context.
+    set_principal(principal)
+    request.state.tenant_id = principal.tenant_id
+    request.state.user_id = principal.user_id
+
+    return principal
+
+
+CurrentPrincipal = Annotated[AuthenticatedUser, Depends(get_current_principal)]
+
+
+async def get_optional_principal(
+    request: Request, credentials: BearerCredentials
+) -> AuthenticatedUser | None:
+    """Bind the identity when a valid token is present, otherwise return ``None``.
+
+    For endpoints that serve both signed-in and anonymous callers. An *invalid*
+    token still fails loudly rather than being treated as anonymous — silently
+    downgrading a rejected token to "not signed in" would hide expiry bugs and
+    make debugging a client integration miserable.
+    """
+    if credentials is None or not credentials.credentials:
+        return None
+    return await get_current_principal(request, credentials)
+
+
+OptionalPrincipal = Annotated[AuthenticatedUser | None, Depends(get_optional_principal)]
+
+
+async def get_current_user(session: DbSession, principal: CurrentPrincipal) -> User:
+    """Load the authenticated user's database row.
+
+    Depend on this only when the live record is needed — a profile page, or a
+    check that must not tolerate the staleness described above. Ordinary
+    endpoints should use :class:`CurrentPrincipal` and avoid the query.
+
+    Re-checks ``is_active`` because this reads current state: a token issued
+    before deactivation is cryptographically valid but must not be honoured once
+    we have looked.
+    """
+    user = await UserRepository(session).get_by_id(principal.user_id)
+    if user is None:
+        # Valid signature, but the user is gone or belongs to another tenant.
+        # The lookup is tenant-scoped, so a token whose tenant claim was tampered
+        # with lands here rather than reading another tenant's user.
+        logger.warning(
+            "authenticated_user_not_found",
+            user_id=str(principal.user_id),
+            tenant_id=str(principal.tenant_id),
         )
+        raise AuthenticationError("The session is no longer valid. Please sign in again.")
 
-    try:
-        tenant_uuid = uuid.UUID(x_tenant_id)
-    except ValueError as exc:
-        raise AuthenticationError("X-Tenant-ID must be a valid UUID.") from exc
+    if not user.is_active:
+        raise PermissionDeniedError("This account has been deactivated.")
 
-    tenant = await TenantRepository(session).get_by_id(tenant_uuid)
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_current_tenant(session: DbSession, principal: CurrentPrincipal) -> Tenant:
+    """Load the tenant the authenticated user belongs to."""
+    tenant = await TenantRepository(session).get_by_id(principal.tenant_id)
     if tenant is None:
-        raise NotFoundError.for_resource("Tenant", tenant_uuid)
+        raise NotFoundError.for_resource("Tenant", principal.tenant_id)
     if not tenant.is_active:
-        raise PermissionDeniedError("This tenant account is not active.")
-
-    # Bind before any repository runs. Everything downstream reads the tenant
-    # from context rather than receiving it as an argument.
-    set_tenant_id(tenant.id)
-    request.state.tenant_id = tenant.id
+        raise PermissionDeniedError("This account is not active.")
     return tenant
 
 
-CurrentTenant = Annotated[Tenant, Depends(resolve_tenant)]
+CurrentTenant = Annotated[Tenant, Depends(get_current_tenant)]
+
+
+# ---------------------------------------------------------------------------
+# Authorization
+# ---------------------------------------------------------------------------
+
+
+def require_roles(*allowed: RoleName) -> Callable[[AuthenticatedUser], AuthenticatedUser]:
+    """Build a dependency that admits only the listed roles.
+
+    A factory rather than a fixed set of dependencies, so a new requirement is
+    ``Depends(require_roles(RoleName.ADMIN))`` at the endpoint rather than a new
+    function here.
+
+    Enforced as a dependency rather than inside the handler because a dependency
+    runs before the handler body and appears in the OpenAPI document — an
+    authorization check buried in a function body is easy to omit when the next
+    endpoint is copied from this one.
+    """
+    allowed_values = frozenset(role.value for role in allowed)
+
+    def _check(principal: CurrentPrincipal) -> AuthenticatedUser:
+        if not principal.roles.intersection(allowed_values):
+            logger.warning(
+                "authorization_denied",
+                user_id=str(principal.user_id),
+                required=sorted(allowed_values),
+                held=sorted(principal.roles),
+            )
+            raise PermissionDeniedError("You do not have permission to perform this action.")
+        return principal
+
+    return _check
+
+
+def require_minimum_role(
+    minimum: RoleName,
+) -> Callable[[AuthenticatedUser], AuthenticatedUser]:
+    """Build a dependency admitting the given role or any that outranks it.
+
+    Preferred over :func:`require_roles` for hierarchical checks: listing
+    ``ADMIN, OWNER`` explicitly means a role inserted above admin later would
+    silently fail to gain access it should have.
+    """
+    threshold = minimum.rank
+
+    def _check(principal: CurrentPrincipal) -> AuthenticatedUser:
+        # An unrecognised role name is ignored rather than raising: a token
+        # issued before a role was renamed should degrade to "insufficient
+        # privileges", not to a 500.
+        held_ranks: list[int] = []
+        for name in principal.roles:
+            try:
+                held_ranks.append(RoleName(name).rank)
+            except ValueError:
+                logger.warning("unknown_role_in_token", role=name)
+
+        if not held_ranks or max(held_ranks) < threshold:
+            logger.warning(
+                "authorization_denied",
+                user_id=str(principal.user_id),
+                minimum_required=minimum.value,
+                held=sorted(principal.roles),
+            )
+            raise PermissionDeniedError("You do not have permission to perform this action.")
+        return principal
+
+    return _check
+
+
+#: Common authorization requirements, named for readability at the endpoint.
+RequireOwner = Annotated[AuthenticatedUser, Depends(require_roles(RoleName.OWNER))]
+RequireAdmin = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.ADMIN))]
+RequireMember = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.MEMBER))]
 
 
 # ---------------------------------------------------------------------------
 # Repositories
 # ---------------------------------------------------------------------------
 #
-# Repositories depend on CurrentTenant rather than DbSession alone. That
-# ordering is deliberate: FastAPI resolves resolve_tenant first, so tenant
-# context is guaranteed to be bound before any tenant-scoped query can run.
+# Tenant-scoped repositories depend on CurrentPrincipal rather than DbSession
+# alone. That ordering is what guarantees tenant context is bound before any
+# scoped query can run — FastAPI resolves the principal first.
 
 
-def get_user_repository(session: DbSession, _tenant: CurrentTenant) -> UserRepository:
+def get_user_repository(session: DbSession, _principal: CurrentPrincipal) -> UserRepository:
     return UserRepository(session)
 
 
 UserRepo = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+def get_role_repository(session: DbSession, _principal: CurrentPrincipal) -> RoleRepository:
+    return RoleRepository(session)
+
+
+RoleRepo = Annotated[RoleRepository, Depends(get_role_repository)]
+
+
+def get_refresh_token_repository(session: DbSession) -> RefreshTokenRepository:
+    """Unscoped by necessity — see ``app.repositories.refresh_token``.
+
+    Takes no principal because it is used on the refresh path, before one
+    exists.
+    """
+    return RefreshTokenRepository(session)
+
+
+RefreshTokenRepo = Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)]
 
 
 def get_tenant_repository(session: DbSession) -> TenantRepository:
@@ -152,14 +318,30 @@ TenantRepo = Annotated[TenantRepository, Depends(get_tenant_repository)]
 
 
 __all__ = [
+    "BearerCredentials",
     "Cache",
+    "CurrentPrincipal",
     "CurrentTenant",
+    "CurrentUser",
     "DbSession",
+    "OptionalPrincipal",
+    "RefreshTokenRepo",
+    "RequireAdmin",
+    "RequireMember",
+    "RequireOwner",
+    "RoleRepo",
     "TenantRepo",
     "UserRepo",
     "get_cache",
+    "get_current_principal",
+    "get_current_tenant",
+    "get_current_user",
     "get_db_session",
+    "get_optional_principal",
+    "get_refresh_token_repository",
+    "get_role_repository",
     "get_tenant_repository",
     "get_user_repository",
-    "resolve_tenant",
+    "require_minimum_role",
+    "require_roles",
 ]

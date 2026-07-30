@@ -2,10 +2,10 @@
 
 A multi-tenant SaaS platform for dropshipping automation.
 
-> **Status: Phase 0 — foundation only.**
-> There are no business features. No marketplace integrations, no product
-> import, no orders, no billing, and **no authentication**. What exists is the
-> architecture those features will be built on. See
+> **Status: Phase 1 — foundation plus authentication.**
+> There are no business features yet: no marketplace integrations, no product
+> import, no orders, no billing. What exists is the architecture those features
+> will be built on, plus a working multi-tenant authentication system. See
 > [Known limitations](#known-limitations) before deploying anything.
 
 ## Stack
@@ -53,6 +53,8 @@ For running the services without Docker, see
 | Document | Contents |
 |---|---|
 | [Architecture.md](docs/Architecture.md) | Layering, multi-tenancy, and the reasoning behind each major decision |
+| [Authentication.md](docs/Authentication.md) | JWT flow, tenant resolution, token rotation, security decisions |
+| [Database.md](docs/Database.md) | Schema, conventions, migrations |
 | [FolderStructure.md](docs/FolderStructure.md) | Where code belongs and why |
 | [CodingStandards.md](docs/CodingStandards.md) | Conventions and enforced rules |
 | [DevelopmentSetup.md](docs/DevelopmentSetup.md) | Local setup, with and without Docker |
@@ -72,35 +74,44 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 
 ## Known limitations
 
-These are deliberate Phase 0 boundaries, not defects. Each is recorded so that
-none of them is discovered late.
+Deliberate phase boundaries, not defects. Each is recorded so that none is
+discovered late.
 
-1. **No authentication.** Tenant identity comes from an `X-Tenant-ID` header,
-   which is client-controlled and therefore *not* access control. The resolver
-   refuses to run in a deployed environment, so shipping this as-is fails
-   loudly rather than leaking data. See `backend/app/api/deps.py`.
+1. **Password reset is not implemented.** It needs email delivery, a signed
+   single-use token, and its own expiry policy. The page exists and says so
+   plainly rather than faking a confirmation email.
 
-2. **The initial migration has not been run against a live PostgreSQL.** It was
-   written by hand and is unverified. Run `alembic upgrade head` against a
-   throwaway database and confirm the schema before relying on it.
+2. **Email verification is not implemented.** `is_verified` is set true on
+   registration because there is no mail delivery to verify against.
 
-3. **Docker images have not been built.** The Dockerfiles and Compose file are
-   unverified — Docker was not available on the machine where Phase 0 was
-   written. The CI pipeline builds all three images, so the first pipeline run
-   is the real test.
+3. **Registration discloses that an address is already taken.** Unavoidable
+   without email delivery — the account is either creatable or not.
 
-4. **Playwright tests have not been executed.** The specs are written and the
+4. **One email across two tenants resolves to the earliest account.** See
+   [Authentication.md](docs/Authentication.md#known-limitations) for the fix.
+
+5. **No breached-password check, and no multi-factor authentication.** Both
+   should land before live customer accounts exist.
+
+6. **Docker images have not been built.** The Dockerfiles and Compose file are
+   unverified — Docker is not installed on the development machine. The CI
+   pipeline builds all three images, so the first pipeline run is the real test.
+
+7. **Playwright tests have not been executed.** The specs are written and the
    config is in place, but no browser binaries were installed. Run
    `npx playwright install` then `npm run test:e2e`.
 
-5. **Rate limiting fails open.** If Redis is unavailable the limiter allows all
+8. **Rate limiting fails open.** If Redis is unavailable the limiter allows all
    traffic rather than rejecting it — availability is preferred over
    enforcement. Redis therefore needs its own alerting, because while it is
    down there is no quota enforcement at all.
 
-6. **Offset pagination.** Fine at current scale, degrades at deep offsets. Add
+9. **Offset pagination.** Fine at current scale, degrades at deep offsets. Add
    a keyset variant alongside it before product catalogues reach the millions
    per tenant.
+
+10. **Frontend API types are hand-written** and will drift from the server.
+    Generate them from `/openapi.json` before the API surface grows.
 
 ## Licence
 

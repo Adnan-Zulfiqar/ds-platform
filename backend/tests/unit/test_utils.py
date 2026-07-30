@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+
 from app.utils.strings import slugify, truncate
 
 pytestmark = pytest.mark.unit

@@ -1,21 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 /**
- * Edge middleware — the single gate for route access.
+ * Edge middleware — the first routing gate.
  *
- * Runs before any page renders, which is what makes it the correct place for
- * access control: a check inside a layout or component runs *after* the route
- * has already begun rendering, and can be bypassed by a direct fetch of the
- * RSC payload.
+ * **This is a user-experience gate, not a security boundary.** The security
+ * boundary is the API: every `/api/v1` endpoint verifies a signed access token
+ * server-side, and no data reaches the browser without it. Everything here only
+ * decides which page to render, so bypassing it reveals an empty shell that
+ * cannot load any data.
  *
- * **Phase 0 does not enforce anything.** Authentication does not exist, so
- * there is no session to check and every route is reachable. The file exists
- * with the matcher and the route classification already correct so that the
- * auth phase changes one function body rather than introducing a new
- * cross-cutting concern late.
+ * That distinction matters because of a real constraint: the refresh token
+ * cookie is httpOnly and scoped to the API's path (`/api/v1/auth`). When the
+ * frontend and API are served from one origin — the production setup, behind
+ * Nginx — the cookie is not sent to page requests because of the path scope.
+ * In local development they are on different ports, so it is not sent at all.
+ *
+ * Middleware therefore cannot reliably see whether a visitor has a session, and
+ * pretending otherwise would produce redirect loops. It handles only the cheap,
+ * always-correct cases; the authoritative client-side check lives in
+ * `app/(protected)/layout.tsx`, which knows the real session state.
  */
 
-/** Routes reachable without a session. */
+/** Reachable without a session. */
 const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password"] as const;
 
 function isPublicRoute(pathname: string): boolean {
@@ -27,28 +33,27 @@ function isPublicRoute(pathname: string): boolean {
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
 
-  // --- Enforcement, enabled by the auth phase -----------------------------
-  //
-  // const session = request.cookies.get("session");
-  //
-  // if (!session && !isPublicRoute(pathname)) {
-  //   const loginUrl = new URL("/login", request.url);
-  //   // Preserve the destination so the user lands where they intended after
-  //   // signing in, rather than always on the dashboard.
-  //   loginUrl.searchParams.set("next", pathname);
-  //   return NextResponse.redirect(loginUrl);
-  // }
-  //
-  // if (session && isPublicRoute(pathname)) {
-  //   return NextResponse.redirect(new URL("/dashboard", request.url));
-  // }
-  // ------------------------------------------------------------------------
+  // `/` is a redirect stub with nothing to protect; sending it to the guard
+  // would cost a render before the redirect it was always going to perform.
+  if (pathname === "/") {
+    return NextResponse.next();
+  }
 
-  // Referenced so the helper and the route table are covered by the type
-  // checker and linter until enforcement is switched on.
-  void isPublicRoute(pathname);
+  if (isPublicRoute(pathname)) {
+    return NextResponse.next();
+  }
 
-  return NextResponse.next();
+  // Everything else is protected. The page renders its own loading state while
+  // `AuthProvider` resolves the session, then either shows the content or
+  // redirects to sign-in. Redirecting here instead would bounce every
+  // authenticated user to the login page on each hard navigation, because the
+  // session cookie is invisible at this layer.
+  const response = NextResponse.next();
+
+  // Protected pages are user-specific and must never be cached by a shared
+  // proxy or served from the browser's back-forward cache after sign-out.
+  response.headers.set("Cache-Control", "no-store, must-revalidate");
+  return response;
 }
 
 export const config = {
@@ -56,7 +61,9 @@ export const config = {
    * Match every path except static assets and image optimisation.
    *
    * Running middleware on static files would add latency to every asset request
-   * for no benefit. `_next/static` and `_next/image` are served directly.
+   * for no benefit.
    */
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };

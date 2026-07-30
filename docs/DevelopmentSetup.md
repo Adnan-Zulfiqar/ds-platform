@@ -136,24 +136,38 @@ npm run test:e2e
 
 ---
 
-## Working with the API before authentication exists
+## Working with the authenticated API
 
-Every `/api/v1` endpoint requires a tenant. There is no login yet, so the tenant
-comes from an `X-Tenant-ID` header — which only works when `ENVIRONMENT=local`.
+> The `X-Tenant-ID` header from Phase 0 **no longer exists.** Identity now comes
+> from a signed access token. See [Authentication.md](Authentication.md).
 
-Create a tenant to work against:
-
-```bash
-docker compose exec postgres psql -U droppilot -d droppilot -c "INSERT INTO tenants (id, name, slug, status, is_active, timezone, default_currency, created_at, updated_at) VALUES (gen_random_uuid(), 'Acme', 'acme', 'trial', true, 'UTC', 'USD', now(), now()) RETURNING id;"
-```
-
-Then call the API with the returned id:
+Create an account. This provisions a tenant, its first user, and the owner role,
+then signs you in:
 
 ```bash
-curl -H "X-Tenant-ID: <the-uuid>" http://localhost:8000/api/v1/users
+curl -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" -d '{"companyName":"Acme Trading","email":"you@example.com","password":"Correct-Horse-Battery9"}'
 ```
 
-Health endpoints need no tenant:
+The response contains `tokens.accessToken`. Use it as a bearer token:
+
+```bash
+curl http://localhost:8000/api/v1/auth/me -H "Authorization: Bearer <access-token>"
+```
+
+Sign in again later:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"you@example.com","password":"Correct-Horse-Battery9"}'
+```
+
+Access tokens last 15 minutes. The refresh token is returned as an httpOnly
+cookie, so with `curl` use a cookie jar:
+
+```bash
+curl -c jar.txt -b jar.txt -X POST http://localhost:8000/api/v1/auth/refresh -H "Content-Type: application/json" -d '{}'
+```
+
+Health endpoints need no authentication:
 
 ```bash
 curl http://localhost:8000/health

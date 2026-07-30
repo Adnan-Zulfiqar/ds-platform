@@ -1,70 +1,39 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Smoke tests for the Phase 0 shell.
+ * Smoke tests for the application shell.
  *
- * These assert on user-visible behaviour — headings, navigation landmarks,
- * responsive layout — rather than on CSS classes or component internals, so
- * they survive a restyle and only fail when something a user would notice
- * actually breaks.
+ * Phase 1 gated the dashboard behind authentication, so the tests that
+ * previously asserted on dashboard content now assert on the redirect instead.
+ * Signed-in dashboard behaviour needs a running backend and a real account, so
+ * it is covered by the backend integration suite rather than mocked here —
+ * a mocked session would test the mock.
  */
 
 test.describe("Application shell", () => {
-  test("root redirects to the dashboard", async ({ page }) => {
+  test("root redirects an unauthenticated visitor to sign-in", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(/\/login/);
   });
 
-  test("dashboard renders its heading and title", async ({ page }) => {
-    await page.goto("/dashboard");
+  test("sign-in page renders with the correct title", async ({ page }) => {
+    await page.goto("/login");
 
-    await expect(
-      page.getByRole("heading", { name: "Dashboard", level: 1 }),
-    ).toBeVisible();
     await expect(page).toHaveTitle(/DropPilot AI/);
-  });
-
-  test("foundation status is conveyed as text, not colour alone", async ({
-    page,
-  }) => {
-    await page.goto("/dashboard");
-
-    // Accessibility requirement: a status communicated only by hue is invisible
-    // to colour-blind users.
-    await expect(page.getByText("Ready").first()).toBeVisible();
-    await expect(page.getByText("Planned").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   });
 
   test("an unknown route renders the 404 page", async ({ page }) => {
     const response = await page.goto("/this-route-does-not-exist");
 
     expect(response?.status()).toBe(404);
-    await expect(
-      page.getByRole("heading", { name: "Page not found" }),
-    ).toBeVisible();
-  });
-});
-
-test.describe("Navigation", () => {
-  test("sidebar is visible on desktop", async ({ page }) => {
-    await page.goto("/dashboard");
-
-    await expect(
-      page.getByRole("navigation", { name: "Main navigation" }),
-    ).toBeVisible();
-  });
-
-  test("dashboard link is marked as the current page", async ({ page }) => {
-    await page.goto("/dashboard");
-
-    const link = page.getByRole("link", { name: "Dashboard" });
-    await expect(link).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   });
 });
 
 test.describe("Accessibility", () => {
   test("a skip link is the first focusable element", async ({ page }) => {
-    await page.goto("/dashboard");
+    await page.goto("/login");
     await page.keyboard.press("Tab");
 
     await expect(
@@ -73,7 +42,17 @@ test.describe("Accessibility", () => {
   });
 
   test("the page exposes a main landmark", async ({ page }) => {
-    await page.goto("/dashboard");
+    await page.goto("/login");
     await expect(page.getByRole("main")).toBeVisible();
+  });
+});
+
+test.describe("Theme", () => {
+  test("renders in both colour schemes without error", async ({ page }) => {
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto("/login");
+      await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    }
   });
 });

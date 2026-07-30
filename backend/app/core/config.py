@@ -15,7 +15,14 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import ClassVar, Literal
 
-from pydantic import Field, PostgresDsn, RedisDsn, SecretStr, computed_field, field_validator
+from pydantic import (
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    SecretStr,
+    computed_field,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -214,12 +221,91 @@ class SecuritySettings(BaseSettings):
 
     secret_key: SecretStr = SecretStr("insecure-local-development-key-change-me")
 
+    @field_validator("secret_key")
+    @classmethod
+    def _reject_short_secret_key(cls, value: SecretStr) -> SecretStr:
+        """Enforce a signing key long enough for the HMAC algorithms in use.
+
+        RFC 7518 §3.2 requires an HS256 key of at least the hash output size —
+        32 bytes. A shorter key reduces the effective security of every token
+        the platform issues, and the failure is completely silent: short keys
+        sign and verify perfectly well, they are just easier to brute-force.
+
+        Enforced in every environment, not only deployed ones. A developer who
+        sets a four-character key locally and then copies that habit into a
+        secret manager is exactly the path this prevents.
+        """
+        minimum = 32
+        if len(value.get_secret_value()) < minimum:
+            raise ValueError(
+                f"SECURITY_SECRET_KEY must be at least {minimum} characters "
+                f"(RFC 7518 §3.2 for HS256). Generate one with: "
+                f'python -c "import secrets; print(secrets.token_urlsafe(64))"'
+            )
+        return value
+
+    # --- JWT ---------------------------------------------------------------
+    #
+    # HS256 (symmetric) is correct while one service both issues and verifies
+    # tokens: there is no second party who needs to verify without also being
+    # able to sign. Move to RS256 when a separate auth service, a third-party
+    # verifier, or an edge gateway needs verification-only access — at that
+    # point sharing the signing secret would let any of them mint tokens.
+    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
+    jwt_issuer: str = "droppilot"
+    jwt_audience: str = "droppilot-api"
+    # Tolerance for clock skew between the issuing and verifying processes.
+    jwt_leeway_seconds: int = Field(default=10, ge=0)
+
+    # Short-lived by design. An access token cannot be revoked before it
+    # expires — revocation happens on the refresh token — so its lifetime is
+    # the window during which a stolen token remains usable.
     access_token_ttl_minutes: int = Field(default=15, ge=1)
     refresh_token_ttl_days: int = Field(default=30, ge=1)
 
+    # --- Password policy ---------------------------------------------------
+    #
+    # Length dominates every other rule for real-world strength, so the minimum
+    # is 12 rather than the common 8. Composition rules are configurable but
+    # default to off apart from requiring more than one character class:
+    # forcing symbols pushes users towards predictable substitutions
+    # ("Password1!") without materially raising entropy.
+    password_min_length: int = Field(default=12, ge=8)
+    password_max_length: int = Field(
+        default=128,
+        ge=64,
+        description="Upper bound. Argon2 has no truncation limit, but an "
+        "unbounded password is a denial-of-service vector — hashing is "
+        "deliberately expensive.",
+    )
+    password_require_uppercase: bool = True
+    password_require_lowercase: bool = True
+    password_require_digit: bool = True
+    password_require_symbol: bool = False
+
+    # --- Argon2id parameters ----------------------------------------------
+    #
+    # Defaults follow the OWASP recommendation (19 MiB, 2 iterations, 1 lane).
+    # Raise memory_cost first if the hardware allows: memory is the dimension
+    # an attacker finds hardest to parallelise.
+    argon2_time_cost: int = Field(default=2, ge=1)
+    argon2_memory_cost_kib: int = Field(default=19_456, ge=8192)
+    argon2_parallelism: int = Field(default=1, ge=1)
+
+    # --- Login throttling --------------------------------------------------
+    #
+    # Far stricter than the general API limit. Credential stuffing is a
+    # high-volume attack and the endpoint is unauthenticated, so it is the most
+    # exposed surface in the application.
+    login_max_attempts: int = Field(default=5, ge=1)
+    login_attempt_window_seconds: int = Field(default=300, ge=1)
+    login_lockout_seconds: int = Field(default=900, ge=1)
+
+    # --- Cookies -----------------------------------------------------------
     cookie_secure: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     cookie_domain: str | None = None
+    refresh_cookie_name: str = "droppilot_refresh"
 
     rate_limit_enabled: bool = True
     rate_limit_requests: int = Field(default=100, ge=1, description="Requests per window.")

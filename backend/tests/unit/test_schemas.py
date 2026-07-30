@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
+
 from app.core.config import settings
 from app.schemas.common import ErrorResponse, Page, PageMeta, PaginationParams
 from app.schemas.user import UserCreate
-from pydantic import ValidationError as PydanticValidationError
 
 pytestmark = pytest.mark.unit
 

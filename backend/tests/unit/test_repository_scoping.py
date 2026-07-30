@@ -17,12 +17,13 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.dialects import postgresql
+
 from app.core.context import MissingTenantContextError, clear_context, set_tenant_id
 from app.core.exceptions import ConflictError, ValidationError
 from app.models.user import User
 from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
-from sqlalchemy.dialects import postgresql
 
 pytestmark = pytest.mark.unit
 
