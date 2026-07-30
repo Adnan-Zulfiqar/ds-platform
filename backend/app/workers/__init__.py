@@ -1,7 +1,8 @@
-"""Background workers.
+"""Background worker infrastructure.
 
-The Celery application and the base task class. Task implementations live in
-``app.workers.tasks``; none exist in Phase 0.
+The Celery application, the base task class, and the retry policy — everything
+that *runs* background work. The work itself lives in ``app.tasks``, which is an
+entry point into the domain rather than infrastructure.
 """
 
 from app.workers.base import BaseTask, enqueue

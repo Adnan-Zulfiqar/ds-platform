@@ -250,11 +250,23 @@ Three, all structural. The reasoning for each is recorded in the deviations
 table in [FolderStructure.md](FolderStructure.md#deviations-from-the-originally-specified-layout);
 the recommendations below were reached during Phase 0 finalization.
 
-| Specified | Implemented | Status |
+| Specified | Final | Status |
 |---|---|---|
-| `app/config/` | `app/core/config.py` | Recommend **keep** |
-| `app/exceptions/` | `app/core/exceptions.py` | Recommend **keep** |
-| `app/tasks/` | `app/workers/tasks/` | Recommend **revert to the original** |
+| `app/config/` | `app/core/config.py` | **Deviation retained** — approved |
+| `app/exceptions/` | `app/core/exceptions.py` | **Deviation retained** — approved |
+| `app/tasks/` | `app/tasks/` | **Corrected** — matches the specification |
+
+The third was corrected during finalization. The original justification for
+nesting tasks under `workers/` — that tasks are meaningless without the Celery
+app that registers them — proved too much: API routers are equally meaningless
+without the FastAPI app, yet `api/` is correctly top-level.
+
+The right framing is that `tasks/` and `api/` are both **entry points** into the
+domain, translating an external trigger (a queued message, an HTTP request) into
+a service call, and neither is imported by anything beneath it. `workers/`
+retains the infrastructure that runs tasks: the Celery application, the base
+task class, and the retry policy. This matters for a platform whose core value —
+inventory sync, price sync, order fulfilment — is background work.
 
 No other deviations. The tech stack, layering, API versioning scheme, database
 conventions, multi-tenancy model, and folder layout otherwise follow the Phase 0

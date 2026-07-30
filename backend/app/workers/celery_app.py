@@ -61,7 +61,9 @@ celery_app.conf.update(
     # forever with no diagnostic.
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=10,
-    # Discover tasks under app.workers.tasks. Empty in Phase 0.
+    # Task modules the worker must import to register them. Empty in Phase 0;
+    # implementations live in app.tasks (see that package for why it sits
+    # beside app.api rather than inside this one).
     imports=(),
 )
 

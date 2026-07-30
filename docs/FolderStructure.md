@@ -50,8 +50,8 @@ backend/
 │   │   ├── logging.py          Structured logging
 │   │   └── redis.py            Redis clients and cache helper
 │   ├── middleware/             ASGI middleware
-│   ├── workers/                Celery application and base task
-│   │   └── tasks/              Task implementations (empty in Phase 0)
+│   ├── tasks/                  ENTRY POINT — background work (empty in Phase 0)
+│   ├── workers/                INFRASTRUCTURE — Celery app, base task, retries
 │   ├── events/                 Domain events (reserved)
 │   ├── utils/                  Pure functions, no dependencies on other layers
 │   ├── database/               Engine, session factory, health check
@@ -63,18 +63,37 @@ backend/
 └── logs/                       Local log output (gitignored)
 ```
 
+### Entry points
+
+Two packages are entry points into the domain, and they are deliberately
+siblings:
+
+- **`api/`** — HTTP requests
+- **`tasks/`** — queued messages
+
+Both are adapters that translate an external trigger into a service call.
+Neither is imported by anything beneath it. `workers/` is not an entry point; it
+is the infrastructure that runs tasks, in the same way that `main.py` is the
+infrastructure that runs routes.
+
 ### Deviations from the originally specified layout
 
-Three, each recorded here because folder structure is not changed silently.
+Two remain, each recorded here because folder structure is not changed silently.
 
 | Specified | Implemented | Reason |
 |---|---|---|
-| `config/` at top level | `core/config.py` | A dedicated package for one settings module adds a directory without adding clarity. Configuration is a cross-cutting concern and `core` is where those live. |
-| `exceptions/` at top level | `core/exceptions.py` | The exception hierarchy is imported by every layer including `core` itself. Placing it inside `core` keeps the dependency graph acyclic and makes "core depends on nothing" literally true. |
-| `tasks/` at top level | `workers/tasks/` | Tasks are meaningless without the Celery app that registers them. Nesting keeps a task and its runtime configuration together. |
+| `config/` at top level | `core/config.py` | Configuration is imported by 12 modules across every layer, which is what `core` is for. If it outgrows one file it becomes `core/config/` as a package with **no import changes**, since `app.core.config` resolves to either form. |
+| `exceptions/` at top level | `core/exceptions.py` | `core/redis.py` imports `CacheError`. A top-level package would make `core` depend on a non-core package, turning the invariant "core depends on nothing outside itself" into a special case. |
 
-If you prefer the original layout, all three are mechanical moves plus an import
-update — say so and they will be changed.
+Note that the exceptions rationale is narrower than it may appear:
+`exceptions.py` imports nothing from the application, so no circular import is
+possible either way. The benefit is a cleanly checkable layering invariant, not
+a technical constraint.
+
+A third deviation — `tasks/` nested inside `workers/` — was **corrected** during
+Phase 0 finalization. The original justification (tasks are meaningless without
+the Celery app) proved too much: API routers are equally meaningless without the
+FastAPI app, yet `api/` is correctly top-level. See the entry-points note above.
 
 ## Frontend
 
@@ -123,6 +142,7 @@ frontend/
 - Enforces a business rule → `services/`
 - Defines a request or response shape → `schemas/`
 - Handles HTTP → `api/v1/<domain>/`
-- Runs in the background → `workers/tasks/`
+- Runs in the background → `tasks/`
+- Configures how background work executes → `workers/`
 - Pure function with no layer dependencies → `utils/`
 - Read by more than one layer and depends on none → `core/`
