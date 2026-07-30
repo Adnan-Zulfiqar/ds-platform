@@ -52,6 +52,8 @@ For running the services without Docker, see
 
 | Document | Contents |
 |---|---|
+| [PROJECT_ROADMAP.md](PROJECT_ROADMAP.md) | Phase status and deferred decisions |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each phase |
 | [Architecture.md](docs/Architecture.md) | Layering, multi-tenancy, and the reasoning behind each major decision |
 | [Authentication.md](docs/Authentication.md) | JWT flow, tenant resolution, token rotation, security decisions |
 | [Database.md](docs/Database.md) | Schema, conventions, migrations |

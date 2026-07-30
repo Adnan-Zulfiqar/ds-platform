@@ -145,8 +145,12 @@ matching in `_translate_integrity_error` reliable.
 
 ```
 Nginx  →  TrustedHost  →  RequestContext  →  CORS  →  SecurityHeaders
-       →  RateLimit  →  Route  →  Dependencies  →  Handler
-       →  Service  →  Repository  →  PostgreSQL
+       →  RateLimit  →  Route
+       →  Dependencies ─┬─ get_db_session      (transaction opens)
+                        ├─ get_current_principal
+                        │     └─ verify JWT → AuthenticatedUser → bind context
+                        └─ get_user_repository (tenant filter now guaranteed)
+       →  Handler  →  Service  →  Repository  →  PostgreSQL
 ```
 
 Middleware registration order in `main.py` is the *reverse* of execution order —
@@ -157,8 +161,16 @@ rationale is documented at that call site.
 handler returns and rolls back if it raises. Handlers never call `commit()`, so
 a request either fully succeeds or leaves no trace.
 
-**Repositories depend on `CurrentTenant`, not just `DbSession`.** That ordering
-guarantees FastAPI resolves tenant context before any scoped query can run.
+**Tenant-scoped repositories depend on `CurrentPrincipal`, not just
+`DbSession`.** FastAPI resolves dependencies in declaration order, so the
+principal — and therefore the bound tenant context — always exists before a
+scoped query can run. A repository that depended on the session alone could be
+constructed with no tenant bound, and `require_tenant_id()` would then raise at
+query time rather than the request failing cleanly at authentication.
+
+Phase 1 changed this dependency from `CurrentTenant` (which resolved a
+header) to `CurrentPrincipal` (which verifies a token). The guarantee it
+provides is identical; only the source of truth moved.
 
 ---
 
