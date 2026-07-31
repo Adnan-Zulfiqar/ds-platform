@@ -14,6 +14,7 @@ Last updated: 2026-07-31
 | 2 | Application shell, navigation, and SaaS UI foundation | ✅ **Complete** |
 | 3 | AliExpress integration foundation | ✅ **Complete** |
 | 4 | Product import and catalogue synchronisation | ✅ **Complete** |
+| 5 | Order management, fulfilment & synchronisation | ✅ **Complete** |
 
 ---
 
@@ -134,11 +135,35 @@ Full report: [PHASE_4_COMPLETION.md](docs/PHASE_4_COMPLETION.md),
 
 ---
 
-## Phase 5 — ⏳ Not started
+## Phase 5 — Order management, fulfilment & synchronisation ✅
 
-Scope arrives with the Phase 5 prompt. The catalogue foundation is ready to
-receive store mapping, bulk import, or order workflow — whichever the next
-phase specifies.
+**Tag:** `phase-5-complete`
+
+Orders domain with migration `0005`; idempotent AliExpress order sync; five
+API endpoints; Celery sweep/refresh/cleanup with beat entries; shipment
+tracking and a validated fulfilment lifecycle; webhook replay protection
+(unsigned payloads still never mutate state directly); Orders UI with detail,
+timeline, and live statistics; dashboard order-synchronisation row backed by
+the real statistics endpoint.
+
+Live verification through `AliExpressClient.call()` confirmed request signing,
+building, and error mapping — including the live finding that failures arrive
+wrapped in an `error_response` envelope. A populated order-detail success body
+was not available on the sandbox account (debt M16).
+
+Verified with **523 backend tests** and frontend lint, typecheck, and build.
+Orders Playwright suite: 16 passed. Full Playwright suite remains subject to
+M13 parallelism flakes.
+
+Full report: [PHASE_5_COMPLETION.md](docs/PHASE_5_COMPLETION.md).
+
+---
+
+## Phase 6 — ⏳ Not started
+
+Scope arrives with the Phase 6 prompt. The order and catalogue foundations are
+ready to receive store mapping, bulk operations, or fulfilment automation —
+whichever the next phase specifies.
 
 ---
 
@@ -153,7 +178,6 @@ in mind. Nothing here is committed to a phase number.
 | Product import and editing | The platform's highest-volume entity; drives the keyset-pagination and full-text-search decisions |
 | AI optimisation | Listing content generation and enhancement |
 | Inventory and price sync | Background work; the reason queue separation is configured but unused |
-| Order fulfilment and tracking | Money and personal data; needs an audit trail and must never hard-delete |
 | Analytics | Read replica or rollup tables rather than aggregating over live tables |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
@@ -170,7 +194,7 @@ each phase boundary.
 A housekeeping pass on 2026-07-31 resolved all three actionable High items —
 login throttle coverage, authorization wiring, and dead navigation links.
 
-**Current: 1 critical, 1 high, 12 medium, 5 low.**
+**Current: 1 critical, 1 high, 13 medium, 5 low** (M16 added; M9/M11/M15 updated).
 
 The critical item is that the **deployment path has never been executed** —
 Docker images, Compose, and Nginx are all unbuilt. It cannot be closed on this

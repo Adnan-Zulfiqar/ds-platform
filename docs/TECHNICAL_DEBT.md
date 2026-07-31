@@ -3,13 +3,15 @@
 Reviewed 2026-07-31 at `phase-1-complete`; updated after Phase 2.
 Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 **Phase 4 release review 2026-07-31** — M10 resolved; M15 added.
+**Phase 5 release review 2026-07-31** — M16 added; M9/M11/M15 updated; live
+`AliExpressClient.call()` verified for category success and order error/list paths.
 
-**Current count: 1 critical, 1 high, 12 medium, 5 low.**
+**Current count: 1 critical, 1 high, 13 medium, 5 low.**
 
-The Phase 4 release closed M10: product and feed contracts are now verified
-through captured live payloads and integration tests that drive the real HTTP
-pipeline. M15 records that catalogue Celery tasks are registered and unit-tested
-but have never run under a broker.
+The Phase 5 release verified the production AliExpress client path against the
+live gateway and shipped order sync. M16 records that a populated order-detail
+success body remains documentation-derived. M15 now covers order Celery tasks
+as well as catalogue tasks.
 
 The Phase 3 release review added four items, all discovered by verifying rather
 than by reading: M11 and M12 are the price of the new webhook endpoint being
@@ -149,33 +151,54 @@ gateway for product import has not been re-run as part of this release; Phase
 3.7 proved access via direct HTTP. The parsing layer is verified; the full
 client stack in production is not.
 
-### M15 — Product Celery sync tasks have never run under a broker
+### M15 — Celery sync tasks have never run under a broker
 
-`products.sync_one` and `products.sweep_stale` follow the Phase 3 task pattern
-and are unit-tested via `.run()`, but no RabbitMQ broker or Celery worker runs
-on the development machine. Nothing schedules `sweep_stale` (no beat entry).
+`products.sync_one`, `products.sweep_stale`, and the Phase 5 order tasks
+(`orders.sync_all`, `orders.sync_one_store`, `orders.refresh_status`,
+`orders.cleanup`) follow the established task pattern and are unit-tested via
+`.run()`, but no RabbitMQ broker or Celery worker runs on the development
+machine. Beat entries for the order tasks exist in `celery_app.py`; they have
+never been exercised by a running beat process.
 
-**Impact:** background price and inventory refresh is implemented but unverified
-in a running worker process.
-**Trigger:** before advertising scheduled catalogue sync to customers.
+**Impact:** background catalogue and order refresh is implemented but
+unverified in a running worker process.
+**Trigger:** before advertising scheduled sync to customers.
 **Fix:** run `docker compose up` with worker and beat once C1 is closed; add an
 integration test that executes `.apply()` against an in-process worker if CI
 cannot reach RabbitMQ.
+
+### M16 — Populated order-detail success body is documentation-derived
+
+Live verification through `AliExpressClient.call()` captured real error
+envelopes for `aliexpress.ds.trade.order.get` and a live
+`commissionorder.listbyindex` response. The sandbox account has **no real
+orders**, so the happy-path order-detail body used by the sync mapper is built
+from AliExpress documentation rather than a captured success payload.
+
+**Impact:** field names or nesting that differ from documentation will surface
+only when the first real order is synced.
+**Trigger:** the first connected account with live orders, or a fixture
+captured from one.
+**Fix:** re-run `scripts/verify_orders_live.py` (or sync) against an account
+with orders; commit the success fixture; align the Pydantic models to the live
+shape; add a regression test.
 
 ### M11 — The webhook accepts unsigned, unauthenticated deliveries
 
 `/api/v1/integrations/aliexpress/webhook` is public and performs no signature
 verification. Anyone who learns the URL can post to it.
 
-Tolerable **only** because the handler is inert: it parses, logs field names,
-and returns 200. Nothing is written, enqueued, or acted upon.
+Phase 5 added Redis replay protection, message classification, and delivery
+counters. The handler still **must not** mutate order state from the payload:
+there is no verifiable tenant claim and no signature. At most it may nudge a
+sync that re-fetches from the supplier API under the tenant's own credentials.
 
 The open question is factual and cheap to answer — whether AliExpress signs
 deliveries at all. The handler already records `signature_header_present` on
 every delivery, so a single real notification settles it.
 
-**Trigger:** before any webhook payload causes a state change. At that point an
-unverified delivery becomes an attacker-controlled write.
+**Trigger:** before any webhook payload is trusted to write order fields
+directly.
 **Fix:** confirm the signing scheme, compute the HMAC over the raw body, and
 reject mismatches. `parse_webhook_payload` reads `request.body()`, which Starlette
 caches, so the exact bytes remain available for verification.
@@ -300,25 +323,21 @@ request volume, not guessing.
 **Trigger:** observed abuse, or before opening the API to the public internet.
 **Fix:** apply the login throttle keyed on IP to both.
 
-### M9 — The dashboard renders mock data
+### M9 — The dashboard still renders mock charts and headline stats
 
-Every figure on `/dashboard` — six stat cards, three charts — comes from
-`lib/mock/dashboard-data.ts`. Nothing is real.
+Phase 5 added a **live** order-synchronisation row on `/dashboard` (and on
+`/orders`) backed by `GET /orders/statistics`. The six mock headline cards and
+three charts still come from `lib/mock/dashboard-data.ts`.
 
 **This is contained rather than dangerous**, and the containment is the point:
-the module is quarantined under `lib/mock/`, every export is prefixed `MOCK_`,
-nothing outside the dashboard imports it, and the page carries a visible banner
-telling the user the figures are placeholders. An operator cannot mistake them
-for their own data.
+the mock module is quarantined under `lib/mock/`, every export is prefixed
+`MOCK_`, and the page banner states which figures are sample data. An operator
+must not mistake the mock row for their own metrics.
 
-It is listed as debt anyway because the containment is a convention, not a
-mechanism — nothing prevents a future page importing the module.
-
-**Trigger:** the first analytics endpoint.
-**Fix:** add fetchers to `services/dashboard.ts`, swap the imports in the
-dashboard page, delete `lib/mock/dashboard-data.ts`. A surviving `MOCK_`
-reference anywhere means the migration is incomplete, which is exactly what the
-prefix is for.
+**Trigger:** the first analytics endpoint that replaces the remaining mock row.
+**Fix:** add fetchers to `services/dashboard.ts`, swap the remaining `MOCK_`
+imports, delete `lib/mock/dashboard-data.ts`. A surviving `MOCK_` reference
+anywhere means the migration is incomplete.
 
 ### M8 — The dashboard bundle is 108 kB, almost all Recharts
 

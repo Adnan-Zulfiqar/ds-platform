@@ -14,6 +14,64 @@ Nothing pending.
 
 ---
 
+## [phase-5] — 2026-07-31
+
+Order management, fulfilment, and synchronisation from AliExpress.
+
+Closed with live `AliExpressClient.call()` verification, migration `0005`,
+integration tests against real PostgreSQL, and an Orders UI backed by the real
+API. See [PHASE_5_COMPLETION.md](docs/PHASE_5_COMPLETION.md).
+
+### Added
+
+**Contract layer** (`app/integrations/aliexpress/orders.py`)
+- Wire models and parsers for order detail, commission list, and logistics
+- Captured live fixtures for error envelopes and list responses
+- Client fix: unwrap `error_response` envelopes before error mapping
+
+**Domain model** (`app/models/order.py`, migration `0005`)
+- `orders`, `order_items`, `shipments`, `tracking_events`, `order_events`,
+  `order_sync_runs`
+- Validated fulfilment transition map
+
+**Sync service** (`app/services/order_sync.py`)
+- Idempotent incremental import; timeline merge; statistics
+
+**Order API** (`app/api/v1/orders/router.py`)
+- List (filters), statistics, sync, detail, timeline
+
+**Background sync** (`app/tasks/orders.py`)
+- `orders.sync_all`, `orders.sync_one_store`, `orders.refresh_status`,
+  `orders.cleanup` with Celery beat entries
+
+**Webhook processing**
+- Redis replay protection, classification, delivery counters; unsigned payloads
+  never mutate order state directly
+
+**Frontend orders module**
+- `/orders` list with filters, search, pagination, sync dialog, live statistics
+- `/orders/[orderId]` detail with items, shipments, tracking, timeline
+- Dashboard live order-synchronisation row
+
+### Verified
+
+- **523 backend tests** — ruff, mypy strict, pytest all green
+- **Live `AliExpressClient.call()`** — category success; order get error path;
+  commission order list capture
+- **Tenant isolation** — SQL compile tests on order repositories; integration
+  cross-tenant 404
+- **Frontend lint, typecheck, build** — all pass
+- **Playwright orders suite** — 16 passed against real backend
+
+### Not verified
+
+- Populated order-detail success body from live API (M16)
+- Celery order tasks under a live broker/worker (M15)
+- Webhook signature verification (M11 — unsigned)
+- Docker deployment (C1 — unchanged)
+
+---
+
 ## [phase-4] — 2026-07-31
 
 Product import and catalogue synchronisation from AliExpress.
