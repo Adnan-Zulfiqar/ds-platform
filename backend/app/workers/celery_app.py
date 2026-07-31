@@ -1,9 +1,10 @@
 """Celery application.
 
-**Phase 0 defines no tasks.** This module configures the worker so that the
-first real job — an AliExpress import, an inventory sync — is a single task
-function rather than an infrastructure project. Getting the reliability settings
-right now is much cheaper than discovering them under production load.
+Configured in Phase 0 so that the first real job would be a single task
+function rather than an infrastructure project; tasks arrived in Phases 3-5
+(integration health checks, catalogue sync, order sync). Getting the
+reliability settings right early is much cheaper than discovering them under
+production load.
 
 **Broker choice.** RabbitMQ brokers the work and Redis stores results. Redis
 alone would be simpler, but Redis is not a durable message broker: a restart can
@@ -70,7 +71,36 @@ celery_app.conf.update(
     imports=(
         "app.tasks.integrations.aliexpress",
         "app.tasks.products",
+        "app.tasks.orders",
     ),
+    # Periodic schedule, executed by a beat process (`celery -A ... beat`).
+    # Configuration only: no beat process runs on the development machine, so
+    # these entries are registered but have never fired (M15). Intervals are
+    # deliberately conservative — every scheduled sync spends tenants' supplier
+    # quota, and the windows overlap the interval so a missed beat leaves
+    # overlap rather than a gap.
+    beat_schedule={
+        "orders-sync-all": {
+            "task": "orders.sync_all",
+            "schedule": 60 * 60,  # hourly; the sync window is 2 days
+        },
+        "orders-refresh-status": {
+            "task": "orders.refresh_status",
+            "schedule": 60 * 60 * 6,
+        },
+        "orders-cleanup": {
+            "task": "orders.cleanup",
+            "schedule": 60 * 60 * 24,
+        },
+        "products-sweep-stale": {
+            "task": "products.sweep_stale",
+            "schedule": 60 * 60 * 12,  # matches the 12h staleness threshold
+        },
+        "aliexpress-sweep-health": {
+            "task": "integrations.aliexpress.sweep_health_checks",
+            "schedule": 60 * 60,
+        },
+    },
 )
 
 # Explicit routing table.
