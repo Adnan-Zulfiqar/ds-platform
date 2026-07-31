@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 
+import { OrderStatisticsCards } from "@/components/orders/order-statistics-cards";
 import { OrdersChart } from "@/components/dashboard/charts/orders-chart";
 import { ProductPerformanceChart } from "@/components/dashboard/charts/product-performance-chart";
 import { SalesChart } from "@/components/dashboard/charts/sales-chart";
@@ -29,11 +30,10 @@ import { useAuth } from "@/providers/auth-provider";
 /**
  * Dashboard.
  *
- * **Every figure on this page is mock data.** There is nothing to report yet:
- * no products, orders, or connected stores exist. The banner below says so
- * plainly rather than letting an operator mistake invented numbers for their
- * own — a dashboard that looks authoritative and is not is worse than an empty
- * one.
+ * **The charts and stat row are mock data; the order synchronisation row is
+ * live.** The banner says which is which rather than letting an operator
+ * mistake invented numbers for their own — a dashboard that looks
+ * authoritative and is not is worse than an empty one.
  *
  * The layout, the components, and the states are all real. Replacing the mock
  * import with a React Query hook from `services/dashboard.ts` is the entire
@@ -64,12 +64,21 @@ export default function DashboardPage() {
         }
       />
 
+      {/* Live figures from the order statistics endpoint — real data, unlike
+          the sample charts below. Kept above the banner so the "sample data"
+          caveat applies only to what actually is sample data. */}
+      <section aria-label="Live order status" className="space-y-2">
+        <h2 className="text-lg font-semibold">Order synchronisation</h2>
+        <OrderStatisticsCards />
+      </section>
+
       <Alert>
         <FlaskConical className="h-4 w-4" />
         <AlertTitle>Sample data</AlertTitle>
         <AlertDescription>
           Every figure below is placeholder data for layout purposes. Real
-          metrics appear once products, stores, and orders are connected.
+          metrics appear once products and stores are connected. The order
+          synchronisation row above is live.
         </AlertDescription>
       </Alert>
 

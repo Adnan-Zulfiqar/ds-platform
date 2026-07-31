@@ -263,8 +263,11 @@ test.describe("Protected routes", () => {
   });
 
   test("placeholder pages state plainly that they are not built", async ({ page }) => {
+    // Products and Orders are real modules now; Stores is still a ComingSoon
+    // placeholder. Pointing at a built page would make this assertion false
+    // for the wrong reason.
     await signIn(page);
-    await page.goto("/products");
+    await page.goto("/stores");
 
     await expect(page.getByText("Not available yet")).toBeVisible();
   });

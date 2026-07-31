@@ -251,6 +251,164 @@ export interface ListQuery {
   q?: string;
 }
 
+export type OrderSource = "aliexpress" | "manual";
+
+export type FulfillmentStatus =
+  | "pending"
+  | "awaiting_payment"
+  | "paid"
+  | "processing"
+  | "fulfilled"
+  | "shipped"
+  | "delivered"
+  | "cancelled"
+  | "refunded"
+  | "disputed";
+
+export type PaymentStatus = "unknown" | "unpaid" | "paid" | "refunded";
+
+export type ShipmentStatus =
+  | "pending"
+  | "in_transit"
+  | "out_for_delivery"
+  | "delivered"
+  | "exception"
+  | "returned";
+
+export type OrderEventType =
+  | "created"
+  | "synced"
+  | "status_change"
+  | "payment_change"
+  | "shipment_update"
+  | "note"
+  | "webhook";
+
+export type SyncRunStatus = "running" | "succeeded" | "failed";
+export type SyncTrigger = "manual" | "scheduled" | "webhook";
+
+/** Money fields are `string` for the same Decimal reason documented above. */
+export interface OrderItem {
+  id: string;
+  externalItemId: string | null;
+  productId: string | null;
+  externalProductId: string | null;
+  title: string | null;
+  skuAttributes: string | null;
+  quantity: number;
+  unitPrice: string | null;
+  currency: string | null;
+  externalStatus: string | null;
+}
+
+export interface TrackingEvent {
+  id: string;
+  occurredAt: string;
+  status: string | null;
+  description: string | null;
+  location: string | null;
+}
+
+export interface Shipment {
+  id: string;
+  trackingNumber: string | null;
+  carrier: string | null;
+  serviceName: string | null;
+  status: ShipmentStatus;
+  estimatedDeliveryAt: string | null;
+  shippedAt: string | null;
+  deliveredAt: string | null;
+  currentLocation: string | null;
+  lastCheckedAt: string | null;
+  trackingEvents: TrackingEvent[];
+}
+
+export interface Order {
+  id: string;
+  source: OrderSource;
+  externalId: string;
+  externalStatus: string | null;
+  fulfillmentStatus: FulfillmentStatus;
+  paymentStatus: PaymentStatus;
+  buyerName: string | null;
+  countryCode: string | null;
+  currency: string | null;
+  totalAmount: string | null;
+  itemCount: number;
+  externalCreatedAt: string | null;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  createdAt: string;
+}
+
+export interface OrderDetail extends Order {
+  buyerCountry: string | null;
+  recipientName: string | null;
+  recipientPhone: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  province: string | null;
+  postalCode: string | null;
+  shippingAmount: string | null;
+  paidAt: string | null;
+  deliveredAt: string | null;
+  items: OrderItem[];
+  shipments: Shipment[];
+}
+
+/** One row of the merged lifecycle-plus-tracking history. */
+export interface OrderTimelineEntry {
+  kind: "order" | "tracking";
+  eventType: OrderEventType | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  status: string | null;
+  description: string | null;
+  location: string | null;
+  occurredAt: string;
+}
+
+export interface OrderSyncRun {
+  id: string;
+  trigger: SyncTrigger;
+  status: SyncRunStatus;
+  windowStart: string | null;
+  windowEnd: string | null;
+  ordersSeen: number;
+  ordersCreated: number;
+  ordersUpdated: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export interface OrderSyncPayload {
+  sinceDays?: number;
+}
+
+export interface OrderStatistics {
+  totalOrders: number;
+  byStatus: Record<string, number>;
+  pendingFulfillment: number;
+  processing: number;
+  delivered: number;
+  failedSyncsLast7Days: number;
+  lastSync: OrderSyncRun | null;
+  /** Null when Redis is unavailable — absent rather than a fabricated zero. */
+  webhookEventsReceived: number | null;
+}
+
+/** Filters accepted by GET /orders beyond the shared list parameters. */
+export interface OrderListQuery extends ListQuery {
+  status?: FulfillmentStatus;
+  source?: OrderSource;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
 
 export interface ComponentHealth {

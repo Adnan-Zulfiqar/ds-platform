@@ -1,20 +1,29 @@
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/ui/coming-soon";
+import { OrderStatisticsCards } from "@/components/orders/order-statistics-cards";
+import { OrderTable } from "@/components/orders/order-table";
+import { SyncOrdersDialog } from "@/components/orders/sync-orders-dialog";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata: Metadata = { title: "Orders" };
 
+/**
+ * The order list.
+ *
+ * A Server Component rendering client islands, the same shape as the products
+ * page: statistics, the table (which owns its filters and pagination), and the
+ * sync dialog each own their own state and data fetching.
+ */
 export default function OrdersPage() {
   return (
-    <ComingSoon
-      title="Orders"
-      description="Track, fulfil, and monitor customer orders."
-      planned={[
-        "Unified order list across every connected store",
-        "Automatic supplier fulfilment",
-        "Shipment tracking and customer notifications",
-        "Refund and cancellation handling",
-      ]}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Orders"
+        description="Orders synchronised from your connected suppliers."
+        actions={<SyncOrdersDialog />}
+      />
+      <OrderStatisticsCards />
+      <OrderTable />
+    </div>
   );
 }
