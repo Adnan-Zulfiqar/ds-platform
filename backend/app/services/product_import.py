@@ -136,6 +136,16 @@ class ProductImportService(BaseService):
         record.finished_at = datetime.now(UTC)
         await self.session.flush()
 
+        # Load the children explicitly before returning.
+        #
+        # `selectin` eager loading applies when a product is *queried*, not to
+        # one just built in this session — and the variants and images were
+        # written through their own repositories, so the parent's collections
+        # are stale. Touching them afterwards would trigger a lazy load, which
+        # is implicit IO, which raises `MissingGreenlet` in async SQLAlchemy
+        # rather than awaiting. Refreshing here is that load, made explicit.
+        await self.session.refresh(product, attribute_names=["variants", "images"])
+
         self.logger.info(
             "product_imported",
             product_id=str(product.id),
