@@ -10,7 +10,7 @@ implied.
 |---|---|
 | Date | 2026-07-31 |
 | Branch | `develop` |
-| Tag | `phase-7-complete` → `8d4e4df` |
+| Tag | `phase-7-complete` (annotated; tip recorded below after tagging) |
 | Base | `phase-6-complete` (`6725d3a`) |
 | Migration | `0007` — `email_verification_tokens` |
 | Local Docker | **Unavailable** (`docker` not on PATH) |
@@ -22,7 +22,9 @@ implied.
 | `2ddbced` | feat(ops): harden webhooks and add Celery/Compose deployment validation |
 | `3839e58` | feat(auth): add email verification foundation without fake SMTP |
 | `8d6eeda` | fix(frontend): remove stale nav/store and stabilize e2e registration |
-| `8d4e4df` | docs: close Phase 7 production hardening |
+| `52da999` | docs: close Phase 7 production hardening |
+
+**Tag tip:** `52da999` (`phase-7-complete`).
 
 ---
 
