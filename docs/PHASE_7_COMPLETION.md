@@ -10,7 +10,7 @@ implied.
 |---|---|
 | Date | 2026-07-31 |
 | Branch | `develop` |
-| Tag | `phase-7-complete` (annotated; tip recorded below after tagging) |
+| Tag | `phase-7-complete` → commit `1ed5477` (pushed; not moved) |
 | Base | `phase-6-complete` (`6725d3a`) |
 | Migration | `0007` — `email_verification_tokens` |
 | Local Docker | **Unavailable** (`docker` not on PATH) |
@@ -23,8 +23,10 @@ implied.
 | `3839e58` | feat(auth): add email verification foundation without fake SMTP |
 | `8d6eeda` | fix(frontend): remove stale nav/store and stabilize e2e registration |
 | `52da999` | docs: close Phase 7 production hardening |
+| `1ed5477` | docs: record Phase 7 commit and tag tip hashes |
 
-**Tag tip:** `52da999` (`phase-7-complete`).
+`phase-7-complete` was pushed at `1ed5477`. Later docs-only tip commits may sit
+ahead of the tag on `develop` without moving the tag.
 
 ---
 
