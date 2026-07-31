@@ -29,7 +29,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.integrations.aliexpress.auth import build_signed_params
+from app.integrations.aliexpress.auth import build_signed_params, signing_path_for
 from app.integrations.aliexpress.exceptions import (
     AliExpressAuthError,
     AliExpressError,
@@ -130,8 +130,21 @@ class AliExpressClient:
         Separate from :meth:`call` because these endpoints take no
         ``access_token`` — obtaining one is the point — and live on different
         paths from the API gateway.
+
+        **The signature must include the API path for these endpoints.** They
+        are REST-style (``/rest/auth/token/create``), and REST-style requests
+        prefix the base string with the path minus the ``/rest`` routing
+        segment. An earlier version signed without it, producing a signature the
+        gateway cannot reproduce — surfacing as an opaque "invalid signature"
+        rejection at the exact moment a user finishes authorising, with nothing
+        in the message to indicate why.
         """
-        signed = build_signed_params(params, app_key=self._app_key, app_secret=self._app_secret)
+        signed = build_signed_params(
+            params,
+            app_key=self._app_key,
+            app_secret=self._app_secret,
+            api_path=signing_path_for(url),
+        )
         return await self._request_with_retries(url, signed, operation="token_exchange")
 
     # -- Transport ----------------------------------------------------------

@@ -21,6 +21,7 @@ from app.integrations.aliexpress.auth import (
     build_signed_params,
     resolve_token_expiry,
     sign_request,
+    signing_path_for,
 )
 from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import (
@@ -130,6 +131,69 @@ class TestSigning:
         assert signed["sign_method"] == "sha256"
         assert signed["timestamp"].isdigit()
         assert signed["sign"]
+
+
+class TestSigningPath:
+    """The API path prefix rule.
+
+    Phase 3.5 found that token exchange signed *without* the path prefix, which
+    REST-style endpoints require. The gateway rejects that as an invalid
+    signature with no indication of which half is wrong, so the rule is pinned
+    here rather than left to be rediscovered.
+    """
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            # REST style: path prefixed, minus the /rest routing segment.
+            ("https://api-sg.aliexpress.com/rest/auth/token/create", "/auth/token/create"),
+            ("https://api-sg.aliexpress.com/rest/auth/token/refresh", "/auth/token/refresh"),
+            # TOP style: the method travels as a parameter, no path prefix.
+            ("https://api-sg.aliexpress.com/sync", ""),
+            # Trailing slashes must not change the result.
+            ("https://api-sg.aliexpress.com/rest/auth/token/create/", "/auth/token/create"),
+        ],
+    )
+    def test_derives_the_signing_path(self, url: str, expected: str) -> None:
+        assert signing_path_for(url) == expected
+
+    def test_the_path_changes_the_signature(self) -> None:
+        """If it did not, the prefix would be decorative."""
+        params = {"code": "abc", "grant_type": "authorization_code"}
+        assert sign_request(params, app_secret=APP_SECRET) != sign_request(
+            params, app_secret=APP_SECRET, api_path="/auth/token/create"
+        )
+
+    async def test_token_exchange_signs_with_the_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression test for the Phase 3.5 fix.
+
+        Captures the signature the client actually sends and compares it with
+        one computed independently using the path prefix.
+        """
+        captured: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            from urllib.parse import parse_qs
+
+            body = parse_qs(request.content.decode())
+            captured.update({k: v[0] for k, v in body.items()})
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+
+        monkeypatch.setattr(client_module.httpx, "AsyncClient", mock_client(handler))
+
+        url = "https://api-sg.aliexpress.com/rest/auth/token/create"
+        await build().exchange_token(url, {"code": "abc", "grant_type": "authorization_code"})
+
+        # Recompute over exactly what was transmitted.
+        sent = {k: v for k, v in captured.items() if k != "sign"}
+        expected = sign_request(sent, app_secret=APP_SECRET, api_path="/auth/token/create")
+
+        assert captured["sign"] == expected
+
+        # And confirm it is *not* the unprefixed signature — the old behaviour.
+        assert captured["sign"] != sign_request(sent, app_secret=APP_SECRET)
 
 
 class TestTokenExpiryResolution:

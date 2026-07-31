@@ -3,24 +3,21 @@
 How a tenant connects their AliExpress account, how their credentials are
 protected, and why each decision was made that way.
 
-> ## ⚠️ Verify the API contract before live traffic
+> ## ⚠️ Verification status
 >
-> The endpoints, signing scheme, and error codes here implement the documented
-> AliExpress Open Platform behaviour, **but none of it has been exercised
-> against the real API.** AliExpress operates several regional gateways and has
-> changed both signing methods and paths between API generations.
+> A **documentation review** was completed in Phase 3.5 and found and fixed one
+> genuine defect (the signing path prefix — see
+> [Verification log](#verification-log)).
 >
-> Before connecting a real account, confirm against current AliExpress developer
-> documentation for the account in use:
+> **No request has ever been sent to AliExpress.** The OAuth round trip could
+> not be completed because the registered callback
+> (`https://whiteto.com/api/v1/integrations/aliexpress/callback`) returns 404 —
+> that domain does not serve this application — and no credentials were
+> available. Everything below is verified against documentation and reference
+> implementations, not against the live gateway.
 >
-> * the authorize, token, refresh, and gateway URLs
-> * the signing algorithm and which parameters are excluded
-> * the error codes mapped in `client.py`
-> * the token response field names
->
-> Every one of these is either a setting or isolated in a single function,
-> specifically so that correcting one is a configuration change or a one-function
-> edit rather than a rewrite. See [Correcting the contract](#correcting-the-contract).
+> Use `backend/scripts/verify_aliexpress.py` to complete the live verification.
+> See [Running live verification](#running-live-verification).
 
 ## Contents
 
@@ -283,6 +280,96 @@ Full list in `.env.example` under the AliExpress section.
 refuses to store credentials.** That is deliberate — refusing beats writing a
 customer's supplier secret in plaintext because a key was missing — but it means
 the failure appears at first use rather than at boot.
+
+---
+
+## Verification log
+
+### Phase 3.5 — documentation review, 2026-07-31
+
+Compared against the AliExpress Open Platform documentation and two independent
+reference implementations. Note the official doc portals
+(`openservice.aliexpress.com`) are JavaScript-rendered and could not be read
+programmatically, so reference implementations carried most of the weight.
+
+| Item | Result |
+|---|---|
+| Authorization URL and parameters | ✅ Matches |
+| Signature algorithm (HMAC-SHA256, upper hex) | ✅ Matches |
+| Parameter sorting | ✅ Matches |
+| `sign_method` excluded from the base string | ✅ Matches |
+| **API path prefix in the signature** | ❌ **Defect found and fixed** |
+| Token and refresh endpoint paths | ✅ Matches |
+| Token response field names | ✅ Plausible; `extra="allow"` tolerates variation |
+| Error code mappings | ⚠️ Unverified — needs live failures to confirm |
+
+#### The defect
+
+REST-style endpoints prefix the signature base string with the API path, minus
+the `/rest` routing segment. TOP-style requests to `/sync` prefix nothing —
+the method travels as a parameter instead.
+
+`AliExpressClient.call` handled this correctly, but `exchange_token` signed
+**without** the prefix. Token creation and refresh would therefore have been
+rejected with an invalid-signature error — at the exact moment a user finished
+authorising, with nothing in the message indicating why.
+
+Fixed by deriving the prefix from the URL in `auth.signing_path_for`, so no call
+site has to remember it. Pinned by a regression test that recomputes the
+signature over exactly what was transmitted and asserts it is *not* the
+unprefixed form.
+
+#### One observation worth noting
+
+A live authorization URL seen in the wild carried `redirect_auth=true` rather
+than `redirect_uri=...`. Reference implementations use `redirect_uri`, and that
+is what is implemented. If authorization fails with a redirect-related error,
+this is the first thing to check.
+
+---
+
+## Running live verification
+
+`backend/scripts/verify_aliexpress.py` walks the flow against the real gateway.
+**Credentials come from the environment and are never printed** — the script
+masks every secret and reports response *shapes* rather than contents, so a
+token cannot end up in a scrollback buffer or a screen recording.
+
+```bash
+# Configuration only — contacts nothing.
+python scripts/verify_aliexpress.py preflight
+```
+
+```bash
+# Print the authorization URL to open in a browser.
+python scripts/verify_aliexpress.py authorize
+```
+
+```bash
+# Exchange the code from the redirect. It is single-use and expires quickly.
+ALIEXPRESS_AUTH_CODE=... python scripts/verify_aliexpress.py exchange
+```
+
+```bash
+# One read-only call.
+ALIEXPRESS_ACCESS_TOKEN=... python scripts/verify_aliexpress.py call
+```
+
+### Prerequisites that are not yet met
+
+1. **`ALIEXPRESS_APP_KEY` and `ALIEXPRESS_APP_SECRET`** must be set. Neither is
+   set anywhere on the development machine.
+2. **`ALIEXPRESS_REDIRECT_URI` must match the developer console exactly**, and
+   the target must be reachable. The registered callback is
+   `https://whiteto.com/api/v1/integrations/aliexpress/callback`, which
+   currently returns 404 — that domain does not serve this application.
+
+   For the script alone, the redirect only has to be *reachable enough* for the
+   browser to land somewhere: the code is in the URL and usable even if the page
+   errors. For the **application** flow to work end to end, the callback must
+   genuinely reach this backend.
+3. **Redis must be running** for the application flow — the OAuth `state` lives
+   there and the service fails closed without it. The script does not need it.
 
 ---
 

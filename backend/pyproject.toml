@@ -97,6 +97,10 @@ known-first-party = ["app", "tests"]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S105", "S106", "S107"]  # hardcoded test credentials are fine
 "alembic/versions/*" = ["E501"]
+# Operator scripts are command-line tools: writing to stdout is their entire
+# purpose, and the T201 ban on `print` exists to keep it out of *application*
+# code, where structured logging belongs instead.
+"scripts/*" = ["T201"]
 
 # --------------------------------------------------------------------------
 # mypy — static type checking.

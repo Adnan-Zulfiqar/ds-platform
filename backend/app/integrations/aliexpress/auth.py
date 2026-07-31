@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -83,6 +83,30 @@ def sign_request(params: dict[str, Any], *, app_secret: str, api_path: str = "")
     ).hexdigest()
 
     return digest.upper()
+
+
+def signing_path_for(url: str) -> str:
+    """Derive the path that must prefix the signature base string for a URL.
+
+    The Open Platform has two request styles and they sign differently:
+
+    * **REST style** (``/rest/auth/token/create``) — the base string is prefixed
+      with the API path, *excluding* the ``/rest`` routing segment. So the
+      prefix for that URL is ``/auth/token/create``.
+    * **TOP style** (``/sync``) — the method travels as a ``method`` parameter
+      and no path is prefixed.
+
+    Getting this wrong produces an "invalid signature" error that says nothing
+    about which half is wrong, so it is derived here rather than passed by hand
+    at each call site.
+    """
+    path = urlparse(url).path.rstrip("/")
+
+    if path.startswith("/rest"):
+        return path[len("/rest") :] or ""
+    if path in {"/sync", ""}:
+        return ""
+    return path
 
 
 def build_signed_params(
@@ -209,4 +233,5 @@ __all__ = [
     "build_signed_params",
     "resolve_token_expiry",
     "sign_request",
+    "signing_path_for",
 ]
