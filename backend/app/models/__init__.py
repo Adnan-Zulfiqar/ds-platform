@@ -17,6 +17,15 @@ from app.models.base import (
     UUIDPrimaryKeyMixin,
 )
 from app.models.integration import AliExpressConnection, IntegrationStatus
+from app.models.product import (
+    ImportStatus,
+    Product,
+    ProductImage,
+    ProductImport,
+    ProductSource,
+    ProductStatus,
+    ProductVariant,
+)
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role, RoleName, UserRole
 from app.models.tenant import Tenant, TenantStatus
@@ -26,7 +35,14 @@ __all__ = [
     "AliExpressConnection",
     "Base",
     "IdentifiedBase",
+    "ImportStatus",
     "IntegrationStatus",
+    "Product",
+    "ProductImage",
+    "ProductImport",
+    "ProductSource",
+    "ProductStatus",
+    "ProductVariant",
     "ReferenceBase",
     "RefreshToken",
     "Role",
