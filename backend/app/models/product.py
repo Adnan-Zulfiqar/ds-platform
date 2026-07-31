@@ -154,12 +154,21 @@ class Product(TenantScopedBase):
 
     # --- Supplier pricing ---------------------------------------------------
     #
-    # What the supplier charges. The tenant's own selling price is deliberately
-    # not here: pricing rules are a later phase, and storing a sell price now
-    # would mean inventing a rule engine to keep it correct.
+    # What the supplier charges. Sell price is derived by the pricing engine and
+    # audited in ``price_changes``; it is stored here so list views do not join.
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     cost_price_min: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     cost_price_max: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    sell_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+
+    #: Optional sales-channel assignment. Null means the product is in the
+    #: catalogue but not mapped to a store yet.
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # --- Inventory ----------------------------------------------------------
     stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

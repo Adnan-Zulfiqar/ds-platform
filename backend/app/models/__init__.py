@@ -6,6 +6,13 @@ module that defines the model — a model that is never imported is silently
 omitted from migrations.
 """
 
+from app.models.analytics import AnalyticsDaily
+from app.models.automation import (
+    AutomationAction,
+    AutomationRule,
+    AutomationRun,
+    AutomationSchedule,
+)
 from app.models.base import (
     Base,
     IdentifiedBase,
@@ -17,6 +24,12 @@ from app.models.base import (
     UUIDPrimaryKeyMixin,
 )
 from app.models.integration import AliExpressConnection, IntegrationStatus
+from app.models.inventory import (
+    InventoryChange,
+    InventoryChangeReason,
+    InventorySyncRun,
+)
+from app.models.notification import Notification, NotificationKind
 from app.models.order import (
     FulfillmentStatus,
     Order,
@@ -32,6 +45,12 @@ from app.models.order import (
     SyncTrigger,
     TrackingEvent,
 )
+from app.models.pricing import (
+    PriceChange,
+    PricingRule,
+    PricingScope,
+    PricingStrategy,
+)
 from app.models.product import (
     ImportStatus,
     Product,
@@ -43,16 +62,27 @@ from app.models.product import (
 )
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role, RoleName, UserRole
+from app.models.store import Store, StorePlatform, StoreStatus
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User
 
 __all__ = [
     "AliExpressConnection",
+    "AnalyticsDaily",
+    "AutomationAction",
+    "AutomationRule",
+    "AutomationRun",
+    "AutomationSchedule",
     "Base",
     "FulfillmentStatus",
     "IdentifiedBase",
     "ImportStatus",
     "IntegrationStatus",
+    "InventoryChange",
+    "InventoryChangeReason",
+    "InventorySyncRun",
+    "Notification",
+    "NotificationKind",
     "Order",
     "OrderEvent",
     "OrderEventType",
@@ -60,6 +90,10 @@ __all__ = [
     "OrderSource",
     "OrderSyncRun",
     "PaymentStatus",
+    "PriceChange",
+    "PricingRule",
+    "PricingScope",
+    "PricingStrategy",
     "Product",
     "ProductImage",
     "ProductImport",
@@ -73,6 +107,9 @@ __all__ = [
     "Shipment",
     "ShipmentStatus",
     "SoftDeleteMixin",
+    "Store",
+    "StorePlatform",
+    "StoreStatus",
     "SyncRunStatus",
     "SyncTrigger",
     "Tenant",

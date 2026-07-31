@@ -468,6 +468,7 @@ class OrderSyncService(BaseService):
                 order_id=order.id, tracking_number=logistics.logistics_no
             )
             status = map_shipment_status(detail.logistics_status)
+            previous_status = shipment.status if shipment is not None else None
             if shipment is None:
                 shipment = await self.shipments.create(
                     order_id=order.id,
@@ -488,6 +489,18 @@ class OrderSyncService(BaseService):
                 shipment.last_checked_at = now
             if status is ShipmentStatus.DELIVERED and shipment.delivered_at is None:
                 shipment.delivered_at = now
+
+            # Append a scan only when status moves. A no-op refresh must not
+            # flood the timeline; the logistics payload rarely carries full
+            # carrier history (M16), so the current status is what we record.
+            if previous_status is None or previous_status != status:
+                await self.tracking.create(
+                    shipment_id=shipment.id,
+                    occurred_at=now,
+                    status=detail.logistics_status or status.value,
+                    description=f"Status: {detail.logistics_status or status.value}",
+                    location=None,
+                )
 
         await self.session.flush()
         await self._record_event(

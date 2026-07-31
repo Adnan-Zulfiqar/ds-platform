@@ -19,6 +19,7 @@ from app.models.product import (
     ProductImage,
     ProductImport,
     ProductSource,
+    ProductStatus,
     ProductVariant,
 )
 from app.repositories.base import TenantScopedRepository
@@ -37,6 +38,7 @@ class ProductRepository(TenantScopedRepository[Product]):
             "title",
             "status",
             "cost_price_min",
+            "sell_price",
             "stock_quantity",
             "last_synced_at",
         }
@@ -76,6 +78,31 @@ class ProductRepository(TenantScopedRepository[Product]):
             query = query.where(where_clause)
         result = await self.session.execute(query.group_by(Product.status))
         return {str(status.value): count for status, count in result.all()}
+
+    async def list_for_inventory(
+        self,
+        *,
+        store_id: uuid.UUID | None = None,
+        limit: int = 500,
+    ) -> list[Product]:
+        """Catalogue rows eligible for an inventory sweep."""
+        query = self._base_query().where(
+            Product.status.in_((ProductStatus.ACTIVE, ProductStatus.DRAFT))
+        )
+        if store_id is not None:
+            query = query.where(Product.store_id == store_id)
+        query = query.order_by(Product.last_synced_at.asc().nulls_first()).limit(limit)
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def count_for_store(self, store_id: uuid.UUID) -> int:
+        where_clause = self._base_query().whereclause
+        query = (
+            select(func.count(Product.id)).select_from(Product).where(Product.store_id == store_id)
+        )
+        if where_clause is not None:
+            query = query.where(where_clause)
+        return int((await self.session.execute(query)).scalar_one())
 
 
 class ProductVariantRepository(TenantScopedRepository[ProductVariant]):

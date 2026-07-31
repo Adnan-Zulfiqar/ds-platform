@@ -72,6 +72,12 @@ celery_app.conf.update(
         "app.tasks.integrations.aliexpress",
         "app.tasks.products",
         "app.tasks.orders",
+        "app.tasks.inventory",
+        "app.tasks.pricing",
+        "app.tasks.automation",
+        "app.tasks.shipments",
+        "app.tasks.analytics",
+        "app.tasks.notifications",
     ),
     # Periodic schedule, executed by a beat process (`celery -A ... beat`).
     # Configuration only: no beat process runs on the development machine, so
@@ -95,6 +101,30 @@ celery_app.conf.update(
         "products-sweep-stale": {
             "task": "products.sweep_stale",
             "schedule": 60 * 60 * 12,  # matches the 12h staleness threshold
+        },
+        "inventory-sync": {
+            "task": "inventory.sync",
+            "schedule": 60 * 60 * 6,
+        },
+        "pricing-recalculate": {
+            "task": "pricing.recalculate",
+            "schedule": 60 * 60 * 12,
+        },
+        "automation-run": {
+            "task": "automation.run",
+            "schedule": 60 * 60,
+        },
+        "shipment-refresh": {
+            "task": "shipment.refresh",
+            "schedule": 60 * 60 * 6,
+        },
+        "analytics-aggregate": {
+            "task": "analytics.aggregate",
+            "schedule": 60 * 60,
+        },
+        "cleanup-old-notifications": {
+            "task": "cleanup.old_notifications",
+            "schedule": 60 * 60 * 24,
         },
         "aliexpress-sweep-health": {
             "task": "integrations.aliexpress.sweep_health_checks",

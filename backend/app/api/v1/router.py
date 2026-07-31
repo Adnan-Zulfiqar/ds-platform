@@ -17,7 +17,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import analytics, auth, integrations, orders, products, stores, users
+from app.api.v1 import (
+    analytics,
+    auth,
+    automation,
+    integrations,
+    inventory,
+    notifications,
+    orders,
+    pricing,
+    products,
+    stores,
+    users,
+)
 
 api_router = APIRouter()
 
@@ -29,6 +41,10 @@ api_router.include_router(integrations.router)
 api_router.include_router(products.router)
 api_router.include_router(stores.router)
 api_router.include_router(orders.router)
+api_router.include_router(inventory.router)
+api_router.include_router(pricing.router)
+api_router.include_router(automation.router)
+api_router.include_router(notifications.router)
 api_router.include_router(analytics.router)
 
 __all__ = ["api_router"]
