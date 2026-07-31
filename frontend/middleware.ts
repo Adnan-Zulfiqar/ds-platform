@@ -21,8 +21,20 @@ import { NextResponse, type NextRequest } from "next/server";
  * `app/(protected)/layout.tsx`, which knows the real session state.
  */
 
-/** Reachable without a session. */
-const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password"] as const;
+/**
+ * Reachable without a session.
+ *
+ * `/unauthorized` is public because it reports a *permission* failure, not an
+ * authentication one. Treating it as protected would mean an unauthorized user
+ * gets bounced to sign-in, re-enters correct credentials, and lands back on the
+ * same wall.
+ */
+const PUBLIC_ROUTES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/unauthorized",
+] as const;
 
 function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some(

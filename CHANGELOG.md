@@ -10,7 +10,79 @@ production release.
 
 ## [Unreleased]
 
-Phase 2 — scope not yet defined. No feature work.
+Phase 3 — scope not yet defined.
+
+---
+
+## [phase-2] — 2026-07-31
+
+Application shell, navigation, and SaaS UI foundation. Frontend only; no
+business functionality.
+
+### Added
+
+**Application shell**
+- `AppShell` — sidebar, top bar, and a main region that owns scrolling so the
+  chrome stays put without `position: fixed`
+- Collapsible desktop sidebar with six navigation sections, tooltips when
+  collapsed, and a persisted collapse preference
+- Responsive drawer below `md`, sharing the same navigation component as the
+  desktop rail so the two cannot diverge; closes on navigation and when the
+  viewport grows past the breakpoint
+- Top bar with notification centre, theme toggle, and a user menu showing name,
+  email, tenant, and role
+
+**Navigation**
+- `lib/navigation.ts` — one manifest feeding sidebar, drawer, and top bar. Each
+  entry declares whether its destination exists; unbuilt ones render as
+  non-interactive items, so primary navigation can never reach a 404
+
+**Dashboard**
+- Six stat cards with trend indicators that decouple direction from sentiment,
+  so a metric where down is good is not painted red
+- Three reusable charts — sales area, stacked orders, horizontal product
+  performance — on a shared chart theme that reads design tokens at runtime, so
+  a theme switch recolours them with no JavaScript
+- `ChartContainer` owning all four chart states: loading, error, empty, populated
+
+**Design system** — nine primitives: `avatar`, `tooltip`, `sheet`, `separator`,
+`empty-state`, `error-state`, `page-header`, `coming-soon`, plus `stat-card` and
+`chart-container` under `components/dashboard/`
+
+**Routes** — `/products`, `/stores`, `/orders`, `/analytics`, `/settings`,
+`/unauthorized`, plus loading and error boundaries scoped to the protected group
+
+**State and services** — `notification-store`; `services/dashboard.ts`,
+`products.ts`, `stores.ts` as query keys and types with no fetchers, because
+those endpoints do not exist
+
+**Testing** — 47 Playwright tests covering sidebar, mobile navigation, theme
+switching, protected routes, dashboard, and user menu at 320px, 768px, and
+1440px. They register real accounts through the API rather than stubbing it, so
+they exercise the actual token and cookie handling
+
+### Changed
+
+- `layouts/sidebar.tsx` and `layouts/top-nav.tsx` moved into
+  `components/navigation/` and split into focused components
+- `middleware.ts` treats `/unauthorized` as public — it reports a permission
+  failure, not an authentication one
+
+### Fixed
+
+- **`CORS_ORIGINS` could not be set in the documented format.**
+  pydantic-settings runs `json.loads` on list-typed fields before validators
+  execute, so the comma-separated form in `.env.example` raised
+  `JSONDecodeError` during boot. The application could not start with its own
+  example configuration. Fixed with `NoDecode` plus a validator accepting both
+  forms, and covered by regression tests
+- The user menu showed the email address twice for accounts with no name set
+
+---
+
+## [phase-1.1] — 2026-07-31
+
+Pre-Phase-2 housekeeping.
 
 ### Added
 

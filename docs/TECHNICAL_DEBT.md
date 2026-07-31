@@ -1,9 +1,14 @@
 # Technical debt register
 
-Reviewed 2026-07-31, at `phase-1-complete` (`e3e0b9c`).
-Housekeeping pass applied 2026-07-31 — **H1, H2, and H3 resolved.**
+Reviewed 2026-07-31 at `phase-1-complete`; updated after Phase 2.
+Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 
-**Current count: 1 critical, 1 high, 6 medium, 5 low.**
+**Current count: 1 critical, 1 high, 7 medium, 5 low.**
+
+Phase 2 added M8 (dashboard bundle size) and resolved one latent defect found by
+running the app: `CORS_ORIGINS` could not be parsed in the format documented in
+`.env.example`, so the application could not start with its own example
+configuration. Regression tests now cover it.
 
 Only genuine issues are listed. Items are ranked by the cost of leaving them,
 not by how hard they are to fix. Each has a **trigger** — the point at which it
@@ -157,6 +162,18 @@ request volume, not guessing.
 
 **Trigger:** observed abuse, or before opening the API to the public internet.
 **Fix:** apply the login throttle keyed on IP to both.
+
+### M8 — The dashboard bundle is 108 kB, almost all Recharts
+
+Other routes are ~192 B. Recharts is imported statically by the dashboard, so
+the whole library ships with that route.
+
+Acceptable for one authenticated page. It stops being acceptable if analytics
+adds more chart-heavy routes, since each would pull the same weight.
+
+**Trigger:** a second chart-heavy route.
+**Fix:** `next/dynamic` for the chart components so the library loads only where
+it is used.
 
 ### M7 — The frontend build cache was tracked in git
 

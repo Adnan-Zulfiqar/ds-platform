@@ -11,7 +11,8 @@ Last updated: 2026-07-31
 |---|---|---|
 | 0 | Foundation | ✅ **Complete** |
 | 1 | Authentication and multi-tenant identity | ✅ **Complete** |
-| 2 | *Scope not yet defined* | 🚧 **In Progress** |
+| 2 | Application shell, navigation, and SaaS UI foundation | ✅ **Complete** |
+| 3 | *Scope not yet defined* | ⏳ Not started |
 
 ---
 
@@ -51,13 +52,29 @@ Full detail: [Authentication.md](docs/Authentication.md)
 
 ---
 
-## Phase 2 — 🚧 In Progress
+## Phase 2 — Application shell and SaaS UI foundation ✅
 
-**Scope is not yet defined.** Marked in progress at the point Phase 1 was
-finalised; the requirements arrive with the Phase 2 prompt and this entry will
-be filled in then.
+The professional interface foundation every future module builds on. Frontend
+only; no business functionality.
 
-No Phase 2 code has been written.
+Collapsible sidebar with six navigation sections driven by a single manifest;
+responsive drawer below `md`; top bar with notification centre, theme toggle,
+and a user menu showing identity, tenant, and role. Dashboard with six stat
+cards and three reusable charts on clearly-quarantined mock data. Nine new
+design-system primitives. Six protected routes plus unauthorized, loading, and
+error states.
+
+Verified with **47 Playwright tests against a real backend** — accounts are
+registered through the API rather than stubbed — at 320px, 768px, and 1440px in
+both themes.
+
+Full detail: [Frontend.md](docs/Frontend.md)
+
+---
+
+## Phase 3 — ⏳ Not started
+
+Scope arrives with the Phase 3 prompt. No Phase 3 code has been written.
 
 ---
 

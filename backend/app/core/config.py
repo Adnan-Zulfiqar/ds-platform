@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
-from typing import ClassVar, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
     Field,
@@ -23,7 +23,7 @@ from pydantic import (
     computed_field,
     field_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Environment(StrEnum):
@@ -366,9 +366,22 @@ class Settings(BaseSettings):
     project_name: str = "DropPilot AI"
     api_v1_prefix: str = "/api/v1"
 
-    # Comma-separated in the environment, e.g. "http://localhost:3000,https://app.droppilot.ai"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
-    allowed_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    # Comma-separated in the environment, e.g.
+    #   CORS_ORIGINS=http://localhost:3000,https://app.droppilot.ai
+    #
+    # `NoDecode` is essential, not decoration. pydantic-settings treats any
+    # list-typed field as "complex" and runs `json.loads` on the raw environment
+    # value *before* field validators execute — so a plain comma-separated
+    # string raised `JSONDecodeError` at startup and the validator below never
+    # ran. That made the format documented in `.env.example` unusable, and the
+    # failure was a stack trace during boot rather than anything actionable.
+    #
+    # `NoDecode` suppresses that pre-parse and hands the raw string to the
+    # validator, which accepts both the comma-separated and JSON-array forms.
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     default_page_size: int = Field(default=25, ge=1)
     max_page_size: int = Field(
@@ -386,15 +399,39 @@ class Settings(BaseSettings):
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod
-    def _split_comma_separated(cls, value: object) -> object:
+    def _parse_string_list(cls, value: object) -> object:
         """Accept both a JSON array and a plain comma-separated string.
 
         Docker Compose and most secret managers only deal in flat strings, so
-        requiring JSON here would be a constant source of deployment friction.
+        requiring JSON would be constant deployment friction — but some secret
+        managers *do* emit JSON, so both must work.
+
+        Because these fields are annotated ``NoDecode``, pydantic-settings hands
+        over the raw string and performs no parsing of its own. This validator is
+        therefore the only place either format is understood, and it must handle
+        both.
         """
-        if isinstance(value, str) and not value.startswith("["):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+        if not isinstance(value, str):
+            return value
+
+        stripped = value.strip()
+        if not stripped:
+            return []
+
+        if stripped.startswith("["):
+            import json
+
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                # A value that looks like JSON but is malformed is a typo, not a
+                # comma-separated list. Saying so beats the confusing
+                # "input should be a valid list" that would follow.
+                raise ValueError(
+                    f"Value looks like a JSON array but could not be parsed: {exc}"
+                ) from exc
+
+        return [item.strip() for item in stripped.split(",") if item.strip()]
 
     @property
     def docs_enabled(self) -> bool:

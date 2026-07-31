@@ -241,6 +241,10 @@ availability-over-enforcement trade, and it means Redis needs its own alerting.
 
 ## Frontend architecture
 
+> Expanded in Phase 2. Full detail — directory layout, component tiers, routing,
+> theming, accessibility — is in [Frontend.md](Frontend.md). The essentials
+> follow.
+
 **Server Components by default**, `"use client"` only where interactivity or a
 browser API demands it. Keeps JavaScript off the wire.
 
@@ -260,9 +264,21 @@ id. Components never call `fetch` directly.
 **Design tokens as CSS variables.** Components reference semantic roles
 (`bg-background`), never literal colours, so theming is one class on `<html>`.
 
-**Access control belongs in `middleware.ts`**, which runs before rendering. The
-`(protected)` route group is a naming convention that provides no enforcement
-whatsoever.
+**Access control is client-side, in `AuthGuard`.** `middleware.ts` cannot see
+the httpOnly, path-scoped session cookie, so gating there would cause redirect
+loops. The `(protected)` route group is a naming convention providing no
+enforcement; the guard enforces, and the API is the actual security boundary —
+bypassing the guard reveals an empty shell that cannot load data.
+
+**One navigation manifest.** `lib/navigation.ts` feeds the desktop sidebar, the
+mobile drawer, and the top bar. Each entry declares whether its destination
+exists; unbuilt ones render as non-interactive items rather than links, so
+primary navigation can never reach a 404.
+
+**Three tiers of component**, distinguished by what they may know:
+primitives (`components/ui/`) know nothing about the application; composed
+components know routes, session, and stores; layouts know how the pieces fit.
+A primitive importing `useAuth` has left its tier.
 
 ---
 

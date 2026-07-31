@@ -2,11 +2,13 @@
 
 A multi-tenant SaaS platform for dropshipping automation.
 
-> **Status: Phase 1 — foundation plus authentication.**
+> **Status: Phase 2 — foundation, authentication, and application shell.**
 > There are no business features yet: no marketplace integrations, no product
 > import, no orders, no billing. What exists is the architecture those features
-> will be built on, plus a working multi-tenant authentication system. See
-> [Known limitations](#known-limitations) before deploying anything.
+> will be built on, a working multi-tenant authentication system, and the SaaS
+> interface shell they will render into. Dashboard figures are placeholder data
+> and the UI says so. See [Known limitations](#known-limitations) before
+> deploying anything.
 
 ## Stack
 
@@ -58,6 +60,7 @@ For running the services without Docker, see
 | [TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md) | Known debt, ranked, each with a trigger |
 | [Architecture.md](docs/Architecture.md) | Layering, multi-tenancy, and the reasoning behind each major decision |
 | [Authentication.md](docs/Authentication.md) | JWT flow, tenant resolution, token rotation, security decisions |
+| [Frontend.md](docs/Frontend.md) | Component organisation, routing, theming, accessibility |
 | [Database.md](docs/Database.md) | Schema, conventions, migrations |
 | [FolderStructure.md](docs/FolderStructure.md) | Where code belongs and why |
 | [CodingStandards.md](docs/CodingStandards.md) | Conventions and enforced rules |
