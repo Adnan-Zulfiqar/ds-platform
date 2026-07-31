@@ -1,0 +1,8 @@
+{
+  "aliexpress_ds_product_get_response": {
+    "rsp_code": 605,
+    "rsp_msg": "ITEM_ID_NOT_FOUND",
+    "request_id": "212a639d17855375973415575",
+    "_trace_id_": "2151fd3a17855375973383522e0f60"
+  }
+}
