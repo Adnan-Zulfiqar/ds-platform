@@ -259,6 +259,28 @@ class TestCallback:
         assert status["connected"] is True
         assert status["connection"]["status"] == "connected"
 
+    async def test_completes_without_a_bearer_token(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AliExpress redirects the browser here; no Authorization header arrives."""
+        patch_aliexpress(monkeypatch, token_handler)
+
+        body = await register(client)
+        headers = auth_header(body)
+        state = await begin_connection(client, headers)
+
+        response = await client.get(
+            CALLBACK_URL,
+            params={"code": "auth-code", "state": state},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 303
+        assert "aliexpress=connected" in response.headers["location"]
+
+        status = (await client.get(STATUS_URL, headers=headers)).json()
+        assert status["connected"] is True
+
     async def test_tokens_are_stored_encrypted(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db_session: Any
     ) -> None:

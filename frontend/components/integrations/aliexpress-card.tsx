@@ -92,16 +92,22 @@ export function AliExpressCard() {
   async function handleConnect() {
     setFormError(null);
 
-    if (!appKey.trim() || !appSecret.trim()) {
-      setFormError("Both the app key and app secret are required.");
+    const trimmedKey = appKey.trim();
+    const trimmedSecret = appSecret.trim();
+    const hasPartialCredentials =
+      Boolean(trimmedKey) !== Boolean(trimmedSecret);
+
+    if (hasPartialCredentials) {
+      setFormError("Supply both the app key and app secret, or leave both blank.");
       return;
     }
 
     try {
-      const authorization = await connect.mutateAsync({
-        appKey: appKey.trim(),
-        appSecret: appSecret.trim(),
-      });
+      const authorization = await connect.mutateAsync(
+        trimmedKey && trimmedSecret
+          ? { appKey: trimmedKey, appSecret: trimmedSecret }
+          : {},
+      );
 
       // Clear the secret from component state before leaving the page. It is
       // about to be out of scope anyway, but not holding a credential longer
@@ -187,8 +193,9 @@ export function AliExpressCard() {
             </dl>
           ) : (
             <p className="text-sm text-muted-foreground">
-              You will need an app key and app secret from the AliExpress
-              developer console.
+              Connect using the platform application configured on the server, or
+              supply your own app key and secret from the AliExpress developer
+              console.
             </p>
           )}
         </CardContent>
@@ -231,8 +238,10 @@ export function AliExpressCard() {
           <DialogHeader>
             <DialogTitle>Connect AliExpress</DialogTitle>
             <DialogDescription>
-              Enter the credentials from your AliExpress developer console. You
-              will then be redirected to AliExpress to authorise access.
+              Leave the fields blank to use the platform&apos;s AliExpress
+              application, or enter your own credentials if you operate a
+              separate developer account. You will then be redirected to
+              AliExpress to authorise access.
             </DialogDescription>
           </DialogHeader>
 

@@ -65,6 +65,10 @@ def get_redis(purpose: RedisPurpose = RedisPurpose.CACHE) -> Redis[str]:
             _dsn_for(purpose),
             encoding="utf-8",
             decode_responses=True,
+            # RESP3 negotiates with HELLO, which Redis 5 and some Windows ports
+            # reject. RESP2 is sufficient for every command this application
+            # uses and keeps local development working against older servers.
+            protocol=2,
             socket_timeout=timeout,
             socket_connect_timeout=timeout,
             max_connections=settings.redis.max_connections,

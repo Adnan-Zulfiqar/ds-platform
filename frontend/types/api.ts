@@ -131,8 +131,8 @@ export interface AliExpressAuthorization {
 }
 
 export interface AliExpressConnectPayload {
-  appKey: string;
-  appSecret: string;
+  appKey?: string;
+  appSecret?: string;
 }
 
 export interface LoginPayload {

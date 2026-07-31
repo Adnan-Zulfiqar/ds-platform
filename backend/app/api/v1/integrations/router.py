@@ -102,7 +102,6 @@ async def connect_aliexpress(
 )
 async def aliexpress_callback(
     session: DbSession,
-    principal: CurrentPrincipal,
     code: Annotated[str | None, Query(description="Authorization code.")] = None,
     state: Annotated[str | None, Query(description="CSRF state token.")] = None,
     error: Annotated[str | None, Query(description="Error from AliExpress.")] = None,
@@ -117,9 +116,9 @@ async def aliexpress_callback(
     reason is drawn from a fixed vocabulary this application controls — never an
     upstream message, which could be reflected into the page.
 
-    Requires authentication. The user was signed in when they started the flow,
-    and their session survives the round trip; an unauthenticated callback has
-    no tenant to attach the connection to.
+    **No Bearer token is required.** AliExpress redirects the browser here; the
+    OAuth ``state`` token — issued during an authenticated ``/connect`` call and
+    verified server-side — binds the callback to the correct tenant.
     """
     return_url = settings.aliexpress.frontend_return_url
 
@@ -135,7 +134,7 @@ async def aliexpress_callback(
     service = AliExpressService(session)
 
     try:
-        await service.complete_connection(code=code, state_token=state)
+        connection = await service.complete_connection(code=code, state_token=state)
     except Exception:
         # Deliberately broad. Whatever went wrong, the user must land back in
         # the application rather than on an error page they cannot act on. The
@@ -144,7 +143,7 @@ async def aliexpress_callback(
         logger.exception("aliexpress_callback_failed")
         return RedirectResponse(f"{return_url}?aliexpress=failed", status_code=303)
 
-    logger.info("aliexpress_callback_succeeded", tenant_id=str(principal.tenant_id))
+    logger.info("aliexpress_callback_succeeded", tenant_id=str(connection.tenant_id))
     return RedirectResponse(f"{return_url}?aliexpress=connected", status_code=303)
 
 

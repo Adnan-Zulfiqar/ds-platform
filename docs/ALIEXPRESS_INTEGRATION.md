@@ -13,21 +13,22 @@ protected, and why each decision was made that way.
 > against documentation and reference implementations, not against the live
 > gateway.
 >
-> Two of the three blockers are now cleared. Credentials are configured, and the
-> registered callback moved to
-> `https://api.whiteto.com/api/v1/integrations/aliexpress/callback`, which a
-> Cloudflare Tunnel forwards to the local backend — a public request to it
-> reaches this application and returns 401 rather than 404.
+> Two infrastructure fixes cleared the remaining blockers:
 >
-> The apex `whiteto.com` was never a viable callback host: it serves the
-> Next.js frontend, so `/api/v1/*` returned that application's 404 page. The
-> subdomain avoids disturbing it.
+> * **Callback routing** — registered at
+>   `https://api.whiteto.com/api/v1/integrations/aliexpress/callback`, forwarded
+>   to the local backend by a Cloudflare Tunnel. Only that path is forwarded;
+>   that is sufficient because AliExpress calls nothing else.
+> * **Redis protocol** — local Redis ports that reject RESP3's `HELLO` command
+>   now connect with RESP2. Without that, the OAuth `state` store and rate
+>   limiter failed on every request.
+> * **Callback authentication** — the callback no longer requires a Bearer
+>   token. The browser arrives from AliExpress without one; tenant binding comes
+>   from the server-side OAuth `state` issued during `/connect`.
 >
-> **Still blocked:** Redis. The OAuth `state` store fails closed, so
-> `POST /connect` cannot issue an authorization URL yet. See the note below.
->
-> Use `backend/scripts/verify_aliexpress.py` to complete the live verification.
-> See [Running live verification](#running-live-verification).
+> **Still unverified against the live gateway.** Use
+> `backend/scripts/verify_aliexpress.py` or the application UI to complete the
+> first live OAuth round trip. See [Running live verification](#running-live-verification).
 
 ## Contents
 
@@ -119,6 +120,20 @@ Three properties make it work:
 **It fails closed.** If Redis is unavailable the flow refuses to start, because
 a state that cannot be stored cannot be verified on return — and an unverifiable
 callback is exactly what the defence exists to prevent.
+
+### Why the callback does not require a Bearer token
+
+AliExpress redirects the user's browser here after consent. That navigation
+carries no `Authorization` header — only the `code` and `state` query
+parameters. Requiring a Bearer token would make every real OAuth round trip fail
+with 401.
+
+The CSRF defence does not depend on session authentication on return. During
+`/connect`, an authenticated admin stores credentials and receives a random
+`state` token bound to their tenant in Redis. On callback, that token is looked
+up, consumed, and used to bind tenant context before the code is exchanged.
+An attacker who does not know the state cannot attach a connection to a victim's
+workspace.
 
 ### Why the callback redirects instead of returning JSON
 

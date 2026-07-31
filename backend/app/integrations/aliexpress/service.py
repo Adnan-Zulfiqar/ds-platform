@@ -27,7 +27,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.context import require_tenant_id
+from app.core.context import require_tenant_id, set_tenant_id, set_user_id
 from app.core.encryption import (
     EncryptionNotConfiguredError,
     decrypt,
@@ -173,16 +173,14 @@ class AliExpressService(BaseService):
         """
         state = await self._consume_state(state_token)
 
-        tenant_id = require_tenant_id()
-        if state.tenant_id != str(tenant_id):
-            # The state was issued for a different workspace. Either a stale
-            # session or an attempt to attach an account across tenants.
-            self.logger.error(
-                "aliexpress_state_tenant_mismatch",
-                expected=state.tenant_id,
-                actual=str(tenant_id),
-            )
-            raise AliExpressOAuthStateError()
+        # The browser arrives from AliExpress without a Bearer token. The OAuth
+        # state issued during an authenticated /connect call is the authority
+        # on which tenant owns this callback — binding from it is what makes
+        # the CSRF defence work without requiring a session cookie on return.
+        tenant_id = uuid.UUID(state.tenant_id)
+        set_tenant_id(tenant_id)
+        if state.user_id:
+            set_user_id(uuid.UUID(state.user_id))
 
         connection = await self.connections.get_for_tenant()
         if connection is None:
