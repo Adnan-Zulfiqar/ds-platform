@@ -4,21 +4,38 @@ AliExpress pushes order and shipping notifications here. This module is separate
 from the OAuth callback — the callback completes a browser redirect; webhooks
 are server-to-server POSTs with a JSON (or form) body.
 
-Processing is intentionally stubbed: the endpoint acknowledges receipt, logs the
-payload for inspection, and returns immediately so AliExpress does not retry.
+Phase 5 adds recognition, replay protection and audit accounting on top of the
+Phase 3 acknowledgement. What it deliberately does **not** add is any state
+mutation, and the reason is a security boundary rather than an omission:
+
+* **Deliveries are unsigned.** No signature header has been observed on any
+  delivery, and AliExpress documents no signing scheme for this endpoint (M11
+  in ``TECHNICAL_DEBT.md``). An unsigned body is attacker-controlled input.
+* **Deliveries carry no verifiable tenant claim.** The stored connection keeps
+  no external seller identifier to match against, so a payload cannot be
+  attributed to a tenant without trusting the payload itself — which is
+  exactly the thing that cannot be trusted.
+
+Letting an unsigned, unattributable POST write to any tenant's orders would be
+an unauthenticated write path into customer data. Until deliveries are signed,
+the honest ceiling is: recognise, deduplicate, count, log — and let the
+polling sync (which authenticates outbound) remain the source of truth.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import parse_qs
 
+from redis.exceptions import RedisError
 from starlette.requests import Request
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.redis import RedisPurpose, get_redis
 from app.integrations.aliexpress.schemas import AliExpressWebhookAckResponse
 
 logger = get_logger(__name__)
@@ -31,6 +48,23 @@ _MAX_LOGGED_FIELD_NAMES = 40
 #: to establish empirically whether AliExpress signs deliveries — the question
 #: the signature TODO below is waiting on.
 _SIGNATURE_HEADERS = ("x-aliexpress-signature", "x-iop-signature", "sign", "signature")
+
+#: Payload fields that may carry a delivery identifier, in preference order.
+#: The message shape is undocumented, so recognised names are tried first and a
+#: content hash is the fallback — a replayed identical body still deduplicates.
+_MESSAGE_ID_FIELDS = ("message_id", "msg_id", "id", "event_id", "notify_id")
+
+#: Payload fields whose value hints at the notification type.
+_TYPE_FIELDS = ("type", "msg_type", "biz_type", "topic", "event")
+
+#: How long a delivery id is remembered for replay protection. Long enough to
+#: cover any plausible redelivery schedule; short enough that the key space
+#: cannot grow without bound.
+_REPLAY_TTL_SECONDS = 7 * 24 * 3600
+
+#: Counter surfaced by /orders/statistics. Global rather than tenant-scoped
+#: because deliveries carry no verifiable tenant claim (see module docstring).
+WEBHOOK_COUNTER_KEY = "webhooks:aliexpress:received"
 
 
 async def parse_webhook_payload(request: Request) -> dict[str, Any]:
@@ -55,6 +89,106 @@ async def parse_webhook_payload(request: Request) -> dict[str, Any]:
         return {key: values[0] if len(values) == 1 else values for key, values in form.items()}
 
     return {"_raw": raw_body.decode("utf-8", errors="replace")}
+
+
+def extract_message_id(payload: Mapping[str, Any]) -> str:
+    """A stable identifier for this delivery, for replay protection.
+
+    Prefers an explicit id field; falls back to a content hash so that a
+    byte-identical replay is still recognised even when the sender includes no
+    identifier. Two genuinely different messages never collide, and that is
+    the only property replay protection needs.
+    """
+    for field in _MESSAGE_ID_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str | int) and str(value).strip():
+            return str(value).strip()
+
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def classify_webhook(payload: Mapping[str, Any]) -> str:
+    """A coarse label for what kind of notification arrived.
+
+    Only the label is trusted for logging and metrics — never for a write. The
+    message vocabulary is undocumented, so anything mentioning an order is
+    "order" and everything else keeps its raw type or falls to "unknown".
+    """
+    for field in _TYPE_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return "order" if "order" in value.lower() else value.strip().lower()[:64]
+    if any("order" in key.lower() for key in payload):
+        return "order"
+    return "unknown"
+
+
+async def register_delivery(message_id: str) -> bool:
+    """Record a delivery id, returning whether it is new.
+
+    Redis ``SET NX`` gives an atomic test-and-set, so two concurrent replays
+    cannot both pass. **Degrades toward processing**: when Redis is down the
+    delivery is treated as new, because the consequence of a duplicate here is
+    a duplicate log line — while the consequence of dropping a genuine
+    delivery is silence about a real order. That trade-off must be revisited
+    the moment webhook payloads drive writes.
+    """
+    try:
+        client = get_redis(RedisPurpose.CACHE)
+        is_new = await client.set(
+            f"webhooks:aliexpress:seen:{message_id}",
+            "1",
+            nx=True,
+            ex=_REPLAY_TTL_SECONDS,
+        )
+        return bool(is_new)
+    except (RedisError, OSError):
+        logger.warning("webhook_replay_guard_unavailable")
+        return True
+
+
+async def count_delivery() -> None:
+    """Increment the activity counter surfaced by /orders/statistics."""
+    try:
+        await get_redis(RedisPurpose.CACHE).incr(WEBHOOK_COUNTER_KEY)
+    except (RedisError, OSError):
+        # Degrade, never fail: the counter is telemetry, not the delivery.
+        logger.warning("webhook_counter_unavailable")
+
+
+async def process_webhook(payload: Mapping[str, Any], headers: Mapping[str, str]) -> str:
+    """Recognise, deduplicate and account for one delivery.
+
+    Returns the outcome — ``"processed"``, ``"duplicate"`` or ``"empty"`` —
+    which the tests assert on and the audit log records. Deliberately performs
+    **no state mutation**; see the module docstring for why unsigned,
+    unattributable input must not reach the orders tables.
+    """
+    if not payload:
+        return "empty"
+
+    message_id = extract_message_id(payload)
+    kind = classify_webhook(payload)
+
+    if not await register_delivery(message_id):
+        # The audit trail records the replay; the caller still acknowledges,
+        # because re-acking a duplicate is what stops the sender re-sending.
+        logger.info(
+            "aliexpress_webhook_duplicate",
+            message_kind=kind,
+            message_id_hash=hashlib.sha256(message_id.encode()).hexdigest()[:16],
+        )
+        return "duplicate"
+
+    await count_delivery()
+    logger.info(
+        "aliexpress_webhook_processed",
+        message_kind=kind,
+        message_id_hash=hashlib.sha256(message_id.encode()).hexdigest()[:16],
+        signature_present=any(name in headers for name in _SIGNATURE_HEADERS),
+    )
+    return "processed"
 
 
 def acknowledge_webhook(
@@ -103,13 +237,10 @@ async def receive_webhook(request: Request) -> AliExpressWebhookAckResponse:
 
     Reading the body can fail independently of its content: a client that
     disconnects mid-upload raises rather than returning bytes. So the guard is
-    deliberately broad. Nothing is lost by it, because nothing here acts on the
-    payload yet; the failure is recorded and alerting is the right place to
-    surface it.
-
-    This has to be revisited when processing arrives. Acknowledging a delivery
-    that was never understood means dropping it, which is only acceptable while
-    the handler is inert.
+    deliberately broad. Processing failures are also swallowed, and that is
+    safe for the same reason processing is bounded: nothing here mutates
+    state, so a delivery lost to a Redis hiccup costs a log line and a
+    counter tick, and the polling sync remains the source of truth.
     """
     try:
         payload = await parse_webhook_payload(request)
@@ -118,7 +249,22 @@ async def receive_webhook(request: Request) -> AliExpressWebhookAckResponse:
         logger.exception("aliexpress_webhook_unreadable")
         return AliExpressWebhookAckResponse()
 
+    try:
+        await process_webhook(payload, header_map)
+    except Exception:
+        logger.exception("aliexpress_webhook_processing_failed")
+
     return acknowledge_webhook(payload=payload, headers=header_map)
 
 
-__all__ = ["acknowledge_webhook", "parse_webhook_payload", "receive_webhook"]
+__all__ = [
+    "WEBHOOK_COUNTER_KEY",
+    "acknowledge_webhook",
+    "classify_webhook",
+    "count_delivery",
+    "extract_message_id",
+    "parse_webhook_payload",
+    "process_webhook",
+    "receive_webhook",
+    "register_delivery",
+]
