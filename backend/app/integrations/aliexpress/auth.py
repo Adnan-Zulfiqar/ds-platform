@@ -196,7 +196,9 @@ def build_authorization_url(*, app_key: str, state: str) -> str:
             "response_type": "code",
             "force_auth": "true",
             "client_id": app_key,
-            "redirect_uri": settings.aliexpress.redirect_uri,
+            # The OAuth parameter name stays `redirect_uri` — that is what
+            # AliExpress expects on the wire. Only our setting is renamed.
+            "redirect_uri": settings.aliexpress.callback_url,
             "state": state,
         }
     )

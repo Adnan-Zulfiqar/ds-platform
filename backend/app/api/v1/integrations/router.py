@@ -72,10 +72,13 @@ async def connect_aliexpress(
 
     A POST rather than the GET named in the phase brief. The call has side
     effects — it writes encrypted credentials and issues a single-use state
-    token — and it accepts a secret in its body, which must not travel in a URL
-    where it would land in browser history, proxy logs, and the `Referer`
+    token — and it may accept a secret in its body, which must not travel in a
+    URL where it would land in browser history, proxy logs, and the `Referer`
     header. The response carries the authorization URL for the client to
     navigate to.
+
+    The body is normally empty: credentials default to the platform's AliExpress
+    application. A tenant running their own application may override both.
     """
     service = AliExpressService(session)
 

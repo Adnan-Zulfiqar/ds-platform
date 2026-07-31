@@ -127,19 +127,24 @@ class AliExpressAuthorizationResponse(CamelCaseModel):
 
 
 class AliExpressConnectRequest(CamelCaseModel):
-    """Credentials supplied by the tenant to begin a connection.
+    """Optional per-tenant credentials for beginning a connection.
 
-    The app secret arrives here once, over TLS, and is encrypted before it
-    touches the database. It is never returned by any endpoint.
+    **Both fields are optional, and normally omitted.** In the AliExpress model
+    the developer application belongs to the platform operator: DropPilot
+    registers one app, and each seller authorises *that* app. A seller does not
+    register their own, so requiring them to supply an app key would make
+    onboarding impossible.
 
-    Not a ``SecretStr``: the value is needed as a plain string immediately to
-    encrypt it, and the masking `SecretStr` provides protects reprs — which
-    these schemas never emit into logs anyway. The protection that matters is
-    that no *response* model carries the field.
+    They remain accepted for the case where a tenant genuinely operates their
+    own AliExpress application — an agency with an existing integration, for
+    example. When supplied they take precedence over the platform credentials.
+
+    When an app secret is supplied it arrives once, over TLS, and is encrypted
+    before it touches the database. It is never returned by any endpoint.
     """
 
-    app_key: str = Field(min_length=1, max_length=64)
-    app_secret: str = Field(min_length=1, max_length=512)
+    app_key: str | None = Field(default=None, max_length=64)
+    app_secret: str | None = Field(default=None, max_length=512)
 
 
 __all__ = [

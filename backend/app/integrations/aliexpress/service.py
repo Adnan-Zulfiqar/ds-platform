@@ -65,10 +65,54 @@ class AliExpressService(BaseService):
 
     # -- Connect ------------------------------------------------------------
 
+    @staticmethod
+    def resolve_credentials(app_key: str | None, app_secret: str | None) -> tuple[str, str]:
+        """Choose which application credentials to use.
+
+        A tenant-supplied pair wins when both halves are present; otherwise the
+        platform application from configuration is used. Both halves are
+        required together — a tenant key signed with the platform secret would
+        fail with an opaque invalid-signature error, so a half-supplied pair is
+        rejected rather than silently mixed.
+
+        Raises :class:`ValidationError` when neither source yields a usable pair,
+        which is the case when the deployment has not been configured at all.
+        """
+        tenant_key = (app_key or "").strip()
+        tenant_secret = (app_secret or "").strip()
+
+        if tenant_key and tenant_secret:
+            return tenant_key, tenant_secret
+
+        if tenant_key or tenant_secret:
+            raise ValidationError(
+                "Supply both an app key and an app secret, or neither to use "
+                "the platform application."
+            )
+
+        platform_key = settings.aliexpress.app_key.strip()
+        platform_secret = settings.aliexpress.app_secret
+
+        if not platform_key or not platform_secret:
+            raise ValidationError(
+                "AliExpress is not configured on this server. Set "
+                "ALIEXPRESS_APP_KEY and ALIEXPRESS_APP_SECRET, or supply "
+                "credentials for this workspace."
+            )
+
+        return platform_key, platform_secret.get_secret_value()
+
     async def begin_connection(
-        self, *, app_key: str, app_secret: str, user_id: uuid.UUID | None
+        self,
+        *,
+        app_key: str | None = None,
+        app_secret: str | None = None,
+        user_id: uuid.UUID | None,
     ) -> tuple[str, str]:
         """Store credentials and return an authorization URL and state token.
+
+        Credentials default to the platform application; a tenant may override
+        with their own. See :meth:`resolve_credentials`.
 
         The app secret is encrypted and persisted **before** the user is sent to
         AliExpress, because the callback arrives on a different request with no
@@ -84,11 +128,7 @@ class AliExpressService(BaseService):
             # because a key was missing.
             raise EncryptionNotConfiguredError()
 
-        app_key = app_key.strip()
-        if not app_key:
-            raise ValidationError("An AliExpress app key is required.")
-        if not app_secret.strip():
-            raise ValidationError("An AliExpress app secret is required.")
+        app_key, app_secret = self.resolve_credentials(app_key, app_secret)
 
         tenant_id = require_tenant_id()
         existing = await self.connections.get_for_tenant()
@@ -164,7 +204,7 @@ class AliExpressService(BaseService):
                     "code": code,
                     "grant_type": "authorization_code",
                     "need_refresh_token": "true",
-                    "redirect_uri": settings.aliexpress.redirect_uri,
+                    "redirect_uri": settings.aliexpress.callback_url,
                 },
             )
         except AliExpressError as exc:

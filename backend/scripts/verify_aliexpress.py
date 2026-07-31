@@ -71,13 +71,25 @@ def require(name: str) -> str:
     return value
 
 
+def platform_credentials() -> tuple[str, str]:
+    """Read the application credentials through the settings object.
+
+    Deliberately not ``os.environ``: the point of the audit is that credentials
+    reach the code through one validated path. A script that read the
+    environment directly could pass while the application itself was
+    misconfigured.
+    """
+    key = settings.aliexpress.app_key.strip()
+    secret = settings.aliexpress.app_secret
+    return key, (secret.get_secret_value() if secret else "")
+
+
 def preflight() -> tuple[str, str]:
     """Report configuration without contacting AliExpress."""
-    print("Configuration")
+    print("Configuration  (loaded via app.core.config, not os.environ)")
     print("-" * 60)
 
-    app_key = os.environ.get("ALIEXPRESS_APP_KEY", "").strip()
-    app_secret = os.environ.get("ALIEXPRESS_APP_SECRET", "").strip()
+    app_key, app_secret = platform_credentials()
 
     print(f"  app key           : {mask(app_key)}")
     print(f"  app secret        : {mask(app_secret)}")
@@ -85,7 +97,8 @@ def preflight() -> tuple[str, str]:
     print(f"  token url         : {settings.aliexpress.token_url}")
     print(f"  refresh url       : {settings.aliexpress.refresh_url}")
     print(f"  api base url      : {settings.aliexpress.api_base_url}")
-    print(f"  redirect uri      : {settings.aliexpress.redirect_uri}")
+    print(f"  callback url      : {settings.aliexpress.callback_url}")
+    print(f"  app environment   : {settings.aliexpress.environment}")
     print()
     print("Derived signing paths")
     print("-" * 60)
@@ -131,8 +144,10 @@ def authorize() -> None:
 
 
 async def _exchange() -> None:
-    app_key = require("ALIEXPRESS_APP_KEY")
-    app_secret = require("ALIEXPRESS_APP_SECRET")
+    app_key, app_secret = platform_credentials()
+    if not app_key or not app_secret:
+        print("  ✗ ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET are not configured.")
+        sys.exit(2)
     code = require("ALIEXPRESS_AUTH_CODE")
 
     client = AliExpressClient(app_key=app_key, app_secret=app_secret, tenant_id=VERIFICATION_TENANT)
@@ -148,7 +163,7 @@ async def _exchange() -> None:
             "code": code,
             "grant_type": "authorization_code",
             "need_refresh_token": "true",
-            "redirect_uri": settings.aliexpress.redirect_uri,
+            "redirect_uri": settings.aliexpress.callback_url,
         },
     )
 
@@ -175,8 +190,10 @@ async def _exchange() -> None:
 
 
 async def _call() -> None:
-    app_key = require("ALIEXPRESS_APP_KEY")
-    app_secret = require("ALIEXPRESS_APP_SECRET")
+    app_key, app_secret = platform_credentials()
+    if not app_key or not app_secret:
+        print("  ✗ ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET are not configured.")
+        sys.exit(2)
     access_token = require("ALIEXPRESS_ACCESS_TOKEN")
 
     # A read-only method from the dropship permission group. Overridable, since

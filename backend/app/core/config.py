@@ -13,9 +13,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
+    AliasChoices,
     Field,
     PostgresDsn,
     RedisDsn,
@@ -24,6 +26,10 @@ from pydantic import (
     field_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# app/core/config.py → app/core → app → backend → repository root
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = _BACKEND_ROOT.parent
 
 
 class Environment(StrEnum):
@@ -367,6 +373,33 @@ class AliExpressSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="ALIEXPRESS_", extra="ignore")
 
+    # --- Platform application credentials -----------------------------------
+    #
+    # **These belong to the platform operator, not to a tenant.** DropPilot
+    # registers one AliExpress developer application; each seller authorises
+    # *that* application through OAuth. A seller does not register their own.
+    #
+    # This is why they are configuration rather than per-tenant database rows:
+    # requiring every customer to create an AliExpress developer account before
+    # they could connect would make onboarding impossible.
+    #
+    # Per-tenant credential columns still exist on `aliexpress_connections`
+    # from Phase 3 and take precedence when populated, so nothing already stored
+    # breaks. See docs/ALIEXPRESS_INTEGRATION.md for the migration note.
+    app_key: str = Field(
+        default="",
+        description="Platform AliExpress app key. Public; travels in every request URL.",
+    )
+    app_secret: SecretStr | None = Field(
+        default=None,
+        description="Platform AliExpress app secret. Never logged or returned.",
+    )
+
+    # Which AliExpress application status this deployment targets. An app in
+    # `test` status can only be authorised by allow-listed accounts, so a
+    # failure that looks like bad credentials is often just this.
+    environment: Literal["test", "production"] = "test"
+
     authorize_url: str = "https://api-sg.aliexpress.com/oauth/authorize"
 
     # rule fires on any name containing "token".
@@ -377,7 +410,17 @@ class AliExpressSettings(BaseSettings):
     # Where AliExpress returns the user after consent. Must match the value
     # registered in the AliExpress developer console exactly — a mismatch is
     # rejected at the authorization step, before any code is issued.
-    redirect_uri: str = "http://localhost:8000/api/v1/integrations/aliexpress/callback"
+    #
+    # Accepts either environment name. `ALIEXPRESS_CALLBACK_URL` matches the
+    # AliExpress console's own wording; `ALIEXPRESS_REDIRECT_URI` is the OAuth
+    # spec term and what Phase 3 shipped. Supporting both means renaming does
+    # not silently fall back to the localhost default in an environment that is
+    # still using the old name — which would break authorization while looking
+    # like a credentials problem.
+    callback_url: str = Field(
+        default="http://localhost:8000/api/v1/integrations/aliexpress/callback",
+        validation_alias=AliasChoices("ALIEXPRESS_CALLBACK_URL", "ALIEXPRESS_REDIRECT_URI"),
+    )
 
     # Where the user lands in the application afterwards.
     frontend_return_url: str = "http://localhost:3000/settings/integrations"
@@ -445,7 +488,17 @@ class Settings(BaseSettings):
     """Root settings object."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Absolute paths, not a bare ".env".
+        #
+        # A relative name resolves against the *working directory*, so running
+        # uvicorn from the repository root and from `backend/` would read
+        # different files — or none. The failure is silent: settings fall back
+        # to defaults and the application starts looking healthy while pointed
+        # at the wrong configuration.
+        #
+        # Both locations are read, repository root first, so `backend/.env` can
+        # override for a backend-only setting. Missing files are ignored.
+        env_file=(_REPO_ROOT / ".env", _BACKEND_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
