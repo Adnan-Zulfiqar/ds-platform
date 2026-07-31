@@ -61,19 +61,26 @@ celery_app.conf.update(
     # forever with no diagnostic.
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=10,
-    # Task modules the worker must import to register them. Empty in Phase 0;
-    # implementations live in app.tasks (see that package for why it sits
+    # Task modules the worker must import to register them. A task that is
+    # defined but never imported by the worker fails at call time with
+    # "unregistered task", which is a confusing error to debug.
+    #
+    # Implementations live in app.tasks (see that package for why it sits
     # beside app.api rather than inside this one).
-    imports=(),
+    imports=("app.tasks.integrations.aliexpress",),
 )
 
 # Explicit routing table.
 #
-# Empty now, but the mechanism is configured because queue separation is very
-# hard to retrofit: once every job shares one queue, a flood of slow imports
-# blocks time-sensitive order fulfilment behind it. Later phases add entries
-# here rather than changing worker startup.
-celery_app.conf.task_routes = {}
+# Queue separation is very hard to retrofit: once every job shares one queue, a
+# flood of slow imports blocks time-sensitive order fulfilment behind it.
+#
+# Integration work goes to its own queue because it is bounded by a third
+# party's latency and quota rather than by our own capacity. A supplier having a
+# slow morning must not delay anything else.
+celery_app.conf.task_routes = {
+    "integrations.*": {"queue": "integrations"},
+}
 
 
 @setup_logging.connect

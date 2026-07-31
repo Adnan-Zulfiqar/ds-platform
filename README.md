@@ -61,6 +61,7 @@ For running the services without Docker, see
 | [Architecture.md](docs/Architecture.md) | Layering, multi-tenancy, and the reasoning behind each major decision |
 | [Authentication.md](docs/Authentication.md) | JWT flow, tenant resolution, token rotation, security decisions |
 | [Frontend.md](docs/Frontend.md) | Component organisation, routing, theming, accessibility |
+| [ALIEXPRESS_INTEGRATION.md](docs/ALIEXPRESS_INTEGRATION.md) | OAuth flow, credential handling, client architecture, security model |
 | [Database.md](docs/Database.md) | Schema, conventions, migrations |
 | [FolderStructure.md](docs/FolderStructure.md) | Where code belongs and why |
 | [CodingStandards.md](docs/CodingStandards.md) | Conventions and enforced rules |

@@ -10,7 +10,66 @@ production release.
 
 ## [Unreleased]
 
-Phase 3 — scope not yet defined.
+Phase 4 — scope not yet defined.
+
+---
+
+## [phase-3] — 2026-07-31
+
+AliExpress integration foundation. Connection, credentials, and client only —
+no product, price, inventory, or order functionality.
+
+### Added
+
+**Credential encryption** (`app/core/encryption.py`)
+- Fernet (AES-128-CBC + HMAC-SHA256, random IV) for third-party credentials
+- Key rotation via `MultiFernet`: keys newest-first, decryption tries each, so
+  rotation needs no downtime
+- Fails closed when no key is configured — refusing beats storing a customer's
+  supplier secret in plaintext
+
+**Database** — migration `0003`
+- `aliexpress_connections` with encrypted secret and token columns, status,
+  expiry, and last-sync tracking. Unique per tenant
+
+**Integration package** (`app/integrations/aliexpress/`)
+- Signed HTTP client with timeouts, jittered exponential backoff, and typed
+  error mapping. Retries only failures that could resolve themselves
+- Inspects the response body regardless of status, because AliExpress reports
+  failure inside HTTP 200 as often as through a status code
+- OAuth signing and a single-use, server-side, random `state` token
+
+**Outbound rate limiting** (`app/integrations/rate_limiter.py`)
+- Per tenant and provider. **Fails closed**, the opposite of the inbound
+  limiter: exceeding a provider's quota can suspend the application key for
+  every tenant
+
+**Endpoints**
+- `POST /api/v1/integrations/aliexpress/connect` (admin or owner)
+- `GET /api/v1/integrations/aliexpress/callback`
+- `GET /api/v1/integrations/aliexpress/status`
+- `DELETE /api/v1/integrations/aliexpress/disconnect` (admin or owner)
+
+**Background tasks** — `health_check` and `sweep_health_checks`, with tenant
+context bound per connection; integration work routed to its own queue
+
+**Frontend** — `/settings/integrations` with real server-driven connection
+state, and a settings index that is now a genuine hub rather than a placeholder
+
+**Documentation** — `docs/ALIEXPRESS_INTEGRATION.md`
+
+### Changed
+
+- Disconnect **hard-deletes** the connection, unlike everything else in the
+  platform. A customer who disconnects has asked us to forget their credentials
+- Celery `task_routes` sends `integrations.*` to a dedicated queue
+
+### Fixed
+
+- **Docker images installed a stub `app` package into site-packages** (debt item
+  M1). The real code only won by `sys.path` ordering, so any command run from a
+  different directory resolved to the empty stub. The builder now installs
+  dependencies only, extracted from `pyproject.toml`
 
 ---
 

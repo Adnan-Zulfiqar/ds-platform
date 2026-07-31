@@ -16,14 +16,17 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
+from app.models.integration import AliExpressConnection, IntegrationStatus
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role, RoleName, UserRole
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User
 
 __all__ = [
+    "AliExpressConnection",
     "Base",
     "IdentifiedBase",
+    "IntegrationStatus",
     "ReferenceBase",
     "RefreshToken",
     "Role",

@@ -31,11 +31,21 @@ COPY backend/pyproject.toml ./
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# `pip install .` needs the package present; a stub keeps this layer independent
-# of the real source so the cache survives code changes.
-RUN mkdir -p app && touch app/__init__.py README.md \
+# Install the *dependencies only*, never the application package itself.
+#
+# An earlier version created a stub `app/__init__.py` so that `pip install .`
+# would succeed without the real source. That worked, but it left an empty `app`
+# package in site-packages which the real code at /app only shadows because the
+# working directory precedes site-packages on sys.path. Any command run from a
+# different directory resolved to the empty stub and failed with a confusing
+# ImportError.
+#
+# Extracting the dependency list keeps the layer cache — it changes only when
+# pyproject.toml changes — without installing anything that can shadow the
+# application. `tomllib` is in the standard library from Python 3.11.
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
     && pip install --upgrade pip \
-    && pip install .
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime

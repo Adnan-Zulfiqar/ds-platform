@@ -12,7 +12,8 @@ Last updated: 2026-07-31
 | 0 | Foundation | ✅ **Complete** |
 | 1 | Authentication and multi-tenant identity | ✅ **Complete** |
 | 2 | Application shell, navigation, and SaaS UI foundation | ✅ **Complete** |
-| 3 | *Scope not yet defined* | 🚧 **In Progress** |
+| 3 | AliExpress integration foundation | ✅ **Complete** |
+| 4 | *Scope not yet defined* | ⏳ Not started |
 
 ---
 
@@ -74,18 +75,36 @@ Full detail: [Frontend.md](docs/Frontend.md)
 
 ---
 
-## Phase 3 — 🚧 In Progress
+## Phase 3 — AliExpress integration foundation ✅
 
-**Scope is not yet defined.** Marked in progress at the point Phase 2 was
-finalised; the requirements arrive with the Phase 3 prompt and this entry will
-be filled in then.
+The connection foundation for supplier automation. No product, price, inventory,
+or order functionality — those are later phases, and this exists so they are
+feature work rather than infrastructure work.
 
-No Phase 3 code has been written.
+Fernet credential encryption with key rotation; `aliexpress_connections` and
+migration `0003`; a signed HTTP client with timeouts, jittered retries, error
+mapping, and outbound rate limiting; the OAuth flow with a single-use
+server-side `state` token; four endpoints; a Celery health check; and a real
+integrations settings page.
 
-The shell is deliberately ready to receive a feature module: add the route under
-`app/(protected)/`, flip its `status` to `ready` in `lib/navigation.ts`, and put
-the feature's own components under `features/`. Nothing about the shell needs to
-change.
+Verified with **240 backend tests** and **55 Playwright tests**. Migration `0003`
+applied against PostgreSQL 17.
+
+**Not verified against the real AliExpress API.** The signing scheme, endpoints,
+and error codes are implemented from documentation and exercised only against
+mocks. Every one is a setting or a single function, so correcting them is cheap.
+See [ALIEXPRESS_INTEGRATION.md](docs/ALIEXPRESS_INTEGRATION.md).
+
+---
+
+## Phase 4 — ⏳ Not started
+
+Scope arrives with the Phase 4 prompt. No Phase 4 code has been written.
+
+The shell and the integration foundation are both ready to receive a feature
+module: add the route under `app/(protected)/`, flip its `status` to `ready` in
+`lib/navigation.ts`, and add an API method through
+`AliExpressClient.call`. Nothing in the foundation needs to change.
 
 ---
 

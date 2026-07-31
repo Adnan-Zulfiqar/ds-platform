@@ -22,9 +22,13 @@ COPY backend/pyproject.toml ./
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN mkdir -p app && touch app/__init__.py README.md \
+
+# Dependencies only — never the application package. See the equivalent step in
+# backend.Dockerfile for why installing the package here would leave a stub in
+# site-packages that shadows the real code.
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
     && pip install --upgrade pip \
-    && pip install .
+    && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # ---------------------------------------------------------------------------
 FROM python:3.13-slim AS runtime

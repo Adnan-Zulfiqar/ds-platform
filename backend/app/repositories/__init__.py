@@ -10,6 +10,10 @@ known).
 """
 
 from app.repositories.base import BaseRepository, TenantScopedRepository
+from app.repositories.integration import (
+    AliExpressConnectionRepository,
+    IntegrationMaintenanceRepository,
+)
 from app.repositories.refresh_token import (
     RefreshTokenRepository,
     generate_token_secret,
@@ -20,8 +24,10 @@ from app.repositories.tenant import TenantRepository
 from app.repositories.user import AuthenticationUserRepository, UserRepository, normalise_email
 
 __all__ = [
+    "AliExpressConnectionRepository",
     "AuthenticationUserRepository",
     "BaseRepository",
+    "IntegrationMaintenanceRepository",
     "RefreshTokenRepository",
     "RoleRepository",
     "TenantRepository",

@@ -94,6 +94,47 @@ export interface AuthResponse {
   tokens: TokenResponse;
 }
 
+export type IntegrationStatus = "pending" | "connected" | "expired" | "error";
+
+/**
+ * A marketplace connection as returned by the API.
+ *
+ * Note what is absent: no app secret, no access token, no refresh token, not
+ * even a masked one. The server's response model has no field for them, which
+ * is why a credential cannot reach the browser.
+ */
+export interface AliExpressConnection {
+  id: string;
+  status: IntegrationStatus;
+  /** Public identifier, not a secret — it travels in every request URL. */
+  appKey: string;
+  connectedAt: string | null;
+  lastSyncAt: string | null;
+  tokenExpiresAt: string | null;
+  isTokenExpired: boolean;
+  lastError: string | null;
+}
+
+export interface AliExpressStatus {
+  /**
+   * Computed server-side. A connection whose token has expired is not
+   * connected, so clients must not infer this from `status` alone.
+   */
+  connected: boolean;
+  connection: AliExpressConnection | null;
+}
+
+export interface AliExpressAuthorization {
+  authorizationUrl: string;
+  state: string;
+  expiresInSeconds: number;
+}
+
+export interface AliExpressConnectPayload {
+  appKey: string;
+  appSecret: string;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;

@@ -301,6 +301,35 @@ class SecuritySettings(BaseSettings):
     login_attempt_window_seconds: int = Field(default=300, ge=1)
     login_lockout_seconds: int = Field(default=900, ge=1)
 
+    # --- Credential encryption --------------------------------------------
+    #
+    # Separate from `secret_key`, which signs tokens. Two reasons they must not
+    # be the same value: a signing key can be rotated the moment a leak is
+    # suspected at the cost of ending every session, whereas rotating the
+    # encryption key requires re-encrypting stored data first. Sharing one key
+    # would tie those two very different operations together.
+    #
+    # A list, ordered newest first. Decryption tries every key; encryption
+    # always uses the first. That is what makes rotation possible without
+    # downtime: prepend a new key, re-encrypt in the background, then drop the
+    # old one.
+    #
+    # Each entry must be a urlsafe base64-encoded 32-byte Fernet key. Generate
+    # with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    encryption_keys: Annotated[list[SecretStr], NoDecode] = Field(
+        default_factory=list,
+        description="Fernet keys, newest first. Empty disables credential storage.",
+    )
+
+    @field_validator("encryption_keys", mode="before")
+    @classmethod
+    def _parse_encryption_keys(cls, value: object) -> object:
+        """Accept a comma-separated list, matching every other list setting."""
+        if not isinstance(value, str):
+            return value
+        return [item.strip() for item in value.split(",") if item.strip()]
+
     # --- Cookies -----------------------------------------------------------
     cookie_secure: bool = True
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
@@ -317,6 +346,66 @@ class SecuritySettings(BaseSettings):
     # a settable setting, which would let the very value used to detect an
     # insecure key be overridden from the environment.
     LOCAL_PLACEHOLDER_KEY: ClassVar[str] = "insecure-local-development-key-change-me"
+
+
+class AliExpressSettings(BaseSettings):
+    """AliExpress Open Platform configuration.
+
+    **App credentials are not here.** ``app_key`` and ``app_secret`` belong to
+    the tenant, not the platform, so they live encrypted in
+    ``aliexpress_connections``. Only values that are the same for every tenant
+    are configured here.
+
+    **The endpoints are configurable for a reason.** AliExpress operates several
+    regional gateways and has changed paths between API generations. The
+    defaults below reflect the documented Open Platform gateway, but they must
+    be confirmed against current AliExpress developer documentation for the
+    account in use before any live traffic — see docs/ALIEXPRESS_INTEGRATION.md.
+    Making them settings means correcting one is a configuration change, not a
+    code change and redeploy.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="ALIEXPRESS_", extra="ignore")
+
+    authorize_url: str = "https://api-sg.aliexpress.com/oauth/authorize"
+
+    # rule fires on any name containing "token".
+    token_url: str = "https://api-sg.aliexpress.com/rest/auth/token/create"  # noqa: S105
+    refresh_url: str = "https://api-sg.aliexpress.com/rest/auth/token/refresh"
+    api_base_url: str = "https://api-sg.aliexpress.com/sync"
+
+    # Where AliExpress returns the user after consent. Must match the value
+    # registered in the AliExpress developer console exactly — a mismatch is
+    # rejected at the authorization step, before any code is issued.
+    redirect_uri: str = "http://localhost:8000/api/v1/integrations/aliexpress/callback"
+
+    # Where the user lands in the application afterwards.
+    frontend_return_url: str = "http://localhost:3000/settings/integrations"
+
+    request_timeout_seconds: float = Field(default=15.0, gt=0)
+    connect_timeout_seconds: float = Field(default=5.0, gt=0)
+
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        description="Retries for transient failures only; never for a 4xx.",
+    )
+    retry_backoff_seconds: float = Field(default=1.0, gt=0)
+    retry_backoff_max_seconds: float = Field(default=30.0, gt=0)
+
+    # Outbound quota. AliExpress enforces its own limits and answers with an
+    # error code; staying under them locally avoids burning quota on requests
+    # that will be rejected anyway.
+    rate_limit_requests: int = Field(default=60, ge=1)
+    rate_limit_window_seconds: int = Field(default=60, ge=1)
+
+    # Refresh this far ahead of expiry rather than waiting for a 401, so a sync
+    # is never interrupted by a token that lapsed mid-run.
+    token_refresh_margin_seconds: int = Field(default=900, ge=0)
+
+    # How long an OAuth `state` value stays valid. Long enough to read a consent
+    # screen, short enough to bound replay.
+    oauth_state_ttl_seconds: int = Field(default=600, ge=60)
 
 
 class ObservabilitySettings(BaseSettings):
@@ -396,6 +485,7 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod

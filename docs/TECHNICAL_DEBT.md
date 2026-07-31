@@ -5,6 +5,12 @@ Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 
 **Current count: 1 critical, 1 high, 8 medium, 5 low.**
 
+Phase 3 resolved M1 (Docker stub package) and added M10 (unverified AliExpress
+contract). **C1 remains open and unchanged**: Docker is still not installed on
+this machine, so `docker compose build` and `up` — the first item of the Phase 3
+brief — could not be run. Neither WSL nor Docker Desktop is present, and
+installing them needs administrator elevation and a reboot.
+
 Phase 2 added M8 (dashboard bundle size) and M9 (dashboard mock data), and
 resolved one latent defect found by running the app: `CORS_ORIGINS` could not be
 parsed in the format documented in `.env.example`, so the application could not
@@ -109,7 +115,28 @@ except the verification endpoints themselves.
 
 ## Medium
 
-### M1 — The backend Docker image installs a stub `app` package
+### M10 — The AliExpress contract is unverified against the real API
+
+The signing scheme, endpoint URLs, and error-code mappings are implemented from
+documentation and exercised only against mocks. AliExpress operates several
+regional gateways and has changed signing methods between API generations.
+
+**Contained by design.** Every one of these is either a setting or isolated in a
+single function, so correcting one is configuration or a one-function edit —
+see the correction table in `docs/ALIEXPRESS_INTEGRATION.md`.
+
+**Trigger:** before connecting a real AliExpress account.
+
+### ~~M1 — The backend Docker image installs a stub `app` package~~ ✅ RESOLVED 2026-07-31
+
+The builder now extracts the dependency list from `pyproject.toml` and installs
+only that, so nothing named `app` reaches site-packages. The layer cache is
+preserved — it still invalidates only when `pyproject.toml` changes.
+
+The extraction command was verified locally against the real manifest, though
+the image itself remains unbuilt (C1).
+
+### M1 (original) — The backend Docker image installs a stub `app` package
 
 `docker/backend.Dockerfile` creates an empty `app/__init__.py` to make
 `pip install .` cache-friendly, which installs a **stub `app` package into

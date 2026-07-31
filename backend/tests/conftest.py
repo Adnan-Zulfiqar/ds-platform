@@ -29,6 +29,15 @@ os.environ.setdefault("LOG_JSON_OUTPUT", "false")
 # mirrors local HTTP development; deployed environments keep the default of
 # true, which `Settings` does not allow to be weakened silently.
 os.environ.setdefault("SECURITY_COOKIE_SECURE", "false")
+# Two fixed Fernet keys so credential encryption works in tests, and so key
+# rotation is exercised rather than assumed. Fixed rather than generated per run
+# because a value encrypted in one test must be readable in another.
+# These decode to the literal ASCII "test-key-N-NEVER-USE-IN-PROD-!!!", so a
+# grep of a config file makes their nature obvious.
+os.environ.setdefault(
+    "SECURITY_ENCRYPTION_KEYS",
+    "dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=,dGVzdC1rZXktMi1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
+)
 # ---------------------------------------------------------------------------
 
 from app.core import context as ctx

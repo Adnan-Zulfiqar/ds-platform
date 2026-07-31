@@ -47,6 +47,38 @@ export async function isApiReachable(): Promise<boolean> {
 }
 
 /**
+ * Whether Redis is available to the backend.
+ *
+ * Some flows need it and correctly refuse without it. Starting an OAuth
+ * connection is one: the `state` token is stored in Redis, and it is the CSRF
+ * defence for the redirect. With nowhere to store it the server fails closed
+ * rather than beginning a flow it could not verify on return — so those tests
+ * are skipped, not failed, when Redis is absent.
+ *
+ * Read from the health endpoint, which already reports component status, rather
+ * than by connecting to Redis from the test.
+ */
+export async function isRedisAvailable(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_URL}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok && response.status !== 503) return false;
+
+    const body = (await response.json()) as {
+      components?: { name: string; status: string }[];
+    };
+    return (
+      body.components?.some(
+        (component) => component.name === "redis" && component.status === "healthy",
+      ) ?? false
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Register through the UI and land on the dashboard.
  *
  * Driving the real form rather than calling the API and injecting a token: the
