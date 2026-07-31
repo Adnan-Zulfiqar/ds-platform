@@ -202,13 +202,16 @@ integration.
    been made. Product search, detail and order endpoints remain unverified, and
    their request shapes are still taken from documentation.
 
-2. **The consent scope looks too narrow for Phase 4.** The authorization screen
-   requested only *Alibaba Member's Basic Information* — login, user information
-   and membership identification. No product or dropship scope appeared, despite
-   the **AliExpress-dropship** permission group showing Active in the console.
-   OAuth succeeds regardless, because identity scope is enough to issue tokens.
-   Product import may fail with a permission error until this is resolved in the
-   developer console. **This is the most likely blocker for Phase 4.**
+2. ~~**The consent scope looks too narrow for Phase 4.**~~ **Withdrawn — this
+   was wrong.** The authorization screen requested only *Alibaba Member's Basic
+   Information*, and this report concluded that was the most likely blocker for
+   Phase 4. Phase 3.7 probed the live APIs directly and found the dropship
+   endpoints fully accessible with the token that consent produced.
+
+   The consent screen describes what is read from the end user's *account*. It
+   does not enumerate the application's API permission groups, which is what
+   governs callable methods. Inferring API access from the consent screen was
+   the error. See [PHASE_3_7_PERMISSIONS.md](PHASE_3_7_PERMISSIONS.md).
 
 3. **Token refresh is untested against the live gateway.** `refresh_if_needed`
    and the refresh endpoint signing are exercised only by mocks. The stored
