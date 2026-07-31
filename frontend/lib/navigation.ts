@@ -2,7 +2,6 @@ import {
   BarChart3,
   Bell,
   Bot,
-  Download,
   LayoutDashboard,
   Package,
   Settings,
@@ -73,13 +72,6 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         icon: Package,
         status: "ready",
         description: "Manage your product catalogue across every channel.",
-      },
-      {
-        href: "/products/import",
-        label: "Import Product",
-        icon: Download,
-        status: "coming-soon",
-        description: "Import products from AliExpress and other suppliers.",
       },
       {
         href: "/inventory",
@@ -194,9 +186,9 @@ export const ALL_NAV_ITEMS: readonly NavItem[] = NAV_SECTIONS.flatMap(
 /**
  * Resolve the navigation item matching a pathname.
  *
- * Matches the **longest** href rather than the first, so `/products/import`
- * resolves to the import item and not to `/products`. A first-match scan would
- * label every product subpage "Products".
+ * Matches the **longest** href rather than the first, so a nested route such as
+ * `/products/123` resolves to Products via prefix rather than a shorter sibling.
+ * A first-match scan would label nested pages incorrectly when order matters.
  */
 export function findNavItem(pathname: string): NavItem | undefined {
   return ALL_NAV_ITEMS.filter(

@@ -29,26 +29,39 @@ export async function registerViaApi(
   request: APIRequestContext,
   account: TestAccount = buildAccount(),
 ): Promise<{ account: TestAccount; accessToken: string; tenantId: string }> {
-  const response = await request.post(`${API_URL}/api/v1/auth/register`, {
-    data: {
-      companyName: account.companyName,
-      email: account.email,
-      password: account.password,
-      firstName: "E2E",
-      lastName: "Operator",
-    },
-  });
+  // Parallel Playwright runs burn through the global IP rate limit quickly.
+  // Backing off on 429 is cheaper than disabling the limiter for the whole suite.
+  let lastStatus = 0;
+  let lastBody = "";
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const response = await request.post(`${API_URL}/api/v1/auth/register`, {
+      data: {
+        companyName: account.companyName,
+        email: account.email,
+        password: account.password,
+        firstName: "E2E",
+        lastName: "Operator",
+      },
+    });
 
-  if (!response.ok()) {
-    throw new Error(`Registration failed (${response.status()}): ${await response.text()}`);
+    if (response.ok()) {
+      const body = (await response.json()) as RegisterResponse;
+      return {
+        account,
+        accessToken: body.tokens.accessToken,
+        tenantId: body.identity.tenant.id,
+      };
+    }
+
+    lastStatus = response.status();
+    lastBody = await response.text();
+    if (lastStatus !== 429) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
   }
 
-  const body = (await response.json()) as RegisterResponse;
-  return {
-    account,
-    accessToken: body.tokens.accessToken,
-    tenantId: body.identity.tenant.id,
-  };
+  throw new Error(`Registration failed (${lastStatus}): ${lastBody}`);
 }
 
 /**

@@ -89,15 +89,28 @@ export async function registerAndSignIn(
   page: Page,
   account: TestAccount = buildAccount(),
 ): Promise<TestAccount> {
-  await page.goto("/register");
+  // Rate-limit 429s under a busy suite look like navigation flakes (M13). Retry
+  // with a fresh account rather than failing the whole test on a shared IP bucket.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const candidate = attempt === 0 ? account : buildAccount();
+    await page.goto("/register");
 
-  await page.getByLabel("Company name").fill(account.companyName);
-  await page.getByLabel("Work email").fill(account.email);
-  await page.getByLabel("Password", { exact: true }).fill(account.password);
-  await page.getByLabel("Confirm password").fill(account.password);
+    await page.getByLabel("Company name").fill(candidate.companyName);
+    await page.getByLabel("Work email").fill(candidate.email);
+    await page.getByLabel("Password", { exact: true }).fill(candidate.password);
+    await page.getByLabel("Confirm password").fill(candidate.password);
 
-  await page.getByRole("button", { name: "Create account" }).click();
-  await page.waitForURL(/\/dashboard/, { timeout: 20_000 });
+    await page.getByRole("button", { name: "Create account" }).click();
+    try {
+      await page.waitForURL(/\/dashboard/, { timeout: 20_000 });
+      return candidate;
+    } catch {
+      if (page.isClosed()) {
+        throw new Error("Registration page closed before reaching /dashboard");
+      }
+      await page.waitForTimeout(1500 * (attempt + 1));
+    }
+  }
 
-  return account;
+  throw new Error("Registration did not reach /dashboard after retries");
 }
