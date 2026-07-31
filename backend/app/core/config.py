@@ -31,6 +31,43 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = _BACKEND_ROOT.parent
 
+#: Env files every settings class reads, repository root first.
+#:
+#: Absolute, not a bare ".env". A relative name resolves against the *working
+#: directory*, so launching from the repository root and from `backend/` would
+#: read different files — or none — and the failure is silent: settings fall
+#: back to defaults and the application starts looking healthy while pointed at
+#: the wrong configuration.
+_ENV_FILES = (_REPO_ROOT / ".env", _BACKEND_ROOT / ".env")
+
+
+class _EnvFileSettings(BaseSettings):
+    """Base for every settings group, carrying the env-file configuration.
+
+    **This base is load-bearing, not decoration.** pydantic-settings reads
+    ``env_file`` from the class being instantiated. A nested settings class that
+    does not declare one reads ``os.environ`` and nothing else — so with the
+    file configured only on the root ``Settings``, every nested group
+    (``POSTGRES_*``, ``SECURITY_*``, ``ALIEXPRESS_*``, ...) silently ignored the
+    ``.env`` and fell back to defaults.
+
+    That failure mode is particularly nasty because it is invisible: the
+    application boots, reports healthy, and runs on default credentials while
+    the operator believes their ``.env`` was applied. It surfaced during Phase
+    3.5 live setup, when app credentials present in the file were reported
+    missing by the application.
+
+    pydantic merges ``model_config`` across inheritance, so subclasses declare
+    only their ``env_prefix`` and inherit the file configuration from here.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
 
 class Environment(StrEnum):
     """Deployment environment.
@@ -49,7 +86,7 @@ class Environment(StrEnum):
         return self in (Environment.STAGING, Environment.PRODUCTION)
 
 
-class DatabaseSettings(BaseSettings):
+class DatabaseSettings(_EnvFileSettings):
     """PostgreSQL connection and pool configuration.
 
     Pool sizing matters at the scale this platform targets. Each API process
@@ -118,7 +155,7 @@ class DatabaseSettings(BaseSettings):
         )
 
 
-class RedisSettings(BaseSettings):
+class RedisSettings(_EnvFileSettings):
     """Redis configuration.
 
     Logical databases separate concerns so that flushing the cache can never
@@ -182,7 +219,7 @@ class RedisSettings(BaseSettings):
         return self.dsn_for(self.rate_limit_db)
 
 
-class CelerySettings(BaseSettings):
+class CelerySettings(_EnvFileSettings):
     """Celery and RabbitMQ configuration.
 
     RabbitMQ is the broker (durable routing, good operational tooling) while
@@ -215,7 +252,7 @@ class CelerySettings(BaseSettings):
     )
 
 
-class SecuritySettings(BaseSettings):
+class SecuritySettings(_EnvFileSettings):
     """Security parameters.
 
     Nothing here has a usable default for production — ``Settings`` refuses to
@@ -354,7 +391,7 @@ class SecuritySettings(BaseSettings):
     LOCAL_PLACEHOLDER_KEY: ClassVar[str] = "insecure-local-development-key-change-me"
 
 
-class AliExpressSettings(BaseSettings):
+class AliExpressSettings(_EnvFileSettings):
     """AliExpress Open Platform configuration.
 
     **App credentials are not here.** ``app_key`` and ``app_secret`` belong to
@@ -451,7 +488,7 @@ class AliExpressSettings(BaseSettings):
     oauth_state_ttl_seconds: int = Field(default=600, ge=60)
 
 
-class ObservabilitySettings(BaseSettings):
+class ObservabilitySettings(_EnvFileSettings):
     """Logging and monitoring configuration."""
 
     model_config = SettingsConfigDict(env_prefix="LOG_", extra="ignore")
@@ -468,7 +505,7 @@ class ObservabilitySettings(BaseSettings):
     slow_request_ms: int = Field(default=1000, ge=1)
 
 
-class StorageSettings(BaseSettings):
+class StorageSettings(_EnvFileSettings):
     """Object storage (AWS S3) configuration."""
 
     model_config = SettingsConfigDict(env_prefix="S3_", extra="ignore")
@@ -484,25 +521,14 @@ class StorageSettings(BaseSettings):
     presigned_url_ttl_seconds: int = Field(default=3600, ge=1)
 
 
-class Settings(BaseSettings):
-    """Root settings object."""
+class Settings(_EnvFileSettings):
+    """Root settings object.
 
-    model_config = SettingsConfigDict(
-        # Absolute paths, not a bare ".env".
-        #
-        # A relative name resolves against the *working directory*, so running
-        # uvicorn from the repository root and from `backend/` would read
-        # different files — or none. The failure is silent: settings fall back
-        # to defaults and the application starts looking healthy while pointed
-        # at the wrong configuration.
-        #
-        # Both locations are read, repository root first, so `backend/.env` can
-        # override for a backend-only setting. Missing files are ignored.
-        env_file=(_REPO_ROOT / ".env", _BACKEND_ROOT / ".env"),
-        env_file_encoding="utf-8",
-        extra="ignore",
-        case_sensitive=False,
-    )
+    Inherits its env-file configuration from `_EnvFileSettings` like every other
+    group, so there is exactly one definition of where configuration is read
+    from. It previously declared its own, which is how the nested groups came to
+    be missing theirs without anyone noticing.
+    """
 
     environment: Environment = Environment.LOCAL
     project_name: str = "DropPilot AI"

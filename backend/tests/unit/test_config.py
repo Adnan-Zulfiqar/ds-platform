@@ -12,7 +12,18 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import (
+    _ENV_FILES,
+    AliExpressSettings,
+    CelerySettings,
+    DatabaseSettings,
+    ObservabilitySettings,
+    RedisSettings,
+    SecuritySettings,
+    Settings,
+    StorageSettings,
+    _EnvFileSettings,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -55,6 +66,100 @@ class TestListParsing:
 
         assert settings.cors_origins == ["http://localhost:3000"]
         assert settings.allowed_hosts == ["*"]
+
+
+class TestEnvFileLoading:
+    """Every settings group must read the .env file.
+
+    A regression guard for a defect found during Phase 3.5 live setup: only the
+    root ``Settings`` declared ``env_file``, so every nested group
+    (``POSTGRES_*``, ``SECURITY_*``, ``ALIEXPRESS_*``, ...) read ``os.environ``
+    and silently ignored the file.
+
+    The failure was invisible — the application booted, reported healthy, and
+    ran on default credentials while the operator believed their ``.env`` had
+    been applied. Credentials genuinely present in the file were reported
+    missing by the application.
+    """
+
+    @pytest.mark.parametrize(
+        "settings_class",
+        [
+            Settings,
+            AliExpressSettings,
+            SecuritySettings,
+            DatabaseSettings,
+            RedisSettings,
+            CelerySettings,
+            ObservabilitySettings,
+            StorageSettings,
+        ],
+    )
+    def test_every_settings_class_inherits_the_env_file_base(self, settings_class: type) -> None:
+        """Inheritance is checked rather than `model_config["env_file"]`.
+
+        `conftest` blanks that key so the suite cannot read a developer's real
+        `.env`, which would make this assertion pass for the wrong reason — or
+        fail on a clean checkout. The base class is what actually carries the
+        setting, and it is what a new settings group would forget to inherit.
+        """
+        assert issubclass(settings_class, _EnvFileSettings), (
+            f"{settings_class.__name__} does not inherit _EnvFileSettings, so it "
+            "will ignore .env and silently fall back to defaults."
+        )
+
+    def test_env_file_paths_are_absolute(self) -> None:
+        """A relative path resolves against the working directory.
+
+        Launching from the repository root and from `backend/` would then read
+        different files, or none.
+        """
+        from pathlib import Path
+
+        assert _ENV_FILES, "no .env locations are configured at all"
+        for path in _ENV_FILES:
+            assert Path(path).is_absolute()
+
+    def test_a_nested_group_reads_values_from_a_file(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The behaviour itself, not just the configuration.
+
+        Asserting the config key exists would pass even if pydantic stopped
+        honouring it, so this writes a file and checks a nested group picks it
+        up.
+        """
+        from pathlib import Path
+
+        env_path = Path(str(tmp_path)) / ".env"
+        env_path.write_text(
+            "ALIEXPRESS_APP_KEY=from-the-file\nALIEXPRESS_ENVIRONMENT=production\n",
+            encoding="utf-8",
+        )
+
+        # Ensure the environment cannot be the source of the value.
+        monkeypatch.delenv("ALIEXPRESS_APP_KEY", raising=False)
+        monkeypatch.delenv("ALIEXPRESS_ENVIRONMENT", raising=False)
+
+        config = AliExpressSettings(_env_file=str(env_path))  # type: ignore[call-arg]
+
+        assert config.app_key == "from-the-file"
+        assert config.environment == "production"
+
+    def test_the_environment_still_wins_over_a_file(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Precedence matters for deployment: a container's environment must
+        override whatever file happens to be baked into the image."""
+        from pathlib import Path
+
+        env_path = Path(str(tmp_path)) / ".env"
+        env_path.write_text("ALIEXPRESS_APP_KEY=from-the-file\n", encoding="utf-8")
+        monkeypatch.setenv("ALIEXPRESS_APP_KEY", "from-the-environment")
+
+        config = AliExpressSettings(_env_file=str(env_path))  # type: ignore[call-arg]
+
+        assert config.app_key == "from-the-environment"
 
 
 class TestDeployedEnvironmentGuards:

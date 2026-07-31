@@ -44,6 +44,35 @@ from app.core import context as ctx
 from app.core.config import Environment, get_settings
 
 
+# --- The suite must not read the developer's .env --------------------------
+# Every settings group reads `.env` so that a real deployment picks up its
+# configuration (see `_EnvFileSettings`). That is right for the application and
+# wrong for the tests: the suite would then assert against whatever credentials
+# happen to sit in one machine's file, and pass or fail accordingly. Two tests
+# caught this immediately — a real `ALIEXPRESS_APP_KEY` made the
+# "defaults are empty" assertions fail.
+#
+# So the file is switched off here, leaving `os.environ` above as the single
+# source of test configuration. This is deliberately done in the harness rather
+# than by teaching the application to detect pytest; production code should not
+# know that tests exist.
+#
+# Individual tests may still pass `_env_file=` explicitly to exercise file
+# loading — that argument overrides this.
+def _disable_env_file_reads() -> None:
+    from pydantic_settings import BaseSettings
+
+    from app.core import config as config_module
+
+    for obj in vars(config_module).values():
+        if isinstance(obj, type) and issubclass(obj, BaseSettings):
+            obj.model_config["env_file"] = None
+
+
+_disable_env_file_reads()
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _verify_test_environment() -> None:
     """Guard against running the suite against a non-test configuration.
