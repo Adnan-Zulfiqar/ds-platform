@@ -14,6 +14,58 @@ Nothing pending.
 
 ---
 
+## [phase-6] — 2026-07-31
+
+Inventory synchronisation, dynamic pricing, multi-store management, automation,
+notifications, real analytics, and shipment tracking extensions.
+
+Closed with migration `0006`, integration tests against real PostgreSQL, live
+`AliExpressClient.call()` for the inventory dependency, and frontend pages for
+every new module. See [PHASE_6_COMPLETION.md](docs/PHASE_6_COMPLETION.md).
+
+### Added
+
+**Domain** (`migration 0006`)
+- `stores`, inventory sync runs/changes, pricing rules/changes, automation
+  rules/runs, notifications, analytics daily rollups
+- Product `sell_price` and optional `store_id`
+
+**Services & APIs**
+- Inventory sync (idempotent, reuses product import)
+- Pricing engine (percentage / fixed / tiered; min profit / max price guards;
+  preview before apply; audit trail)
+- Store management with health and statistics
+- Automation dispatcher (background-oriented)
+- Notification centre
+- Analytics dashboard aggregates
+
+**Celery**
+- `inventory.sync`, `pricing.recalculate`, `automation.run`,
+  `shipment.refresh`, `analytics.aggregate`, `cleanup.old_notifications`
+
+**Frontend**
+- `/inventory`, `/pricing`, `/stores`, `/automation`, `/notifications`,
+  `/analytics`, `/shipments`
+- Dashboard and analytics consume live `/analytics/dashboard` — `MOCK_*` removed
+
+### Verified
+
+- **566 backend tests** — ruff, mypy strict, pytest all green
+- **Live `AliExpressClient.call()`** — `product.get` success for inventory path;
+  category / order error path re-checked
+- Frontend lint, typecheck, build
+- Tenant isolation tests for new repositories
+- Playwright: Phase 6 ops smoke + updated shell dashboard tests (chromium)
+
+### Not verified
+
+- Celery under a live RabbitMQ broker (M15)
+- Webhook signature verification (M11)
+- Docker deployment (C1)
+- Marketplace OAuth for sales channels (manual stores only)
+
+---
+
 ## [phase-5] — 2026-07-31
 
 Order management, fulfilment, and synchronisation from AliExpress.

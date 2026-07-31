@@ -5,8 +5,11 @@ Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 **Phase 4 release review 2026-07-31** — M10 resolved; M15 added.
 **Phase 5 release review 2026-07-31** — M16 added; M9/M11/M15 updated; live
 `AliExpressClient.call()` verified for category success and order error/list paths.
+**Phase 6 release review 2026-07-31** — M9 resolved (dashboard uses live
+analytics); M15 expanded to cover Phase 6 Celery tasks; live `product.get`
+re-verified for inventory sync.
 
-**Current count: 1 critical, 1 high, 13 medium, 5 low.**
+**Current count: 1 critical, 1 high, 12 medium, 5 low.**
 
 The Phase 5 release verified the production AliExpress client path against the
 live gateway and shipped order sync. M16 records that a populated order-detail
@@ -153,16 +156,17 @@ client stack in production is not.
 
 ### M15 — Celery sync tasks have never run under a broker
 
-`products.sync_one`, `products.sweep_stale`, and the Phase 5 order tasks
-(`orders.sync_all`, `orders.sync_one_store`, `orders.refresh_status`,
-`orders.cleanup`) follow the established task pattern and are unit-tested via
-`.run()`, but no RabbitMQ broker or Celery worker runs on the development
-machine. Beat entries for the order tasks exist in `celery_app.py`; they have
-never been exercised by a running beat process.
+Catalogue, order, and Phase 6 ops tasks
+(`inventory.sync`, `pricing.recalculate`, `automation.run`, `shipment.refresh`,
+`analytics.aggregate`, `cleanup.old_notifications`, plus earlier product/order
+tasks) follow the established task pattern and are unit-tested via `.run()`,
+but no RabbitMQ broker or Celery worker runs on the development machine. Beat
+entries exist in `celery_app.py`; they have never been exercised by a running
+beat process.
 
-**Impact:** background catalogue and order refresh is implemented but
-unverified in a running worker process.
-**Trigger:** before advertising scheduled sync to customers.
+**Impact:** background refresh and automation are implemented but unverified in
+a running worker process.
+**Trigger:** before advertising scheduled sync or automation to customers.
 **Fix:** run `docker compose up` with worker and beat once C1 is closed; add an
 integration test that executes `.apply()` against an in-process worker if CI
 cannot reach RabbitMQ.
@@ -323,21 +327,11 @@ request volume, not guessing.
 **Trigger:** observed abuse, or before opening the API to the public internet.
 **Fix:** apply the login throttle keyed on IP to both.
 
-### M9 — The dashboard still renders mock charts and headline stats
+### ~~M9 — The dashboard still renders mock charts and headline stats~~ ✅ RESOLVED 2026-07-31
 
-Phase 5 added a **live** order-synchronisation row on `/dashboard` (and on
-`/orders`) backed by `GET /orders/statistics`. The six mock headline cards and
-three charts still come from `lib/mock/dashboard-data.ts`.
-
-**This is contained rather than dangerous**, and the containment is the point:
-the mock module is quarantined under `lib/mock/`, every export is prefixed
-`MOCK_`, and the page banner states which figures are sample data. An operator
-must not mistake the mock row for their own metrics.
-
-**Trigger:** the first analytics endpoint that replaces the remaining mock row.
-**Fix:** add fetchers to `services/dashboard.ts`, swap the remaining `MOCK_`
-imports, delete `lib/mock/dashboard-data.ts`. A surviving `MOCK_` reference
-anywhere means the migration is incomplete.
+Phase 6 replaced the mock row with `GET /analytics/dashboard`. Charts and
+headline stats come from `services/dashboard.ts`. `lib/mock/dashboard-data.ts`
+was deleted; a repo-wide search finds no remaining `MOCK_` symbols.
 
 ### M8 — The dashboard bundle is 108 kB, almost all Recharts
 

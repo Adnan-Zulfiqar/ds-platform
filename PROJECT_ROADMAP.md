@@ -15,6 +15,7 @@ Last updated: 2026-07-31
 | 3 | AliExpress integration foundation | ✅ **Complete** |
 | 4 | Product import and catalogue synchronisation | ✅ **Complete** |
 | 5 | Order management, fulfilment & synchronisation | ✅ **Complete** |
+| 6 | Inventory, pricing, multi-store, automation & tracking | ✅ **Complete** |
 
 ---
 
@@ -159,11 +160,21 @@ Full report: [PHASE_5_COMPLETION.md](docs/PHASE_5_COMPLETION.md).
 
 ---
 
-## Phase 6 — ⏳ Not started
+## Phase 6 — Inventory, pricing, multi-store, automation & tracking ✅
 
-Scope arrives with the Phase 6 prompt. The order and catalogue foundations are
-ready to receive store mapping, bulk operations, or fulfilment automation —
-whichever the next phase specifies.
+**Tag:** `phase-6-complete`
+
+Operations platform on top of Phase 4/5: sales-channel stores; inventory sync
+reusing product import; dynamic pricing with preview/apply audit; automation
+rules that dispatch to existing services; notification centre; real analytics
+dashboard (mock data removed); shipment tracking list + TrackingEvent writes;
+Celery tasks for inventory/pricing/automation/shipments/analytics/cleanup.
+
+Live `AliExpressClient.call()` verified for the inventory dependency
+(`product.get`). No new AliExpress methods were added.
+
+Verified with **566 backend tests** and frontend lint, typecheck, and build.
+Full report: [PHASE_6_COMPLETION.md](docs/PHASE_6_COMPLETION.md).
 
 ---
 
@@ -174,15 +185,13 @@ in mind. Nothing here is committed to a phase number.
 
 | Area | Notes |
 |---|---|
-| Store connections | Shopify, WooCommerce, eBay, Etsy, TikTok Shop, AliExpress. Third-party credentials must be encrypted at rest with a key held outside the database |
-| Product import and editing | The platform's highest-volume entity; drives the keyset-pagination and full-text-search decisions |
+| Store channel OAuth | Shopify / Woo / eBay / Etsy / TikTok — credentials encrypted; Phase 6 is manual-first |
 | AI optimisation | Listing content generation and enhancement |
-| Inventory and price sync | Background work; the reason queue separation is configured but unused |
-| Analytics | Read replica or rollup tables rather than aggregating over live tables |
+| Real FX for pricing | Currency conversion hook is identity today |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
 | Admin panel | Platform operations across tenants |
-| Notifications and reporting | Email and webhook delivery |
+| Email notifications | In-app centre exists; outbound email delivery does not |
 
 ---
 
@@ -194,7 +203,8 @@ each phase boundary.
 A housekeeping pass on 2026-07-31 resolved all three actionable High items —
 login throttle coverage, authorization wiring, and dead navigation links.
 
-**Current: 1 critical, 1 high, 13 medium, 5 low** (M16 added; M9/M11/M15 updated).
+**Current: 1 critical, 1 high, 12 medium, 5 low** (M9 resolved in Phase 6;
+M11/M15 remain).
 
 The critical item is that the **deployment path has never been executed** —
 Docker images, Compose, and Nginx are all unbuilt. It cannot be closed on this
