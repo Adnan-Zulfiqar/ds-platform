@@ -7,13 +7,21 @@ exhaustively without a network:
    over the sorted parameters, not with a bearer header.
 2. **The OAuth state token** — the CSRF defence for the authorization redirect.
 
-> **Verify before live traffic.** The signing scheme below implements the
-> documented Open Platform algorithm (sorted concatenation, HMAC-SHA256, upper
-> hex). AliExpress has shipped more than one signing method across API
-> generations and gateways, and the exact parameter names differ by endpoint.
-> Confirm both against the current developer documentation for the account in
-> use. The algorithm is isolated in :func:`sign_request` precisely so that
-> correcting it is a change to one function.
+**Verified against the live gateway on 2026-07-31.** The scheme is sorted
+``key + value`` concatenation, prefixed with the API path for REST-style
+endpoints, HMAC-SHA256 with the app secret, upper-case hex — and **every**
+parameter except ``sign`` is included, ``sign_method`` among them.
+
+That last detail was the one defect live traffic found: excluding ``sign_method``
+produced ``IncompleteSignature`` on every token exchange. It was isolated by
+signing the same request four ways against the real endpoint with a deliberately
+invalid authorization code, which the gateway checks *after* the signature, so
+the error code distinguished the two failures without consuming a real code.
+See :func:`sign_request` and ``_UNSIGNED_PARAMS``.
+
+AliExpress has shipped more than one signing method across API generations and
+gateways, so the algorithm stays isolated in :func:`sign_request`: correcting it
+is a change to one function.
 """
 
 from __future__ import annotations
@@ -35,10 +43,17 @@ logger = get_logger(__name__)
 
 #: Parameters excluded from the signature base string.
 #:
-#: `sign` cannot sign itself. `sign_method` is excluded because the gateway
-#: reads it before verifying and including it makes the base string depend on a
-#: value the server has already consumed.
-_UNSIGNED_PARAMS = frozenset({"sign", "sign_method"})
+#: **Only `sign`**, which cannot sign itself. Every other parameter is signed,
+#: `sign_method` included.
+#:
+#: This previously also excluded `sign_method`, on the reasoning that the
+#: gateway consumes it before verifying. That reasoning was wrong, and it was
+#: the sole cause of the `IncompleteSignature` rejection on the first live token
+#: exchange. Confirmed against the live gateway on 2026-07-31 by signing an
+#: otherwise identical request four ways: excluding `sign_method` returned
+#: `IncompleteSignature`, while including it returned `InvalidCode` — the
+#: signature verified and only the deliberately invalid code was refused.
+_UNSIGNED_PARAMS = frozenset({"sign"})
 
 
 def sign_request(params: dict[str, Any], *, app_secret: str, api_path: str = "") -> str:

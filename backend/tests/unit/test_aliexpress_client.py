@@ -108,11 +108,25 @@ class TestSigning:
             {"a": "1", "b": "2"}, app_secret=APP_SECRET
         )
 
-    def test_sign_and_sign_method_are_excluded(self) -> None:
-        """`sign` cannot sign itself, and the gateway consumes `sign_method`."""
+    def test_only_sign_itself_is_excluded(self) -> None:
+        """`sign` cannot sign itself. Nothing else is exempt."""
         base = {"method": "test"}
         assert sign_request(base, app_secret=APP_SECRET) == sign_request(
-            {**base, "sign": "ignored", "sign_method": "sha256"}, app_secret=APP_SECRET
+            {**base, "sign": "ignored"}, app_secret=APP_SECRET
+        )
+
+    def test_sign_method_is_part_of_the_signature(self) -> None:
+        """The regression from the first live token exchange.
+
+        Excluding `sign_method` from the base string returned
+        `IncompleteSignature` on every call. The gateway does verify it, so
+        omitting it produces a signature the gateway cannot reproduce — and the
+        error names neither the parameter nor the scheme, which is why this is
+        pinned rather than left to be rediscovered.
+        """
+        base = {"method": "test"}
+        assert sign_request(base, app_secret=APP_SECRET) != sign_request(
+            {**base, "sign_method": "sha256"}, app_secret=APP_SECRET
         )
 
     def test_signature_is_upper_hex(self) -> None:
