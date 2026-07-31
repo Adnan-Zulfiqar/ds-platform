@@ -10,7 +10,60 @@ production release.
 
 ## [Unreleased]
 
-Phase 4 — scope not yet defined.
+Nothing pending.
+
+---
+
+## [phase-4] — 2026-07-31
+
+Product import and catalogue synchronisation from AliExpress.
+
+Closed with contract discovery from live payloads, integration tests against
+real PostgreSQL, and a products UI backed by the real API. See
+[PHASE_4_COMPLETION.md](docs/PHASE_4_COMPLETION.md).
+
+### Added
+
+**Contract layer** (`app/integrations/aliexpress/catalog.py`)
+- Pydantic models parsing real `aliexpress.ds.product.get` and feed payloads
+- Captured fixtures committed under `tests/fixtures/aliexpress/`
+
+**Domain model** (`app/models/product.py`, migration `0004`)
+- `products`, `product_variants`, `product_images`, `product_imports`
+- Unique constraint on `(tenant_id, source, external_id)` for idempotent import
+
+**Import service** (`app/services/product_import.py`)
+- Import by supplier product id; feed browse without importing
+- Idempotent upsert preserving tenant-set status on refresh
+
+**Product API** (`app/api/v1/products/router.py`)
+- List, detail, import, sync, import history, feed browse
+
+**Background sync foundation** (`app/tasks/products.py`)
+- `products.sync_one` — refresh one product from its supplier
+- `products.sweep_stale` — fan out refresh for stale catalogue rows
+
+**Frontend products module**
+- `/products` page with table, empty state, and import dialog
+- Real API fetchers in `services/products.ts`
+
+### Verified
+
+- **419 backend tests** — ruff, mypy strict, pytest all green
+- **Tenant isolation** — SQL compile tests on four repositories; integration
+  tests confirm cross-tenant access returns 404 not 403
+- **Real payload parsing** — integration tests use committed capture, not
+  invented JSON
+- **Frontend lint, typecheck, build** — all pass
+- **Playwright** — UI paths pass; import-flow tests skip when live OAuth
+  callback cannot complete (documented)
+
+### Not verified
+
+- Celery product sync tasks under a live broker/worker
+- Celery beat scheduling for stale-product sweeps
+- Live import through production `AliExpressClient.call` (fixture transport in tests)
+- Docker deployment (C1 — unchanged)
 
 ---
 

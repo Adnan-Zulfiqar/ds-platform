@@ -13,7 +13,7 @@ Last updated: 2026-07-31
 | 1 | Authentication and multi-tenant identity | ✅ **Complete** |
 | 2 | Application shell, navigation, and SaaS UI foundation | ✅ **Complete** |
 | 3 | AliExpress integration foundation | ✅ **Complete** |
-| 4 | *Scope not yet defined* | ⏳ Not started |
+| 4 | Product import and catalogue synchronisation | ✅ **Complete** |
 
 ---
 
@@ -111,14 +111,34 @@ Full detail: [PHASE_3_COMPLETION.md](docs/PHASE_3_COMPLETION.md),
 
 ---
 
-## Phase 4 — ⏳ Not started
+## Phase 4 — Product import and catalogue synchronisation ✅
 
-Scope arrives with the Phase 4 prompt. No Phase 4 code has been written.
+**Tag:** `phase-4-complete`
 
-The shell and the integration foundation are both ready to receive a feature
-module: add the route under `app/(protected)/`, flip its `status` to `ready` in
-`lib/navigation.ts`, and add an API method through
-`AliExpressClient.call`. Nothing in the foundation needs to change.
+Import products from AliExpress by supplier product id, store variants and
+images per tenant, refresh price and stock on demand, and expose a products UI
+backed by the real API.
+
+Contract schemas built from live captured payloads; migration `0004`; tenant-scoped
+repositories with SQL compile isolation tests; idempotent import service reusing
+the Phase 3 client; six product endpoints; Celery sync foundation; Playwright
+coverage for UI-owned paths with documented skips when live OAuth cannot complete.
+
+Verified with **419 backend tests** and frontend lint, typecheck, and build.
+Playwright import-flow tests skip on a developer backend where the live gateway
+rejects the synthetic OAuth code — parsing and storage are covered by integration
+tests against captured fixtures.
+
+Full report: [PHASE_4_COMPLETION.md](docs/PHASE_4_COMPLETION.md),
+[PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
+
+---
+
+## Phase 5 — ⏳ Not started
+
+Scope arrives with the Phase 5 prompt. The catalogue foundation is ready to
+receive store mapping, bulk import, or order workflow — whichever the next
+phase specifies.
 
 ---
 
@@ -150,7 +170,7 @@ each phase boundary.
 A housekeeping pass on 2026-07-31 resolved all three actionable High items —
 login throttle coverage, authorization wiring, and dead navigation links.
 
-**Current: 1 critical, 1 high, 6 medium, 5 low.**
+**Current: 1 critical, 1 high, 12 medium, 5 low.**
 
 The critical item is that the **deployment path has never been executed** —
 Docker images, Compose, and Nginx are all unbuilt. It cannot be closed on this

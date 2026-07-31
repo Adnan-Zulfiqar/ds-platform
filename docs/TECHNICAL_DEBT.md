@@ -2,9 +2,14 @@
 
 Reviewed 2026-07-31 at `phase-1-complete`; updated after Phase 2.
 Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
-**Phase 3 release review 2026-07-31** — M10 narrowed; M11–M14 added.
+**Phase 4 release review 2026-07-31** — M10 resolved; M15 added.
 
 **Current count: 1 critical, 1 high, 12 medium, 5 low.**
+
+The Phase 4 release closed M10: product and feed contracts are now verified
+through captured live payloads and integration tests that drive the real HTTP
+pipeline. M15 records that catalogue Celery tasks are registered and unit-tested
+but have never run under a broker.
 
 The Phase 3 release review added four items, all discovered by verifying rather
 than by reading: M11 and M12 are the price of the new webhook endpoint being
@@ -127,24 +132,35 @@ except the verification endpoints themselves.
 
 ## Medium
 
-### M10 — The AliExpress *business* contract is unverified through our client
+### ~~M10 — The AliExpress *business* contract is unverified through our client~~ ✅ RESOLVED 2026-07-31
 
-**Narrowed 2026-07-31, not resolved.** Phases 3.5–3.7 verified the parts that
-carry credentials: the signing scheme (one live defect found and fixed —
-`sign_method` had to be inside the signature base), the token endpoint, the OAuth
-round trip, and which permission groups are granted.
+Phase 4 captured real `aliexpress.ds.product.get` and feed payloads, built
+Pydantic models from them, and pinned the shapes as committed fixtures.
+Integration tests drive the real HTTP pipeline with only the network boundary
+replaced — the mock returns the **real captured JSON**, not invented success
+data.
 
-What remains unverified is the layer above. `AliExpressClient.call` has never
-been used against a live business endpoint, and no response in
-`integrations/aliexpress/schemas.py` has ever parsed a real payload. Phase 3.7's
-probing went straight to HTTP using the application's signing helpers, so it
-proved *access* rather than the client's own request building, retry handling,
-error mapping and deserialisation.
+Verified behaviours that mocks would not have caught: semicolon-delimited image
+URLs, string prices requiring `Decimal`, double-wrapped arrays, composite
+`sku_attr` keys, and the decision to never expose supplier HTML description.
 
-This is now the largest single risk in Phase 4, and it is a contract risk rather
-than an access one — the shape of what comes back, not permission to ask.
+**Remaining gap:** production-path `AliExpressClient.call` against the live
+gateway for product import has not been re-run as part of this release; Phase
+3.7 proved access via direct HTTP. The parsing layer is verified; the full
+client stack in production is not.
 
-**Trigger:** the first Phase 4 product import.
+### M15 — Product Celery sync tasks have never run under a broker
+
+`products.sync_one` and `products.sweep_stale` follow the Phase 3 task pattern
+and are unit-tested via `.run()`, but no RabbitMQ broker or Celery worker runs
+on the development machine. Nothing schedules `sweep_stale` (no beat entry).
+
+**Impact:** background price and inventory refresh is implemented but unverified
+in a running worker process.
+**Trigger:** before advertising scheduled catalogue sync to customers.
+**Fix:** run `docker compose up` with worker and beat once C1 is closed; add an
+integration test that executes `.apply()` against an in-process worker if CI
+cannot reach RabbitMQ.
 
 ### M11 — The webhook accepts unsigned, unauthenticated deliveries
 
