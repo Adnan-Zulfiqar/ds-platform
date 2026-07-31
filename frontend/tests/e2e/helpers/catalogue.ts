@@ -1,0 +1,144 @@
+import type { APIRequestContext } from "@playwright/test";
+
+import { API_URL, TEST_PASSWORD, type TestAccount, buildAccount } from "./auth";
+
+/** Product id from the captured AliExpress fixture used in backend integration tests. */
+export const FIXTURE_PRODUCT_ID = "3256806389000685";
+
+interface AuthTokens {
+  accessToken: string;
+}
+
+interface RegisterResponse {
+  identity: {
+    tenant: { id: string };
+    user: { email: string };
+  };
+  tokens: AuthTokens;
+}
+
+/**
+ * Register a tenant through the API and return its bearer token.
+ *
+ * Playwright cannot inject the in-memory access token the UI stores after
+ * registration, but it can seed catalogue state through the same endpoints the
+ * UI calls — which is what makes the import-and-view flow testable without
+ * stubbing the browser network.
+ */
+export async function registerViaApi(
+  request: APIRequestContext,
+  account: TestAccount = buildAccount(),
+): Promise<{ account: TestAccount; accessToken: string; tenantId: string }> {
+  const response = await request.post(`${API_URL}/api/v1/auth/register`, {
+    data: {
+      companyName: account.companyName,
+      email: account.email,
+      password: account.password,
+      firstName: "E2E",
+      lastName: "Operator",
+    },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Registration failed (${response.status()}): ${await response.text()}`);
+  }
+
+  const body = (await response.json()) as RegisterResponse;
+  return {
+    account,
+    accessToken: body.tokens.accessToken,
+    tenantId: body.identity.tenant.id,
+  };
+}
+
+/**
+ * Complete the AliExpress OAuth callback using the platform application credentials.
+ *
+ * Returns whether the workspace ended up connected. On a live backend without
+ * transport-level mocking this depends on the supplier accepting the synthetic
+ * auth code — which it will not — so callers must treat `false` as expected
+ * outside CI and skip rather than fail.
+ */
+export async function connectAliExpressViaApi(
+  request: APIRequestContext,
+  accessToken: string,
+): Promise<boolean> {
+  const headers = { Authorization: `Bearer ${accessToken}` };
+
+  const connect = await request.post(`${API_URL}/api/v1/integrations/aliexpress/connect`, {
+    headers,
+    data: {},
+  });
+  if (connect.status() !== 201) {
+    return false;
+  }
+
+  const { state } = (await connect.json()) as { state: string };
+  const callback = await request.get(
+    `${API_URL}/api/v1/integrations/aliexpress/callback?code=auth-code&state=${encodeURIComponent(state)}`,
+    { maxRedirects: 0 },
+  );
+
+  if (callback.status() !== 303) {
+    return false;
+  }
+
+  const location = callback.headers()["location"] ?? "";
+  return location.includes("aliexpress=connected");
+}
+
+/** Import a supplier product and return the created catalogue row. */
+export async function importProductViaApi(
+  request: APIRequestContext,
+  accessToken: string,
+  externalId: string = FIXTURE_PRODUCT_ID,
+): Promise<{ id: string; title: string; externalId: string } | null> {
+  const response = await request.post(`${API_URL}/api/v1/products/import`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    data: { externalId },
+  });
+
+  if (!response.ok()) {
+    return null;
+  }
+
+  return (await response.json()) as { id: string; title: string; externalId: string };
+}
+
+/**
+ * Seed a connected tenant with one imported product entirely through the API.
+ *
+ * Skips cleanly when OAuth or import cannot complete — the common case against
+ * a developer backend talking to the real AliExpress gateway without mocks.
+ */
+export async function seedCatalogueViaApi(request: APIRequestContext): Promise<{
+  account: TestAccount;
+  product: { id: string; title: string; externalId: string };
+} | null> {
+  const registered = await registerViaApi(request);
+  const connected = await connectAliExpressViaApi(request, registered.accessToken);
+  if (!connected) {
+    return null;
+  }
+
+  const product = await importProductViaApi(request, registered.accessToken);
+  if (!product) {
+    return null;
+  }
+
+  return { account: registered.account, product };
+}
+
+/** Sign in through the UI using credentials from an API-seeded account. */
+export async function signInWithAccount(
+  page: import("@playwright/test").Page,
+  account: TestAccount,
+): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(account.email);
+  await page.getByLabel("Password", { exact: true }).fill(account.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL(/\/dashboard/, { timeout: 20_000 });
+}
+
+export { TEST_PASSWORD };

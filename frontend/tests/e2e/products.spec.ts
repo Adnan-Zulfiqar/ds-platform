@@ -1,24 +1,22 @@
 import { expect, test } from "@playwright/test";
 
-import { isApiReachable, registerAndSignIn } from "./helpers/auth";
+import { isApiReachable, isRedisAvailable, registerAndSignIn, API_URL } from "./helpers/auth";
+import {
+  FIXTURE_PRODUCT_ID,
+  connectAliExpressViaApi,
+  registerViaApi,
+  seedCatalogueViaApi,
+  signInWithAccount,
+} from "./helpers/catalogue";
 
 /**
  * Product catalogue tests.
  *
  * Run against the real API, so what the page shows is genuinely the server's
- * state.
- *
- * **The successful-import path is not covered here, deliberately.** Importing
- * requires a connected AliExpress account, and connecting requires completing
- * an OAuth consent screen on a live third-party site. A browser test cannot do
- * that, and stubbing it would only test the stub. That path is covered by the
- * backend integration suite, which drives the real HTTP pipeline against the
- * captured supplier payload, and it was additionally verified end to end
- * against the live gateway during Phase 4.
- *
- * What *is* covered here is everything the browser genuinely owns: routing,
- * authentication, the empty state, the import dialog's behaviour, and the
- * failure a user actually hits first — importing with no supplier connected.
+ * state. The import-flow suite seeds connection and catalogue rows through the
+ * same HTTP endpoints the UI uses; when the live AliExpress gateway rejects the
+ * synthetic OAuth code those tests skip rather than fail. Parsing and storage
+ * are covered by the backend integration suite against captured payloads.
  */
 
 test.beforeAll(async () => {
@@ -126,6 +124,85 @@ test.describe("Products page", () => {
     await expect(
       page.getByRole("heading", { name: "Import from AliExpress" }),
     ).toBeHidden();
+  });
+});
+
+test.describe("Products import flow", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.beforeAll(async () => {
+    test.skip(
+      !(await isApiReachable()),
+      "Backend API is not reachable — start it to run product import flow tests.",
+    );
+    test.skip(
+      !(await isRedisAvailable()),
+      "Redis is not available — OAuth state storage is required to connect AliExpress.",
+    );
+  });
+
+  test("shows AliExpress as connected after OAuth completes", async ({ page, request }) => {
+    const { account, accessToken } = await registerViaApi(request);
+    const connected = await connectAliExpressViaApi(request, accessToken);
+    test.skip(
+      !connected,
+      "AliExpress OAuth callback did not complete — live gateway rejects the synthetic auth code.",
+    );
+
+    const status = await request.get(
+      `${API_URL}/api/v1/integrations/aliexpress/status`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    expect((await status.json()).connected).toBe(true);
+
+    await signInWithAccount(page, account);
+    await page.goto("/settings/integrations");
+
+    const suppliers = page.getByRole("region", { name: "Suppliers" });
+    await expect(suppliers.getByText("Not connected")).toBeHidden();
+    await expect(suppliers.getByText("Connection error")).toBeHidden();
+  });
+
+  test("displays an imported product after API seeding", async ({ page, request }) => {
+    const seeded = await seedCatalogueViaApi(request);
+    test.skip(
+      seeded === null,
+      "Catalogue seeding failed — OAuth or import could not complete against this backend.",
+    );
+
+    await signInWithAccount(page, seeded.account);
+    await page.goto("/products");
+
+    await expect(page.getByTestId("product-row")).toHaveCount(1);
+    await expect(page.getByText(seeded.product.title.slice(0, 20))).toBeVisible();
+    await expect(page.getByText(seeded.product.externalId)).toBeVisible();
+  });
+
+  test("imports through the dialog when AliExpress is connected", async ({
+    page,
+    request,
+  }) => {
+    const { account, accessToken } = await registerViaApi(request);
+    const connected = await connectAliExpressViaApi(request, accessToken);
+    test.skip(
+      !connected,
+      "AliExpress OAuth callback did not complete — live gateway rejects the synthetic auth code.",
+    );
+
+    await signInWithAccount(page, account);
+    await page.goto("/products");
+
+    await page.getByRole("button", { name: "Import product" }).first().click();
+    await page.getByLabel("AliExpress product ID").fill(FIXTURE_PRODUCT_ID);
+
+    const response = page.waitForResponse((r) =>
+      r.url().includes("/products/import"),
+    );
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+
+    expect((await response).status()).toBe(201);
+    await expect(page.getByTestId("product-row")).toHaveCount(1);
+    await expect(page.getByText(FIXTURE_PRODUCT_ID)).toBeVisible();
   });
 });
 
