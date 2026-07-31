@@ -568,6 +568,50 @@ class TestWebhook:
         assert response.status_code == 200
         assert response.json() == {"status": "received"}
 
+    async def test_rejects_invalid_signature_when_secret_configured(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(
+            "app.integrations.aliexpress.webhook.settings.aliexpress.webhook_secret",
+            SecretStr("integration-webhook-secret"),
+        )
+        response = await client.post(
+            WEBHOOK_URL,
+            content=b'{"message_id":"bad-sig"}',
+            headers={
+                "content-type": "application/json",
+                "x-aliexpress-signature": "00" * 32,
+            },
+        )
+        assert response.status_code == 401
+
+    async def test_accepts_valid_signature_when_secret_configured(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        from app.integrations.aliexpress.webhook_security import compute_hmac_sha256_hex
+
+        secret = "integration-webhook-secret"
+        body = b'{"message_id":"good-sig","type":"ORDER_STATUS"}'
+        digest = compute_hmac_sha256_hex(secret=secret, raw_body=body)
+        monkeypatch.setattr(
+            "app.integrations.aliexpress.webhook.settings.aliexpress.webhook_secret",
+            SecretStr(secret),
+        )
+        response = await client.post(
+            WEBHOOK_URL,
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-aliexpress-signature": digest,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"status": "received"}
+
     async def test_is_documented_in_openapi(self, client: AsyncClient) -> None:
         spec = (await client.get("/openapi.json")).json()
         operation = spec["paths"][WEBHOOK_URL]["post"]

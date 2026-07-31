@@ -185,13 +185,25 @@ The Cloudflare Tunnel must forward this path to the local backend, the same way
 it forwards the OAuth callback. A request that never reaches this application
 returns 404 from the tunnel edge.
 
-### Security status
+### Security status (Phase 7)
 
-**Signature verification is not implemented yet.** The handler accepts any POST,
-logs the payload, and acknowledges receipt. That is acceptable only while no
-business logic runs here. Before processing order or customer data, confirm
-AliExpress's webhook signing scheme and implement verification in
-`app/integrations/aliexpress/webhook.py`.
+AliExpress has not published a confirmed signing scheme for this push endpoint.
+DropPilot implements a **documented dual mode**:
+
+| Mode | When | Behaviour |
+|---|---|---|
+| HMAC | `ALIEXPRESS_WEBHOOK_SECRET` set | HMAC-SHA256 over raw body; invalid/missing → **401** |
+| Shed | secret unset (default) | No signature check; per-IP shed limiter; still **200** |
+
+In both modes:
+
+- Replay protection rejects duplicate message ids (Redis NX).
+- Logs record field *names* and counts, never customer payload values.
+- **Order state is never mutated** from webhook payloads — polling sync remains
+  the source of truth until a production secret matches real AliExpress
+  deliveries.
+
+See `app/integrations/aliexpress/webhook_security.py`.
 
 ---
 

@@ -383,6 +383,15 @@ class SecuritySettings(_EnvFileSettings):
     rate_limit_requests: int = Field(default=100, ge=1, description="Requests per window.")
     rate_limit_window_seconds: int = Field(default=60, ge=1)
 
+    # --- Email verification ------------------------------------------------
+    #
+    # Off by default: there is no mail provider yet, so flipping this without
+    # SMTP would lock every new registration out. When a provider is wired,
+    # set this true, set registration to create unverified users, and use
+    # RequireVerified. See docs/PHASE_7_PLAN.md.
+    require_email_verification: bool = False
+    email_verification_ttl_hours: int = Field(default=24, ge=1, le=168)
+
     hsts_max_age_seconds: int = Field(default=31_536_000, ge=0)
 
     # ClassVar, not a field. Without the annotation Pydantic would treat this as
@@ -486,6 +495,23 @@ class AliExpressSettings(_EnvFileSettings):
     # How long an OAuth `state` value stays valid. Long enough to read a consent
     # screen, short enough to bound replay.
     oauth_state_ttl_seconds: int = Field(default=600, ge=60)
+
+    # --- Inbound webhooks --------------------------------------------------
+    #
+    # Optional HMAC secret. When set, deliveries must present a matching
+    # signature header or they are rejected with 401. When unset (default),
+    # the handler stays non-mutating and uses a shed-without-429 limiter
+    # instead of the global rate limiter (see M11/M12).
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        description="HMAC-SHA256 secret for inbound AliExpress webhooks.",
+    )
+    webhook_shed_limit: int = Field(
+        default=120,
+        ge=1,
+        description="Max webhook deliveries processed per IP per window when unsigned.",
+    )
+    webhook_shed_window_seconds: int = Field(default=60, ge=1)
 
 
 class ObservabilitySettings(_EnvFileSettings):

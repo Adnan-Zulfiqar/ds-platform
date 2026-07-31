@@ -69,6 +69,7 @@ celery_app.conf.update(
     # Implementations live in app.tasks (see that package for why it sits
     # beside app.api rather than inside this one).
     imports=(
+        "app.tasks.health",
         "app.tasks.integrations.aliexpress",
         "app.tasks.products",
         "app.tasks.orders",
@@ -80,11 +81,9 @@ celery_app.conf.update(
         "app.tasks.notifications",
     ),
     # Periodic schedule, executed by a beat process (`celery -A ... beat`).
-    # Configuration only: no beat process runs on the development machine, so
-    # these entries are registered but have never fired (M15). Intervals are
-    # deliberately conservative — every scheduled sync spends tenants' supplier
-    # quota, and the windows overlap the interval so a missed beat leaves
-    # overlap rather than a gap.
+    # Intervals are deliberately conservative — every scheduled sync spends
+    # tenants' supplier quota, and the windows overlap the interval so a missed
+    # beat leaves overlap rather than a gap.
     beat_schedule={
         "orders-sync-all": {
             "task": "orders.sync_all",

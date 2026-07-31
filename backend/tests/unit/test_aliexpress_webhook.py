@@ -36,6 +36,11 @@ class FakeRedis:
         self.counters[key] = self.counters.get(key, 0) + 1
         return self.counters[key]
 
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int:
+        key = str(args[0])
+        self.counters[key] = self.counters.get(key, 0) + 1
+        return self.counters[key]
+
 
 @pytest.fixture()
 def fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
@@ -306,10 +311,10 @@ class TestProcessWebhook:
 
 
 class TestReceiveWebhook:
-    """The 200-always contract.
+    """Inbound HTTP contract.
 
-    The module promises AliExpress will not retry. That promise is only kept if
-    no path out of the handler raises.
+    Unsigned mode keeps the 200-always acknowledgement so AliExpress does not
+    retry-storm. Signature mode returns 401 on bad HMAC (opt-in secret).
     """
 
     @pytest.mark.asyncio
@@ -332,3 +337,63 @@ class TestReceiveWebhook:
 
         assert response.status == "received"
         exception.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_valid_signature_is_accepted(
+        self, fake_redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        from app.integrations.aliexpress import webhook as webhook_module
+        from app.integrations.aliexpress.webhook_security import compute_hmac_sha256_hex
+
+        secret = "phase7-webhook-secret"
+        body = b'{"message_id":"sig-ok","type":"ORDER_STATUS"}'
+        digest = compute_hmac_sha256_hex(secret=secret, raw_body=body)
+
+        monkeypatch.setattr(
+            webhook_module.settings.aliexpress,
+            "webhook_secret",
+            SecretStr(secret),
+        )
+        monkeypatch.setattr(
+            "app.integrations.aliexpress.webhook_security.get_redis",
+            lambda *_a, **_k: fake_redis,
+        )
+
+        request = MagicMock()
+        request.body = AsyncMock(return_value=body)
+        request.json = AsyncMock(return_value={"message_id": "sig-ok", "type": "ORDER_STATUS"})
+        request.headers = {"content-type": "application/json", "x-aliexpress-signature": digest}
+        request.client = MagicMock(host="203.0.113.10")
+
+        response = await webhook_module.receive_webhook(request)
+        assert response.status == "received"
+
+    @pytest.mark.asyncio
+    async def test_invalid_signature_is_rejected(
+        self, fake_redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        from app.core.exceptions import AuthenticationError
+        from app.integrations.aliexpress import webhook as webhook_module
+
+        monkeypatch.setattr(
+            webhook_module.settings.aliexpress,
+            "webhook_secret",
+            SecretStr("phase7-webhook-secret"),
+        )
+
+        body = b'{"message_id":"sig-bad"}'
+        request = MagicMock()
+        request.body = AsyncMock(return_value=body)
+        request.json = AsyncMock(return_value={"message_id": "sig-bad"})
+        request.headers = {
+            "content-type": "application/json",
+            "x-aliexpress-signature": "00" * 32,
+        }
+        request.client = MagicMock(host="203.0.113.11")
+
+        with pytest.raises(AuthenticationError):
+            await webhook_module.receive_webhook(request)

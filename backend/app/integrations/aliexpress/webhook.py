@@ -8,9 +8,11 @@ Phase 5 adds recognition, replay protection and audit accounting on top of the
 Phase 3 acknowledgement. What it deliberately does **not** add is any state
 mutation, and the reason is a security boundary rather than an omission:
 
-* **Deliveries are unsigned.** No signature header has been observed on any
-  delivery, and AliExpress documents no signing scheme for this endpoint (M11
-  in ``TECHNICAL_DEBT.md``). An unsigned body is attacker-controlled input.
+* **Deliveries are unsigned by default.** AliExpress has not confirmed a
+  public signing scheme for this endpoint. Phase 7 adds opt-in HMAC via
+  ``ALIEXPRESS_WEBHOOK_SECRET`` and shed-without-429 limiting when the secret
+  is unset (see ``webhook_security.py``). An unsigned body remains
+  attacker-controlled input.
 * **Deliveries carry no verifiable tenant claim.** The stored connection keeps
   no external seller identifier to match against, so a payload cannot be
   attributed to a tenant without trusting the payload itself — which is
@@ -34,9 +36,16 @@ from redis.exceptions import RedisError
 from starlette.requests import Request
 
 from app.core.config import settings
+from app.core.exceptions import AuthenticationError
 from app.core.logging import get_logger
 from app.core.redis import RedisPurpose, get_redis
 from app.integrations.aliexpress.schemas import AliExpressWebhookAckResponse
+from app.integrations.aliexpress.webhook_security import (
+    allow_webhook_under_shed,
+    configured_webhook_secret,
+    verify_webhook_signature,
+    webhook_secret_configured,
+)
 
 logger = get_logger(__name__)
 
@@ -209,9 +218,9 @@ def acknowledge_webhook(
     any deployed environment. So a developer working against real deliveries can
     see everything, and production cannot leak it.
 
-    TODO: verify AliExpress webhook signatures once their signing scheme is
-    confirmed against current developer documentation. Until then, this endpoint
-    accepts any POST — acceptable only while no business logic runs here.
+    Signature verification is opt-in via ``ALIEXPRESS_WEBHOOK_SECRET``; see
+    ``webhook_security.py``. Until a secret is configured, this endpoint
+    accepts any POST and remains non-mutating.
     """
     logger.info(
         "aliexpress_webhook_received",
@@ -230,24 +239,36 @@ def acknowledge_webhook(
 async def receive_webhook(request: Request) -> AliExpressWebhookAckResponse:
     """Parse an inbound webhook request and acknowledge it.
 
-    **200 is unconditional, including when parsing fails.** The module docstring
-    promises AliExpress will not retry, and an uncaught exception would break
-    that promise by returning 500 — provoking exactly the redelivery the design
-    is trying to avoid, on a schedule this application does not control.
+    **Signature mode** (secret configured): invalid or missing signatures raise
+    :class:`AuthenticationError` (401). Attackers should not get a 200 that
+    looks like acceptance.
 
-    Reading the body can fail independently of its content: a client that
-    disconnects mid-upload raises rather than returning bytes. So the guard is
-    deliberately broad. Processing failures are also swallowed, and that is
-    safe for the same reason processing is bounded: nothing here mutates
-    state, so a delivery lost to a Redis hiccup costs a log line and a
-    counter tick, and the polling sync remains the source of truth.
+    **Unsigned mode** (default): 200 is returned even when processing is shed
+    or Redis fails, so a delivery agent does not retry-storm. Processing
+    failures are swallowed because nothing here mutates state — the polling
+    sync remains the source of truth.
     """
     try:
+        raw_body = await request.body()
         payload = await parse_webhook_payload(request)
         header_map = {key.lower(): value for key, value in request.headers.items()}
     except Exception:
         logger.exception("aliexpress_webhook_unreadable")
         return AliExpressWebhookAckResponse()
+
+    if webhook_secret_configured():
+        if not verify_webhook_signature(
+            secret=configured_webhook_secret(),
+            raw_body=raw_body,
+            headers=header_map,
+        ):
+            logger.warning("aliexpress_webhook_signature_rejected")
+            raise AuthenticationError("Webhook signature is not valid.")
+    else:
+        client_ip = request.client.host if request.client else "unknown"
+        if not await allow_webhook_under_shed(client_ip=client_ip):
+            # Still acknowledge — returning 429 would provoke redelivery.
+            return acknowledge_webhook(payload=payload, headers=header_map)
 
     try:
         await process_webhook(payload, header_map)

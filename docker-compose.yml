@@ -122,6 +122,40 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    networks: [droppilot]
+
+  # Beat is a separate process on purpose: co-locating it with a worker means a
+  # worker restart also restarts the scheduler, and two replicas would each fire
+  # the same schedule. One beat, N workers.
+  beat:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    command: >
+      celery -A app.workers.celery_app.celery_app beat --loglevel=info
     networks: [droppilot]
 
   frontend:
