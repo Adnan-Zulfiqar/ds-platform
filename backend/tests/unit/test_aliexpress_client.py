@@ -284,6 +284,77 @@ class TestErrorMapping:
         with pytest.raises(AliExpressResponseError):
             await build().call("aliexpress.test")
 
+    async def test_a_wrapped_error_response_envelope_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: the gateway wraps errors in an `error_response` envelope.
+
+        Found by Phase 5 live verification. The payload below is the **real
+        captured response** to `aliexpress.ds.trade.order.get` with a missing
+        parameter. Before the fix, validating only the top-level body meant
+        `is_error` was false and the error body was returned as a success.
+        """
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "error_response": {
+                        "type": "ISV",
+                        "code": "MissingParameter",
+                        "msg": (
+                            "The input parameter \u201corder_id\u201d that is mandatory "
+                            "for processing this request is not supplied"
+                        ),
+                        "request_id": "213ba8d017855321073836012",
+                    }
+                },
+            )
+
+        monkeypatch.setattr(client_module.httpx, "AsyncClient", mock_client(handler))
+
+        with pytest.raises(AliExpressResponseError) as excinfo:
+            await build().call("aliexpress.ds.trade.order.get")
+        assert excinfo.value.upstream_code == "MissingParameter"
+
+    async def test_a_wrapped_rate_limit_is_retried_not_returned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: `ApiCallLimit` inside the envelope must trigger the retry.
+
+        The real captured response — before the envelope fix this passed
+        through as a success payload, silently skipping the retry that the
+        rate-limit mapping exists to provide.
+        """
+        attempts = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "error_response": {
+                            "type": "ISV",
+                            "code": "ApiCallLimit",
+                            "msg": (
+                                "Api access frequency exceeds the limit. "
+                                "this ban will last 1 seconds"
+                            ),
+                            "request_id": "2140d6a517855321087302643",
+                        }
+                    },
+                )
+            return httpx.Response(200, json={"result": {"ok": True}})
+
+        monkeypatch.setattr(client_module.httpx, "AsyncClient", mock_client(handler))
+
+        payload = await build().call("aliexpress.ds.commissionorder.listbyindex")
+
+        assert attempts == 2
+        assert payload == {"result": {"ok": True}}
+
     async def test_code_zero_is_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Some endpoints return code "0" to mean success."""
 

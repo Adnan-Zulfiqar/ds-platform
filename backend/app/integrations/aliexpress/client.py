@@ -254,7 +254,17 @@ class AliExpressClient:
         if not isinstance(body, dict):
             raise AliExpressResponseError("AliExpress returned an unexpected payload.")
 
-        error = AliExpressErrorResponse.model_validate(body)
+        # The gateway wraps documented failures in an `error_response` envelope:
+        # {"error_response": {"type": "ISV", "code": "MissingParameter", ...}}.
+        # Found by live verification in Phase 5 — validating only the top level
+        # let an ApiCallLimit response through as a *success*, silently skipping
+        # the retry the rate-limit mapping exists to trigger. The envelope is
+        # unwrapped before interpretation; a flat error body (older gateways)
+        # still works because the fallback is the body itself.
+        error_body = body.get("error_response")
+        error = AliExpressErrorResponse.model_validate(
+            error_body if isinstance(error_body, dict) else body
+        )
         if error.is_error:
             raise self._map_error(error, operation=operation)
 

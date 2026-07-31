@@ -1,0 +1,9 @@
+{
+  "error_response": {
+    "type": "ISV",
+    "code": "ApiCallLimit",
+    "msg": "Api access frequency exceeds the limit. this ban will last 1 seconds",
+    "request_id": "2140d6a517855321087302643",
+    "_trace_id_": "2140f88817855321087281226e0e95"
+  }
+}
