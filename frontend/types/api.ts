@@ -150,6 +150,99 @@ export interface RegisterPayload {
 }
 
 /** Query parameters accepted by every list endpoint. */
+export type ProductSource = "aliexpress" | "manual";
+export type ProductStatus = "draft" | "active" | "archived" | "unavailable";
+export type ImportStatus =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped";
+
+/**
+ * Prices are `string`, not `number`.
+ *
+ * The backend stores money as `Decimal` and serialises it as a string. Parsing
+ * it into a JavaScript number would reintroduce the binary floating-point error
+ * the backend went to some trouble to avoid — 3.30 is not representable, and
+ * the error compounds across a catalogue and again across a margin calculation.
+ * Format for display; do not do arithmetic on these without a decimal library.
+ */
+export interface ProductVariant {
+  id: string;
+  externalVariantId: string;
+  externalAttributes: string | null;
+  label: string | null;
+  costPrice: string | null;
+  listPrice: string | null;
+  currency: string | null;
+  stockQuantity: number;
+  imageUrl: string | null;
+}
+
+export interface ProductImage {
+  url: string;
+  position: number;
+}
+
+export interface Product {
+  id: string;
+  source: ProductSource;
+  externalId: string;
+  externalUrl: string | null;
+  title: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  brand: string | null;
+  status: ProductStatus;
+  currency: string | null;
+  costPriceMin: string | null;
+  costPriceMax: string | null;
+  stockQuantity: number;
+  supplierName: string | null;
+  rating: string | null;
+  reviewCount: number | null;
+  orderCount: number | null;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  createdAt: string;
+}
+
+export interface ProductDetail extends Product {
+  variants: ProductVariant[];
+  images: ProductImage[];
+}
+
+export interface ProductImportRecord {
+  id: string;
+  source: ProductSource;
+  externalId: string;
+  status: ImportStatus;
+  productId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export interface ProductImportPayload {
+  externalId: string;
+  shipToCountry?: string;
+  currency?: string;
+}
+
+/** A feed entry: a summary, with no variants and no stock. */
+export interface FeedProduct {
+  externalId: string;
+  title: string | null;
+  imageUrl: string | null;
+  price: string | null;
+  currency: string | null;
+  orders: number | null;
+  categoryName: string | null;
+}
+
 export interface ListQuery {
   page?: number;
   size?: number;

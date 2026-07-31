@@ -1,28 +1,28 @@
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/ui/coming-soon";
+import { ImportProductDialog } from "@/components/products/import-product-dialog";
+import { ProductTable } from "@/components/products/product-table";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata: Metadata = { title: "Products" };
 
 /**
- * The route exists so the sidebar link resolves. The feature does not.
+ * The product catalogue.
  *
- * Product import and catalogue management belong to a later phase; this page is
- * honest about that rather than showing an empty table that implies the feature
- * works and the user simply has no data.
+ * A Server Component rendering two client islands: the table owns its own data
+ * fetching and the dialog owns its own form state. Neither needs this page to
+ * hold state on its behalf, so it does not become a client component merely to
+ * pass props down.
  */
 export default function ProductsPage() {
   return (
-    <ComingSoon
-      title="Products"
-      description="Manage your product catalogue across every connected channel."
-      planned={[
-        "Import products from AliExpress and other suppliers",
-        "Bulk edit titles, descriptions, and pricing",
-        "AI-assisted listing optimisation",
-        "Variant and inventory management",
-        "Publish to connected stores",
-      ]}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Products"
+        description="Products imported from your connected suppliers."
+        actions={<ImportProductDialog />}
+      />
+      <ProductTable />
+    </div>
   );
 }
