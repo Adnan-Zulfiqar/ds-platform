@@ -1,0 +1,478 @@
+{
+  "aliexpress_ds_product_get_response": {
+    "result": {
+      "ae_item_sku_info_dtos": {
+        "ae_item_sku_info_d_t_o": [
+          {
+            "sku_attr": "10:529#Realme GT Neo5;14:771#tyjt white",
+            "offer_sale_price": "3.30",
+            "sku_id": "12000037711871337",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.30",
+            "offer_bulk_sale_price": "3.30",
+            "sku_available_stock": 2994,
+            "id": "10:529#Realme GT Neo5;14:771#tyjt white",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Beige",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scbb2378dbd974ff79915cfd3cba5bf8ax.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt white",
+                  "property_value_id": 771,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "CANVAS",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5",
+                  "property_value_id": 529,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:529#Realme GT Neo5;14:365458#tyjt red",
+            "offer_sale_price": "3.23",
+            "sku_id": "12000037711871353",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.23",
+            "offer_bulk_sale_price": "3.23",
+            "sku_available_stock": 2972,
+            "id": "10:529#Realme GT Neo5;14:365458#tyjt red",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Brown",
+                  "sku_image": "https://ae01.alicdn.com/kf/S2a840486c98e4162be25209ffdf69214i.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt red",
+                  "property_value_id": 365458,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "CANVAS",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5",
+                  "property_value_id": 529,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:365211#Realme GT Neo5se;14:771#tyjt white",
+            "offer_sale_price": "3.26",
+            "sku_id": "12000037711871338",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.26",
+            "offer_bulk_sale_price": "3.26",
+            "sku_available_stock": 2989,
+            "id": "10:365211#Realme GT Neo5se;14:771#tyjt white",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Beige",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scbb2378dbd974ff79915cfd3cba5bf8ax.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt white",
+                  "property_value_id": 771,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "Cotton",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5se",
+                  "property_value_id": 365211,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:365211#Realme GT Neo5se;14:365458#tyjt red",
+            "offer_sale_price": "3.19",
+            "sku_id": "12000037711871354",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.19",
+            "offer_bulk_sale_price": "3.19",
+            "sku_available_stock": 2988,
+            "id": "10:365211#Realme GT Neo5se;14:365458#tyjt red",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Brown",
+                  "sku_image": "https://ae01.alicdn.com/kf/S2a840486c98e4162be25209ffdf69214i.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt red",
+                  "property_value_id": 365458,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "Cotton",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5se",
+                  "property_value_id": 365211,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:529#Realme GT Neo5;14:193#tyjt brown",
+            "offer_sale_price": "3.26",
+            "sku_id": "12000037711871341",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.26",
+            "offer_bulk_sale_price": "3.26",
+            "sku_available_stock": 2986,
+            "id": "10:529#Realme GT Neo5;14:193#tyjt brown",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "black",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scb2ffed2160345fd9c1f96f270417632q.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt brown",
+                  "property_value_id": 193,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "CANVAS",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5",
+                  "property_value_id": 529,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:477#Realme GT3;14:365458#tyjt red",
+            "offer_sale_price": "3.26",
+            "sku_id": "12000039465667538",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.26",
+            "offer_bulk_sale_price": "3.26",
+            "sku_available_stock": 2984,
+            "id": "10:477#Realme GT3;14:365458#tyjt red",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Brown",
+                  "sku_image": "https://ae01.alicdn.com/kf/S2a840486c98e4162be25209ffdf69214i.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt red",
+                  "property_value_id": 365458,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "aluminum",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT3",
+                  "property_value_id": 477,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:477#Realme GT3;14:193#tyjt brown",
+            "offer_sale_price": "3.23",
+            "sku_id": "12000039465667536",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.23",
+            "offer_bulk_sale_price": "3.23",
+            "sku_available_stock": 2988,
+            "id": "10:477#Realme GT3;14:193#tyjt brown",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "black",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scb2ffed2160345fd9c1f96f270417632q.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt brown",
+                  "property_value_id": 193,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "aluminum",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT3",
+                  "property_value_id": 477,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:365211#Realme GT Neo5se;14:193#tyjt brown",
+            "offer_sale_price": "3.39",
+            "sku_id": "12000037711871342",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.39",
+            "offer_bulk_sale_price": "3.39",
+            "sku_available_stock": 2989,
+            "id": "10:365211#Realme GT Neo5se;14:193#tyjt brown",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "black",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scb2ffed2160345fd9c1f96f270417632q.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt brown",
+                  "property_value_id": 193,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "Cotton",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5se",
+                  "property_value_id": 365211,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:477#Realme GT3;14:1254#tyjt black",
+            "offer_sale_price": "3.47",
+            "sku_id": "12000039465667537",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.47",
+            "offer_bulk_sale_price": "3.47",
+            "sku_available_stock": 2967,
+            "id": "10:477#Realme GT3;14:1254#tyjt black",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "SKY BLUE",
+                  "sku_image": "https://ae01.alicdn.com/kf/S603302e3d6ac495c83aa16868041f9b2P.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt black",
+                  "property_value_id": 1254,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "aluminum",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT3",
+                  "property_value_id": 477,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:477#Realme GT3;14:771#tyjt white",
+            "offer_sale_price": "3.44",
+            "sku_id": "12000039465667535",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.44",
+            "offer_bulk_sale_price": "3.44",
+            "sku_available_stock": 2989,
+            "id": "10:477#Realme GT3;14:771#tyjt white",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "Beige",
+                  "sku_image": "https://ae01.alicdn.com/kf/Scbb2378dbd974ff79915cfd3cba5bf8ax.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt white",
+                  "property_value_id": 771,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "aluminum",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT3",
+                  "property_value_id": 477,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:529#Realme GT Neo5;14:1254#tyjt black",
+            "offer_sale_price": "3.30",
+            "sku_id": "12000037711871349",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.30",
+            "offer_bulk_sale_price": "3.30",
+            "sku_available_stock": 2936,
+            "id": "10:529#Realme GT Neo5;14:1254#tyjt black",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "SKY BLUE",
+                  "sku_image": "https://ae01.alicdn.com/kf/S603302e3d6ac495c83aa16868041f9b2P.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt black",
+                  "property_value_id": 1254,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "CANVAS",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5",
+                  "property_value_id": 529,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          },
+          {
+            "sku_attr": "10:365211#Realme GT Neo5se;14:1254#tyjt black",
+            "offer_sale_price": "3.14",
+            "sku_id": "12000037711871350",
+            "price_include_tax": false,
+            "currency_code": "USD",
+            "sku_price": "3.14",
+            "offer_bulk_sale_price": "3.14",
+            "sku_available_stock": 2978,
+            "id": "10:365211#Realme GT Neo5se;14:1254#tyjt black",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                {
+                  "sku_property_value": "SKY BLUE",
+                  "sku_image": "https://ae01.alicdn.com/kf/S603302e3d6ac495c83aa16868041f9b2P.jpg",
+                  "sku_property_name": "Color",
+                  "property_value_definition_name": "tyjt black",
+                  "property_value_id": 1254,
+                  "sku_property_id": 14
+                },
+                {
+                  "sku_property_value": "Cotton",
+                  "sku_property_name": "Material",
+                  "property_value_definition_name": "Realme GT Neo5se",
+                  "property_value_id": 365211,
+                  "sku_property_id": 10
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "ae_multimedia_info_dto": {
+        "image_urls": "https://ae01.alicdn.com/kf/S4f3fbe67fdb448a6ade1fd8864c2012fM.jpg;https://ae01.alicdn.com/kf/Sbe69442b561e48c59d67a889dc4d8d365.jpg;https://ae01.alicdn.com/kf/S2a840486c98e4162be25209ffdf69214i.jpg;https://ae01.alicdn.com/kf/Scb2ffed2160345fd9c1f96f270417632q.jpg;https://ae01.alicdn.com/kf/S603302e3d6ac495c83aa16868041f9b2P.jpg;https://ae01.alicdn.com/kf/Scbb2378dbd974ff79915cfd3cba5bf8ax.jpg"
+      },
+      "package_info_dto": {
+        "package_width": 10,
+        "package_height": 2,
+        "package_length": 18,
+        "gross_weight": "0.040",
+        "package_type": false,
+        "product_unit": 100000015
+      },
+      "logistics_info_dto": {
+        "delivery_time": 3,
+        "ship_to_country": "US"
+      },
+      "product_id_converter_result": {
+        "main_product_id": 1005006575315437,
+        "sub_product_id": "{\"US\":3256806389000685}"
+      },
+      "ae_item_base_info_dto": {
+        "mobile_detail": "{\"version\":\"2.0.0\",\"moduleList\":[{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/S668020a3e5fa4a7d94244a4dc9674c730.jpeg\",\"style\":{},\"targetUrl\":\"\"}},{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/S76f50dcb7419458a9ee3ca6ebd70dc25U.jpeg\",\"style\":{},\"targetUrl\":\"\"}},{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/Sccfa9445ab5848989d804a975ebd0495U.jpeg\",\"style\":{},\"targetUrl\":\"\"}},{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/Sd3e52963f0744b7aa12356341955792aX.jpeg\",\"style\":{},\"targetUrl\":\"\"}},{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/S7a3acee4f9034cb68f3949354c31ad25a.jpeg\",\"style\":{},\"targetUrl\":\"\"}},{\"type\":\"image\",\"data\":{\"url\":\"https://ae01.alicdn.com/kf/S58022c4c5924483882ebb6d29a7818ecH.jpeg\",\"style\":{},\"targetUrl\":\"\"}}]}",
+        "subject": "For Realme GT Neo5 Case Realme GT Neo5 SE Phone Case realme gt neo5 GT Neo 5SE Cover Realme GT3 case Camera Protector Lens Cover",
+        "evaluation_count": "40",
+        "sales_count": "112",
+        "product_status_type": "onSelling",
+        "avg_evaluation_rating": "4.9",
+        "separated_listing": false,
+        "currency_code": "USD",
+        "sl_product": false,
+        "category_id": 380230,
+        "product_id": 3256806389000685,
+        "detail": "<div class=\"detailmodule_html\"><div class=\"detail-desc-decorate-richtext\"><p><img src=\"https://ae01.alicdn.com/kf/S668020a3e5fa4a7d94244a4dc9674c730.jpeg\" slate-data-type=\"image\"/><img src=\"https://ae01.alicdn.com/kf/S76f50dcb7419458a9ee3ca6ebd70dc25U.jpeg\" slate-data-type=\"image\"/><img src=\"https://ae01.alicdn.com/kf/Sccfa9445ab5848989d804a975ebd0495U.jpeg\" slate-data-type=\"image\"/><img src=\"https://ae01.alicdn.com/kf/Sd3e52963f0744b7aa12356341955792aX.jpeg\" slate-data-type=\"image\"/><img src=\"https://ae01.alicdn.com/kf/S7a3acee4f9034cb68f3949354c31ad25a.jpeg\" slate-data-type=\"image\"/><img src=\"https://ae01.alicdn.com/kf/S58022c4c5924483882ebb6d29a7818ecH.jpeg\" slate-data-type=\"image\"/></p></div></div><br/>"
+      },
+      "has_whole_sale": false,
+      "ae_item_properties": {
+        "ae_item_property": [
+          {
+            "attr_name_id": 2,
+            "attr_value_id": 386606430,
+            "attr_name": "Brand Name",
+            "attr_value": "NoEnName_Null"
+          },
+          {
+            "attr_name_id": 400000603,
+            "attr_value_id": 23399591357,
+            "attr_name": "High-concerned chemical",
+            "attr_value": "None"
+          },
+          {
+            "attr_name_id": 219,
+            "attr_value_id": 9441741844,
+            "attr_name": "Origin",
+            "attr_value": "Mainland China"
+          },
+          {
+            "attr_name_id": 100002145,
+            "attr_value_id": 3098,
+            "attr_name": "Features",
+            "attr_value": "Anti-Scratch"
+          },
+          {
+            "attr_name_id": 100002145,
+            "attr_value_id": 89658397,
+            "attr_name": "Features",
+            "attr_value": "Anti-Fingerprint"
+          },
+          {
+            "attr_name_id": 20205,
+            "attr_value_id": 124,
+            "attr_name": "Main Material",
+            "attr_value": "Plastic"
+          },
+          {
+            "attr_name_id": 200389261,
+            "attr_value_id": 202833810,
+            "attr_name": "Design",
+            "attr_value": "Plain"
+          },
+          {
+            "attr_name_id": 351,
+            "attr_value_id": 200746398,
+            "attr_name": "Type",
+            "attr_value": "Case"
+          },
+          {
+            "attr_name_id": -1,
+            "attr_name": "Choice",
+            "attr_value": "yes"
+          },
+          {
+            "attr_name_id": -2,
+            "attr_name": "semi_Choice",
+            "attr_value": "yes"
+          }
+        ]
+      },
+      "ae_store_info": {
+        "store_id": 1101460887,
+        "shipping_speed_rating": "4.7",
+        "communication_rating": "4.7",
+        "store_name": "szsxjtkj Store",
+        "store_country_code": "CN",
+        "item_as_described_rating": "4.6"
+      }
+    },
+    "rsp_code": 200,
+    "rsp_msg": "Call succeeds",
+    "request_id": "210171a817855259773031437",
+    "_trace_id_": "2140f89017855259773021110e0e74"
+  }
+}

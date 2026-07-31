@@ -1,0 +1,191 @@
+{
+  "aliexpress_ds_recommend_feed_get_response": {
+    "result": {
+      "current_record_count": 5,
+      "total_record_count": 7717,
+      "is_finished": false,
+      "products": {
+        "traffic_product_d_t_o": [
+          {
+            "original_price": "3.14",
+            "product_small_image_urls": {
+              "productSmallImageUrl": [
+                "https://ae-pic-a1.aliexpress-media.com/kf/S4f3fbe67fdb448a6ade1fd8864c2012fM.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sbe69442b561e48c59d67a889dc4d8d365.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S2a840486c98e4162be25209ffdf69214i.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Scb2ffed2160345fd9c1f96f270417632q.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S603302e3d6ac495c83aa16868041f9b2P.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Scbb2378dbd974ff79915cfd3cba5bf8ax.jpg"
+              ]
+            },
+            "second_level_category_name": "Mobile Phone Cases & Covers",
+            "product_detail_url": "https://www.aliexpress.com/item/3256806389000685.html?pdp_npi=6%40dis%21USD%213.14%213.04%21%21%213.14%213.04%21%402140f89017855259706698554e0e74%2112000037711871350%21affd%21%21%21%211%210%21",
+            "target_sale_price": "3.04",
+            "second_level_category_id": 202228401,
+            "discount": "3%",
+            "product_main_image_url": "https://ae-pic-a1.aliexpress-media.com/kf/S4f3fbe67fdb448a6ade1fd8864c2012fM.jpg",
+            "first_level_category_id": 202192403,
+            "target_sale_price_currency": "USD",
+            "original_price_currency": "USD",
+            "shop_url": "https://www.aliexpress.com/store/1101460887",
+            "target_original_price_currency": "USD",
+            "product_id": 3256806389000685,
+            "seller_id": 239989460,
+            "target_original_price": "3.14",
+            "product_video_url": "",
+            "first_level_category_name": "Phones & Telecommunications Accessories",
+            "evaluate_rate": "98.0%",
+            "sale_price": "3.04",
+            "product_title": "For Realme GT Neo5 Case Realme GT Neo5 SE Phone Case realme gt neo5 GT Neo 5SE Cover Realme GT3 case Camera Protector Lens Cover",
+            "shop_id": 1101460887,
+            "sale_price_currency": "USD",
+            "lastest_volume": 112
+          },
+          {
+            "original_price": "16.82",
+            "product_small_image_urls": {
+              "productSmallImageUrl": [
+                "https://ae-pic-a1.aliexpress-media.com/kf/S36b4575c92d24380aee2fd90347c3ef8t.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S181da34a58da42b6b41c66914d21b359q.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S9a08b1e61f5d4e6397a3c79ee47aed8af.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Hf16555b49495450090581b64ae36422fq.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S90a08e33abe1477b9f9134d423d88f63Q.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Hf35345dbc8104a06acd3a27861b6c8ddM.jpg"
+              ]
+            },
+            "second_level_category_name": "Mobile Phone Cases & Covers",
+            "product_detail_url": "https://www.aliexpress.com/item/3256802341892278.html?pdp_npi=6%40dis%21USD%212.51%210.99%21%21%2116.82%216.62%21%402140f89017855259706698554e0e74%2112000021015705338%21affd%21%21%21%211%210%21",
+            "target_sale_price": "0.99",
+            "second_level_category_id": 202228401,
+            "discount": "60%",
+            "product_main_image_url": "https://ae-pic-a1.aliexpress-media.com/kf/S36b4575c92d24380aee2fd90347c3ef8t.jpg",
+            "first_level_category_id": 202192403,
+            "target_sale_price_currency": "USD",
+            "original_price_currency": "CNY",
+            "shop_url": "https://www.aliexpress.com/store/1101005495",
+            "target_original_price_currency": "USD",
+            "product_id": 3256802341892278,
+            "seller_id": 222460666,
+            "target_original_price": "2.51",
+            "product_video_url": "https://video.aliexpress-media.com/play/u/ae_sg_item/1135918363/p/1/e/6/t/10301/307549207036.mp4",
+            "first_level_category_name": "Phones & Telecommunications Accessories",
+            "evaluate_rate": "86.3%",
+            "sale_price": "6.62",
+            "product_title": "7Colors Ultra Thin Liquid Silicone Matte Case For iPhone 15 14 13 12 Mini 11 Pro X XS Max XR 7 8 Plus SE 2022 Soft TPU Cover",
+            "shop_id": 1101005495,
+            "sale_price_currency": "CNY",
+            "lastest_volume": 31
+          },
+          {
+            "original_price": "269.55",
+            "product_small_image_urls": {
+              "productSmallImageUrl": [
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sad1ddd4b56d4436d8819286197779b64v.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sc1630cd641df4c72a9b6279b76b95058P.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sd204a923133d44ab939fb37253aacf3fe.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sba85147798484beb93d7284f11c7a7bb7.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S77348273b25146a9a01161e46b81d59bw.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sda6e5374cc55443cad75113d2485c13aa.jpg"
+              ]
+            },
+            "second_level_category_name": "Interior Accessories",
+            "product_detail_url": "https://www.aliexpress.com/item/3256806433441998.html?pdp_npi=6%40dis%21USD%2140.16%2113.08%21%21%21269.55%2187.80%21%402140f89017855259706698554e0e74%2112000037841865789%21affd%21%21%21%211%210%21",
+            "target_sale_price": "13.08",
+            "second_level_category_id": 200003411,
+            "discount": "67%",
+            "product_main_image_url": "https://ae-pic-a1.aliexpress-media.com/kf/Sad1ddd4b56d4436d8819286197779b64v.jpg",
+            "first_level_category_id": 34,
+            "target_sale_price_currency": "USD",
+            "original_price_currency": "CNY",
+            "shop_url": "https://www.aliexpress.com/store/1103354080",
+            "target_original_price_currency": "USD",
+            "product_id": 3256806433441998,
+            "seller_id": 2677778059,
+            "target_original_price": "40.16",
+            "product_video_url": "",
+            "first_level_category_name": "Automobiles, Parts & Accessories",
+            "evaluate_rate": "95.0%",
+            "sale_price": "87.80",
+            "product_title": "Metal Leather Car Remote Key Case Cover Shell For Renault Koleos Captur Megane Clio Scenic Talisman Arkana Dacia Sandero Card",
+            "shop_id": 1103354080,
+            "sale_price_currency": "CNY",
+            "lastest_volume": 29
+          },
+          {
+            "original_price": "111.04",
+            "product_small_image_urls": {
+              "productSmallImageUrl": [
+                "https://ae-pic-a1.aliexpress-media.com/kf/Se30297673d9c4578b52080bd3270028fm.jpeg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sb03ffd071d0c4aa490370626319e375am.jpeg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S165e6345aa154a429b84475866dde54fj.jpeg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S9718dcec6564425c8af56556d10290e6I.jpeg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S13f1f71ee0234f9986ef702de27b1670O.jpeg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S03948c1d916749e9b60e364792d22a61V.jpeg"
+              ]
+            },
+            "second_level_category_name": "Car Electronics",
+            "product_detail_url": "https://www.aliexpress.com/item/3256805857557926.html?pdp_npi=6%40dis%21USD%2116.54%211.14%21%21%21111.04%217.66%21%402140f89017855259706698554e0e74%2112000035461111657%21affd%21%21%21%211%210%21",
+            "target_sale_price": "1.14",
+            "second_level_category_id": 200000285,
+            "discount": "93%",
+            "product_main_image_url": "https://ae-pic-a1.aliexpress-media.com/kf/Se30297673d9c4578b52080bd3270028fm.jpeg",
+            "first_level_category_id": 34,
+            "target_sale_price_currency": "USD",
+            "original_price_currency": "CNY",
+            "shop_url": "https://www.aliexpress.com/store/1102958085",
+            "target_original_price_currency": "USD",
+            "product_id": 3256805857557926,
+            "seller_id": 2676026251,
+            "target_original_price": "16.54",
+            "product_video_url": "",
+            "first_level_category_name": "Automobiles, Parts & Accessories",
+            "evaluate_rate": "95.1%",
+            "sale_price": "7.66",
+            "product_title": "For Ford 54-Pin SYNC 2 Or SYNC 3 With RCA Rearview Camera Adapters Cable Harness Auto Parking Assistance Accessories Vehicle",
+            "shop_id": 1102958085,
+            "sale_price_currency": "CNY",
+            "lastest_volume": 221
+          },
+          {
+            "original_price": "87.32",
+            "product_small_image_urls": {
+              "productSmallImageUrl": [
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sc7794d2d504540cc922f11528ad9dac2z.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S450234e2452c4729a26dfe8461ec640bQ.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S4ec155f9f60e4b61ade6ed8785b28861B.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sc3ac39b5f80245ecbfe9b60c5fda9c74X.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/S309dad1bfdf74cf0b679a72ab598b3c4W.jpg",
+                "https://ae-pic-a1.aliexpress-media.com/kf/Sb35d5eca2ccd484e8d2d8ebbf7eeb9e9U.jpg"
+              ]
+            },
+            "second_level_category_name": "Interior Accessories",
+            "product_detail_url": "https://www.aliexpress.com/item/3256806154862206.html?pdp_npi=6%40dis%21USD%2113.01%215.01%21%21%2187.32%2133.63%21%402140f89017855259706698554e0e74%2112000036897769914%21affd%21%21%21%211%210%21",
+            "target_sale_price": "5.01",
+            "second_level_category_id": 200003411,
+            "discount": "61%",
+            "product_main_image_url": "https://ae-pic-a1.aliexpress-media.com/kf/Sc7794d2d504540cc922f11528ad9dac2z.jpg",
+            "first_level_category_id": 34,
+            "target_sale_price_currency": "USD",
+            "original_price_currency": "CNY",
+            "shop_url": "https://www.aliexpress.com/store/1103331716",
+            "target_original_price_currency": "USD",
+            "product_id": 3256806154862206,
+            "seller_id": 2677658242,
+            "target_original_price": "13.01",
+            "product_video_url": "https://video.aliexpress-media.com/play/u/ae_sg_item/2677658242/p/1/e/6/t/10301/1100202399316.mp4",
+            "first_level_category_name": "Automobiles, Parts & Accessories",
+            "evaluate_rate": "96.3%",
+            "sale_price": "33.63",
+            "product_title": "For 2022 2023 Honda Civic Car Center Console Box 11th Gen CIVIC Center console armrest box storage box Tray Auto Accessories",
+            "shop_id": 1103331716,
+            "sale_price_currency": "CNY",
+            "lastest_volume": 35
+          }
+        ]
+      }
+    },
+    "rsp_code": 200,
+    "request_id": "210137bd17855259706705613",
+    "_trace_id_": "2140f89017855259706698554e0e74"
+  }
+}
