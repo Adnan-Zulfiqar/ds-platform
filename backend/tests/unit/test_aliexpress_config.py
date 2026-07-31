@@ -26,7 +26,7 @@ PLATFORM_SECRET = "platform-app-secret"
 TENANT_KEY = "tenant-app-key"
 TENANT_SECRET = "tenant-app-secret"
 
-CALLBACK = "https://whiteto.com/api/v1/integrations/aliexpress/callback"
+CALLBACK = "https://api.whiteto.com/api/v1/integrations/aliexpress/callback"
 
 
 class TestCallbackUrlAlias:

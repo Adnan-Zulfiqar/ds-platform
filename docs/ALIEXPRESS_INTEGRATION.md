@@ -9,12 +9,22 @@ protected, and why each decision was made that way.
 > genuine defect (the signing path prefix — see
 > [Verification log](#verification-log)).
 >
-> **No request has ever been sent to AliExpress.** The OAuth round trip could
-> not be completed because the registered callback
-> (`https://whiteto.com/api/v1/integrations/aliexpress/callback`) returns 404 —
-> that domain does not serve this application — and no credentials were
-> available. Everything below is verified against documentation and reference
-> implementations, not against the live gateway.
+> **No request has ever been sent to AliExpress.** Everything below is verified
+> against documentation and reference implementations, not against the live
+> gateway.
+>
+> Two of the three blockers are now cleared. Credentials are configured, and the
+> registered callback moved to
+> `https://api.whiteto.com/api/v1/integrations/aliexpress/callback`, which a
+> Cloudflare Tunnel forwards to the local backend — a public request to it
+> reaches this application and returns 401 rather than 404.
+>
+> The apex `whiteto.com` was never a viable callback host: it serves the
+> Next.js frontend, so `/api/v1/*` returned that application's 404 page. The
+> subdomain avoids disturbing it.
+>
+> **Still blocked:** Redis. The OAuth `state` store fails closed, so
+> `POST /connect` cannot issue an authorization URL yet. See the note below.
 >
 > Use `backend/scripts/verify_aliexpress.py` to complete the live verification.
 > See [Running live verification](#running-live-verification).
@@ -355,14 +365,27 @@ ALIEXPRESS_AUTH_CODE=... python scripts/verify_aliexpress.py exchange
 ALIEXPRESS_ACCESS_TOKEN=... python scripts/verify_aliexpress.py call
 ```
 
-### Prerequisites that are not yet met
+### Prerequisites
 
-1. **`ALIEXPRESS_APP_KEY` and `ALIEXPRESS_APP_SECRET`** must be set. Neither is
-   set anywhere on the development machine.
-2. **`ALIEXPRESS_REDIRECT_URI` must match the developer console exactly**, and
-   the target must be reachable. The registered callback is
-   `https://whiteto.com/api/v1/integrations/aliexpress/callback`, which
-   currently returns 404 — that domain does not serve this application.
+1. **`ALIEXPRESS_APP_KEY` and `ALIEXPRESS_APP_SECRET`** — configured, and
+   confirmed to load. Note that until the `_EnvFileSettings` fix, a value
+   present in `.env` was read by the root settings only: every nested group,
+   this one included, ignored the file entirely and reported the credentials
+   missing. If credentials ever appear absent despite being set, check that
+   first.
+2. **The callback must match the developer console exactly, and be reachable.**
+   Registered and configured as
+   `https://api.whiteto.com/api/v1/integrations/aliexpress/callback`, forwarded
+   to the local backend by a Cloudflare Tunnel.
+
+   Only that one path is forwarded. `/health`, `/docs` and every other route
+   return 404 on `api.whiteto.com` and never reach this machine. That is
+   sufficient — AliExpress calls nothing else — but it means the subdomain is
+   not a general-purpose route to the backend.
+
+   Set `ALIEXPRESS_CALLBACK_URL`, not `ALIEXPRESS_REDIRECT_URI`. Both are
+   aliases for one field and the former wins, so a value set only in the latter
+   is read and discarded.
 
    For the script alone, the redirect only has to be *reachable enough* for the
    browser to land somewhere: the code is in the URL and usable even if the page
