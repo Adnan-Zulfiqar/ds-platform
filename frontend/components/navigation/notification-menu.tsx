@@ -1,6 +1,7 @@
 "use client";
 
 import { Bell } from "lucide-react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,25 +12,27 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
-import { useNotificationStore } from "@/stores/notification-store";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
+import {
+  useMarkAllNotificationsRead,
+  useNotifications,
+  useUnreadNotificationCount,
+} from "@/services/notifications";
 
 /**
- * Notification centre.
+ * Notification centre — backed by GET /notifications.
  *
- * The panel and its store are real; **there is no notification source yet**, so
- * it is genuinely empty rather than populated with invented entries. A fake
- * unread badge on an empty inbox trains users to ignore the badge, which is
- * precisely the wrong habit to build into a product whose value later depends
- * on alerting people to failed order syncs.
- *
- * The store shape is in place so the phase that produces notifications only
- * has to feed it.
+ * Unread count and the recent list come from React Query (server state). The
+ * old Zustand store remains on disk unused so a follow-up can delete it without
+ * mixing UI and server state again.
  */
 export function NotificationMenu() {
-  const notifications = useNotificationStore((state) => state.notifications);
-  const unreadCount = useNotificationStore((state) => state.unreadCount());
-  const markAllRead = useNotificationStore((state) => state.markAllRead);
+  const { data: unread } = useUnreadNotificationCount();
+  const { data: page } = useNotifications({ page: 1, size: 8 });
+  const markAll = useMarkAllNotificationsRead();
+
+  const unreadCount = unread?.unread ?? 0;
+  const notifications = page?.items ?? [];
 
   return (
     <DropdownMenu>
@@ -47,8 +50,6 @@ export function NotificationMenu() {
           <Bell className="h-4 w-4" />
           {unreadCount > 0 && (
             <span
-              // Decorative: the count is already in the button's accessible
-              // name above, so announcing it twice would be noise.
               aria-hidden="true"
               className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-destructive-foreground"
             >
@@ -66,7 +67,8 @@ export function NotificationMenu() {
               variant="ghost"
               size="sm"
               className="h-auto p-0 text-xs font-normal"
-              onClick={markAllRead}
+              onClick={() => markAll.mutate()}
+              disabled={markAll.isPending}
             >
               Mark all read
             </Button>
@@ -88,19 +90,38 @@ export function NotificationMenu() {
                 key={notification.id}
                 className={cn(
                   "border-b px-3 py-2.5 last:border-0",
-                  !notification.read && "bg-accent/40",
+                  !notification.isRead && "bg-accent/40",
                 )}
               >
-                <p className="text-sm font-medium">{notification.title}</p>
+                {notification.href ? (
+                  <Link
+                    href={notification.href}
+                    className="text-sm font-medium hover:underline"
+                  >
+                    {notification.title}
+                  </Link>
+                ) : (
+                  <p className="text-sm font-medium">{notification.title}</p>
+                )}
                 {notification.body && (
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {notification.body}
                   </p>
                 )}
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {formatDateTime(notification.createdAt)}
+                </p>
               </li>
             ))}
           </ul>
         )}
+
+        <DropdownMenuSeparator />
+        <div className="px-2 py-1.5">
+          <Button variant="ghost" size="sm" className="w-full" asChild>
+            <Link href="/notifications">View all notifications</Link>
+          </Button>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );

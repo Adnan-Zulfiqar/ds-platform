@@ -18,7 +18,7 @@ import {
   TOOLTIP_STYLE,
   formatNumber,
 } from "@/components/dashboard/charts/chart-theme";
-import type { OrdersPoint } from "@/lib/mock/dashboard-data";
+import type { OrdersPoint } from "@/services/dashboard";
 
 interface OrdersChartProps {
   data: readonly OrdersPoint[];

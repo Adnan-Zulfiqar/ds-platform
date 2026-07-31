@@ -16,7 +16,7 @@ import {
   TOOLTIP_STYLE,
   formatNumber,
 } from "@/components/dashboard/charts/chart-theme";
-import type { ProductPerformance } from "@/lib/mock/dashboard-data";
+import type { ProductPerformance } from "@/services/dashboard";
 
 interface ProductPerformanceChartProps {
   data: readonly ProductPerformance[];

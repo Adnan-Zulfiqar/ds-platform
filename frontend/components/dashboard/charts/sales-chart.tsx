@@ -19,7 +19,7 @@ import {
   formatCurrency,
   formatCurrencyCompact,
 } from "@/components/dashboard/charts/chart-theme";
-import type { TimeSeriesPoint } from "@/lib/mock/dashboard-data";
+import type { TimeSeriesPoint } from "@/services/dashboard";
 
 interface SalesChartProps {
   data: readonly TimeSeriesPoint[];

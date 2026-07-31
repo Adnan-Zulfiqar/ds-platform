@@ -208,7 +208,7 @@ test.describe("User menu", () => {
 test.describe("Dashboard", () => {
   test.use({ viewport: VIEWPORTS.desktop });
 
-  test("renders the heading and every stat card", async ({ page }) => {
+  test("renders the heading and every live stat card", async ({ page }) => {
     await signIn(page);
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -217,33 +217,30 @@ test.describe("Dashboard", () => {
     for (const label of [
       "Revenue",
       "Orders",
-      "Profit",
-      "Active products",
-      "Connected stores",
-      "Automation tasks",
+      "Products",
+      "Stores",
+      "Inventory units",
+      "Automation runs (7d)",
     ]) {
       await expect(metrics.getByText(label, { exact: true })).toBeVisible();
     }
   });
 
-  test("declares that the figures are sample data", async ({ page }) => {
-    // Non-negotiable while the numbers are invented: an operator must not
-    // mistake them for their own.
+  test("does not present invented sample-data figures", async ({ page }) => {
+    // Phase 6 removed MOCK_* — the sample-data banner must stay gone.
     await signIn(page);
-    await expect(page.getByText("Sample data")).toBeVisible();
+    await expect(page.getByText("Sample data")).toHaveCount(0);
   });
 
-  test("renders all three charts", async ({ page }) => {
+  test("renders chart sections for live analytics", async ({ page }) => {
     await signIn(page);
 
     // Matched by role: "Orders" is also a nav link and a stat card label, so a
-    // text query resolves to three elements.
+    // text query resolves to three elements. Empty tenants show empty states
+    // rather than Recharts — headings prove the sections mounted.
     for (const title of ["Sales overview", "Orders", "Top products"]) {
       await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
     }
-    // Recharts renders SVG; its presence proves the chart mounted rather than
-    // collapsing to zero height inside its container.
-    await expect(page.locator(".recharts-surface").first()).toBeVisible();
   });
 });
 
@@ -253,6 +250,8 @@ test.describe("Protected routes", () => {
   test("every built route renders inside the shell", async ({ page }) => {
     await signIn(page);
 
+    // Keep this list short — Phase 6 ops routes are covered in phase6-ops.spec.
+    // Hard navigations remount the app; refresh must succeed for each hop.
     for (const route of ["/products", "/stores", "/orders", "/analytics", "/settings"]) {
       await page.goto(route);
       await expect(page).toHaveURL(new RegExp(`${route}$`));
@@ -263,11 +262,9 @@ test.describe("Protected routes", () => {
   });
 
   test("placeholder pages state plainly that they are not built", async ({ page }) => {
-    // Products and Orders are real modules now; Stores is still a ComingSoon
-    // placeholder. Pointing at a built page would make this assertion false
-    // for the wrong reason.
+    // Phase 6 built Stores/Inventory/etc.; Customers remains ComingSoon.
     await signIn(page);
-    await page.goto("/stores");
+    await page.goto("/customers");
 
     await expect(page.getByText("Not available yet")).toBeVisible();
   });

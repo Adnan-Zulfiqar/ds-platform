@@ -1,59 +1,126 @@
-import type { OrdersPoint, ProductPerformance, TimeSeriesPoint } from "@/lib/mock/dashboard-data";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+
+import { apiClient } from "@/lib/api-client";
 
 /**
- * Dashboard data access — **structure only**.
+ * Dashboard data access — real analytics from GET /analytics/dashboard.
  *
- * No endpoint exists yet. `GET /api/v1/analytics/...` is a registered router
- * with no routes, so implementing fetchers here would produce code that
- * compiles, looks finished, and 404s.
- *
- * What is defined now is the part worth agreeing early: the **query keys** and
- * the **response types**. Both are decisions, not implementation, and settling
- * them means the page can be written against a stable shape.
- *
- * **Migration path when the endpoint lands:**
- * 1. Add the fetchers and `useQuery` hooks below.
- * 2. Swap the `MOCK_*` imports in `app/(protected)/dashboard/page.tsx` for those
- *    hooks.
- * 3. Delete `lib/mock/dashboard-data.ts`. Any surviving `MOCK_` reference means
- *    the migration is incomplete.
+ * Chart component types live here (formerly under `lib/mock/dashboard-data`,
+ * which was deleted once the dashboard consumed this API).
  */
 
-/** Period a dashboard query covers. */
 export type DashboardPeriod = "7d" | "30d" | "90d" | "12m";
 
-/**
- * Hierarchical query keys.
- *
- * The nesting is what makes partial invalidation work: invalidating
- * `dashboardKeys.all` clears every dashboard query, while a period-specific key
- * leaves the others cached.
- */
-export const dashboardKeys = {
-  all: ["dashboard"] as const,
-  summary: (period: DashboardPeriod) => [...dashboardKeys.all, "summary", period] as const,
-  sales: (period: DashboardPeriod) => [...dashboardKeys.all, "sales", period] as const,
-  orders: (period: DashboardPeriod) => [...dashboardKeys.all, "orders", period] as const,
-  topProducts: (period: DashboardPeriod) =>
-    [...dashboardKeys.all, "top-products", period] as const,
-};
-
-/** Headline metrics for the stat card row. */
-export interface DashboardSummary {
+export interface TimeSeriesPoint {
+  label: string;
   revenue: number;
   profit: number;
-  orderCount: number;
-  activeProductCount: number;
-  connectedStoreCount: number;
-  automationTaskCount: number;
-  /** Percentage change against the preceding period of equal length. */
-  revenueChangePercent: number;
-  profitChangePercent: number;
-  orderCountChangePercent: number;
 }
 
-export interface DashboardCharts {
-  sales: TimeSeriesPoint[];
-  orders: OrdersPoint[];
-  topProducts: ProductPerformance[];
+export interface OrdersPoint {
+  label: string;
+  fulfilled: number;
+  pending: number;
+  cancelled: number;
+}
+
+export interface ProductPerformance {
+  name: string;
+  units: number;
+}
+
+export const dashboardKeys = {
+  all: ["dashboard"] as const,
+  summary: (period: DashboardPeriod) =>
+    [...dashboardKeys.all, "summary", period] as const,
+};
+
+export interface AnalyticsSeriesPoint {
+  label: string;
+  revenue: string;
+  orders: number;
+  profit: string;
+}
+
+export interface AnalyticsOrdersPoint {
+  label: string;
+  fulfilled: number;
+  pending: number;
+  cancelled: number;
+}
+
+export interface AnalyticsTopProduct {
+  productId: string;
+  title: string;
+  units: number;
+  revenue: string | null;
+}
+
+export interface AnalyticsRecentActivity {
+  kind: string;
+  title: string;
+  occurredAt: string;
+  href: string | null;
+}
+
+export interface AnalyticsDashboard {
+  revenue: string;
+  orderCount: number;
+  productCount: number;
+  storeCount: number;
+  connectedStoreCount: number;
+  inventoryUnits: number;
+  syncRuns7d: number;
+  syncFailures7d: number;
+  automationRuns7d: number;
+  automationFailures7d: number;
+  unreadNotifications: number;
+  salesSeries: AnalyticsSeriesPoint[];
+  ordersSeries: AnalyticsOrdersPoint[];
+  topProducts: AnalyticsTopProduct[];
+  recentActivity: AnalyticsRecentActivity[];
+  periodStart: string;
+  periodEnd: string;
+}
+
+const PERIOD_DAYS: Record<DashboardPeriod, number> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+  "12m": 365,
+};
+
+async function fetchDashboard(period: DashboardPeriod): Promise<AnalyticsDashboard> {
+  const { data } = await apiClient.get<AnalyticsDashboard>("/analytics/dashboard", {
+    params: { periodDays: PERIOD_DAYS[period] },
+  });
+  return data;
+}
+
+export function useDashboard(
+  period: DashboardPeriod = "30d",
+): UseQueryResult<AnalyticsDashboard> {
+  return useQuery({
+    queryKey: dashboardKeys.summary(period),
+    queryFn: () => fetchDashboard(period),
+  });
+}
+
+export function toSalesSeries(
+  points: AnalyticsSeriesPoint[],
+): TimeSeriesPoint[] {
+  return points.map((point) => ({
+    label: point.label,
+    revenue: Number(point.revenue) || 0,
+    profit: Number(point.profit) || 0,
+  }));
+}
+
+export function toProductPerformance(
+  products: AnalyticsTopProduct[],
+): ProductPerformance[] {
+  return products.map((product) => ({
+    name: product.title,
+    units: product.units,
+  }));
 }

@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bell,
   Bot,
   Download,
   LayoutDashboard,
@@ -7,8 +8,10 @@ import {
   Settings,
   ShoppingCart,
   Store,
+  Tags,
   Truck,
   Users,
+  Warehouse,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -79,6 +82,20 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         description: "Import products from AliExpress and other suppliers.",
       },
       {
+        href: "/inventory",
+        label: "Inventory",
+        icon: Warehouse,
+        status: "ready",
+        description: "Stock levels and supplier inventory sync.",
+      },
+      {
+        href: "/pricing",
+        label: "Pricing",
+        icon: Tags,
+        status: "ready",
+        description: "Markup rules and sell-price previews.",
+      },
+      {
         href: "/suppliers",
         label: "Suppliers",
         icon: Truck,
@@ -97,6 +114,13 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         icon: ShoppingCart,
         status: "ready",
         description: "Track and fulfil customer orders.",
+      },
+      {
+        href: "/shipments",
+        label: "Shipments",
+        icon: Truck,
+        status: "ready",
+        description: "Carrier tracking and delivery status.",
       },
       {
         href: "/customers",
@@ -141,8 +165,15 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         href: "/automation",
         label: "Automation",
         icon: Bot,
-        status: "coming-soon",
+        status: "ready",
         description: "Rules for pricing, inventory, and fulfilment.",
+      },
+      {
+        href: "/notifications",
+        label: "Notifications",
+        icon: Bell,
+        status: "ready",
+        description: "Sync, pricing, and automation alerts.",
       },
       {
         href: "/settings",

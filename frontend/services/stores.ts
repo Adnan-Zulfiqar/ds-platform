@@ -1,32 +1,105 @@
-import type { ListQuery } from "@/types/api";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
-/**
- * Store connection data access — **structure only**.
- *
- * `GET /api/v1/stores` is a registered router with no routes.
- *
- * One constraint worth recording before this is implemented: store connections
- * hold third-party credentials, which must be encrypted at rest with a key held
- * outside the database, and **must never be returned to the client** — not even
- * masked. The read types defined in the implementing phase should expose
- * connection *status*, never secrets.
- */
+import { apiClient } from "@/lib/api-client";
+import type { ListQuery, Page } from "@/types/api";
+
+export type StorePlatform =
+  | "shopify"
+  | "woocommerce"
+  | "ebay"
+  | "etsy"
+  | "tiktok_shop"
+  | "manual";
+
+export type StoreStatus =
+  | "pending"
+  | "connected"
+  | "disconnected"
+  | "error"
+  | "syncing";
+
+export interface Store {
+  id: string;
+  name: string;
+  slug: string;
+  platform: StorePlatform;
+  status: StoreStatus;
+  storefrontUrl: string | null;
+  externalStoreId: string | null;
+  currency: string;
+  timezone: string;
+  settings: Record<string, unknown>;
+  inventorySyncEnabled: boolean;
+  pricingSyncEnabled: boolean;
+  orderSyncEnabled: boolean;
+  lastSyncAt: string | null;
+  lastActivityAt: string | null;
+  lastError: string | null;
+  healthScore: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoreCreatePayload {
+  name: string;
+  slug: string;
+  platform?: StorePlatform;
+  storefrontUrl?: string;
+  currency?: string;
+  credentials?: Record<string, string>;
+}
+
+export interface StoreStatistics {
+  totalStores: number;
+  byStatus: Record<string, number>;
+  connected: number;
+  withErrors: number;
+  productCount: number;
+  lastActivityAt: string | null;
+}
 
 export const storeKeys = {
   all: ["stores"] as const,
   lists: () => [...storeKeys.all, "list"] as const,
   list: (query: ListQuery) => [...storeKeys.lists(), query] as const,
-  details: () => [...storeKeys.all, "detail"] as const,
-  detail: (id: string) => [...storeKeys.details(), id] as const,
+  statistics: () => [...storeKeys.all, "statistics"] as const,
+  detail: (id: string) => [...storeKeys.all, "detail", id] as const,
 };
 
-/** Sales channels the platform targets. */
-export type StoreProvider =
-  | "shopify"
-  | "woocommerce"
-  | "ebay"
-  | "etsy"
-  | "tiktok-shop"
-  | "aliexpress";
+export function useStores(query: ListQuery = {}): UseQueryResult<Page<Store>> {
+  return useQuery({
+    queryKey: storeKeys.list(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<Store>>("/stores", { params: query });
+      return data;
+    },
+  });
+}
 
-export type StoreConnectionStatus = "connected" | "disconnected" | "error" | "syncing";
+export function useStoreStatistics(): UseQueryResult<StoreStatistics> {
+  return useQuery({
+    queryKey: storeKeys.statistics(),
+    queryFn: async () => {
+      const { data } = await apiClient.get<StoreStatistics>("/stores/statistics");
+      return data;
+    },
+  });
+}
+
+export function useCreateStore() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: StoreCreatePayload) => {
+      const { data } = await apiClient.post<Store>("/stores", payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: storeKeys.all });
+    },
+  });
+}

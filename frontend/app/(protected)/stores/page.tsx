@@ -1,20 +1,22 @@
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/ui/coming-soon";
+import { StoreStatisticsCards } from "@/components/stores/store-statistics-cards";
+import { StoreTable } from "@/components/stores/store-table";
+import { CreateStoreDialog } from "@/components/stores/create-store-dialog";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata: Metadata = { title: "Connected Stores" };
 
 export default function StoresPage() {
   return (
-    <ComingSoon
-      title="Connected Stores"
-      description="Connect and manage the sales channels you sell through."
-      planned={[
-        "Connect Shopify, WooCommerce, eBay, Etsy, and TikTok Shop",
-        "OAuth-based authorisation per channel",
-        "Per-store sync status and error reporting",
-        "Channel-specific pricing and listing rules",
-      ]}
-    />
+    <div className="space-y-6 p-4 sm:p-6">
+      <PageHeader
+        title="Connected Stores"
+        description="Sales channels, connection health, and per-store sync settings."
+        actions={<CreateStoreDialog />}
+      />
+      <StoreStatisticsCards />
+      <StoreTable />
+    </div>
   );
 }
