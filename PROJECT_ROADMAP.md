@@ -16,6 +16,7 @@ Last updated: 2026-07-31
 | 4 | Product import and catalogue synchronisation | ✅ **Complete** |
 | 5 | Order management, fulfilment & synchronisation | ✅ **Complete** |
 | 6 | Inventory, pricing, multi-store, automation & tracking | ✅ **Complete** |
+| 7 | Production hardening & operational readiness | ✅ **Complete** |
 
 ---
 
@@ -178,6 +179,25 @@ Full report: [PHASE_6_COMPLETION.md](docs/PHASE_6_COMPLETION.md).
 
 ---
 
+## Phase 7 — Production hardening & operational readiness ✅
+
+**Tag:** `phase-7-complete`
+
+CI-ready deployment validation (develop triggers, image builds, compose config,
+Celery broker job, best-effort compose smoke); Compose beat + worker health;
+webhook HMAC opt-in + shed limiter; email-verification foundation without fake
+SMTP; store-channel decision (remain manual; Shopify first later); frontend
+cleanup.
+
+Local Docker and local RabbitMQ were unavailable; C1/M15 local runtime legs are
+documented as CI-dependent. Live AliExpress re-check skipped (no connected
+account after earlier DB rebuild).
+
+Full report: [PHASE_7_COMPLETION.md](docs/PHASE_7_COMPLETION.md).
+Decision: [STORE_CHANNEL_DECISION.md](docs/STORE_CHANNEL_DECISION.md).
+
+---
+
 ## Later phases
 
 Not scheduled, and listed only so that architectural seams are built with them
@@ -185,7 +205,7 @@ in mind. Nothing here is committed to a phase number.
 
 | Area | Notes |
 |---|---|
-| Store channel OAuth | Shopify / Woo / eBay / Etsy / TikTok — credentials encrypted; Phase 6 is manual-first |
+| Store channel OAuth | Decision: manual for now; Shopify preferred first — see STORE_CHANNEL_DECISION.md |
 | AI optimisation | Listing content generation and enhancement |
 | Real FX for pricing | Currency conversion hook is identity today |
 | Subscription billing | Plan limits attach to `tenants` |
@@ -203,16 +223,11 @@ each phase boundary.
 A housekeeping pass on 2026-07-31 resolved all three actionable High items —
 login throttle coverage, authorization wiring, and dead navigation links.
 
-**Current: 1 critical, 1 high, 12 medium, 5 low** (M9 resolved in Phase 6;
-M11/M15 remain).
-
-The critical item is that the **deployment path has never been executed** —
-Docker images, Compose, and Nginx are all unbuilt. It cannot be closed on this
-machine (no Docker); the CI `docker` job builds all three images, so opening a
-pull request retires it.
-
-The remaining High item (`is_verified` unenforced) is inert until email
-verification is implemented, and is best fixed in that phase.
+**Current: see [TECHNICAL_DEBT.md](docs/TECHNICAL_DEBT.md)** after Phase 7
+updates. C1 is narrowed (CI path ready; local Docker still absent). H4 is
+narrowed to “enforcement off until SMTP”. M11/M12 dual-mode mitigations landed;
+mutation from unsigned webhooks remains forbidden. M15 moves to CI broker job
+confirmation after push.
 
 ## Deferred technical decisions
 

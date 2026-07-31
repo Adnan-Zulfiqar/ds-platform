@@ -14,6 +14,36 @@ Nothing pending.
 
 ---
 
+## [phase-7] — 2026-07-31
+
+Production hardening and operational readiness. See
+[PHASE_7_COMPLETION.md](docs/PHASE_7_COMPLETION.md).
+
+### Added
+
+- Compose **beat** service and worker healthcheck
+- CI on `develop`: image builds, `docker compose config`, Celery broker job,
+  best-effort compose smoke
+- `workers.health` task + `scripts/verify_celery_broker.py`
+- Webhook HMAC (opt-in) and shed-without-429 limiter
+- Email verification foundation: migration `0007`, logging mailer,
+  `/auth/verify-email/*`, `RequireVerified` (flag-gated)
+- `docs/STORE_CHANNEL_DECISION.md`, `docs/PHASE_7_PLAN.md`
+
+### Changed
+
+- Access tokens carry `email_verified`
+- Frontend: removed unused notification Zustand store; removed stale Import nav
+
+### Verified (local)
+
+- Backend: ruff, mypy strict, pytest (583+)
+- Frontend: lint, typecheck, build
+- Live AliExpress and local Docker/Celery: **not** available on this machine —
+  CI path documented
+
+---
+
 ## [phase-6] — 2026-07-31
 
 Inventory synchronisation, dynamic pricing, multi-store management, automation,

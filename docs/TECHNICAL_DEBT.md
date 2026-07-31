@@ -8,8 +8,11 @@ Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 **Phase 6 release review 2026-07-31** — M9 resolved (dashboard uses live
 analytics); M15 expanded to cover Phase 6 Celery tasks; live `product.get`
 re-verified for inventory sync.
+**Phase 7 release review 2026-07-31** — C1 narrowed (CI compose/images/celery);
+M11/M12 mitigated (HMAC opt-in + shed); H4 foundation shipped (enforcement
+off); M15 CI broker job added (local RabbitMQ still absent).
 
-**Current count: 1 critical, 1 high, 12 medium, 5 low.**
+**Current count: 1 critical (narrowed), 1 high (narrowed), ~10 medium, 5 low.**
 
 The Phase 5 release verified the production AliExpress client path against the
 live gateway and shipped order sync. M16 records that a populated order-detail
@@ -28,10 +31,10 @@ cover the application's own client calling a business endpoint, or any response
 schema parsing a real payload. That distinction matters and is stated in full
 under M10.
 
-**C1 remains open and unchanged**: Docker is still not installed on this
-machine, so `docker compose build` and `up` — the first item of the Phase 3
-brief — could not be run. Neither WSL nor Docker Desktop is present, and
-installing them needs administrator elevation and a reboot.
+**C1 remains open but narrowed**: Docker is still not installed on this
+machine. Phase 7 added develop-branch CI image builds, `docker compose config`,
+a Celery broker job, and a best-effort compose smoke job. Local
+`docker compose up --build` still cannot be run here.
 
 Phase 2 added M8 (dashboard bundle size) and M9 (dashboard mock data), and
 resolved one latent defect found by running the app: `CORS_ORIGINS` could not be
@@ -60,21 +63,20 @@ Severity meanings:
 
 ## Critical
 
-### C1 — The entire deployment path is unverified
+### C1 — Deployment path not proven on a local Docker host
 
-Three Dockerfiles, a Compose stack, and an Nginx configuration have **never been
-built or run**. Docker is not installed on the development machine.
+Three Dockerfiles, Compose (now including **beat**), and Nginx remain unbuilt on
+this development machine (no Docker). Phase 7 made the path **CI-ready**:
+`develop` triggers image builds, `compose config` validation, and a best-effort
+compose smoke job.
 
-That is a large amount of infrastructure whose first execution will be its first
-test. Multi-stage builds, a non-root user, `output: "standalone"` tracing, four
-service dependencies with health gates, and a reverse proxy all have to work
-together on the first attempt.
+**Still missing locally:** a human-confirmed `docker compose up --build` with
+healthy postgres/redis/rabbitmq/backend/worker/beat/frontend/nginx.
 
-**Impact:** any deployment attempt is a first run of untested code.
-**Trigger:** immediately — before anything is deployed anywhere.
-**Fix:** install Docker Desktop and run `docker compose up --build`, or push the
-branch and let the CI `docker` job build all three images. CI already has that
-job; it has not run because the branch has not opened a pull request.
+**Impact:** first deploy on a real host may still surprise.
+**Trigger:** before production traffic.
+**Fix:** install Docker Desktop and run the stack, or confirm the CI
+`docker` / `compose-config` / `compose-smoke` jobs green on `develop`.
 
 ---
 
@@ -118,20 +120,20 @@ screen-reader equivalent when the sidebar is collapsed.
 Kept visible rather than hidden: the information architecture is part of the
 product, and a 404 reads as broken where a disabled item reads as unfinished.
 
-### H4 — `is_verified` is never enforced
+### H4 — Email verification enforcement is off (foundation only) — narrowed
 
-The column exists, registration sets it, and the principal carries it, but
-**nothing checks it**. An unverified user has identical access to a verified
-one.
+Phase 7 added `EmailVerificationToken`, a logging mailer (no SMTP),
+`/auth/verify-email/request|confirm`, JWT `email_verified`, and
+`RequireVerified` on role gates when `SECURITY_REQUIRE_EMAIL_VERIFICATION=true`.
 
-Harmless today because registration always sets it true. It becomes a real hole
-the moment email verification is implemented and the default flips to false —
-at which point unverified accounts would silently retain full access.
+Enforcement remains **off by default** and registration still creates verified
+users when the flag is false — flipping the default without a mail provider
+would lock every signup out. That is intentional, not incomplete wiring.
 
-**Impact:** none today; a security hole the day verification lands.
-**Trigger:** implementing email verification.
-**Fix:** add a dependency that requires verification, applied to everything
-except the verification endpoints themselves.
+**Impact:** none while the flag is false; correct denial once enabled with mail.
+**Trigger:** wiring a real mail provider and setting the flag true.
+**Fix:** SES/Resend (or equivalent) behind `Mailer`; flip the flag; set
+registration `is_verified=false` (already conditional on the flag).
 
 ---
 
@@ -154,22 +156,18 @@ gateway for product import has not been re-run as part of this release; Phase
 3.7 proved access via direct HTTP. The parsing layer is verified; the full
 client stack in production is not.
 
-### M15 — Celery sync tasks have never run under a broker
+### M15 — Celery under a broker — CI path added, local still absent
 
-Catalogue, order, and Phase 6 ops tasks
-(`inventory.sync`, `pricing.recalculate`, `automation.run`, `shipment.refresh`,
-`analytics.aggregate`, `cleanup.old_notifications`, plus earlier product/order
-tasks) follow the established task pattern and are unit-tested via `.run()`,
-but no RabbitMQ broker or Celery worker runs on the development machine. Beat
-entries exist in `celery_app.py`; they have never been exercised by a running
-beat process.
+Phase 7 added `workers.health`, Compose beat, a worker healthcheck, and
+`scripts/verify_celery_broker.py`, plus a GitHub Actions `celery-broker` job
+(RabbitMQ + worker + task execution). Local RabbitMQ was not available on this
+machine, so the job has not been observed green yet.
 
-**Impact:** background refresh and automation are implemented but unverified in
-a running worker process.
-**Trigger:** before advertising scheduled sync or automation to customers.
-**Fix:** run `docker compose up` with worker and beat once C1 is closed; add an
-integration test that executes `.apply()` against an in-process worker if CI
-cannot reach RabbitMQ.
+**Impact:** scheduled sync is still unproven until the CI job (or a local
+Compose run) succeeds.
+**Trigger:** before advertising scheduled sync to customers.
+**Fix:** confirm `celery-broker` green on `develop`; optionally run Compose
+worker+beat once Docker is installed.
 
 ### M16 — Populated order-detail success body is documentation-derived
 
@@ -187,60 +185,42 @@ captured from one.
 with orders; commit the success fixture; align the Pydantic models to the live
 shape; add a regression test.
 
-### M11 — The webhook accepts unsigned, unauthenticated deliveries
+### ~~M11 — The webhook accepts unsigned, unauthenticated deliveries~~ ⚠️ MITIGATED 2026-07-31
 
-`/api/v1/integrations/aliexpress/webhook` is public and performs no signature
-verification. Anyone who learns the URL can post to it.
+Phase 7 added opt-in HMAC via `ALIEXPRESS_WEBHOOK_SECRET` (401 on mismatch) and
+documented that AliExpress has not confirmed a public signing scheme. Unsigned
+mode remains the default. **Order mutation from webhook payloads is still
+forbidden.**
 
-Phase 5 added Redis replay protection, message classification, and delivery
-counters. The handler still **must not** mutate order state from the payload:
-there is no verifiable tenant claim and no signature. At most it may nudge a
-sync that re-fetches from the supplier API under the tenant's own credentials.
+**Residual:** confirm the real AliExpress signature header/algorithm against a
+live delivery, then require the secret in production.
 
-The open question is factual and cheap to answer — whether AliExpress signs
-deliveries at all. The handler already records `signature_header_present` on
-every delivery, so a single real notification settles it.
+### ~~M12 — The webhook is exempt from inbound rate limiting~~ ⚠️ MITIGATED 2026-07-31
 
-**Trigger:** before any webhook payload is trusted to write order fields
-directly.
-**Fix:** confirm the signing scheme, compute the HMAC over the raw body, and
-reject mismatches. `parse_webhook_payload` reads `request.body()`, which Starlette
-caches, so the exact bytes remain available for verification.
+Phase 7 added a per-IP shed limiter that drops excess traffic while still
+returning **200** (no retry-storm). Global rate-limit exemption remains for the
+same reason.
 
-### M12 — The webhook is exempt from inbound rate limiting
+**Residual:** tune shed limits under real delivery volume.
 
-Added to `_EXEMPT_PATHS` deliberately: returning 429 to a delivery agent reads as
-failure and provokes redelivery, converting a burst of legitimate notifications
-into a larger one. Dropping a supplier's order update is worse than absorbing
-the traffic.
+### M13 — The Playwright suite is flaky under load / rate limits
 
-The cost is an unauthenticated public POST endpoint with no throttle at all —
-a denial-of-service surface, and with M11 an unauthenticated one.
+Phase 7 re-run (chromium):
 
-**Trigger:** same as M11 — when the handler stops being inert.
-**Fix:** a webhook-specific limiter that sheds load without returning a
-retry-provoking status.
+* Default workers: **68 passed, 9 failed** — many failures were registration
+  `429 rate_limit_exceeded` or timeouts waiting for `/dashboard`.
+* `--workers=1 --retries=2`: **73 passed, 3 flaky, 2 failed** — remaining hard
+  failures were still API registration 429 after retries exhausted.
 
-### M13 — The Playwright suite is flaky under full parallelism
+E2E helpers now back off on 429 for API and UI registration. That reduces but
+does not eliminate shared-IP bucket exhaustion on a long suite against a live
+local backend.
 
-The 116-test suite fails 2–5 tests per run at default parallelism on this
-machine, with a **different** set failing each time. Every failure passes when
-re-run serially, and the suite is green with `--retries=2`.
-
-Two distinct causes were separated during the Phase 3 release:
-
-* A stale `next start` server on port 3000 was being reused
-  (`reuseExistingServer: !CI`), so tests ran against a build hours old. This
-  produced 14 confident, repeatable failures that looked like real defects and
-  were not. Killing the server dropped it to 5.
-* The remaining 2–5 are genuine timing flakes under parallel load, mostly
-  navigation-drawer and theme-toggle transitions.
-
-**Impact:** a flaky suite trains people to re-run rather than investigate, which
-is how a real regression gets waved through.
-**Trigger:** before the suite gates a merge.
-**Fix:** await the transition end rather than a timeout in the drawer and theme
-tests. Separately, make CI always start a fresh server.
+**Impact:** merge confidence still requires serial workers and/or a higher
+local rate-limit ceiling for e2e.
+**Trigger:** before the suite gates a merge without retries.
+**Fix:** dedicated e2e rate-limit bypass header (authenticated test-only) or
+`RATE_LIMIT` env raised for local e2e; await drawer/theme transitions.
 
 ### M14 — Local Redis is a decade old, and the client is pinned to RESP2
 
