@@ -32,10 +32,12 @@ from app.schemas.auth import (
     RegisterRequest,
     TenantRead,
     TokenResponse,
+    VerifyEmailConfirmRequest,
 )
 from app.schemas.common import MessageResponse
 from app.schemas.user import UserRead
 from app.services.auth import AuthResult, AuthService
+from app.services.email_verification import EmailVerificationService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -263,3 +265,39 @@ async def logout_all(
     count = await AuthService(session).logout_all_sessions(principal.user_id)
     _clear_refresh_cookie(response)
     return MessageResponse(message=f"Signed out of {count} session(s).")
+
+
+@router.post(
+    "/verify-email/request",
+    response_model=MessageResponse,
+    summary="Issue an email verification token",
+)
+async def request_email_verification(user: CurrentUser, session: DbSession) -> MessageResponse:
+    """Send (or log) a verification token for the signed-in user.
+
+    The raw token is never returned in the HTTP response — only the mailer
+    (currently a logging backend) receives it. Callers must not treat this as
+    proof that mail was delivered.
+    """
+    await EmailVerificationService(session).request_for_user(user)
+    return MessageResponse(
+        message="If verification is required, a message has been prepared for your account."
+    )
+
+
+@router.post(
+    "/verify-email/confirm",
+    response_model=MessageResponse,
+    summary="Confirm email verification",
+)
+async def confirm_email_verification(
+    payload: VerifyEmailConfirmRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> MessageResponse:
+    """Consume a verification token for the authenticated user."""
+    await EmailVerificationService(session).confirm(
+        raw_token=payload.token,
+        user=user,
+    )
+    return MessageResponse(message="Email address verified.")

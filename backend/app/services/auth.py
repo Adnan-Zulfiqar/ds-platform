@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.context import AuthenticatedUser, set_principal, set_tenant_id
 from app.core.exceptions import (
     ConflictError,
@@ -147,7 +148,9 @@ class AuthService(BaseService):
             # True because no mail delivery exists yet to verify against. When
             # the verification flow lands this becomes False and registration
             # sends a confirmation.
-            is_verified=True,
+            # Verified until a mail provider exists and enforcement is enabled.
+            # Flipping the default without mail would lock every signup out.
+            is_verified=not settings.security.require_email_verification,
         )
 
         await self.roles.assign_by_name(user_id=user.id, name=RoleName.OWNER)
@@ -402,6 +405,7 @@ class AuthService(BaseService):
             user_id=user.id,
             tenant_id=user.tenant_id,
             roles=tuple(sorted(roles)),
+            is_verified=user.is_verified,
         )
         # Each token carries a fresh random `jti`, so two refresh tokens issued
         # in the same second for the same user are distinct and their hashes

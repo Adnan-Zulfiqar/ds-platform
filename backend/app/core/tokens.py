@@ -57,6 +57,9 @@ class TokenClaims:
     issued_at: datetime
     expires_at: datetime
     roles: tuple[str, ...] = ()
+    #: Present on access tokens issued after Phase 7. Absent on older tokens —
+    #: treated as verified when enforcement is off, unverified when on.
+    is_verified: bool | None = None
 
     @property
     def is_access(self) -> bool:
@@ -79,6 +82,7 @@ def _encode(
     token_type: TokenType,
     ttl: timedelta,
     roles: tuple[str, ...] = (),
+    is_verified: bool = True,
 ) -> IssuedToken:
     now = datetime.now(UTC)
     expires_at = now + ttl
@@ -101,6 +105,7 @@ def _encode(
     # TTL and is the accepted trade — see docs/Authentication.md.
     if token_type is TokenType.ACCESS:
         payload["roles"] = list(roles)
+        payload["email_verified"] = is_verified
 
     token = jwt.encode(
         payload,
@@ -111,7 +116,11 @@ def _encode(
 
 
 def create_access_token(
-    *, user_id: uuid.UUID, tenant_id: uuid.UUID, roles: tuple[str, ...] = ()
+    *,
+    user_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    roles: tuple[str, ...] = (),
+    is_verified: bool = True,
 ) -> IssuedToken:
     return _encode(
         user_id=user_id,
@@ -119,6 +128,7 @@ def create_access_token(
         token_type=TokenType.ACCESS,
         ttl=timedelta(minutes=settings.security.access_token_ttl_minutes),
         roles=roles,
+        is_verified=is_verified,
     )
 
 
@@ -183,6 +193,13 @@ def decode_token(token: str, *, expected_type: TokenType) -> TokenClaims:
         raise AuthenticationError("The authentication token is not valid.")
 
     try:
+        verified_claim = payload.get("email_verified")
+        is_verified: bool | None
+        if verified_claim is None:
+            is_verified = None
+        else:
+            is_verified = bool(verified_claim)
+
         return TokenClaims(
             user_id=uuid.UUID(payload["sub"]),
             tenant_id=uuid.UUID(payload["tid"]),
@@ -191,6 +208,7 @@ def decode_token(token: str, *, expected_type: TokenType) -> TokenClaims:
             issued_at=datetime.fromtimestamp(payload["iat"], tz=UTC),
             expires_at=datetime.fromtimestamp(payload["exp"], tz=UTC),
             roles=tuple(payload.get("roles", ())),
+            is_verified=is_verified,
         )
     except (KeyError, ValueError, TypeError) as exc:
         # A correctly signed token with malformed claims means our own issuer

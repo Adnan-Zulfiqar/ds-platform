@@ -26,6 +26,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.context import AuthenticatedUser, set_principal
 from app.core.exceptions import (
     AuthenticationError,
@@ -111,6 +112,14 @@ async def get_current_principal(
 
     claims = decode_token(credentials.credentials, expected_type=TokenType.ACCESS)
 
+    # Older access tokens omit ``email_verified``. When enforcement is off,
+    # treat that as verified so existing sessions keep working. When
+    # enforcement is on, missing means unverified — the user must refresh.
+    if claims.is_verified is None:
+        token_verified = not settings.security.require_email_verification
+    else:
+        token_verified = claims.is_verified
+
     principal = AuthenticatedUser(
         user_id=claims.user_id,
         tenant_id=claims.tenant_id,
@@ -119,6 +128,7 @@ async def get_current_principal(
         # token. Endpoints that need it read the user record.
         email="",
         roles=frozenset(claims.roles),
+        is_verified=token_verified,
     )
 
     # Binds tenant and user context as a single step, so the three can never
@@ -224,7 +234,7 @@ def require_roles(*allowed: RoleName) -> Callable[[AuthenticatedUser], Authentic
                 held=sorted(principal.roles),
             )
             raise PermissionDeniedError("You do not have permission to perform this action.")
-        return principal
+        return require_verified(principal)
 
     return _check
 
@@ -259,7 +269,9 @@ def require_minimum_role(
                 held=sorted(principal.roles),
             )
             raise PermissionDeniedError("You do not have permission to perform this action.")
-        return principal
+        # Role gates sit on every tenant-data endpoint; H4 is enforced here so
+        # it cannot be skipped by copying an endpoint that only checked roles.
+        return require_verified(principal)
 
     return _check
 
@@ -282,6 +294,27 @@ RequireMember = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleNa
 #: revoked mid-session, or by an older token after a role rename — and without
 #: this it would read tenant data unchallenged.
 RequireViewer = Annotated[AuthenticatedUser, Depends(require_minimum_role(RoleName.VIEWER))]
+
+
+def require_verified(
+    principal: CurrentPrincipal,
+) -> AuthenticatedUser:
+    """Reject unverified accounts when email verification enforcement is on.
+
+    No-op while ``SECURITY_REQUIRE_EMAIL_VERIFICATION`` is false — the only
+    safe default until a mail provider exists. Applied as a dependency so the
+    check cannot be forgotten inside a handler body (H4).
+    """
+    if not settings.security.require_email_verification:
+        return principal
+    if not principal.is_verified:
+        raise PermissionDeniedError(
+            "Verify your email address before using this part of the platform."
+        )
+    return principal
+
+
+RequireVerified = Annotated[AuthenticatedUser, Depends(require_verified)]
 
 
 # ---------------------------------------------------------------------------

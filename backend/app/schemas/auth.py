@@ -86,6 +86,12 @@ class LogoutRequest(CamelCaseModel):
     refresh_token: str | None = None
 
 
+class VerifyEmailConfirmRequest(CamelCaseModel):
+    """Raw verification token from the mailer / development log."""
+
+    token: str = Field(min_length=16, max_length=256)
+
+
 class TokenResponse(CamelCaseModel):
     """Issued tokens.
 
@@ -130,4 +136,5 @@ __all__ = [
     "RegisterRequest",
     "TenantRead",
     "TokenResponse",
+    "VerifyEmailConfirmRequest",
 ]

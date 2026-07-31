@@ -23,6 +23,7 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
+from app.models.email_verification import EmailVerificationToken
 from app.models.integration import AliExpressConnection, IntegrationStatus
 from app.models.inventory import (
     InventoryChange,
@@ -74,6 +75,7 @@ __all__ = [
     "AutomationRun",
     "AutomationSchedule",
     "Base",
+    "EmailVerificationToken",
     "FulfillmentStatus",
     "IdentifiedBase",
     "ImportStatus",

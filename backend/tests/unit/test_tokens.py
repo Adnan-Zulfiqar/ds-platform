@@ -39,6 +39,18 @@ class TestAccessTokens:
         assert claims.tenant_id == tenant_id
         assert claims.roles == ("admin",)
         assert claims.is_access
+        assert claims.is_verified is True
+
+    def test_access_token_carries_unverified_flag(
+        self, user_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        issued = create_access_token(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            is_verified=False,
+        )
+        claims = decode_token(issued.token, expected_type=TokenType.ACCESS)
+        assert claims.is_verified is False
 
     def test_each_token_has_a_unique_jti(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         """Two tokens minted back to back must be distinguishable.
