@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import CurrentPrincipal, DbSession, RequireAdmin
@@ -24,8 +24,10 @@ from app.integrations.aliexpress.schemas import (
     AliExpressConnectionRead,
     AliExpressConnectRequest,
     AliExpressStatusResponse,
+    AliExpressWebhookAckResponse,
 )
 from app.integrations.aliexpress.service import AliExpressService
+from app.integrations.aliexpress.webhook import receive_webhook
 from app.models.integration import AliExpressConnection
 from app.schemas.common import MessageResponse
 
@@ -145,6 +147,25 @@ async def aliexpress_callback(
 
     logger.info("aliexpress_callback_succeeded", tenant_id=str(connection.tenant_id))
     return RedirectResponse(f"{return_url}?aliexpress=connected", status_code=303)
+
+
+@router.post(
+    "/aliexpress/webhook",
+    response_model=AliExpressWebhookAckResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Receive AliExpress push notifications",
+)
+async def aliexpress_webhook(request: Request) -> AliExpressWebhookAckResponse:
+    """Accept inbound notifications from AliExpress.
+
+    Separate from the OAuth callback. AliExpress POSTs server-to-server; there
+    is no browser and no redirect. The handler logs the payload and returns
+    immediately so upstream retries stop.
+
+    **No authentication header is expected.** Signature verification is not
+    implemented yet — see ``app.integrations.aliexpress.webhook``.
+    """
+    return await receive_webhook(request)
 
 
 @router.get(

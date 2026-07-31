@@ -35,6 +35,7 @@ CONNECT_URL = "/api/v1/integrations/aliexpress/connect"
 STATUS_URL = "/api/v1/integrations/aliexpress/status"
 CALLBACK_URL = "/api/v1/integrations/aliexpress/callback"
 DISCONNECT_URL = "/api/v1/integrations/aliexpress/disconnect"
+WEBHOOK_URL = "/api/v1/integrations/aliexpress/webhook"
 
 
 @pytest.fixture(autouse=True)
@@ -549,3 +550,31 @@ class TestTenantIsolation:
 
         assert acme["connection"]["appKey"] == "acme-key"
         assert globex["connection"]["appKey"] == "globex-key"
+
+
+class TestWebhook:
+    async def test_accepts_an_unauthenticated_json_payload(self, client: AsyncClient) -> None:
+        response = await client.post(
+            WEBHOOK_URL,
+            json={"message_type": "ORDER_STATUS", "order_id": "12345"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "received"}
+
+    async def test_accepts_an_empty_body(self, client: AsyncClient) -> None:
+        response = await client.post(WEBHOOK_URL, content=b"")
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "received"}
+
+    async def test_is_documented_in_openapi(self, client: AsyncClient) -> None:
+        spec = (await client.get("/openapi.json")).json()
+        operation = spec["paths"][WEBHOOK_URL]["post"]
+
+        assert operation["summary"] == "Receive AliExpress push notifications"
+        assert (
+            "AliExpressWebhookAckResponse"
+            in operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+        )
+        assert operation.get("security") is None

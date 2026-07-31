@@ -147,6 +147,19 @@ class AliExpressConnectRequest(CamelCaseModel):
     app_secret: str | None = Field(default=None, max_length=512)
 
 
+class AliExpressWebhookAckResponse(CamelCaseModel):
+    """Acknowledgement returned after accepting an inbound webhook.
+
+    Deliberately contentless. This is read by a delivery agent deciding whether
+    to retry, not by a person, so it reports nothing about what the payload was
+    or what happened to it — the caller is unauthenticated and can post
+    anything, and echoing back detail would confirm to an attacker what the
+    endpoint understood.
+    """
+
+    status: str = Field(default="received", description="Fixed acknowledgement token.")
+
+
 __all__ = [
     "AliExpressAuthorizationResponse",
     "AliExpressConnectRequest",
@@ -154,4 +167,5 @@ __all__ = [
     "AliExpressErrorResponse",
     "AliExpressStatusResponse",
     "AliExpressTokenResponse",
+    "AliExpressWebhookAckResponse",
 ]

@@ -33,6 +33,19 @@ logger = get_logger(__name__)
 # Health and docs endpoints are exempt: probes must never be throttled, or a
 # burst of traffic causes the orchestrator to declare the service dead and
 # restart it, turning a slowdown into an outage.
+#
+# The AliExpress webhook is exempt for a different and less comfortable reason.
+# Throttling it returns 429 to a delivery agent, which reads that as failure and
+# redelivers on a schedule this application does not control — so a burst of
+# legitimate notifications would be converted into a larger burst. Dropping a
+# supplier's order update is worse than absorbing the traffic.
+#
+# The cost is real and is recorded in `TECHNICAL_DEBT.md`: this is an
+# unauthenticated public POST endpoint with no throttle, so anyone who learns
+# the URL can flood it. It is tolerable only while the handler is inert — it
+# parses, logs and returns. Before the webhook does anything expensive
+# (database writes, enqueuing tasks), it needs its own limiter, one that sheds
+# load without returning a retry-provoking status.
 _EXEMPT_PATHS = frozenset(
     {
         "/health",
@@ -41,6 +54,7 @@ _EXEMPT_PATHS = frozenset(
         "/docs",
         "/redoc",
         "/openapi.json",
+        "/api/v1/integrations/aliexpress/webhook",
     }
 )
 

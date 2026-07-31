@@ -87,13 +87,27 @@ mapping, and outbound rate limiting; the OAuth flow with a single-use
 server-side `state` token; four endpoints; a Celery health check; and a real
 integrations settings page.
 
-Verified with **240 backend tests** and **55 Playwright tests**. Migration `0003`
-applied against PostgreSQL 17.
+Closed with sub-phases 3.5–3.7: live OAuth verification, permission
+verification, and an inbound webhook at
+`POST /api/v1/integrations/aliexpress/webhook`.
 
-**Not verified against the real AliExpress API.** The signing scheme, endpoints,
-and error codes are implemented from documentation and exercised only against
-mocks. Every one is a setting or a single function, so correcting them is cheap.
-See [ALIEXPRESS_INTEGRATION.md](docs/ALIEXPRESS_INTEGRATION.md).
+Verified with **291 backend tests** and **116 Playwright tests** (114 passed,
+2 flaky, 0 failed). Migration `0003` applied against PostgreSQL 17.
+
+**Verified against the real AliExpress API — partially.** A live OAuth round
+trip completes and stores encrypted tokens; product, category, search, order and
+freight endpoints are confirmed reachable; affiliate is confirmed denied. Two
+defects were found this way and could not have been found any other way: the
+signature omitted `sign_method`, and the callback required a Bearer token no
+browser redirect carries.
+
+**Still unverified:** no business API call has been made through
+`AliExpressClient`, and no response schema has parsed a real payload. That is
+the main risk carried into Phase 4.
+
+Full detail: [PHASE_3_COMPLETION.md](docs/PHASE_3_COMPLETION.md),
+[PHASE_3_6_COMPLETION.md](docs/PHASE_3_6_COMPLETION.md),
+[PHASE_3_7_PERMISSIONS.md](docs/PHASE_3_7_PERMISSIONS.md).
 
 ---
 

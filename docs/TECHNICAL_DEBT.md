@@ -2,12 +2,24 @@
 
 Reviewed 2026-07-31 at `phase-1-complete`; updated after Phase 2.
 Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
+**Phase 3 release review 2026-07-31** — M10 narrowed; M11–M14 added.
 
-**Current count: 1 critical, 1 high, 8 medium, 5 low.**
+**Current count: 1 critical, 1 high, 12 medium, 5 low.**
 
-Phase 3 resolved M1 (Docker stub package) and added M10 (unverified AliExpress
-contract). **C1 remains open and unchanged**: Docker is still not installed on
-this machine, so `docker compose build` and `up` — the first item of the Phase 3
+The Phase 3 release review added four items, all discovered by verifying rather
+than by reading: M11 and M12 are the price of the new webhook endpoint being
+public and unthrottled, M13 is a flaky end-to-end suite that briefly produced 14
+convincing false failures, and M14 records that local Redis is a decade older
+than the production target.
+
+M10 was **narrowed, not resolved.** Live verification covered everything that
+carries a credential — signing, token exchange, OAuth, permissions. It did not
+cover the application's own client calling a business endpoint, or any response
+schema parsing a real payload. That distinction matters and is stated in full
+under M10.
+
+**C1 remains open and unchanged**: Docker is still not installed on this
+machine, so `docker compose build` and `up` — the first item of the Phase 3
 brief — could not be run. Neither WSL nor Docker Desktop is present, and
 installing them needs administrator elevation and a reboot.
 
@@ -115,17 +127,94 @@ except the verification endpoints themselves.
 
 ## Medium
 
-### M10 — The AliExpress contract is unverified against the real API
+### M10 — The AliExpress *business* contract is unverified through our client
 
-The signing scheme, endpoint URLs, and error-code mappings are implemented from
-documentation and exercised only against mocks. AliExpress operates several
-regional gateways and has changed signing methods between API generations.
+**Narrowed 2026-07-31, not resolved.** Phases 3.5–3.7 verified the parts that
+carry credentials: the signing scheme (one live defect found and fixed —
+`sign_method` had to be inside the signature base), the token endpoint, the OAuth
+round trip, and which permission groups are granted.
 
-**Contained by design.** Every one of these is either a setting or isolated in a
-single function, so correcting one is configuration or a one-function edit —
-see the correction table in `docs/ALIEXPRESS_INTEGRATION.md`.
+What remains unverified is the layer above. `AliExpressClient.call` has never
+been used against a live business endpoint, and no response in
+`integrations/aliexpress/schemas.py` has ever parsed a real payload. Phase 3.7's
+probing went straight to HTTP using the application's signing helpers, so it
+proved *access* rather than the client's own request building, retry handling,
+error mapping and deserialisation.
 
-**Trigger:** before connecting a real AliExpress account.
+This is now the largest single risk in Phase 4, and it is a contract risk rather
+than an access one — the shape of what comes back, not permission to ask.
+
+**Trigger:** the first Phase 4 product import.
+
+### M11 — The webhook accepts unsigned, unauthenticated deliveries
+
+`/api/v1/integrations/aliexpress/webhook` is public and performs no signature
+verification. Anyone who learns the URL can post to it.
+
+Tolerable **only** because the handler is inert: it parses, logs field names,
+and returns 200. Nothing is written, enqueued, or acted upon.
+
+The open question is factual and cheap to answer — whether AliExpress signs
+deliveries at all. The handler already records `signature_header_present` on
+every delivery, so a single real notification settles it.
+
+**Trigger:** before any webhook payload causes a state change. At that point an
+unverified delivery becomes an attacker-controlled write.
+**Fix:** confirm the signing scheme, compute the HMAC over the raw body, and
+reject mismatches. `parse_webhook_payload` reads `request.body()`, which Starlette
+caches, so the exact bytes remain available for verification.
+
+### M12 — The webhook is exempt from inbound rate limiting
+
+Added to `_EXEMPT_PATHS` deliberately: returning 429 to a delivery agent reads as
+failure and provokes redelivery, converting a burst of legitimate notifications
+into a larger one. Dropping a supplier's order update is worse than absorbing
+the traffic.
+
+The cost is an unauthenticated public POST endpoint with no throttle at all —
+a denial-of-service surface, and with M11 an unauthenticated one.
+
+**Trigger:** same as M11 — when the handler stops being inert.
+**Fix:** a webhook-specific limiter that sheds load without returning a
+retry-provoking status.
+
+### M13 — The Playwright suite is flaky under full parallelism
+
+The 116-test suite fails 2–5 tests per run at default parallelism on this
+machine, with a **different** set failing each time. Every failure passes when
+re-run serially, and the suite is green with `--retries=2`.
+
+Two distinct causes were separated during the Phase 3 release:
+
+* A stale `next start` server on port 3000 was being reused
+  (`reuseExistingServer: !CI`), so tests ran against a build hours old. This
+  produced 14 confident, repeatable failures that looked like real defects and
+  were not. Killing the server dropped it to 5.
+* The remaining 2–5 are genuine timing flakes under parallel load, mostly
+  navigation-drawer and theme-toggle transitions.
+
+**Impact:** a flaky suite trains people to re-run rather than investigate, which
+is how a real regression gets waved through.
+**Trigger:** before the suite gates a merge.
+**Fix:** await the transition end rather than a timeout in the drawer and theme
+tests. Separately, make CI always start a fresh server.
+
+### M14 — Local Redis is a decade old, and the client is pinned to RESP2
+
+Development runs Redis 3.0.504 — the archived 2016 Windows port, which predates
+`HELLO` and therefore RESP3. `app/core/redis.py` sets `protocol=2` so the client
+can connect at all.
+
+Production targets Redis 7. The pin is harmless there, but the divergence means
+local development exercises a materially different server from the one that will
+run in production.
+
+Memurai (Redis 7 compatible) is the intended fix; its installer fails 1603 on
+this machine because MSI custom actions cannot write to `C:\Windows\Temp`, which
+needs an elevated shell to correct.
+
+**Trigger:** before relying on any Redis 5+ feature, or before treating local
+Redis behaviour as evidence about production.
 
 ### ~~M1 — The backend Docker image installs a stub `app` package~~ ✅ RESOLVED 2026-07-31
 

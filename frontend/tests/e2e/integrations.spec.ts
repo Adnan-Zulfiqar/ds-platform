@@ -56,7 +56,24 @@ async function connectWithCredentials(
   await page.getByRole("button", { name: "Continue to AliExpress" }).click();
 
   const response = await responsePromise;
-  expect(response.status(), await response.text()).toBe(201);
+
+  // Read the status first, and the body only if we are about to fail.
+  //
+  // A successful `connect` immediately navigates to the AliExpress
+  // authorization URL, and Chrome discards the body of a response that was
+  // navigated away from. Passing `await response.text()` as the assertion
+  // message evaluated it eagerly on every call, including the successful ones,
+  // so the helper threw a protocol error instead of passing — the application
+  // was behaving correctly the whole time.
+  const status = response.status();
+  const detail =
+    status === 201
+      ? ""
+      : await response
+          .text()
+          .catch(() => "(body unavailable: the page navigated away)");
+
+  expect(status, detail).toBe(201);
 }
 
 test.describe("Integrations page", () => {
@@ -125,14 +142,17 @@ test.describe("Integrations page", () => {
     await expect(page.getByLabel("App secret")).toHaveAttribute("type", "password");
   });
 
-  test("both fields are required", async ({ page }) => {
+  test("rejects a half-supplied credential pair", async ({ page }) => {
     await registerAndSignIn(page);
     await page.goto("/settings/integrations");
     await page.getByRole("button", { name: "Connect" }).click();
 
+    await page.getByLabel("App key").fill("only-a-key");
     await page.getByRole("button", { name: "Continue to AliExpress" }).click();
 
-    await expect(page.getByText(/both the app key and app secret are required/i)).toBeVisible();
+    await expect(
+      page.getByText(/supply both the app key and app secret, or leave both blank/i),
+    ).toBeVisible();
   });
 
   test("submitting credentials moves the connection to pending", async ({ page }) => {

@@ -17,8 +17,10 @@ protected, and why each decision was made that way.
 >
 > * **Callback routing** — registered at
 >   `https://api.whiteto.com/api/v1/integrations/aliexpress/callback`, forwarded
->   to the local backend by a Cloudflare Tunnel. Only that path is forwarded;
->   that is sufficient because AliExpress calls nothing else.
+>   to the local backend by a Cloudflare Tunnel.
+> * **Webhook routing** — register
+>   `https://api.whiteto.com/api/v1/integrations/aliexpress/webhook` separately.
+>   The tunnel must forward this path as well; it is not the OAuth callback.
 > * **Redis protocol** — local Redis ports that reject RESP3's `HELLO` command
 >   now connect with RESP2. Without that, the OAuth `state` store and rate
 >   limiter failed on every request.
@@ -34,14 +36,15 @@ protected, and why each decision was made that way.
 
 1. [Architecture](#architecture)
 2. [OAuth flow](#oauth-flow)
-3. [Credential handling](#credential-handling)
-4. [Security model](#security-model)
-5. [API client](#api-client)
-6. [Rate limiting](#rate-limiting)
-7. [Background tasks](#background-tasks)
-8. [Configuration](#configuration)
-9. [Correcting the contract](#correcting-the-contract)
-10. [Known limitations](#known-limitations)
+3. [Webhook flow](#webhook-flow)
+4. [Credential handling](#credential-handling)
+5. [Security model](#security-model)
+6. [API client](#api-client)
+7. [Rate limiting](#rate-limiting)
+8. [Background tasks](#background-tasks)
+9. [Configuration](#configuration)
+10. [Correcting the contract](#correcting-the-contract)
+11. [Known limitations](#known-limitations)
 
 ---
 
@@ -52,6 +55,7 @@ app/integrations/aliexpress/
 ├── exceptions.py   typed failures, each declaring whether it is retryable
 ├── schemas.py      wire models (theirs) and API models (ours)
 ├── auth.py         request signing + OAuth state
+├── webhook.py      inbound push notifications (separate from OAuth callback)
 ├── client.py       the only code that talks to AliExpress over the network
 └── service.py      connection lifecycle; knows nothing about HTTP
 ```
@@ -142,6 +146,52 @@ end up on a page. Failures redirect too, carrying a short reason
 (`?aliexpress=denied|failed|invalid`) drawn from a fixed vocabulary this
 application controls — never an upstream message, which could be reflected into
 the page.
+
+---
+
+## Webhook flow
+
+AliExpress can push order and shipping notifications. These are **not** OAuth
+callbacks — they arrive as `POST` requests with a JSON or form-encoded body.
+
+```
+POST /api/v1/integrations/aliexpress/webhook
+      ├─ parse body (JSON or form-urlencoded)
+      ├─ log payload for inspection
+      └─ return HTTP 200 {"status": "received"} immediately
+```
+
+### Why this is separate from the OAuth callback
+
+| | OAuth callback | Webhook |
+|---|---|---|
+| Method | `GET` | `POST` |
+| Caller | User's browser after consent | AliExpress servers |
+| Purpose | Exchange an authorization code | Push order/shipping events |
+| Response | `303` redirect into the app | `200` JSON acknowledgement |
+
+Reusing the callback URL would conflate two different contracts and break one of
+them the first time AliExpress POSTs while the browser expects a redirect.
+
+### Registration URL
+
+Configure this in the AliExpress developer console (not the OAuth redirect URI):
+
+```
+https://api.whiteto.com/api/v1/integrations/aliexpress/webhook
+```
+
+The Cloudflare Tunnel must forward this path to the local backend, the same way
+it forwards the OAuth callback. A request that never reaches this application
+returns 404 from the tunnel edge.
+
+### Security status
+
+**Signature verification is not implemented yet.** The handler accepts any POST,
+logs the payload, and acknowledges receipt. That is acceptable only while no
+business logic runs here. Before processing order or customer data, confirm
+AliExpress's webhook signing scheme and implement verification in
+`app/integrations/aliexpress/webhook.py`.
 
 ---
 
@@ -453,5 +503,5 @@ localised by design:
    nowhere else to live. Three browser tests skip when it is unavailable; the
    backend integration suite covers the same flow with an in-process Redis.
 
-7. **No webhook handling.** AliExpress can push order and shipping updates;
-   nothing receives them yet.
+7. **Webhook processing is stubbed.** The endpoint receives and logs payloads but
+   does not yet verify signatures or update orders. See [Webhook flow](#webhook-flow).

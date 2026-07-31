@@ -16,8 +16,45 @@ Phase 4 — scope not yet defined.
 
 ## [phase-3] — 2026-07-31
 
-AliExpress integration foundation. Connection, credentials, and client only —
-no product, price, inventory, or order functionality.
+AliExpress integration foundation. Connection, credentials, client and inbound
+webhook only — no product, price, inventory, or order functionality.
+
+Closed with live verification against the real AliExpress gateway (sub-phases
+3.5–3.7). See [PHASE_3_COMPLETION.md](docs/PHASE_3_COMPLETION.md).
+
+### Verified live
+
+- **OAuth round trip** completed end to end against `api-sg.aliexpress.com`,
+  storing encrypted access and refresh tokens
+- **Replay protection** — an OAuth state is deleted on first use and a second
+  presentation is refused
+- **API permissions** — product, category, search, order and freight endpoints
+  reachable; affiliate correctly denied, verified against a known-good denial
+  control rather than by absence of evidence
+- **Webhook** reachable through `https://api.whiteto.com` and answering 200 for
+  every malformed input tried
+
+### Added
+
+**Inbound webhook** (`app/integrations/aliexpress/webhook.py`)
+- `POST /api/v1/integrations/aliexpress/webhook`, separate from the OAuth
+  callback — different method, caller, contract and response
+- Always answers 200, including on an unreadable body, because a delivery agent
+  reads the status as a retry instruction
+- Logs field names and counts, never payload values: an order notification
+  carries buyer names and addresses
+- Signature verification is **not** implemented; recorded as M11
+
+### Fixed (during live verification)
+
+- `sign_method` was excluded from the signature base string, which made every
+  token exchange fail with `IncompleteSignature` (`fa02dd2`)
+- Only the root `Settings` read `.env`, so every nested settings group silently
+  ignored the file and ran on defaults (`ba752c9`)
+- The OAuth callback required a Bearer token that a browser redirect from
+  AliExpress can never carry (`74c6653`)
+- Redis connections failed on every request because redis-py negotiates RESP3
+  with `HELLO`, which the local server rejects (`74c6653`)
 
 ### Added
 
