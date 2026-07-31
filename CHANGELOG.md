@@ -14,7 +14,7 @@ Phase 3 — scope not yet defined.
 
 ---
 
-## [phase-2] — 2026-07-31
+## [phase-2-complete] — 2026-07-31
 
 Application shell, navigation, and SaaS UI foundation. Frontend only; no
 business functionality.
@@ -255,6 +255,7 @@ Foundation. Commit `b513e4b`.
 
 ---
 
-[Unreleased]: https://github.com/Adnan-Zulfiqar/ds-platform/compare/phase-1-complete...HEAD
+[Unreleased]: https://github.com/Adnan-Zulfiqar/ds-platform/compare/phase-2-complete...HEAD
+[phase-2-complete]: https://github.com/Adnan-Zulfiqar/ds-platform/compare/phase-1-complete...phase-2-complete
 [phase-1-complete]: https://github.com/Adnan-Zulfiqar/ds-platform/compare/phase-0-complete...phase-1-complete
 [phase-0-complete]: https://github.com/Adnan-Zulfiqar/ds-platform/releases/tag/phase-0-complete

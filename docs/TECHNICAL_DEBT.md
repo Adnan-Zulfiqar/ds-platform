@@ -3,12 +3,17 @@
 Reviewed 2026-07-31 at `phase-1-complete`; updated after Phase 2.
 Housekeeping pass 2026-07-31 — **H1, H2, and H3 resolved.**
 
-**Current count: 1 critical, 1 high, 7 medium, 5 low.**
+**Current count: 1 critical, 1 high, 8 medium, 5 low.**
 
-Phase 2 added M8 (dashboard bundle size) and resolved one latent defect found by
-running the app: `CORS_ORIGINS` could not be parsed in the format documented in
-`.env.example`, so the application could not start with its own example
-configuration. Regression tests now cover it.
+Phase 2 added M8 (dashboard bundle size) and M9 (dashboard mock data), and
+resolved one latent defect found by running the app: `CORS_ORIGINS` could not be
+parsed in the format documented in `.env.example`, so the application could not
+start with its own example configuration. Regression tests now cover it.
+
+**C1 — Docker validation — remains the single blocking item.** Three
+Dockerfiles, the Compose stack, and the Nginx configuration have still never
+been built or executed. Phase 2 did not change this and could not: Docker is not
+installed on the development machine.
 
 Only genuine issues are listed. Items are ranked by the cost of leaving them,
 not by how hard they are to fix. Each has a **trigger** — the point at which it
@@ -162,6 +167,26 @@ request volume, not guessing.
 
 **Trigger:** observed abuse, or before opening the API to the public internet.
 **Fix:** apply the login throttle keyed on IP to both.
+
+### M9 — The dashboard renders mock data
+
+Every figure on `/dashboard` — six stat cards, three charts — comes from
+`lib/mock/dashboard-data.ts`. Nothing is real.
+
+**This is contained rather than dangerous**, and the containment is the point:
+the module is quarantined under `lib/mock/`, every export is prefixed `MOCK_`,
+nothing outside the dashboard imports it, and the page carries a visible banner
+telling the user the figures are placeholders. An operator cannot mistake them
+for their own data.
+
+It is listed as debt anyway because the containment is a convention, not a
+mechanism — nothing prevents a future page importing the module.
+
+**Trigger:** the first analytics endpoint.
+**Fix:** add fetchers to `services/dashboard.ts`, swap the imports in the
+dashboard page, delete `lib/mock/dashboard-data.ts`. A surviving `MOCK_`
+reference anywhere means the migration is incomplete, which is exactly what the
+prefix is for.
 
 ### M8 — The dashboard bundle is 108 kB, almost all Recharts
 

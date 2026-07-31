@@ -12,7 +12,7 @@ Last updated: 2026-07-31
 | 0 | Foundation | ✅ **Complete** |
 | 1 | Authentication and multi-tenant identity | ✅ **Complete** |
 | 2 | Application shell, navigation, and SaaS UI foundation | ✅ **Complete** |
-| 3 | *Scope not yet defined* | ⏳ Not started |
+| 3 | *Scope not yet defined* | 🚧 **In Progress** |
 
 ---
 
@@ -54,6 +54,8 @@ Full detail: [Authentication.md](docs/Authentication.md)
 
 ## Phase 2 — Application shell and SaaS UI foundation ✅
 
+**Tag:** `phase-2-complete` · **Commit:** `1839869`
+
 The professional interface foundation every future module builds on. Frontend
 only; no business functionality.
 
@@ -72,9 +74,18 @@ Full detail: [Frontend.md](docs/Frontend.md)
 
 ---
 
-## Phase 3 — ⏳ Not started
+## Phase 3 — 🚧 In Progress
 
-Scope arrives with the Phase 3 prompt. No Phase 3 code has been written.
+**Scope is not yet defined.** Marked in progress at the point Phase 2 was
+finalised; the requirements arrive with the Phase 3 prompt and this entry will
+be filled in then.
+
+No Phase 3 code has been written.
+
+The shell is deliberately ready to receive a feature module: add the route under
+`app/(protected)/`, flip its `status` to `ready` in `lib/navigation.ts`, and put
+the feature's own components under `features/`. Nothing about the shell needs to
+change.
 
 ---
 
