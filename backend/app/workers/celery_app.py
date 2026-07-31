@@ -67,7 +67,10 @@ celery_app.conf.update(
     #
     # Implementations live in app.tasks (see that package for why it sits
     # beside app.api rather than inside this one).
-    imports=("app.tasks.integrations.aliexpress",),
+    imports=(
+        "app.tasks.integrations.aliexpress",
+        "app.tasks.products",
+    ),
 )
 
 # Explicit routing table.

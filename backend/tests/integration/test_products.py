@@ -9,6 +9,7 @@ so what these tests assert about parsing is what the supplier actually sends.
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ import httpx
 import pytest
 from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.aliexpress import client as client_module
 from app.integrations.aliexpress import service as service_module
@@ -445,3 +447,69 @@ class TestFeedBrowsing:
         assert response.status_code == 200
         assert response.json()
         assert (await client.get(PRODUCTS_URL, headers=headers)).json()["meta"]["totalItems"] == 0
+
+
+class TestSync:
+    async def test_refresh_reuses_the_import_path_without_duplicating(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sync is import again — the same id, the same row, refreshed data."""
+        headers = await connected_tenant(client, monkeypatch)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        response = await client.post(f"{PRODUCTS_URL}/{created['id']}/sync", headers=headers)
+
+        assert response.status_code == 200, response.text
+        refreshed = response.json()
+        assert refreshed["id"] == created["id"]
+        assert refreshed["externalId"] == REAL_PRODUCT_ID
+        assert len(refreshed["variants"]) == 12
+
+    async def test_sync_preserves_status_rather_than_reverting_to_draft(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        patch_aliexpress(monkeypatch, supplier_handler)
+        body = await register(client, email="status@example.com")
+        headers = auth_header(body)
+        await connect_aliexpress(client, headers)
+        tenant_id = uuid.UUID(body["identity"]["tenant"]["id"])
+
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        from app.core.context import set_tenant_id
+        from app.models.product import ProductStatus
+        from app.repositories.product import ProductRepository
+
+        set_tenant_id(tenant_id)
+        product = await ProductRepository(db_session).get_by_id_or_raise(uuid.UUID(created["id"]))
+        product.status = ProductStatus.ACTIVE
+        await db_session.flush()
+
+        response = await client.post(f"{PRODUCTS_URL}/{created['id']}/sync", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "active"
+
+    async def test_syncing_another_tenants_product_returns_404_not_403(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        acme = await connected_tenant(
+            client, monkeypatch, companyName="Acme", email="sync-a@example.com"
+        )
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=acme)
+        ).json()
+
+        globex = await connected_tenant(
+            client, monkeypatch, companyName="Globex", email="sync-g@example.com"
+        )
+        response = await client.post(f"{PRODUCTS_URL}/{created['id']}/sync", headers=globex)
+
+        assert response.status_code == 404
