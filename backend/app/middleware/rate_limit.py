@@ -46,6 +46,9 @@ logger = get_logger(__name__)
 # parses, logs and returns. Before the webhook does anything expensive
 # (database writes, enqueuing tasks), it needs its own limiter, one that sheds
 # load without returning a retry-provoking status.
+# Shopify webhooks are HMAC-verified; returning 429 would provoke redelivery.
+_SHOPIFY_WEBHOOK_PREFIX = "/api/v1/integrations/shopify/webhooks"
+
 _EXEMPT_PATHS = frozenset(
     {
         "/health",
@@ -92,7 +95,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if not self._enabled or request.url.path in _EXEMPT_PATHS:
+        if (
+            not self._enabled
+            or request.url.path in _EXEMPT_PATHS
+            or request.url.path.startswith(_SHOPIFY_WEBHOOK_PREFIX)
+        ):
             return await call_next(request)
 
         identity = self._identity(request)

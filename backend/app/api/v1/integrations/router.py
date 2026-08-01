@@ -12,6 +12,7 @@ structurally rather than by discipline: the response models in
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import RedirectResponse
@@ -28,7 +29,20 @@ from app.integrations.aliexpress.schemas import (
 )
 from app.integrations.aliexpress.service import AliExpressService
 from app.integrations.aliexpress.webhook import receive_webhook
+from app.integrations.shopify.schemas import (
+    ShopifyAuthorizationResponse,
+    ShopifyConnectionRead,
+    ShopifyConnectRequest,
+    ShopifyPublishRequest,
+    ShopifyStatusResponse,
+    ShopifySyncRequest,
+    ShopifyWebhookAckResponse,
+)
+from app.integrations.shopify.service import ShopifyService
+from app.integrations.shopify.sync import ShopifySyncService
+from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.models.integration import AliExpressConnection
+from app.models.shopify import ShopifyConnection
 from app.schemas.common import MessageResponse
 
 logger = get_logger(__name__)
@@ -220,3 +234,139 @@ async def disconnect_aliexpress(session: DbSession, _principal: RequireAdmin) ->
             else "No AliExpress connection was present."
         )
     )
+
+
+def _shopify_to_read(connection: ShopifyConnection) -> ShopifyConnectionRead:
+    return ShopifyConnectionRead(
+        id=connection.id,
+        store_id=connection.store_id,
+        shop_domain=connection.shop_domain,
+        status=connection.status.value,
+        scopes=connection.scopes,
+        connected_at=connection.created_at,
+        last_sync_at=connection.last_sync_at,
+        last_error=connection.last_error,
+        webhooks_registered_at=connection.webhooks_registered_at,
+    )
+
+
+@router.post(
+    "/shopify/connect",
+    response_model=ShopifyAuthorizationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Begin a Shopify OAuth install",
+)
+async def connect_shopify(
+    payload: ShopifyConnectRequest,
+    session: DbSession,
+    principal: RequireAdmin,
+) -> ShopifyAuthorizationResponse:
+    authorization_url, state = await ShopifyService(session).begin_connection(
+        shop=payload.shop,
+        store_name=payload.store_name,
+        user_id=principal.user_id,
+    )
+    return ShopifyAuthorizationResponse(
+        authorization_url=authorization_url,
+        state=state,
+        expires_in_seconds=settings.shopify.oauth_state_ttl_seconds,
+    )
+
+
+@router.get(
+    "/shopify/callback",
+    summary="OAuth callback from Shopify",
+    response_class=RedirectResponse,
+)
+async def shopify_callback(request: Request, session: DbSession) -> RedirectResponse:
+    return_url = settings.shopify.frontend_return_url
+    if request.query_params.get("error"):
+        return RedirectResponse(f"{return_url}?shopify=denied", status_code=303)
+    try:
+        connection = await ShopifyService(session).complete_connection(
+            query_string=str(request.url.query),
+        )
+        # Best-effort webhook registration — failure must not undo OAuth.
+        try:
+            await ShopifyService(session).register_webhooks(connection.store_id)
+        except Exception:
+            logger.exception("shopify_webhook_registration_failed")
+    except Exception:
+        logger.exception("shopify_callback_failed")
+        return RedirectResponse(f"{return_url}?shopify=failed", status_code=303)
+    return RedirectResponse(f"{return_url}?shopify=connected", status_code=303)
+
+
+@router.get(
+    "/shopify/status",
+    response_model=ShopifyStatusResponse,
+    summary="Shopify connection status",
+)
+async def shopify_status(session: DbSession, _principal: CurrentPrincipal) -> ShopifyStatusResponse:
+    configured, connections = await ShopifyService(session).list_status()
+    return ShopifyStatusResponse(
+        configured=configured,
+        connections=[_shopify_to_read(row) for row in connections],
+    )
+
+
+@router.delete(
+    "/shopify/stores/{store_id}",
+    response_model=MessageResponse,
+    summary="Disconnect a Shopify store",
+)
+async def disconnect_shopify(
+    store_id: UUID, session: DbSession, _principal: RequireAdmin
+) -> MessageResponse:
+    await ShopifyService(session).disconnect(store_id=store_id)
+    return MessageResponse(message="Shopify store disconnected and credentials deleted.")
+
+
+@router.post(
+    "/shopify/publish",
+    response_model=MessageResponse,
+    summary="Publish a product to Shopify",
+)
+async def publish_to_shopify(
+    payload: ShopifyPublishRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> MessageResponse:
+    result = await ShopifySyncService(session).publish_product(
+        store_id=payload.store_id,
+        product_id=payload.product_id,
+    )
+    return MessageResponse(
+        message=f"Published to Shopify product {result.get('external_product_id')}."
+    )
+
+
+@router.post(
+    "/shopify/sync/orders",
+    response_model=MessageResponse,
+    summary="Import Shopify orders for a store",
+)
+async def sync_shopify_orders(
+    payload: ShopifySyncRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> MessageResponse:
+    if payload.store_id is None:
+        from app.core.exceptions import ValidationError
+
+        raise ValidationError("storeId is required.")
+    result = await ShopifySyncService(session).import_orders(store_id=payload.store_id)
+    return MessageResponse(
+        message=(
+            f"Imported Shopify orders: created={result['created']} updated={result['updated']}."
+        )
+    )
+
+
+@router.post(
+    "/shopify/webhooks/{topic}",
+    response_model=ShopifyWebhookAckResponse,
+    summary="Receive Shopify webhooks",
+)
+async def shopify_webhook(topic: str, request: Request) -> ShopifyWebhookAckResponse:
+    return await receive_shopify_webhook(request, topic=topic)

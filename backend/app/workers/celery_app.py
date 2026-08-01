@@ -71,6 +71,7 @@ celery_app.conf.update(
     imports=(
         "app.tasks.health",
         "app.tasks.integrations.aliexpress",
+        "app.tasks.integrations.shopify",
         "app.tasks.products",
         "app.tasks.orders",
         "app.tasks.inventory",
@@ -129,6 +130,10 @@ celery_app.conf.update(
             "task": "integrations.aliexpress.sweep_health_checks",
             "schedule": 60 * 60,
         },
+        "shopify-sync-orders": {
+            "task": "shopify.sync_orders_all",
+            "schedule": 60 * 60,
+        },
     },
 )
 
@@ -142,6 +147,7 @@ celery_app.conf.update(
 # slow morning must not delay anything else.
 celery_app.conf.task_routes = {
     "integrations.*": {"queue": "integrations"},
+    "shopify.*": {"queue": "integrations"},
 }
 
 
