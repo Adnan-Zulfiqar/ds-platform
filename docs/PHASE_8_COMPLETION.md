@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-08-01 |
 | Branch | `develop` |
-| Tag | `phase-8-complete` → tip commit after docs close |
+| Tag | `phase-8-complete` → `4a4d5d7` |
 | Base | `phase-7-complete` (`1ed5477`) |
 | Migration | `0008` — shopify_connections, store_listings, orders.store_id |
 
@@ -17,7 +17,7 @@
 | `b4cf4a4` | feat(shopify): add connection schema and tenant-scoped repositories |
 | `6476fe7` | feat(shopify): OAuth, Admin sync, webhooks, and Celery tasks |
 | `665f848` | feat(frontend): Shopify connect card and integrations status UI |
-| *(docs tip)* | docs: close Phase 8 Shopify sales-channel integration |
+| `4a4d5d7` | docs: close Phase 8 Shopify sales-channel integration |
 
 ---
 

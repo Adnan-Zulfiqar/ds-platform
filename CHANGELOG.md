@@ -32,6 +32,7 @@ Shopify as the first sales channel. See
 
 - Backend: ruff, mypy strict, **592** pytest
 - Frontend: lint, typecheck, build
+- Playwright integrations (chromium): **11** passed
 - Live Shopify Admin/OAuth: **not run** (no Partner credentials)
 
 ---
