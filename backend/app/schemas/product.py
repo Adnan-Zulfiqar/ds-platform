@@ -18,8 +18,9 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
+from app.integrations.aliexpress.catalog import normalise_product_id
 from app.models.product import ImportStatus, ProductSource, ProductStatus
 from app.schemas.base import CamelCaseModel
 
@@ -112,9 +113,37 @@ class ProductImportRequest(CamelCaseModel):
     ``external_id`` only. The client does not send a title or a price: those
     come from the supplier, and accepting them here would let a caller write
     arbitrary catalogue data through an endpoint named "import".
+
+    A full listing URL is accepted and reduced to its id — see the validator.
     """
 
-    external_id: str = Field(min_length=1, max_length=128)
+    external_id: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("external_id")
+    @classmethod
+    def _normalise_identifier(cls, value: str) -> str:
+        """Accept a listing URL as well as a bare id.
+
+        Normalising here rather than in the UI means every caller benefits —
+        the API, a future bulk import, a script — instead of the rule living in
+        one React component and being re-invented by the next client.
+
+        The alternative is worse than it looks. Forwarding a URL as a product id
+        returns ``MissingParameter: ... "product_id" ... is not supplied`` from
+        AliExpress, which describes the value as *missing* rather than
+        *malformed* and sends whoever is debugging it hunting a serialisation
+        bug that does not exist. Rejecting it here, with a message that names
+        the real problem, is the difference between a five-second fix and an
+        afternoon.
+        """
+        identifier = normalise_product_id(value)
+        if identifier is None:
+            raise ValueError(
+                "Enter an AliExpress product ID (digits only) or paste the "
+                "full listing URL, for example "
+                "https://www.aliexpress.com/item/1005009558589813.html"
+            )
+        return identifier
 
     #: Destination country and currency shape the prices the supplier quotes,
     #: so they are import parameters rather than display preferences.

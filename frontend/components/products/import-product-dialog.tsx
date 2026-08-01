@@ -18,6 +18,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useImportProduct } from "@/services/products";
 
+/** Matches the numeric id in an AliExpress listing URL. */
+const ITEM_ID_IN_URL = /\/item\/(\d+)/;
+
+/**
+ * Accept either a bare product ID or a pasted listing URL.
+ *
+ * The URL is what people actually have: the ID lives in the address bar, so
+ * that is what gets copied. Pasting one used to send it to the server verbatim,
+ * and AliExpress answers a malformed ID with *"the input parameter product_id
+ * is not supplied"* — describing the value as missing rather than wrong, which
+ * points at a serialisation bug that does not exist.
+ *
+ * The server normalises this too, and is the authority. Doing it here as well
+ * means the user is told immediately rather than after a round trip.
+ */
+export function extractProductId(value: string): string | null {
+  const candidate = value.trim();
+  if (!candidate) return null;
+
+  if (/^\d+$/.test(candidate)) return candidate;
+
+  const inUrl = ITEM_ID_IN_URL.exec(candidate);
+  if (inUrl?.[1]) return inUrl[1];
+
+  // Recover a decorated ID only when there is exactly one candidate: choosing
+  // between two would be a coin flip that imports the wrong product.
+  const runs = candidate.match(/\d{6,}/g);
+  return runs?.length === 1 ? (runs[0] ?? null) : null;
+}
+
 /**
  * Import a product by its AliExpress identifier.
  *
@@ -42,14 +72,16 @@ export function ImportProductDialog() {
   async function handleImport() {
     setFormError(null);
 
-    const trimmed = externalId.trim();
-    if (!trimmed) {
-      setFormError("Enter an AliExpress product ID.");
+    const identifier = extractProductId(externalId);
+    if (!identifier) {
+      setFormError(
+        "Enter an AliExpress product ID, or paste the full listing URL.",
+      );
       return;
     }
 
     try {
-      await importProduct.mutateAsync({ externalId: trimmed });
+      await importProduct.mutateAsync({ externalId: identifier });
       setOpen(false);
       reset();
     } catch (error) {
@@ -81,9 +113,9 @@ export function ImportProductDialog() {
         <DialogHeader>
           <DialogTitle>Import from AliExpress</DialogTitle>
           <DialogDescription>
-            Paste the product ID from an AliExpress listing URL. Importing the
-            same product again refreshes its price, stock and variants rather
-            than creating a duplicate.
+            Paste an AliExpress product ID or the full listing URL. Importing
+            the same product again refreshes its price, stock and variants
+            rather than creating a duplicate.
           </DialogDescription>
         </DialogHeader>
 
@@ -94,18 +126,16 @@ export function ImportProductDialog() {
         ) : null}
 
         <div className="space-y-2">
-          <Label htmlFor="external-id">AliExpress product ID</Label>
+          <Label htmlFor="external-id">AliExpress product ID or URL</Label>
           <Input
             id="external-id"
-            inputMode="numeric"
-            placeholder="3256806389000685"
+            placeholder="1005009558589813"
             value={externalId}
             onChange={(event) => setExternalId(event.target.value)}
             disabled={importProduct.isPending}
           />
           <p className="text-sm text-muted-foreground">
-            Found in the listing URL:
-            aliexpress.com/item/<strong>3256806389000685</strong>.html
+            Paste either the product ID or the whole listing URL — both work.
           </p>
         </div>
 

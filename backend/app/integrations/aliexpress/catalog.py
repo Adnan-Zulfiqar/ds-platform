@@ -30,6 +30,7 @@ stops on the first one.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -377,6 +378,55 @@ class FeedProduct(WireModel):
         return to_decimal(self.original_price)
 
 
+#: Matches the numeric id in an AliExpress listing URL.
+#:
+#: Their URLs take the form ``.../item/1005009558589813.html``, with optional
+#: locale prefixes (``/en/``), regional hosts and tracking query strings. Only
+#: the ``/item/<digits>`` segment is stable across all of them.
+_ITEM_ID_IN_URL = re.compile(r"/item/(\d+)")
+
+#: A bare identifier: digits only. AliExpress ids are numeric, and anything else
+#: is a paste that needs extracting or a value that will be rejected upstream.
+_BARE_ID = re.compile(r"^\d+$")
+
+
+def normalise_product_id(value: str) -> str | None:
+    """Extract an AliExpress product id from an id or a listing URL.
+
+    **Exists because the gateway's error for a malformed id is actively
+    misleading.** Sending a URL where a product id belongs returns
+    ``MissingParameter: The input parameter "product_id" ... is not supplied``
+    — it reports the value as *absent* rather than *wrong*, which sends whoever
+    is debugging it looking for a serialisation bug that is not there. Verified
+    live against the real gateway.
+
+    Accepting a pasted URL is also just what a user does: the id lives in the
+    address bar, so that is what gets copied. Refusing it would be technically
+    defensible and practically useless.
+
+    Returns ``None`` when no id can be recovered, so the caller can say
+    something specific instead of forwarding a value the supplier will reject.
+    """
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+
+    if _BARE_ID.match(candidate):
+        return candidate
+
+    match = _ITEM_ID_IN_URL.search(candidate)
+    if match:
+        return str(match.group(1))
+
+    # A bare id with decoration — quotes, a stray trailing character. Recover
+    # the digits only when they are unambiguous: exactly one run in the string.
+    runs = re.findall(r"\d{6,}", candidate)
+    if len(runs) == 1:
+        return str(runs[0])
+
+    return None
+
+
 def parse_product_detail(payload: dict[str, Any]) -> ProductDetail | None:
     """Extract the product from a raw ``ds.product.get`` envelope.
 
@@ -464,6 +514,7 @@ __all__ = [
     "Sku",
     "SkuProperty",
     "StoreInfo",
+    "normalise_product_id",
     "parse_categories",
     "parse_feed_names",
     "parse_feed_products",

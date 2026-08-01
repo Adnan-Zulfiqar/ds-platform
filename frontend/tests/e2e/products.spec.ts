@@ -87,8 +87,39 @@ test.describe("Products page", () => {
     await page.getByRole("button", { name: "Import product" }).first().click();
     await page.getByRole("button", { name: "Import", exact: true }).click();
 
-    await expect(page.getByText("Enter an AliExpress product ID.")).toBeVisible();
+    await expect(
+      page.getByText(/Enter an AliExpress product ID/),
+    ).toBeVisible();
     expect(requested).toBe(false);
+  });
+
+  test("accepts a pasted listing URL, not just a bare ID", async ({ page }) => {
+    /**
+     * The regression this guards. A full URL used to be forwarded verbatim, and
+     * AliExpress answers a malformed ID with "the input parameter product_id is
+     * not supplied" — reporting it as missing rather than wrong, which sends
+     * you hunting a serialisation bug that is not there.
+     *
+     * Asserting on the request body rather than the outcome: the import itself
+     * needs a connected supplier, which this test does not have.
+     */
+    await registerAndSignIn(page);
+    await page.goto("/products");
+
+    let sentId: string | null = null;
+    await page.route("**/products/import", async (route) => {
+      const body = route.request().postDataJSON() as { externalId?: string };
+      sentId = body.externalId ?? null;
+      return route.abort();
+    });
+
+    await page.getByRole("button", { name: "Import product" }).first().click();
+    await page
+      .getByLabel(/AliExpress product ID/)
+      .fill("https://www.aliexpress.com/item/1005009558589813.html");
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+
+    await expect(() => expect(sentId).toBe("1005009558589813")).toPass();
   });
 
   test("surfaces the server's reason when no supplier is connected", async ({
