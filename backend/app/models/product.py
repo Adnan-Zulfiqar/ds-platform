@@ -52,6 +52,7 @@ class ProductSource(StrEnum):
 
     ALIEXPRESS = "aliexpress"
     MANUAL = "manual"
+    SHOPIFY = "shopify"
 
 
 class ProductStatus(StrEnum):

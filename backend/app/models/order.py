@@ -61,6 +61,7 @@ class OrderSource(StrEnum):
 
     ALIEXPRESS = "aliexpress"
     MANUAL = "manual"
+    SHOPIFY = "shopify"
 
 
 class FulfillmentStatus(StrEnum):
@@ -245,6 +246,15 @@ class Order(TenantScopedBase):
     #: ``products.external_id``: AliExpress uses integers, others use opaque
     #: strings, and the widest representation wins.
     external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    #: Sales-channel store when the order was imported from Shopify (etc.).
+    #: Null for supplier-originated or manual orders with no channel binding.
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     #: The supplier's own status string, verbatim. The mapped
     #: ``fulfillment_status`` is this platform's vocabulary; keeping the raw

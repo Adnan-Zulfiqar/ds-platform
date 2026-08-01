@@ -514,6 +514,43 @@ class AliExpressSettings(_EnvFileSettings):
     webhook_shed_window_seconds: int = Field(default=60, ge=1)
 
 
+class ShopifySettings(_EnvFileSettings):
+    """Shopify Partner / custom app configuration.
+
+    ``api_key`` and ``api_secret`` belong to the DropPilot Shopify app. Per-shop
+    access tokens live encrypted in ``shopify_connections``.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SHOPIFY_", extra="ignore")
+
+    api_key: str = Field(default="", description="Shopify app API key (client id).")
+    api_secret: SecretStr | None = Field(
+        default=None,
+        description="Shopify app API secret. Never logged or returned.",
+    )
+    scopes: str = Field(
+        default=(
+            "read_products,write_products,read_inventory,write_inventory,read_orders,read_locations"
+        ),
+        description="OAuth scopes requested at install time.",
+    )
+    api_version: str = Field(default="2025-01")
+    callback_url: str = Field(
+        default="http://localhost:8000/api/v1/integrations/shopify/callback",
+    )
+    frontend_return_url: str = "http://localhost:3000/settings/integrations"
+    webhook_callback_base: str = Field(
+        default="http://localhost:8000/api/v1/integrations/shopify/webhooks",
+        description="Public base URL Shopify POSTs webhooks to.",
+    )
+    oauth_state_ttl_seconds: int = Field(default=600, ge=60)
+    request_timeout_seconds: float = Field(default=20.0, gt=0)
+    connect_timeout_seconds: float = Field(default=5.0, gt=0)
+    max_retries: int = Field(default=3, ge=0)
+    rate_limit_requests: int = Field(default=40, ge=1)
+    rate_limit_window_seconds: int = Field(default=1, ge=1)
+
+
 class ObservabilitySettings(_EnvFileSettings):
     """Logging and monitoring configuration."""
 
@@ -591,6 +628,7 @@ class Settings(_EnvFileSettings):
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
+    shopify: ShopifySettings = Field(default_factory=ShopifySettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod
