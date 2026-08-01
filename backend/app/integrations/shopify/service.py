@@ -31,8 +31,11 @@ from app.integrations.shopify.auth import (
 )
 from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.exceptions import (
+    ShopifyAuthError,
     ShopifyConfigError,
     ShopifyNotConnectedError,
+    ShopifyOAuthExchangeError,
+    ShopifyOAuthHmacError,
     ShopifyOAuthStateError,
 )
 from app.models.integration import IntegrationStatus
@@ -138,17 +141,37 @@ class ShopifyService(BaseService):
         items = parse_qsl(query_string, keep_blank_values=True)
         params = dict(items)
         if not verify_oauth_hmac(query_items=items, secret=api_secret):
-            raise ShopifyOAuthStateError()
+            logger.warning(
+                "shopify_oauth_hmac_invalid",
+                param_names=sorted(k for k, _ in items if k),
+            )
+            raise ShopifyOAuthHmacError()
 
         state = params.get("state")
         code = params.get("code")
         shop = params.get("shop")
         if not state or not code or not shop:
+            logger.warning(
+                "shopify_oauth_callback_missing_fields",
+                has_state=bool(state),
+                has_code=bool(code),
+                has_shop=bool(shop),
+            )
             raise ShopifyOAuthStateError()
 
-        saved = await self._consume_state(state)
+        try:
+            saved = await self._consume_state(state)
+        except ShopifyOAuthStateError:
+            logger.warning("shopify_oauth_state_missing_or_expired")
+            raise
+
         shop_domain = normalise_shop_domain(shop)
         if shop_domain != saved.get("shop_domain"):
+            logger.warning(
+                "shopify_oauth_shop_mismatch",
+                callback_shop=shop_domain,
+                started_shop=saved.get("shop_domain"),
+            )
             raise ShopifyOAuthStateError()
 
         tenant_id = uuid.UUID(str(saved["tenant_id"]))
@@ -158,12 +181,19 @@ class ShopifyService(BaseService):
         if user_id is not None:
             set_user_id(user_id)
 
-        token_payload = await ShopifyClient.exchange_token(
-            shop_domain=shop_domain,
-            code=code,
-            api_key=api_key,
-            api_secret=api_secret,
-        )
+        try:
+            token_payload = await ShopifyClient.exchange_token(
+                shop_domain=shop_domain,
+                code=code,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+        except ShopifyAuthError as exc:
+            logger.warning(
+                "shopify_oauth_token_exchange_failed",
+                shop_domain=shop_domain,
+            )
+            raise ShopifyOAuthExchangeError() from exc
         access_token = str(token_payload["access_token"])
         scopes = str(token_payload.get("scope") or settings.shopify.scopes)
 

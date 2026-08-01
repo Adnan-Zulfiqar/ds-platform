@@ -163,11 +163,17 @@ export function ShopifyCard() {
           <Label htmlFor="shopify-shop">Store domain</Label>
           <Input
             id="shopify-shop"
-            placeholder="mystore.myshopify.com"
+            placeholder="your-store.myshopify.com"
             value={shop}
             onChange={(event) => setShop(event.target.value)}
             disabled={!configured || connect.isPending}
           />
+          <p className="text-xs text-muted-foreground">
+            Use the <span className="font-medium">*.myshopify.com</span> domain from
+            Shopify Admin → Settings → Domains — not a custom domain like
+            store.com. The Shopify app Allowed redirection URL must match
+            SHOPIFY_CALLBACK_URL exactly.
+          </p>
           {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
         </div>
       </CardContent>

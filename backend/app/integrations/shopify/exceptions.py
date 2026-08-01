@@ -59,6 +59,24 @@ class ShopifyOAuthStateError(AuthenticationError):
     message = "The Shopify authorization state is invalid or has expired."
 
 
+class ShopifyOAuthHmacError(AuthenticationError):
+    code = "shopify_oauth_hmac_invalid"
+    message = "The Shopify OAuth callback signature is not valid."
+
+
+class ShopifyOAuthExchangeError(AuthenticationError):
+    code = "shopify_oauth_exchange_failed"
+    message = "Shopify rejected the authorization code exchange."
+
+
 class ShopifyConfigError(ValidationError):
     code = "shopify_not_configured"
     message = "Shopify is not configured on this server."
+
+
+class ShopifyInvalidShopError(ValidationError):
+    code = "shopify_invalid_shop"
+    message = (
+        "Enter the store's *.myshopify.com domain (Shopify Admin -> Settings -> Domains), "
+        "not a custom storefront domain."
+    )

@@ -21,16 +21,30 @@ class OAuthState:
 
 
 def normalise_shop_domain(shop: str) -> str:
-    """Return ``example.myshopify.com`` from common user inputs."""
+    """Return ``example.myshopify.com`` from common user inputs.
+
+    Custom storefront domains (e.g. ``tenwer.com``) are rejected: Shopify's
+    OAuth authorize endpoint only accepts ``*.myshopify.com``. Sending a custom
+    domain produces Shopify's opaque "Unauthorized Access" page.
+    """
+    from app.integrations.shopify.exceptions import ShopifyInvalidShopError
+
     value = shop.strip().lower()
     value = value.removeprefix("https://").removeprefix("http://")
     value = value.split("/")[0]
+    value = value.removeprefix("www.")
     if value.endswith(".myshopify.com"):
+        label = value.removesuffix(".myshopify.com")
+        if not label or "." in label or not label.replace("-", "").isalnum():
+            raise ShopifyInvalidShopError()
         return value
-    # Bare store name
-    if "." not in value:
+    # Bare store handle — no dots (custom domains always contain one).
+    if "." not in value and value.replace("-", "").isalnum():
         return f"{value}.myshopify.com"
-    return value
+    raise ShopifyInvalidShopError(
+        f"'{value}' is not a Shopify admin domain. Use something like "
+        "your-store.myshopify.com from Shopify Admin -> Settings -> Domains."
+    )
 
 
 def build_authorization_url(*, shop_domain: str, state: str) -> str:

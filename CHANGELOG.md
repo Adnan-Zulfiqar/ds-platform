@@ -15,6 +15,9 @@ production release.
 - AliExpress connect is platform-credential only: merchants no longer enter App
   Key / App Secret. OAuth uses `ALIEXPRESS_APP_*` from the environment; tenant
   rows store encrypted seller tokens only (migration `0009`).
+- Shopify connect rejects custom storefront domains; OAuth callback failures are
+  classified (`hmac` / `state` / `exchange`) without logging secrets. See
+  [SHOPIFY_CONNECTION_DEBUG_REPORT.md](docs/SHOPIFY_CONNECTION_DEBUG_REPORT.md).
 
 ---
 

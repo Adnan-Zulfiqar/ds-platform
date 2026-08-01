@@ -271,6 +271,12 @@ async def connect_shopify(
 async def shopify_callback(request: Request, session: DbSession) -> RedirectResponse:
     return_url = settings.shopify.frontend_return_url
     if request.query_params.get("error"):
+        # Shopify may return error / error_description — log names only.
+        logger.warning(
+            "shopify_oauth_denied",
+            error=request.query_params.get("error"),
+            shop=request.query_params.get("shop"),
+        )
         return RedirectResponse(f"{return_url}?shopify=denied", status_code=303)
     try:
         connection = await ShopifyService(session).complete_connection(
@@ -281,9 +287,27 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             await ShopifyService(session).register_webhooks(connection.store_id)
         except Exception:
             logger.exception("shopify_webhook_registration_failed")
-    except Exception:
-        logger.exception("shopify_callback_failed")
-        return RedirectResponse(f"{return_url}?shopify=failed", status_code=303)
+    except Exception as exc:
+        from app.integrations.shopify.exceptions import (
+            ShopifyOAuthExchangeError,
+            ShopifyOAuthHmacError,
+            ShopifyOAuthStateError,
+        )
+
+        reason = "failed"
+        if isinstance(exc, ShopifyOAuthHmacError):
+            reason = "hmac"
+        elif isinstance(exc, ShopifyOAuthStateError):
+            reason = "state"
+        elif isinstance(exc, ShopifyOAuthExchangeError):
+            reason = "exchange"
+        logger.exception(
+            "shopify_callback_failed",
+            reason=reason,
+            error_type=type(exc).__name__,
+            shop=request.query_params.get("shop"),
+        )
+        return RedirectResponse(f"{return_url}?shopify={reason}", status_code=303)
     return RedirectResponse(f"{return_url}?shopify=connected", status_code=303)
 
 

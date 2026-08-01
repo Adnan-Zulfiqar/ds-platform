@@ -175,8 +175,19 @@ class ShopifyClient:
                 json={"client_id": api_key, "client_secret": api_secret, "code": code},
             )
         if response.status_code >= 400:
+            logger.warning(
+                "shopify_token_exchange_http_error",
+                shop_domain=shop_domain,
+                status_code=response.status_code,
+            )
             raise ShopifyAuthError()
         payload = response.json()
         if not isinstance(payload, dict) or "access_token" not in payload:
+            logger.warning(
+                "shopify_token_exchange_invalid_payload",
+                shop_domain=shop_domain,
+                status_code=response.status_code,
+                has_access_token=isinstance(payload, dict) and "access_token" in payload,
+            )
             raise ShopifyAuthError()
         return payload

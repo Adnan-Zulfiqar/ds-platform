@@ -13,6 +13,7 @@ from app.integrations.shopify.auth import (
     verify_oauth_hmac,
     verify_webhook_hmac,
 )
+from app.integrations.shopify.exceptions import ShopifyInvalidShopError
 
 pytestmark = pytest.mark.unit
 
@@ -28,6 +29,10 @@ class TestNormaliseShop:
         assert (
             normalise_shop_domain("https://mystore.myshopify.com/admin") == "mystore.myshopify.com"
         )
+
+    def test_rejects_custom_storefront_domain(self) -> None:
+        with pytest.raises(ShopifyInvalidShopError):
+            normalise_shop_domain("tenwer.com")
 
 
 class TestHmac:

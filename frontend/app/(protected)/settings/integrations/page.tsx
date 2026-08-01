@@ -55,7 +55,25 @@ const SHOPIFY_CALLBACK: Record<
   failed: {
     variant: "destructive",
     title: "Connection failed",
-    body: "Shopify could not be connected. Check the app credentials and try again.",
+    body:
+      "Shopify could not be connected. Confirm the Partner/custom app Allowed redirection URL matches SHOPIFY_CALLBACK_URL exactly, and use your *.myshopify.com domain.",
+  },
+  hmac: {
+    variant: "destructive",
+    title: "Shopify signature invalid",
+    body:
+      "The OAuth callback signature did not match SHOPIFY_API_SECRET. Confirm the app secret in .env matches the Shopify app.",
+  },
+  state: {
+    variant: "destructive",
+    title: "Authorization expired",
+    body: "That Shopify authorization request expired or was reused. Click Connect Shopify and try again.",
+  },
+  exchange: {
+    variant: "destructive",
+    title: "Token exchange failed",
+    body:
+      "Shopify accepted consent but rejected the code exchange. Confirm API key/secret belong to the same app.",
   },
 };
 

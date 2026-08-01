@@ -293,6 +293,11 @@ same reason.
 
 ### M17 — Shopify live Partner OAuth and Admin API unverified
 
+**2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
+and the failure is Shopify's authorize screen (Unauthorized / 403) before
+callback — typically Allowed redirection URL / app install eligibility. See
+`docs/SHOPIFY_CONNECTION_DEBUG_REPORT.md`.
+
 Phase 8 implemented OAuth, Admin REST client, publish/inventory/price/order
 import, and HMAC webhooks. No Shopify Partner app credentials were available on
 the development machine, so nothing was exercised against a real shop.
