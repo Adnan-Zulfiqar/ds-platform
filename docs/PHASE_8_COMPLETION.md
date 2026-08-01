@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-08-01 |
 | Branch | `develop` |
-| Tag | `phase-8-complete` → `4a4d5d7` |
+| Tag | `phase-8-complete` → `07ec47c` |
 | Base | `phase-7-complete` (`1ed5477`) |
 | Migration | `0008` — shopify_connections, store_listings, orders.store_id |
 
@@ -18,6 +18,7 @@
 | `6476fe7` | feat(shopify): OAuth, Admin sync, webhooks, and Celery tasks |
 | `665f848` | feat(frontend): Shopify connect card and integrations status UI |
 | `4a4d5d7` | docs: close Phase 8 Shopify sales-channel integration |
+| `07ec47c` | docs: record Phase 8 tip hash and Playwright results |
 
 ---
 
