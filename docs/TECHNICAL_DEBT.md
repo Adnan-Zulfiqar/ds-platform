@@ -13,8 +13,94 @@ M11/M12 mitigated (HMAC opt-in + shed); H4 foundation shipped (enforcement
 off); M15 CI broker job added (local RabbitMQ still absent).
 **Phase 8 release review 2026-08-01** — Shopify channel shipped; live Partner
 OAuth/Admin verification still open (M17).
+**Pre-production authentication audit 2026-08-01** — five gaps found by probing
+rather than reading, all now closed and pinned by tests (see S1–S5 below). One
+deployment footgun remains open as M18.
 
-**Current count: 1 critical (narrowed), 1 high (narrowed), ~11 medium, 5 low.**
+**Current count: 1 critical (narrowed), 1 high (narrowed), ~12 medium, 5 low.**
+
+---
+
+## Resolved by the pre-production authentication audit (2026-08-01)
+
+Each was verified failing before the fix and passing after. The audit probed
+behaviour rather than reading code, which is the only reason these were found:
+every one of them is silent at runtime — the application starts, reports
+healthy, and is wrong.
+
+### ~~S1 — Production started with no encryption keys~~ ✅ RESOLVED
+
+`SECURITY_ENCRYPTION_KEYS` was unvalidated at startup. A deployment with the
+value empty booted normally and failed only when someone first connected a
+supplier, where it read as an integration bug rather than a misconfiguration.
+Startup now refuses.
+
+### ~~S2 — Production accepted an encryption key published in this repository~~ ✅ RESOLVED
+
+The two Fernet keys in `tests/conftest.py` are printed in a public repository
+and decode to the literal `test-key-N-NEVER-USE-IN-PROD-!!!`. Nothing stopped
+one reaching production via a copied `.env`, where every customer credential
+would have been encrypted with a key any reader already has. Both are now
+denylisted for deployed environments, and the check covers a published key
+anywhere in the rotation list rather than only first.
+
+### ~~S3 — Production accepted `SECURITY_COOKIE_SECURE=false`~~ ✅ RESOLVED
+
+The refresh cookie is the longest-lived credential a browser holds. Without
+`Secure` it travels over plain HTTP, where anyone on the path can lift it and
+mint access tokens for its full thirty-day life. It is weakened locally on
+purpose — the test client speaks HTTP — which is precisely why the deployed case
+needed a guard rather than a convention.
+
+### ~~S4 — The signing key could double as the encryption key~~ ✅ RESOLVED
+
+They have different rotation stories. A signing key can be replaced the moment a
+leak is suspected, at the cost of ending every session; an encryption key cannot,
+because stored ciphertext must be re-encrypted first. Sharing one value silently
+blocks an urgent rotation behind a slow migration.
+
+### ~~S5 — Logs emitted credentials verbatim~~ ✅ RESOLVED
+
+The pipeline had no redaction processor. A probe logging six credential-shaped
+fields produced six secrets in the output. The audit found no call site that
+actually does this — but discipline describes the code as it is today, and the
+pipeline is also fed by third-party libraries.
+
+A redaction processor now runs before rendering. The field *name* is kept and
+only the value replaced, so "there was an Authorization header and it was
+redacted" stays visible. Booleans and numbers are preserved
+(`password_valid=False` reveals nothing), and an allowlist protects diagnostics
+that merely look sensitive — `token_type` says which kind of token was
+rejected, `signature_header_present` answers whether a provider signs its
+webhooks at all.
+
+**32 tests** cover these, including three asserting local development still
+starts with no encryption keys, an insecure cookie, and the published test keys
+— hardening that breaks local development gets disabled, and then protects
+nothing.
+
+---
+
+## Medium
+
+### M18 — Compose defaults to a guessable password for Postgres and RabbitMQ
+
+`docker-compose.yml` uses `${POSTGRES_PASSWORD:-droppilot}` and
+`${RABBITMQ_PASSWORD:-droppilot}`. Convenient locally, and the intended usage is
+that a deployment supplies real values — but a `docker compose up` on a host
+with those variables unset silently brings up infrastructure with a password
+published in this repository.
+
+Unlike S1–S4 the application cannot detect this: it receives a working DSN and
+has no way to know the password was a default.
+
+**Impact:** database and broker reachable with a known credential if the network
+is not otherwise closed.
+**Trigger:** before any deployment that is reachable from outside its host.
+**Fix:** drop the `:-droppilot` fallbacks so Compose fails loudly on an unset
+variable, or move deployment onto explicit secrets. Not done here because it
+would break the documented local workflow, which was out of scope for this
+audit.
 
 The Phase 5 release verified the production AliExpress client path against the
 live gateway and shipped order sync. M16 records that a populated order-detail

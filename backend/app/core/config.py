@@ -399,6 +399,22 @@ class SecuritySettings(_EnvFileSettings):
     # insecure key be overridden from the environment.
     LOCAL_PLACEHOLDER_KEY: ClassVar[str] = "insecure-local-development-key-change-me"
 
+    #: Fernet keys published in this repository, and therefore public.
+    #:
+    #: They live in ``tests/conftest.py`` so that credential encryption and key
+    #: rotation are exercised by the suite rather than assumed. Anything printed
+    #: in a public repository is not a key — these decode to the literal ASCII
+    #: ``test-key-N-NEVER-USE-IN-PROD-!!!`` precisely so that a reader can see
+    #: that at a glance. A deployment that inherited one from a copied
+    #: ``.env`` would encrypt every customer credential with a key any reader of
+    #: this repository already has.
+    PUBLISHED_TEST_ENCRYPTION_KEYS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
+            "dGVzdC1rZXktMi1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
+        }
+    )
+
 
 class AliExpressSettings(_EnvFileSettings):
     """AliExpress Open Platform configuration.
@@ -695,6 +711,63 @@ class Settings(_EnvFileSettings):
             raise ValueError(
                 "LOG_INCLUDE_REQUEST_BODY must be false in deployed environments; "
                 "request bodies contain customer data."
+            )
+
+        self._validate_deployed_encryption()
+
+        if not self.security.cookie_secure:
+            # The refresh cookie is the longest-lived credential the browser
+            # holds. Without Secure it is sent over plain HTTP, where anyone on
+            # the path can lift it and mint access tokens for thirty days.
+            #
+            # It is weakened locally on purpose — the test client speaks HTTP,
+            # and a Secure cookie would simply never be sent — which is exactly
+            # why the deployed case needs a guard rather than a convention.
+            raise ValueError(
+                f"SECURITY_COOKIE_SECURE must be true in {self.environment}; "
+                "the refresh cookie would otherwise travel over plain HTTP."
+            )
+
+    def _validate_deployed_encryption(self) -> None:
+        """Refuse to deploy with unusable or publicly-known encryption keys.
+
+        Separate from the signing-key checks because the failure mode is
+        different and worse. A bad signing key breaks authentication loudly and
+        immediately. A bad *encryption* key does not: the application starts,
+        reports healthy, serves traffic, and only fails when someone connects a
+        supplier — by which time the deployment looks fine and the error appears
+        to be an integration problem.
+        """
+        keys = [key.get_secret_value() for key in self.security.encryption_keys]
+
+        if not keys:
+            raise ValueError(
+                f"SECURITY_ENCRYPTION_KEYS is empty in {self.environment}. "
+                "Credential storage would fail at first use rather than at "
+                'startup. Generate one with: python -c "from '
+                "cryptography.fernet import Fernet; "
+                'print(Fernet.generate_key().decode())"'
+            )
+
+        published = SecuritySettings.PUBLISHED_TEST_ENCRYPTION_KEYS.intersection(keys)
+        if published:
+            raise ValueError(
+                f"SECURITY_ENCRYPTION_KEYS contains a key published in this "
+                f"repository's test suite, in {self.environment}. It is public; "
+                "generate a new one and re-encrypt any stored credentials."
+            )
+
+        if self.security.secret_key.get_secret_value() in keys:
+            # Two keys with different rotation stories. A signing key can be
+            # replaced the moment a leak is suspected, at the cost of ending
+            # every session. An encryption key cannot — stored ciphertext has
+            # to be re-encrypted first. Sharing one value means an urgent
+            # rotation is blocked on a slow migration.
+            raise ValueError(
+                "SECURITY_SECRET_KEY must not also appear in "
+                "SECURITY_ENCRYPTION_KEYS. They are rotated on different "
+                "schedules and sharing one value makes urgent rotation "
+                "impossible without re-encrypting stored data first."
             )
 
 

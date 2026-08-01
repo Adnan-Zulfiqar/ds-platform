@@ -34,6 +34,102 @@ _NOISY_LOGGERS = {
 }
 
 
+#: Substrings that mark a field as carrying a credential.
+#:
+#: Matched as substrings, case-insensitively, so ``token`` also covers
+#: ``access_token``, ``refresh_token`` and ``tokenValue``. Deliberately broad:
+#: the cost of redacting a harmless field is a less useful log line, while the
+#: cost of missing one is a credential in a log aggregator that a dozen people
+#: and a retention policy can reach.
+_SENSITIVE_FIELD_MARKERS: tuple[str, ...] = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "authorization",
+    "auth_header",
+    "api_key",
+    "apikey",
+    "private_key",
+    "encryption_key",
+    "credential",
+    "cookie",
+    "session_id",
+    "otp",
+    "signature",
+)
+
+#: Fields whose names match a marker but which are safe and useful to keep.
+#:
+#: Without these the redaction would blind exactly the diagnostics it exists to
+#: protect: ``token_type`` says *which kind* of token was rejected, and
+#: ``signature_header_present`` is a boolean that answers whether AliExpress
+#: signs webhook deliveries at all. Neither carries a secret.
+_SENSITIVE_FIELD_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "token_type",
+        "token_expiry",
+        "expires_at",
+        "signature_header_present",
+        "has_token",
+        "token_count",
+    }
+)
+
+_REDACTED = "[redacted]"
+
+
+def _is_sensitive(field: str) -> bool:
+    lowered = field.lower()
+    if lowered in _SENSITIVE_FIELD_ALLOWLIST:
+        return False
+    return any(marker in lowered for marker in _SENSITIVE_FIELD_MARKERS)
+
+
+def _redact_secrets(
+    _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
+    """Replace credential-shaped values before anything is written.
+
+    **A safety net, not the primary defence.** Call sites are expected not to
+    log secrets, and an audit found none that did. But discipline is a property
+    of the code as it is today, and this pipeline is also fed by third-party
+    libraries and by whatever gets written next year.
+
+    The value is replaced rather than the key dropped, so a reader can still see
+    that the field was present — "there was an Authorization header and it was
+    redacted" is useful; silence is not.
+
+    Nested dictionaries are walked because payloads arrive as one object. Depth
+    is bounded: a cycle or a pathological structure must not turn a log line
+    into an infinite loop.
+    """
+    return _redact_mapping(event_dict, depth=0)
+
+
+def _redact_mapping(mapping: MutableMapping[str, Any], *, depth: int) -> MutableMapping[str, Any]:
+    if depth > 4:
+        return mapping
+
+    for key, value in list(mapping.items()):
+        if _is_sensitive(key):
+            # Booleans and integers derived from a secret are not the secret —
+            # `password_valid=False` is a useful diagnostic and reveals nothing.
+            if not isinstance(value, bool | int | float | None.__class__):
+                mapping[key] = _REDACTED
+            continue
+
+        if isinstance(value, dict):
+            mapping[key] = _redact_mapping(dict(value), depth=depth + 1)
+        elif isinstance(value, list | tuple):
+            mapping[key] = [
+                _redact_mapping(dict(item), depth=depth + 1) if isinstance(item, dict) else item
+                for item in value
+            ]
+
+    return mapping
+
+
 def _add_request_context(
     _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
@@ -85,6 +181,10 @@ def configure_logging() -> None:
         _add_service_metadata,
         _add_request_context,
         _drop_color_message_key,
+        # Last of the enriching processors, so it also covers fields added
+        # above it. Placed before rendering so that neither the JSON nor the
+        # console output can carry a credential.
+        _redact_secrets,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
