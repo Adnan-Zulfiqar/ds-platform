@@ -17,6 +17,7 @@ Last updated: 2026-07-31
 | 5 | Order management, fulfilment & synchronisation | ✅ **Complete** |
 | 6 | Inventory, pricing, multi-store, automation & tracking | ✅ **Complete** |
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
+| 8 | Shopify sales-channel integration | ✅ **Complete** |
 
 ---
 
@@ -198,6 +199,21 @@ Decision: [STORE_CHANNEL_DECISION.md](docs/STORE_CHANNEL_DECISION.md).
 
 ---
 
+## Phase 8 — Shopify sales-channel integration ✅
+
+**Tag:** `phase-8-complete`
+
+Implements Option A from the store-channel decision: Shopify OAuth, encrypted
+tokens, product publish (idempotent listings), inventory/price push, order
+import foundation, HMAC webhooks, Celery tasks, and Integrations UI.
+
+Live Shopify Partner OAuth was **not** available on the development machine —
+unit/integration coverage uses mocks where needed; see
+[PHASE_8_COMPLETION.md](docs/PHASE_8_COMPLETION.md) and
+[SHOPIFY_INTEGRATION.md](docs/SHOPIFY_INTEGRATION.md).
+
+---
+
 ## Later phases
 
 Not scheduled, and listed only so that architectural seams are built with them
@@ -205,7 +221,8 @@ in mind. Nothing here is committed to a phase number.
 
 | Area | Notes |
 |---|---|
-| Store channel OAuth | Decision: manual for now; Shopify preferred first — see STORE_CHANNEL_DECISION.md |
+| Additional store channels | WooCommerce / eBay / Etsy / TikTok — Shopify shipped in Phase 8 |
+| Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
 | AI optimisation | Listing content generation and enhancement |
 | Real FX for pricing | Currency conversion hook is identity today |
 | Subscription billing | Plan limits attach to `tenants` |

@@ -11,8 +11,10 @@ re-verified for inventory sync.
 **Phase 7 release review 2026-07-31** — C1 narrowed (CI compose/images/celery);
 M11/M12 mitigated (HMAC opt-in + shed); H4 foundation shipped (enforcement
 off); M15 CI broker job added (local RabbitMQ still absent).
+**Phase 8 release review 2026-08-01** — Shopify channel shipped; live Partner
+OAuth/Admin verification still open (M17).
 
-**Current count: 1 critical (narrowed), 1 high (narrowed), ~10 medium, 5 low.**
+**Current count: 1 critical (narrowed), 1 high (narrowed), ~11 medium, 5 low.**
 
 The Phase 5 release verified the production AliExpress client path against the
 live gateway and shipped order sync. M16 records that a populated order-detail
@@ -202,6 +204,18 @@ returning **200** (no retry-storm). Global rate-limit exemption remains for the
 same reason.
 
 **Residual:** tune shed limits under real delivery volume.
+
+### M17 — Shopify live Partner OAuth and Admin API unverified
+
+Phase 8 implemented OAuth, Admin REST client, publish/inventory/price/order
+import, and HMAC webhooks. No Shopify Partner app credentials were available on
+the development machine, so nothing was exercised against a real shop.
+
+**Impact:** first live install may surface scope, API version, or webhook HMAC
+mismatches.
+**Trigger:** before advertising Shopify to customers.
+**Fix:** configure `SHOPIFY_*` against a development store; run OAuth once;
+publish one product; confirm webhook HMAC; commit fixtures from live payloads.
 
 ### M13 — The Playwright suite is flaky under load / rate limits
 

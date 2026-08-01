@@ -14,6 +14,28 @@ Nothing pending.
 
 ---
 
+## [phase-8] — 2026-08-01
+
+Shopify as the first sales channel. See
+[PHASE_8_COMPLETION.md](docs/PHASE_8_COMPLETION.md) and
+[SHOPIFY_INTEGRATION.md](docs/SHOPIFY_INTEGRATION.md).
+
+### Added
+
+- Migration `0008`: `shopify_connections`, `store_listings`, `orders.store_id`
+- OAuth connect/callback/status/disconnect; Fernet-encrypted access tokens
+- Product publish, inventory/price push, order import (poll + webhooks)
+- Celery `shopify.*` tasks and beat entry
+- Integrations UI Shopify card
+
+### Verified
+
+- Backend: ruff, mypy strict, **592** pytest
+- Frontend: lint, typecheck, build
+- Live Shopify Admin/OAuth: **not run** (no Partner credentials)
+
+---
+
 ## [phase-7] — 2026-07-31
 
 Production hardening and operational readiness. See

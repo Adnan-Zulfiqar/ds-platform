@@ -4,8 +4,9 @@
 |---|---|
 | Date | 2026-07-31 |
 | Phase | 7 |
-| Status | **Decided — defer OAuth implementation** |
+| Status | **Implemented in Phase 8 (Shopify / Option A)** |
 | Implements in Phase 7? | No |
+| Implements in Phase 8? | Yes — Shopify |
 
 Phase 6 shipped multi-store as a **manual-first** model: tenants create and
 manage `Store` rows in DropPilot without connecting a sales-channel OAuth app.
