@@ -49,3 +49,24 @@ Thumbs.db
 
 # Playwright artefacts from local runs
 frontend/test-results/
+
+# ---- Temporary debugging artefacts ----
+#
+# Scratch files written while debugging an integration by hand. They routinely
+# hold whatever was needed to reproduce the problem: an access token, a session
+# cookie, an account and its password.
+#
+# Ignored by pattern rather than by name because the next one will be called
+# something else. A `.tmp-shopify-oauth.json` holding an account password and a
+# live JWT sat untracked in the working tree, one `git add -A` away from a
+# public repository.
+#
+# **These belong outside the project.** The ignore rule is the second line of
+# defence, not the first — a file git cannot see is still a file sitting in a
+# directory that gets zipped, synced, and screen-shared.
+.tmp-*
+*.tmp.json
+*.local.json
+oauth-debug*
+*-token.json
+*-credentials.json
