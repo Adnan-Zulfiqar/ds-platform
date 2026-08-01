@@ -18,7 +18,19 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-droppilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-droppilot}
+      # No default, deliberately.
+      #
+      # `:?` makes Compose refuse to start, with the message below, when the
+      # variable is unset — instead of silently substituting a password that is
+      # published in this repository. The application cannot catch this itself:
+      # it receives a working DSN and has no way to know the password was a
+      # default, so the guard has to live here.
+      #
+      # This does not break the documented local workflow. `cp .env.example .env`
+      # supplies the value and Compose reads `.env` automatically. What it breaks
+      # is the *undocumented* path of running `docker compose up` with no
+      # environment at all, which is precisely the dangerous one.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD — run `cp .env.example .env` for local development}
       POSTGRES_DB: ${POSTGRES_DB:-droppilot}
       # Marginally faster and avoids locale-dependent index collation
       # differences between a developer's machine and CI.
@@ -62,7 +74,8 @@ services:
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-droppilot}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-droppilot}
+      # Same reasoning as POSTGRES_PASSWORD above.
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD — run `cp .env.example .env` for local development}
     ports:
       - "5672:5672"    # AMQP
       - "15672:15672"  # management UI — http://localhost:15672
@@ -89,7 +102,7 @@ services:
       # resolvable by name, and localhost would refer to the container itself.
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
-      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672//
       CELERY_RESULT_BACKEND: redis://redis:6379/3
     ports:
       - "8000:8000"
@@ -114,7 +127,7 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
-      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672//
       CELERY_RESULT_BACKEND: redis://redis:6379/3
     volumes:
       - ./backend:/app
@@ -146,7 +159,7 @@ services:
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
-      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:-droppilot}@rabbitmq:5672//
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-droppilot}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672//
       CELERY_RESULT_BACKEND: redis://redis:6379/3
     volumes:
       - ./backend:/app

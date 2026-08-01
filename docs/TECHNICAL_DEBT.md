@@ -14,10 +14,14 @@ off); M15 CI broker job added (local RabbitMQ still absent).
 **Phase 8 release review 2026-08-01** — Shopify channel shipped; live Partner
 OAuth/Admin verification still open (M17).
 **Pre-production authentication audit 2026-08-01** — five gaps found by probing
-rather than reading, all now closed and pinned by tests (see S1–S5 below). One
-deployment footgun remains open as M18.
+rather than reading, all now closed and pinned by tests (see S1–S5 below).
+**Security hardening 2026-08-01** — M18 resolved (Compose secret defaults
+removed and the guard proved in CI); `.env.production.example`,
+`docs/PRODUCTION_SECURITY.md` and `scripts/check_secrets.py` added. **C1 still
+open**: Docker and WSL are both absent from this machine, so the deployment path
+remains unexecuted here.
 
-**Current count: 1 critical (narrowed), 1 high (narrowed), ~12 medium, 5 low.**
+**Current count: 1 critical (narrowed), 1 high (narrowed), ~11 medium, 5 low.**
 
 ---
 
@@ -83,24 +87,35 @@ nothing.
 
 ## Medium
 
-### M18 — Compose defaults to a guessable password for Postgres and RabbitMQ
+### ~~M18 — Compose defaulted to a guessable password for Postgres and RabbitMQ~~ ✅ RESOLVED 2026-08-01
 
-`docker-compose.yml` uses `${POSTGRES_PASSWORD:-droppilot}` and
-`${RABBITMQ_PASSWORD:-droppilot}`. Convenient locally, and the intended usage is
-that a deployment supplies real values — but a `docker compose up` on a host
-with those variables unset silently brings up infrastructure with a password
-published in this repository.
+`docker-compose.yml` used `${POSTGRES_PASSWORD:-droppilot}` and
+`${RABBITMQ_PASSWORD:-droppilot}`, so `docker compose up` on a host with those
+variables unset silently brought up infrastructure with a password published in
+this repository.
 
-Unlike S1–S4 the application cannot detect this: it receives a working DSN and
-has no way to know the password was a default.
+Unlike S1–S4 the application could not detect this: it receives a working DSN
+and has no way to know the password was a default. The guard therefore had to
+live where the substitution happens.
 
-**Impact:** database and broker reachable with a known credential if the network
-is not otherwise closed.
-**Trigger:** before any deployment that is reachable from outside its host.
-**Fix:** drop the `:-droppilot` fallbacks so Compose fails loudly on an unset
-variable, or move deployment onto explicit secrets. Not done here because it
-would break the documented local workflow, which was out of scope for this
-audit.
+**Fixed** by replacing both defaults with Compose's `:?` syntax, which refuses
+to start and names the missing variable. The `CELERY_BROKER_URL` occurrences —
+three of them, easy to miss — were changed too.
+
+**Local development is unaffected.** `cp .env.example .env` supplies the values
+and Compose reads `.env` automatically. What no longer works is running
+`docker compose up` with no environment at all, which was the dangerous path.
+
+Non-secret defaults were deliberately kept (`POSTGRES_USER`, `POSTGRES_DB`,
+`RABBITMQ_USER`, `NEXT_PUBLIC_API_URL`). Requiring those would add friction
+without removing risk, and a rule that fires on harmless things is a rule people
+learn to route around.
+
+**Verified two ways.** `scripts/check_secrets.py` fails the build if any
+`${…PASSWORD…:-}` or `${…SECRET…:-}` default reappears, and a CI step runs
+`docker compose config` with the variables *unset* to prove the guard actually
+refuses — rather than trusting that the `:?` syntax was written correctly. Each
+of the checker's five rules was individually verified to fire.
 
 The Phase 5 release verified the production AliExpress client path against the
 live gateway and shipped order sync. M16 records that a populated order-detail

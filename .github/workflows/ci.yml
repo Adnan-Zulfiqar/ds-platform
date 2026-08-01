@@ -18,6 +18,52 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
+  # Secrets and deployment defaults (M18)
+  #
+  # First job on purpose, and it needs nothing: a committed secret should fail
+  # the run in under a minute rather than after a full test suite. It is also
+  # the only check here that catches a mistake the application cannot — Compose
+  # substituting a published password produces a working DSN, so nothing
+  # downstream can tell it happened.
+  # -------------------------------------------------------------------------
+  secrets:
+    name: Security — committed secrets & deployment defaults
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Check for committed secrets and insecure defaults
+        run: python scripts/check_secrets.py
+
+      # Proves the guard added in M18 actually refuses, rather than trusting
+      # that the `:?` syntax was written correctly. A guard nobody exercises is
+      # a guard that quietly stops working.
+      - name: Compose must refuse to start without a database password
+        run: |
+          set +e
+          output=$(env -u POSTGRES_PASSWORD -u RABBITMQ_PASSWORD \
+            docker compose config 2>&1)
+          status=$?
+          set -e
+
+          if [ $status -eq 0 ]; then
+            echo "::error::docker compose accepted an unset POSTGRES_PASSWORD."
+            echo "A deployment would silently use a password published in this repository."
+            exit 1
+          fi
+
+          echo "$output" | grep -q "POSTGRES_PASSWORD" || {
+            echo "::error::Compose failed, but not with the expected message."
+            echo "$output"
+            exit 1
+          }
+          echo "Compose correctly refused: the password guard works."
+
+  # -------------------------------------------------------------------------
   # Backend
   # -------------------------------------------------------------------------
   backend:
