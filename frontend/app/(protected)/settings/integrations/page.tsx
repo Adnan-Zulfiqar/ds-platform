@@ -5,23 +5,14 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { AliExpressCard } from "@/components/integrations/aliexpress-card";
+import { ShopifyCard } from "@/components/integrations/shopify-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 
-/**
- * Integrations settings.
- *
- * AliExpress is real and functional. The other providers are listed as
- * unavailable rather than omitted, because knowing what is planned is useful —
- * but each says plainly that it cannot be connected, and none offers a button
- * that would do nothing.
- */
-
-/** Result of an OAuth round trip, set by the callback redirect. */
-const CALLBACK_MESSAGES: Record<
+const ALIEXPRESS_CALLBACK: Record<
   string,
   { variant: "default" | "destructive"; title: string; body: string }
 > = {
@@ -47,8 +38,28 @@ const CALLBACK_MESSAGES: Record<
   },
 };
 
+const SHOPIFY_CALLBACK: Record<
+  string,
+  { variant: "default" | "destructive"; title: string; body: string }
+> = {
+  connected: {
+    variant: "default",
+    title: "Shopify connected",
+    body: "Your Shopify store is now linked to this workspace.",
+  },
+  denied: {
+    variant: "destructive",
+    title: "Authorization declined",
+    body: "The request was declined on Shopify, so nothing was connected.",
+  },
+  failed: {
+    variant: "destructive",
+    title: "Connection failed",
+    body: "Shopify could not be connected. Check the app credentials and try again.",
+  },
+};
+
 const PLANNED_PROVIDERS = [
-  { name: "Shopify", description: "Publish products and receive orders." },
   { name: "WooCommerce", description: "Sync your WordPress storefront." },
   { name: "eBay", description: "List and fulfil across eBay marketplaces." },
   { name: "Etsy", description: "Reach Etsy buyers with the same catalogue." },
@@ -57,11 +68,14 @@ const PLANNED_PROVIDERS = [
 
 function CallbackBanner() {
   const searchParams = useSearchParams();
-  const result = searchParams.get("aliexpress");
+  const aliexpress = searchParams.get("aliexpress");
+  const shopify = searchParams.get("shopify");
 
-  if (!result) return null;
+  const message =
+    (aliexpress && ALIEXPRESS_CALLBACK[aliexpress]) ||
+    (shopify && SHOPIFY_CALLBACK[shopify]) ||
+    null;
 
-  const message = CALLBACK_MESSAGES[result];
   if (!message) return null;
 
   return (
@@ -85,8 +99,6 @@ export default function IntegrationsPage() {
         description="Connect the suppliers and sales channels this workspace sells through."
       />
 
-      {/* useSearchParams opts the subtree into client rendering, so Next
-          requires a Suspense boundary for the static shell to build. */}
       <Suspense fallback={null}>
         <CallbackBanner />
       </Suspense>
@@ -105,11 +117,15 @@ export default function IntegrationsPage() {
           Sales channels
         </h2>
 
+        <Suspense fallback={<Skeleton className="h-64 w-full rounded-lg" />}>
+          <ShopifyCard />
+        </Suspense>
+
         <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>
-            Sales channel integrations are not available yet. Only AliExpress can
-            be connected in this release.
+            Additional sales channels remain planned. Shopify is available when
+            the server has Shopify app credentials configured.
           </AlertDescription>
         </Alert>
 
@@ -119,9 +135,7 @@ export default function IntegrationsPage() {
               <CardHeader>
                 <div className="flex flex-wrap items-center gap-2">
                   <CardTitle className="text-base">{provider.name}</CardTitle>
-                  {/* No connect button: a control that cannot work is worse
-                      than no control at all. */}
-                  <Badge variant="outline">Coming soon</Badge>
+                  <Badge variant="secondary">Coming soon</Badge>
                 </div>
                 <CardDescription>{provider.description}</CardDescription>
               </CardHeader>

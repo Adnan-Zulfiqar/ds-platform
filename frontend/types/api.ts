@@ -115,6 +115,34 @@ export interface AliExpressConnection {
   lastError: string | null;
 }
 
+export interface ShopifyConnection {
+  id: string;
+  storeId: string;
+  shopDomain: string;
+  status: IntegrationStatus;
+  scopes: string;
+  connectedAt: string;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  webhooksRegisteredAt: string | null;
+}
+
+export interface ShopifyStatus {
+  configured: boolean;
+  connections: ShopifyConnection[];
+}
+
+export interface ShopifyAuthorization {
+  authorizationUrl: string;
+  state: string;
+  expiresInSeconds: number;
+}
+
+export interface ShopifyConnectPayload {
+  shop: string;
+  storeName?: string;
+}
+
 export interface AliExpressStatus {
   /**
    * Computed server-side. A connection whose token has expired is not

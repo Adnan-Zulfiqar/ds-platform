@@ -10,6 +10,9 @@ import type {
   AliExpressAuthorization,
   AliExpressConnectPayload,
   AliExpressStatus,
+  ShopifyAuthorization,
+  ShopifyConnectPayload,
+  ShopifyStatus,
 } from "@/types/api";
 
 /**
@@ -26,6 +29,8 @@ export const integrationKeys = {
   all: ["integrations"] as const,
   aliexpress: () => [...integrationKeys.all, "aliexpress"] as const,
   aliexpressStatus: () => [...integrationKeys.aliexpress(), "status"] as const,
+  shopify: () => [...integrationKeys.all, "shopify"] as const,
+  shopifyStatus: () => [...integrationKeys.shopify(), "status"] as const,
 };
 
 async function fetchAliExpressStatus(): Promise<AliExpressStatus> {
@@ -85,6 +90,55 @@ export function useDisconnectAliExpress() {
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: integrationKeys.aliexpressStatus(),
+      });
+    },
+  });
+}
+
+async function fetchShopifyStatus(): Promise<ShopifyStatus> {
+  const { data } = await apiClient.get<ShopifyStatus>("/integrations/shopify/status");
+  return data;
+}
+
+export function useShopifyStatus(): UseQueryResult<ShopifyStatus> {
+  return useQuery({
+    queryKey: integrationKeys.shopifyStatus(),
+    queryFn: fetchShopifyStatus,
+    staleTime: 10_000,
+  });
+}
+
+export function useConnectShopify() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (
+      payload: ShopifyConnectPayload,
+    ): Promise<ShopifyAuthorization> => {
+      const { data } = await apiClient.post<ShopifyAuthorization>(
+        "/integrations/shopify/connect",
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: integrationKeys.shopifyStatus(),
+      });
+    },
+  });
+}
+
+export function useDisconnectShopify() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (storeId: string): Promise<void> => {
+      await apiClient.delete(`/integrations/shopify/stores/${storeId}`);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: integrationKeys.shopifyStatus(),
       });
     },
   });

@@ -110,16 +110,20 @@ test.describe("Integrations page", () => {
     await expect(suppliers.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
-  test("unavailable channels offer no connect control", async ({ page }) => {
-    // A button that cannot work is worse than no button.
+  test("Shopify card is present and planned channels stay unavailable", async ({
+    page,
+  }) => {
     await registerAndSignIn(page);
     await page.goto("/settings/integrations");
 
     const channels = page.getByRole("region", { name: "Sales channels" });
-    await expect(channels.getByRole("heading", { name: "Shopify" })).toBeVisible();
+    await expect(channels.getByText("Shopify", { exact: true }).first()).toBeVisible();
+    await expect(
+      channels.getByRole("button", { name: "Connect Shopify" }),
+    ).toBeVisible();
+    // Other channels remain honestly unavailable.
     await expect(channels.getByText("Coming soon").first()).toBeVisible();
-    // No connect control anywhere in the unavailable section.
-    await expect(channels.getByRole("button", { name: "Connect" })).toHaveCount(0);
+    await expect(channels.getByText("WooCommerce")).toBeVisible();
   });
 
   test("the connect dialog collects both credentials", async ({ page }) => {
