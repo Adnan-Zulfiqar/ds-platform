@@ -8,7 +8,6 @@ import {
 import { apiClient } from "@/lib/api-client";
 import type {
   AliExpressAuthorization,
-  AliExpressConnectPayload,
   AliExpressStatus,
   ShopifyAuthorization,
   ShopifyConnectPayload,
@@ -21,8 +20,8 @@ import type {
  * Unlike `services/dashboard.ts`, these endpoints **exist**, so this module has
  * real fetchers.
  *
- * The app secret travels one way only: into `connect`, over TLS, once. Nothing
- * here reads it back, because no response carries it.
+ * AliExpress connect sends no app credentials — the platform owns
+ * ``ALIEXPRESS_APP_*``. Seller tokens never appear in API responses.
  */
 
 export const integrationKeys = {
@@ -62,12 +61,9 @@ export function useConnectAliExpress() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (
-      payload: AliExpressConnectPayload,
-    ): Promise<AliExpressAuthorization> => {
+    mutationFn: async (): Promise<AliExpressAuthorization> => {
       const { data } = await apiClient.post<AliExpressAuthorization>(
         "/integrations/aliexpress/connect",
-        payload,
       );
       return data;
     },

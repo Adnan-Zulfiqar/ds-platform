@@ -158,11 +158,6 @@ export interface AliExpressAuthorization {
   expiresInSeconds: number;
 }
 
-export interface AliExpressConnectPayload {
-  appKey?: string;
-  appSecret?: string;
-}
-
 export interface LoginPayload {
   email: string;
   password: string;

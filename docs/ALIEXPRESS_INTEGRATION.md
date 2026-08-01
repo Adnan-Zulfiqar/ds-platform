@@ -1,7 +1,11 @@
 # AliExpress integration
 
-How a tenant connects their AliExpress account, how their credentials are
-protected, and why each decision was made that way.
+How a tenant authorizes DropPilot's AliExpress application, how seller tokens
+are protected, and why each decision was made that way.
+
+**Merchants never enter an AliExpress App Key or App Secret.** Those belong to
+DropPilot's developer application (`ALIEXPRESS_APP_KEY` /
+`ALIEXPRESS_APP_SECRET`). Tenants only complete AliExpress consent.
 
 > ## ⚠️ Verification status
 >
@@ -82,28 +86,27 @@ makes the rest of the application testable without a network.
 
 ```
 1. POST /api/v1/integrations/aliexpress/connect     (admin or owner)
-      ├─ app secret encrypted and stored
-      ├─ connection created as `pending`
+      ├─ platform ALIEXPRESS_APP_* credentials only (never from the client)
+      ├─ connection created as `pending` (no app secret on the row)
       ├─ random `state` stored in Redis with a TTL
       └─ returns authorization URL
 
-2. Browser → AliExpress consent screen
+2. Browser → AliExpress consent screen (seller login / approve)
 
 3. GET /api/v1/integrations/aliexpress/callback?code=…&state=…
       ├─ state looked up and DELETED (single use)
-      ├─ tenant in state compared with the caller's tenant
-      ├─ code exchanged for tokens, signed with the stored secret
-      ├─ tokens encrypted, status → `connected`
+      ├─ tenant restored from Redis state (no Bearer required)
+      ├─ code exchanged for tokens, signed with platform app secret
+      ├─ seller access/refresh tokens encrypted, status → `connected`
       └─ 303 redirect back into the application
 ```
 
-### Why `connect` is a POST, not the GET named in the phase brief
+### Why `connect` is a POST, not a GET
 
-It has side effects — it writes encrypted credentials and issues a single-use
-token — and it accepts a secret in its body. A secret in a URL lands in browser
-history, proxy logs, and the `Referer` header of every subsequent request. The
-response carries the authorization URL for the client to navigate to, which
-achieves the same outcome without putting the credential in a URL.
+It has side effects — it creates a pending connection row and issues a
+single-use OAuth `state` — so it is not safe as a cacheable GET. The response
+carries the authorization URL for the client to navigate to. App secrets never
+appear in the request body or URL.
 
 ### Why the `state` parameter is not optional
 
@@ -211,13 +214,14 @@ See `app/integrations/aliexpress/webhook_security.py`.
 
 | Value | Storage | Why |
 |---|---|---|
-| `app_key` | Plaintext | A public identifier; it travels in every request URL |
-| `app_secret` | **Fernet ciphertext** | Signs every request; recoverable, so encrypted not hashed |
-| `access_token` | **Fernet ciphertext** | Same |
+| Platform `app_key` / `app_secret` | Environment only | DropPilot's developer app; never per-tenant, never returned |
+| Connection `app_key` | Plaintext on row | Public identifier of the platform app used at connect time |
+| Connection `encrypted_app_secret` | **Unused (NULL)** | Migration `0009`; secret is not tenant data |
+| `access_token` | **Fernet ciphertext** | Seller grant; must be recoverable to call APIs |
 | `refresh_token` | **Fernet ciphertext** | Same |
 
 **Encryption, not hashing.** Passwords are hashed because they only need
-verifying. These values must be *recovered* to sign outbound requests.
+verifying. Seller tokens must be *recovered* to sign outbound requests.
 
 **Fernet** — AES-128-CBC with an HMAC-SHA256 tag and a random IV per message.
 Authenticated, so tampering is detected rather than yielding wrong plaintext;

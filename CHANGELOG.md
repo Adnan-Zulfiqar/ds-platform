@@ -10,7 +10,11 @@ production release.
 
 ## [Unreleased]
 
-Nothing pending.
+### Fixed
+
+- AliExpress connect is platform-credential only: merchants no longer enter App
+  Key / App Secret. OAuth uses `ALIEXPRESS_APP_*` from the environment; tenant
+  rows store encrypted seller tokens only (migration `0009`).
 
 ---
 

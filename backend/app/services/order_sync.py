@@ -28,11 +28,8 @@ from typing import Any
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.context import require_tenant_id
-from app.core.encryption import decrypt
 from app.core.exceptions import ConflictError, ValidationError
 from app.core.redis import RedisPurpose, get_redis
-from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import AliExpressAuthError, AliExpressError
 from app.integrations.aliexpress.orders import (
     OrderDetail,
@@ -646,18 +643,7 @@ class OrderSyncService(BaseService):
         and coupling them so they could share nine lines would be a dependency
         neither needs.
         """
-        connection = await self.integration.require_connection()
-        connection = await self.integration.refresh_if_needed(connection)
-
-        if not connection.encrypted_access_token:
-            raise ValidationError("AliExpress is not connected for this workspace.")
-
-        client = AliExpressClient(
-            app_key=connection.app_key,
-            app_secret=decrypt(connection.encrypted_app_secret),
-            tenant_id=str(require_tenant_id()),
-            access_token=decrypt(connection.encrypted_access_token),
-        )
+        client = await self.integration.authenticated_client()
         return await client.call(method, params)
 
 

@@ -21,11 +21,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.context import require_tenant_id
-from app.core.encryption import decrypt
 from app.core.exceptions import NotFoundError, ValidationError
 from app.integrations.aliexpress.catalog import parse_feed_products, parse_product_detail
-from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import AliExpressError
 from app.integrations.aliexpress.mapper import map_images, map_product, map_variants
 from app.integrations.aliexpress.service import AliExpressService
@@ -259,18 +256,7 @@ class ProductImportService(BaseService):
         not interrupted partway through by a lapse. That logic lives in
         :class:`AliExpressService` and is reused rather than repeated.
         """
-        connection = await self.integration.require_connection()
-        connection = await self.integration.refresh_if_needed(connection)
-
-        if not connection.encrypted_access_token:
-            raise ValidationError("AliExpress is not connected for this workspace.")
-
-        client = AliExpressClient(
-            app_key=connection.app_key,
-            app_secret=decrypt(connection.encrypted_app_secret),
-            tenant_id=str(require_tenant_id()),
-            access_token=decrypt(connection.encrypted_access_token),
-        )
+        client = await self.integration.authenticated_client()
         return await client.call(method, params)
 
 

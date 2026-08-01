@@ -23,7 +23,6 @@ from app.core.logging import get_logger
 from app.integrations.aliexpress.schemas import (
     AliExpressAuthorizationResponse,
     AliExpressConnectionRead,
-    AliExpressConnectRequest,
     AliExpressStatusResponse,
     AliExpressWebhookAckResponse,
 )
@@ -76,31 +75,22 @@ def _to_read_model(connection: AliExpressConnection) -> AliExpressConnectionRead
     summary="Begin an AliExpress connection",
 )
 async def connect_aliexpress(
-    payload: AliExpressConnectRequest,
     session: DbSession,
     principal: RequireAdmin,
 ) -> AliExpressAuthorizationResponse:
-    """Store credentials and return the URL the browser should visit for consent.
+    """Begin OAuth using platform AliExpress credentials; return the consent URL.
 
     **Restricted to admins and owners.** Connecting a supplier account decides
     where every future order is placed and how much it costs; that is not a
     change a `viewer` or `member` should be able to make.
 
-    A POST rather than the GET named in the phase brief. The call has side
-    effects — it writes encrypted credentials and issues a single-use state
-    token — and it may accept a secret in its body, which must not travel in a
-    URL where it would land in browser history, proxy logs, and the `Referer`
-    header. The response carries the authorization URL for the client to
-    navigate to.
-
-    The body is normally empty: credentials default to the platform's AliExpress
-    application. A tenant running their own application may override both.
+    Merchants never send an app key or secret. DropPilot's ``ALIEXPRESS_APP_KEY``
+    / ``ALIEXPRESS_APP_SECRET`` sign the flow; after consent, only the seller's
+    access/refresh tokens are encrypted on the tenant connection row.
     """
     service = AliExpressService(session)
 
     authorization_url, state = await service.begin_connection(
-        app_key=payload.app_key,
-        app_secret=payload.app_secret,
         user_id=principal.user_id,
     )
 

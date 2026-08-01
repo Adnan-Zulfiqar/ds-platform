@@ -127,24 +127,12 @@ class AliExpressAuthorizationResponse(CamelCaseModel):
 
 
 class AliExpressConnectRequest(CamelCaseModel):
-    """Optional per-tenant credentials for beginning a connection.
+    """Empty body — connect uses platform ``ALIEXPRESS_APP_*`` credentials only.
 
-    **Both fields are optional, and normally omitted.** In the AliExpress model
-    the developer application belongs to the platform operator: DropPilot
-    registers one app, and each seller authorises *that* app. A seller does not
-    register their own, so requiring them to supply an app key would make
-    onboarding impossible.
-
-    They remain accepted for the case where a tenant genuinely operates their
-    own AliExpress application — an agency with an existing integration, for
-    example. When supplied they take precedence over the platform credentials.
-
-    When an app secret is supplied it arrives once, over TLS, and is encrypted
-    before it touches the database. It is never returned by any endpoint.
+    Kept as an explicit empty model so OpenAPI documents a body-less POST and
+    accidental ``appKey`` / ``appSecret`` fields are rejected (``extra=forbid``
+    via the shared camelCase base).
     """
-
-    app_key: str | None = Field(default=None, max_length=64)
-    app_secret: str | None = Field(default=None, max_length=512)
 
 
 class AliExpressWebhookAckResponse(CamelCaseModel):

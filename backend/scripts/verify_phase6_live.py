@@ -28,6 +28,7 @@ from app.core.encryption import decrypt
 from app.database.session import transaction
 from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import AliExpressError
+from app.integrations.aliexpress.service import AliExpressService
 from app.models.integration import AliExpressConnection, IntegrationStatus
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "aliexpress"
@@ -49,9 +50,10 @@ async def _load_client() -> AliExpressClient:
 
         set_tenant_id(row.tenant_id)
         print(f"  connection : {row.id}")
+        app_key, app_secret = AliExpressService.platform_credentials()
         return AliExpressClient(
-            app_key=row.app_key,
-            app_secret=decrypt(row.encrypted_app_secret),
+            app_key=app_key,
+            app_secret=app_secret,
             tenant_id=str(row.tenant_id),
             access_token=decrypt(row.encrypted_access_token),
         )

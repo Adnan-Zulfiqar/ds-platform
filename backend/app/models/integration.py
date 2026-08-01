@@ -83,7 +83,10 @@ class AliExpressConnection(IdentifiedBase):
     #
     # Sized generously: Fernet output is base64 and roughly 1.4x the plaintext
     # plus ~100 bytes of overhead, and token lengths are set by the provider.
-    encrypted_app_secret: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Nullable: the AliExpress *application* secret is platform-owned (env),
+    # not a per-tenant credential. Historical rows may still hold ciphertext
+    # until migration ``0009`` clears them; new connections leave this NULL.
+    encrypted_app_secret: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     encrypted_access_token: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     encrypted_refresh_token: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 

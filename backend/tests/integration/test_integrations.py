@@ -52,6 +52,15 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> fake_aioredis.FakeRedis:
 
 
 @pytest.fixture(autouse=True)
+def platform_aliexpress_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connect uses platform env credentials only — never a request body."""
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(service_module.settings.aliexpress, "app_key", APP_KEY)
+    monkeypatch.setattr(service_module.settings.aliexpress, "app_secret", SecretStr(APP_SECRET))
+
+
+@pytest.fixture(autouse=True)
 def _allow_outbound(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bypass the outbound rate limiter, which has its own tests."""
     from app.integrations.rate_limiter import RateLimitDecision
@@ -97,9 +106,7 @@ def auth_header(body: dict[str, Any]) -> dict[str, str]:
 
 async def begin_connection(client: AsyncClient, headers: dict[str, str]) -> str:
     """Start a connection and return the OAuth state token."""
-    response = await client.post(
-        CONNECT_URL, json={"appKey": APP_KEY, "appSecret": APP_SECRET}, headers=headers
-    )
+    response = await client.post(CONNECT_URL, headers=headers)
     assert response.status_code == 201, response.text
     return response.json()["state"]
 
@@ -107,11 +114,7 @@ async def begin_connection(client: AsyncClient, headers: dict[str, str]) -> str:
 class TestConnect:
     async def test_returns_an_authorization_url_and_state(self, client: AsyncClient) -> None:
         body = await register(client)
-        response = await client.post(
-            CONNECT_URL,
-            json={"appKey": APP_KEY, "appSecret": APP_SECRET},
-            headers=auth_header(body),
-        )
+        response = await client.post(CONNECT_URL, headers=auth_header(body))
 
         assert response.status_code == 201
         payload = response.json()
@@ -122,18 +125,14 @@ class TestConnect:
     async def test_the_app_secret_is_never_returned(self, client: AsyncClient) -> None:
         """The guarantee the whole schema design exists to provide."""
         body = await register(client)
-        response = await client.post(
-            CONNECT_URL,
-            json={"appKey": APP_KEY, "appSecret": APP_SECRET},
-            headers=auth_header(body),
-        )
+        response = await client.post(CONNECT_URL, headers=auth_header(body))
 
         assert APP_SECRET not in response.text
 
-    async def test_the_secret_is_stored_encrypted(
+    async def test_the_app_secret_is_not_stored_on_the_connection(
         self, client: AsyncClient, db_session: Any
     ) -> None:
-        """Read the raw column: a database dump must not yield the credential."""
+        """Platform app secret stays in env — never on the tenant row."""
         body = await register(client)
         await begin_connection(client, auth_header(body))
 
@@ -143,10 +142,7 @@ class TestConnect:
             )
         ).scalar_one()
 
-        assert raw
-        assert APP_SECRET not in raw
-        # Fernet ciphertext is versioned and starts with a fixed byte.
-        assert raw.startswith("gAAAAA")
+        assert raw is None
 
     async def test_requires_admin_or_owner(self, client: AsyncClient) -> None:
         """Connecting decides where every future order is placed.
@@ -181,24 +177,14 @@ class TestConnect:
 
         response = await client.post(
             CONNECT_URL,
-            json={"appKey": APP_KEY, "appSecret": APP_SECRET},
             headers={"Authorization": f"Bearer {viewer_token}"},
         )
 
         assert response.status_code == 403
 
     async def test_rejects_an_unauthenticated_request(self, client: AsyncClient) -> None:
-        response = await client.post(CONNECT_URL, json={"appKey": APP_KEY, "appSecret": APP_SECRET})
+        response = await client.post(CONNECT_URL)
         assert response.status_code == 401
-
-    async def test_rejects_an_empty_app_key(self, client: AsyncClient) -> None:
-        body = await register(client)
-        response = await client.post(
-            CONNECT_URL,
-            json={"appKey": "", "appSecret": APP_SECRET},
-            headers=auth_header(body),
-        )
-        assert response.status_code == 422
 
 
 class TestStatus:
@@ -531,25 +517,19 @@ class TestTenantIsolation:
         assert payload["connection"]["appKey"] == APP_KEY
 
     async def test_each_tenant_keeps_its_own_connection(self, client: AsyncClient) -> None:
+        """Both tenants share the platform app key but keep separate rows."""
         first = await register(client, email="one@acme.example", companyName="Acme")
-        await client.post(
-            CONNECT_URL,
-            json={"appKey": "acme-key", "appSecret": APP_SECRET},
-            headers=auth_header(first),
-        )
+        await begin_connection(client, auth_header(first))
 
         second = await register(client, email="two@globex.example", companyName="Globex")
-        await client.post(
-            CONNECT_URL,
-            json={"appKey": "globex-key", "appSecret": APP_SECRET},
-            headers=auth_header(second),
-        )
+        await begin_connection(client, auth_header(second))
 
         acme = (await client.get(STATUS_URL, headers=auth_header(first))).json()
         globex = (await client.get(STATUS_URL, headers=auth_header(second))).json()
 
-        assert acme["connection"]["appKey"] == "acme-key"
-        assert globex["connection"]["appKey"] == "globex-key"
+        assert acme["connection"]["id"] != globex["connection"]["id"]
+        assert acme["connection"]["appKey"] == APP_KEY
+        assert globex["connection"]["appKey"] == APP_KEY
 
 
 class TestWebhook:

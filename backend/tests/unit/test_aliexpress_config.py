@@ -109,15 +109,12 @@ class TestApplicationSettings:
 
 
 class TestCredentialResolution:
-    """Which application credentials a connection uses.
+    """DropPilot owns the AliExpress developer application.
 
-    The platform registers one AliExpress application and each seller authorises
-    it. A tenant supplying their own is the exception, not the rule.
+    Tenants authorize that application; they never supply an app key/secret.
     """
 
-    def test_platform_credentials_are_used_by_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_platform_credentials_are_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.integrations.aliexpress import service as service_module
 
         monkeypatch.setattr(service_module.settings.aliexpress, "app_key", PLATFORM_KEY)
@@ -125,12 +122,16 @@ class TestCredentialResolution:
             service_module.settings.aliexpress, "app_secret", SecretStr(PLATFORM_SECRET)
         )
 
+        assert AliExpressService.platform_credentials() == (
+            PLATFORM_KEY,
+            PLATFORM_SECRET,
+        )
         assert AliExpressService.resolve_credentials(None, None) == (
             PLATFORM_KEY,
             PLATFORM_SECRET,
         )
 
-    def test_tenant_credentials_take_precedence(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tenant_credentials_are_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.integrations.aliexpress import service as service_module
 
         monkeypatch.setattr(service_module.settings.aliexpress, "app_key", PLATFORM_KEY)
@@ -138,23 +139,16 @@ class TestCredentialResolution:
             service_module.settings.aliexpress, "app_secret", SecretStr(PLATFORM_SECRET)
         )
 
-        assert AliExpressService.resolve_credentials(TENANT_KEY, TENANT_SECRET) == (
-            TENANT_KEY,
-            TENANT_SECRET,
-        )
+        with pytest.raises(ValidationError, match="owned by the platform"):
+            AliExpressService.resolve_credentials(TENANT_KEY, TENANT_SECRET)
 
     @pytest.mark.parametrize(
         ("key", "secret"),
         [(TENANT_KEY, None), (None, TENANT_SECRET), (TENANT_KEY, "  ")],
     )
-    def test_a_half_supplied_pair_is_rejected(
+    def test_any_tenant_supplied_half_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch, key: str | None, secret: str | None
     ) -> None:
-        """Mixing a tenant key with the platform secret fails at the gateway.
-
-        The error there is an opaque invalid-signature rejection, so it is
-        caught here where the cause can be stated.
-        """
         from app.integrations.aliexpress import service as service_module
 
         monkeypatch.setattr(service_module.settings.aliexpress, "app_key", PLATFORM_KEY)
@@ -162,7 +156,7 @@ class TestCredentialResolution:
             service_module.settings.aliexpress, "app_secret", SecretStr(PLATFORM_SECRET)
         )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="owned by the platform"):
             AliExpressService.resolve_credentials(key, secret)
 
     def test_raises_when_nothing_is_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,7 +166,7 @@ class TestCredentialResolution:
         monkeypatch.setattr(service_module.settings.aliexpress, "app_secret", None)
 
         with pytest.raises(ValidationError, match="not configured"):
-            AliExpressService.resolve_credentials(None, None)
+            AliExpressService.platform_credentials()
 
     def test_the_error_does_not_leak_a_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.integrations.aliexpress import service as service_module
@@ -183,7 +177,7 @@ class TestCredentialResolution:
         )
 
         with pytest.raises(ValidationError) as exc_info:
-            AliExpressService.resolve_credentials(TENANT_KEY, None)
+            AliExpressService.resolve_credentials(TENANT_KEY, TENANT_SECRET)
 
         assert PLATFORM_SECRET not in str(exc_info.value)
         assert TENANT_SECRET not in str(exc_info.value)

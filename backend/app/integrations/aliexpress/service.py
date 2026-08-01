@@ -66,81 +66,67 @@ class AliExpressService(BaseService):
     # -- Connect ------------------------------------------------------------
 
     @staticmethod
-    def resolve_credentials(app_key: str | None, app_secret: str | None) -> tuple[str, str]:
-        """Choose which application credentials to use.
+    def platform_credentials() -> tuple[str, str]:
+        """Return DropPilot's AliExpress application credentials from settings.
 
-        A tenant-supplied pair wins when both halves are present; otherwise the
-        platform application from configuration is used. Both halves are
-        required together — a tenant key signed with the platform secret would
-        fail with an opaque invalid-signature error, so a half-supplied pair is
-        rejected rather than silently mixed.
-
-        Raises :class:`ValidationError` when neither source yields a usable pair,
-        which is the case when the deployment has not been configured at all.
+        Merchants never supply an app key/secret. One platform application is
+        authorized by each tenant seller; the secret stays in the environment
+        and is never written to tenant connection rows.
         """
-        tenant_key = (app_key or "").strip()
-        tenant_secret = (app_secret or "").strip()
-
-        if tenant_key and tenant_secret:
-            return tenant_key, tenant_secret
-
-        if tenant_key or tenant_secret:
-            raise ValidationError(
-                "Supply both an app key and an app secret, or neither to use "
-                "the platform application."
-            )
-
         platform_key = settings.aliexpress.app_key.strip()
         platform_secret = settings.aliexpress.app_secret
 
         if not platform_key or not platform_secret:
             raise ValidationError(
                 "AliExpress is not configured on this server. Set "
-                "ALIEXPRESS_APP_KEY and ALIEXPRESS_APP_SECRET, or supply "
-                "credentials for this workspace."
+                "ALIEXPRESS_APP_KEY and ALIEXPRESS_APP_SECRET."
             )
 
         return platform_key, platform_secret.get_secret_value()
 
+    # Kept as a thin alias so older call sites/tests that imported the name
+    # still resolve; always platform-owned.
+    @staticmethod
+    def resolve_credentials(
+        app_key: str | None = None,
+        app_secret: str | None = None,
+    ) -> tuple[str, str]:
+        if (app_key or "").strip() or (app_secret or "").strip():
+            raise ValidationError(
+                "AliExpress app credentials are owned by the platform. "
+                "Do not supply an app key or app secret per workspace."
+            )
+        return AliExpressService.platform_credentials()
+
     async def begin_connection(
         self,
         *,
-        app_key: str | None = None,
-        app_secret: str | None = None,
         user_id: uuid.UUID | None,
     ) -> tuple[str, str]:
-        """Store credentials and return an authorization URL and state token.
+        """Open a pending connection and return the AliExpress consent URL.
 
-        Credentials default to the platform application; a tenant may override
-        with their own. See :meth:`resolve_credentials`.
-
-        The app secret is encrypted and persisted **before** the user is sent to
-        AliExpress, because the callback arrives on a different request with no
-        access to it — signing the token exchange requires the secret, and there
-        is nowhere else to keep it in the meantime.
-
-        The connection is created in ``PENDING`` and only becomes ``CONNECTED``
-        once a token comes back, so an abandoned consent screen is
-        distinguishable from a failure.
+        Uses platform ``ALIEXPRESS_APP_*`` credentials only. Tenant rows store
+        the public app key for display and, after callback, encrypted seller
+        tokens — never the application secret.
         """
         if not is_encryption_configured():
-            # Refusing beats storing a customer's supplier secret in plaintext
-            # because a key was missing.
+            # Refusing beats storing seller tokens in plaintext because a key
+            # was missing.
             raise EncryptionNotConfiguredError()
 
-        app_key, app_secret = self.resolve_credentials(app_key, app_secret)
+        app_key, _app_secret = self.platform_credentials()
 
         tenant_id = require_tenant_id()
         existing = await self.connections.get_for_tenant()
 
         if existing is not None:
-            # Reconnecting replaces the credentials in place. The unique
-            # constraint permits one connection per tenant, and deleting then
-            # recreating would lose `created_at`.
+            # Reconnecting clears seller tokens in place. The unique constraint
+            # permits one connection per tenant, and deleting then recreating
+            # would lose `created_at`.
             await self.connections.update(
                 existing,
                 app_key=app_key,
-                encrypted_app_secret=encrypt(app_secret),
+                encrypted_app_secret=None,
                 encrypted_access_token=None,
                 encrypted_refresh_token=None,
                 token_expiry=None,
@@ -151,7 +137,7 @@ class AliExpressService(BaseService):
         else:
             await self.connections.create(
                 app_key=app_key,
-                encrypted_app_secret=encrypt(app_secret),
+                encrypted_app_secret=None,
                 status=IntegrationStatus.PENDING,
                 user_id=user_id,
             )
@@ -163,6 +149,32 @@ class AliExpressService(BaseService):
 
         self.logger.info("aliexpress_connection_started", tenant_id=str(tenant_id))
         return build_authorization_url(app_key=app_key, state=state.token), state.token
+
+    def build_client(
+        self,
+        connection: AliExpressConnection,
+        *,
+        access_token: str | None = None,
+    ) -> AliExpressClient:
+        """Build a client with platform app credentials and optional seller token."""
+        app_key, app_secret = self.platform_credentials()
+        return AliExpressClient(
+            app_key=app_key,
+            app_secret=app_secret,
+            tenant_id=str(connection.tenant_id),
+            access_token=access_token,
+        )
+
+    async def authenticated_client(self) -> AliExpressClient:
+        """Client for the current tenant with a usable access token."""
+        connection = await self.require_connection()
+        connection = await self.refresh_if_needed(connection)
+        if not connection.encrypted_access_token:
+            raise ValidationError("AliExpress is not connected for this workspace.")
+        return self.build_client(
+            connection,
+            access_token=decrypt(connection.encrypted_access_token),
+        )
 
     async def complete_connection(self, *, code: str, state_token: str) -> AliExpressConnection:
         """Exchange the authorization code for tokens and mark the connection live.
@@ -188,12 +200,7 @@ class AliExpressService(BaseService):
                 "No pending AliExpress connection was found. Please start again."
             )
 
-        app_secret = decrypt(connection.encrypted_app_secret)
-        client = AliExpressClient(
-            app_key=connection.app_key,
-            app_secret=app_secret,
-            tenant_id=str(tenant_id),
-        )
+        client = self.build_client(connection)
 
         try:
             payload = await client.exchange_token(
@@ -283,14 +290,9 @@ class AliExpressService(BaseService):
             )
             return connection
 
-        app_secret = decrypt(connection.encrypted_app_secret)
         refresh_token = decrypt(connection.encrypted_refresh_token)
 
-        client = AliExpressClient(
-            app_key=connection.app_key,
-            app_secret=app_secret,
-            tenant_id=str(connection.tenant_id),
-        )
+        client = self.build_client(connection)
 
         try:
             payload = await client.exchange_token(

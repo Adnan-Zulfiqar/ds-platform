@@ -5,15 +5,10 @@ import { isApiReachable, isRedisAvailable, registerAndSignIn } from "./helpers/a
 /**
  * Integration settings tests.
  *
- * Run against the real API, so the connection state shown is genuinely the
- * server's. **No real AliExpress credentials are used**, and none exist — the
- * tests exercise the states reachable without completing an OAuth round trip
- * with a live provider: not connected, pending after submitting credentials,
- * and disconnected again.
- *
- * The OAuth exchange itself is covered by the backend integration suite, which
- * can mock the provider's HTTP responses. A browser test cannot, so pretending
- * otherwise here would only test a stub.
+ * Run against the real API. Merchants never enter AliExpress app credentials —
+ * connect uses platform ``ALIEXPRESS_APP_*``. Tests exercise states reachable
+ * without completing a live OAuth round trip: not connected, pending after
+ * starting connect (redirect blocked), and disconnected again.
  */
 
 test.beforeAll(async () => {
@@ -24,47 +19,28 @@ test.beforeAll(async () => {
 });
 
 /**
- * Submit credentials and wait for the server to acknowledge.
+ * Start connect and wait for the server to acknowledge (201).
  *
- * Waiting on the response rather than on a redirect matters: on success the app
- * calls `window.location.assign` to leave for AliExpress, and a test that
- * navigates away at the same moment races that. Asserting the status here also
- * means a server-side failure is reported as itself rather than as a confusing
- * "element not found" further down.
+ * The redirect target is a real external site; it is blocked so the test can
+ * observe pending state instead of leaving the app.
  */
-async function connectWithCredentials(
+async function beginAliExpressConnect(
   page: import("@playwright/test").Page,
-  { appKey = "e2e-app-key", appSecret = "e2e-app-secret-not-real" } = {},
 ): Promise<void> {
-  // The server stores the OAuth `state` in Redis and refuses to start the flow
-  // without it, because that token is the CSRF defence for the redirect.
   test.skip(
     !(await isRedisAvailable()),
     "Redis is not available — the OAuth state store is required to begin a connection.",
   );
 
-  // The redirect target is a real external site; block it.
   await page.route("**/oauth/authorize*", (route) => route.abort());
 
-  await page.getByRole("button", { name: "Connect" }).click();
-  await page.getByLabel("App key").fill(appKey);
-  await page.getByLabel("App secret").fill(appSecret);
-
+  const suppliers = page.getByRole("region", { name: "Suppliers" });
   const responsePromise = page.waitForResponse((response) =>
     response.url().includes("/integrations/aliexpress/connect"),
   );
-  await page.getByRole("button", { name: "Continue to AliExpress" }).click();
+  await suppliers.getByRole("button", { name: "Connect AliExpress" }).click();
 
   const response = await responsePromise;
-
-  // Read the status first, and the body only if we are about to fail.
-  //
-  // A successful `connect` immediately navigates to the AliExpress
-  // authorization URL, and Chrome discards the body of a response that was
-  // navigated away from. Passing `await response.text()` as the assertion
-  // message evaluated it eagerly on every call, including the successful ones,
-  // so the helper threw a protocol error instead of passing — the application
-  // was behaving correctly the whole time.
   const status = response.status();
   const detail =
     status === 201
@@ -92,22 +68,26 @@ test.describe("Integrations page", () => {
   });
 
   test("shows AliExpress as not connected for a new workspace", async ({ page }) => {
-    /**
-     * The state must come from the server, not be assumed. A page that claimed
-     * a supplier was connected when it was not would let an operator believe
-     * orders are being fulfilled while nothing happens.
-     */
     await registerAndSignIn(page);
     await page.goto("/settings/integrations");
 
-    // Scoped to the suppliers region: "AliExpress" also appears in the card
-    // description and in the sales-channel notice, so a bare text query is
-    // ambiguous.
     const suppliers = page.getByRole("region", { name: "Suppliers" });
 
     await expect(suppliers.getByRole("heading", { name: "AliExpress" })).toBeVisible();
     await expect(suppliers.getByText("Not connected")).toBeVisible();
-    await expect(suppliers.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(
+      suppliers.getByRole("button", { name: "Connect AliExpress" }),
+    ).toBeVisible();
+  });
+
+  test("AliExpress connect has no merchant credential fields", async ({ page }) => {
+    await registerAndSignIn(page);
+    await page.goto("/settings/integrations");
+
+    const suppliers = page.getByRole("region", { name: "Suppliers" });
+    await expect(suppliers.getByLabel("App key")).toHaveCount(0);
+    await expect(suppliers.getByLabel("App secret")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
   test("Shopify card is present and planned channels stay unavailable", async ({
@@ -121,77 +101,26 @@ test.describe("Integrations page", () => {
     await expect(
       channels.getByRole("button", { name: "Connect Shopify" }),
     ).toBeVisible();
-    // Other channels remain honestly unavailable.
     await expect(channels.getByText("Coming soon").first()).toBeVisible();
     await expect(channels.getByText("WooCommerce")).toBeVisible();
   });
 
-  test("the connect dialog collects both credentials", async ({ page }) => {
+  test("starting connect moves the connection to pending", async ({ page }) => {
     await registerAndSignIn(page);
     await page.goto("/settings/integrations");
 
-    await page.getByRole("button", { name: "Connect" }).click();
-
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByLabel("App key")).toBeVisible();
-    await expect(page.getByLabel("App secret")).toBeVisible();
-  });
-
-  test("the app secret field is masked", async ({ page }) => {
-    // It is a credential; it must not be readable over someone's shoulder.
-    await registerAndSignIn(page);
-    await page.goto("/settings/integrations");
-    await page.getByRole("button", { name: "Connect" }).click();
-
-    await expect(page.getByLabel("App secret")).toHaveAttribute("type", "password");
-  });
-
-  test("rejects a half-supplied credential pair", async ({ page }) => {
-    await registerAndSignIn(page);
-    await page.goto("/settings/integrations");
-    await page.getByRole("button", { name: "Connect" }).click();
-
-    await page.getByLabel("App key").fill("only-a-key");
-    await page.getByRole("button", { name: "Continue to AliExpress" }).click();
-
-    await expect(
-      page.getByText(/supply both the app key and app secret, or leave both blank/i),
-    ).toBeVisible();
-  });
-
-  test("submitting credentials moves the connection to pending", async ({ page }) => {
-    /**
-     * Stops before leaving for AliExpress: the redirect goes to a real external
-     * site. Navigation is blocked so the test observes the state the server
-     * recorded rather than following the browser away.
-     */
-    await registerAndSignIn(page);
-    await page.goto("/settings/integrations");
-
-    await connectWithCredentials(page);
+    await beginAliExpressConnect(page);
     await page.goto("/settings/integrations");
 
     const suppliers = page.getByRole("region", { name: "Suppliers" });
     await expect(suppliers.getByText("Awaiting authorization")).toBeVisible();
-    await expect(suppliers.getByText("e2e-app-key")).toBeVisible();
-  });
-
-  test("the app secret never appears on the page after submission", async ({ page }) => {
-    await registerAndSignIn(page);
-    await page.goto("/settings/integrations");
-
-    await connectWithCredentials(page);
-    await page.goto("/settings/integrations");
-
-    // The API has no field capable of returning it, so it cannot come back.
-    await expect(page.locator("body")).not.toContainText("e2e-app-secret-not-real");
   });
 
   test("disconnecting returns the card to not connected", async ({ page }) => {
     await registerAndSignIn(page);
     await page.goto("/settings/integrations");
 
-    await connectWithCredentials(page);
+    await beginAliExpressConnect(page);
     await page.goto("/settings/integrations");
 
     const suppliers = page.getByRole("region", { name: "Suppliers" });
