@@ -1,11 +1,14 @@
-"""AI provider errors.
+"""AI provider and prompt-management errors.
 
 Mirrors `app.integrations.aliexpress.exceptions`: every failure carries a
-stable machine-readable `code` and inherits `InfrastructureError` (503) — from
-a caller's perspective, "the configured AI provider cannot answer" is the same
-kind of failure as "the database is unreachable", not a client mistake.
+stable machine-readable `code`. Provider failures inherit
+`InfrastructureError` (503) — from a caller's perspective, "the configured AI
+provider cannot answer" is the same kind of failure as "the database is
+unreachable", not a client mistake. `MissingPromptVariablesError` inherits
+`ValidationError` (422) instead: a caller who forgot a variable can fix their
+own request, which is exactly what distinguishes a 4xx from a 5xx here.
 
-Kept to what stage 1 actually raises. Timeout, rate-limit, and malformed-
+Kept to what has an actual caller. Timeout, rate-limit, and malformed-
 response variants belong to whichever stage first makes a real outbound model
 call and can therefore raise them — adding them now would be exception classes
 with no caller, which is the thing CLAUDE.md's KISS rule warns against.
@@ -13,7 +16,9 @@ with no caller, which is the thing CLAUDE.md's KISS rule warns against.
 
 from __future__ import annotations
 
-from app.core.exceptions import InfrastructureError
+from collections.abc import Sequence
+
+from app.core.exceptions import InfrastructureError, ValidationError
 
 SERVICE_NAME = "ai"
 
@@ -42,8 +47,30 @@ class AIProviderNotConfiguredError(AIError):
     retryable = False
 
 
+class MissingPromptVariablesError(ValidationError):
+    """A prompt template could not be rendered — one or more `{{variables}}`
+    it declares were not supplied.
+
+    Raised at render time, before anything is sent anywhere. The alternative
+    — rendering with gaps and sending `{title}` to a model — would pay for an
+    answer nobody can use; failing here is strictly cheaper and clearer.
+    """
+
+    code = "missing_prompt_variables"
+    message = "The prompt is missing one or more required variables."
+
+    def __init__(self, missing: Sequence[str]) -> None:
+        ordered = sorted(missing)
+        super().__init__(
+            f"Missing required prompt variables: {', '.join(ordered)}.",
+            details={"missing_variables": ordered},
+        )
+        self.missing_variables = ordered
+
+
 __all__ = [
     "SERVICE_NAME",
     "AIError",
     "AIProviderNotConfiguredError",
+    "MissingPromptVariablesError",
 ]

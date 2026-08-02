@@ -217,4 +217,92 @@ files), `pytest` (681 passed — 652 baseline + 29 new), `scripts/check_secrets.
 All against `StubProvider`; no live model call was made or claimed, because
 none is possible without a key (§1's finding stands unchanged).
 
-**Stage 2 — Prompt management — begins next.**
+### Stage 2 — Prompt management: done
+
+| Delivered | Where |
+|---|---|
+| `AIPrompt` (versioned, reference data), `PromptExecution` (tenant-scoped audit trail), `PromptExecutionStatus` | `app/models/ai_prompt.py` |
+| `PromptRenderer` — safe `{{variable}}` extraction and substitution | `app/ai/prompt_renderer.py` |
+| `MissingPromptVariablesError` | `app/ai/exceptions.py` |
+| `PromptRepository` (unscoped), `PromptExecutionRepository` (tenant-scoped) | `app/repositories/ai_prompt.py` |
+| `PromptService` — create, version, activate/rollback, history, list, test-render | `app/services/prompt.py` |
+| 7 endpoints behind `RequireAdmin` | `app/api/v1/ai/router.py`, mounted in `app/api/v1/router.py` |
+| Migration `0010` — both tables, partial unique active index, 5 seeded prompts | `alembic/versions/20260802_1942_0010_ai_prompt_management.py` |
+| Tests (35 new: 12 renderer, 5 repository-scoping, 18 integration — routes, permissions, tenant isolation) | `tests/unit/test_prompt_renderer.py`, `tests/unit/test_prompt_execution_repository_scoping.py`, `tests/integration/test_ai_prompts.py` |
+
+**Architecture decisions worth recording.**
+
+*Versions are rows, not a nested history table.* One `AIPrompt` row per
+version, sharing a `name`; "history" is every row for that `name`, "rollback"
+is activating an older version through the exact same endpoint that activates
+a newly-created one. A separate `PromptVersion` child table was considered
+and rejected — it would duplicate every field on `AIPrompt` for no behaviour
+this stage needs, the KISS violation CLAUDE.md warns against.
+
+*Required variables are parsed from the template, never stored as a column.*
+The brief's own field list for `ai_prompts` omits a variables column, and a
+stored list would be a second copy of information the template text already
+contains exactly — one that could silently drift from it. `PromptRenderer`
+is the only source of truth.
+
+*"At most one active version" is a database constraint, not a service-layer
+check.* `uq_ai_prompts_name_active` is a Postgres partial unique index
+(`WHERE active`). `PromptRepository.activate()` still checks first, for a
+fast, friendly error — but the index is what actually stops two concurrent
+activations from both succeeding.
+
+*The rendering engine is deliberately not a template language.* `{{name}}`
+substitution only — no conditionals, no expressions, no `str.format()`
+(which permits attribute-chain injection through a hostile value). Every
+generation prompt will eventually carry supplier-authored text; the smallest
+substitution grammar is the smallest surface for that text to do anything
+other than sit there as data. See `app/ai/prompt_renderer.py`'s docstring.
+
+*"Test prompt rendering" with `execute=true` calls `get_ai_provider()`, which
+Stage 1 wires to `StubProvider` — nothing else is configured.* This is how
+the render → call → record execution pipeline gets exercised end-to-end
+without violating "no real AI API calls yet": `StubProvider` makes no network
+call, and every execution it produces is stored with `is_synthetic=true`. It
+proves the plumbing, not generation quality — §6's verification table is
+unchanged by this stage.
+
+**Known limitations, stated rather than hidden.**
+
+1. **Every endpoint requires `RequireAdmin`, which is a *tenant* admin, not a
+   platform operator.** `ai_prompts` is platform-global — one tenant's admin
+   editing `product_title_generator` changes what every other tenant's
+   generations produce. This platform has no role above tenant-admin yet
+   (`PROJECT_ROADMAP.md`'s "Admin panel: platform operations across tenants"
+   is an unscheduled later phase). `RequireAdmin` is the strongest existing
+   check and what the brief asked for ("respect tenant/admin permissions"),
+   but it does not close this gap — a tenant admin has real, unaudited
+   leverage over every other tenant's output today. This needs a genuine
+   platform-operator role before production use with multiple real tenants.
+2. **`PromptExecution` rows are written but not independently readable.**
+   The brief's admin-capability list (list, create, update, activate,
+   history, test) does not include an execution log viewer, so none was
+   built — adding one now would be ahead of a caller. Tenant isolation is
+   still verified: the SQL-compile test plus an integration test that reads
+   the table directly through the repository (`TestTenantIsolation` in
+   `test_ai_prompts.py`), which is more than the compile test alone proves.
+3. **The `/history` endpoint paginates in Python, not SQL** (`list_versions`
+   fetches every version, then the router slices). Deliberate: per-name
+   version counts are small and admin-curated, and real OFFSET/LIMIT for a
+   dataset that never approaches page 2 in practice would be complexity
+   without a caller who needs it.
+4. **`target_model` is stored, never read.** Recorded per prompt version for
+   a future auditor ("what model was this tuned for"); no code branches on
+   it yet.
+5. **`quality_scorer` is seeded but Stage 5's quality score will not call
+   it** — quality scoring is designed to be model-free (§3). It exists so
+   the name is reserved in the same library, documented in the migration
+   itself so the discrepancy is not a surprise later.
+
+**Verified:** `ruff check`, `ruff format --check`, `mypy app` (strict, 157
+files), `pytest` (716 passed — 681 baseline + 35 new), migration `0010`
+round-tripped (`upgrade → downgrade → upgrade`, all 5 seeded prompts intact
+and re-seeded correctly after both cycles), `scripts/check_secrets.py`. No
+real AI provider call was made or claimed — every execution in every test
+carries `provider=stub`, `is_synthetic=true`.
+
+**Stage 3 — Product extension — begins next.**

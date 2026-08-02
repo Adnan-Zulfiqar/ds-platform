@@ -6,6 +6,7 @@ module that defines the model — a model that is never imported is silently
 omitted from migrations.
 """
 
+from app.models.ai_prompt import AIPrompt, PromptExecution, PromptExecutionStatus
 from app.models.analytics import AnalyticsDaily
 from app.models.automation import (
     AutomationAction,
@@ -69,6 +70,7 @@ from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User
 
 __all__ = [
+    "AIPrompt",
     "AliExpressConnection",
     "AnalyticsDaily",
     "AutomationAction",
@@ -104,6 +106,8 @@ __all__ = [
     "ProductSource",
     "ProductStatus",
     "ProductVariant",
+    "PromptExecution",
+    "PromptExecutionStatus",
     "ReferenceBase",
     "RefreshToken",
     "Role",
