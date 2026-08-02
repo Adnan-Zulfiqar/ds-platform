@@ -39,13 +39,9 @@ Supplier `title` / `description` are never written by this stage.
 
 ## 2. Commits
 
-Recorded at close of stage (see `git log` on `develop`):
-
-| Area | Intent |
+| Commit | Description |
 |---|---|
-| Backend | Schema, repositories, service, API, tests |
-| Frontend | Types, hooks, table wiring, Playwright |
-| Docs | Plan + completion + changelog / debt / roadmap |
+| `63b1e50` | feat(products): optimization versions + StubProvider pipeline (Stage 3) |
 
 ---
 
