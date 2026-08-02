@@ -567,6 +567,65 @@ class ShopifySettings(_EnvFileSettings):
     rate_limit_window_seconds: int = Field(default=1, ge=1)
 
 
+class AIProviderName(StrEnum):
+    """Which backend answers `AIProvider` calls — see `app.ai.provider`.
+
+    Listed here in full, including providers with no implementation yet, so
+    the operator-facing configuration surface does not change shape as each
+    one ships. Selecting one that is not yet implemented is a configuration
+    error (`app.ai.factory` raises `AIProviderNotConfiguredError`), not a
+    silent fallback to `STUB` — a deployment that asked for a real provider
+    must find out immediately, not by noticing the copy looks fake.
+    """
+
+    STUB = "stub"
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GEMINI = "gemini"
+    LOCAL = "local"
+
+
+class AISettings(_EnvFileSettings):
+    """AI provider selection and credentials.
+
+    Keys live here rather than per-tenant. Unlike AliExpress or Shopify —
+    where each tenant authorises their own supplier or store — DropPilot
+    calls the model on the platform's own account; a tenant never supplies
+    their own OpenAI key.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="AI_", extra="ignore")
+
+    provider: AIProviderName = AIProviderName.STUB
+
+    openai_api_key: SecretStr | None = Field(
+        default=None, description="Platform OpenAI API key. Never logged or returned."
+    )
+    anthropic_api_key: SecretStr | None = Field(
+        default=None, description="Platform Anthropic API key. Never logged or returned."
+    )
+    # `GOOGLE_API_KEY` matches Google's own client libraries; `GEMINI_API_KEY`
+    # is the name most third-party examples use. Supporting both means
+    # whichever one an operator already has set from following either
+    # convention works, rather than silently falling back to STUB because the
+    # name did not match.
+    google_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AI_GOOGLE_API_KEY", "AI_GEMINI_API_KEY"),
+        description="Platform Google/Gemini API key. Never logged or returned.",
+    )
+    local_base_url: str | None = Field(
+        default=None,
+        description="Base URL for a self-hosted model server, used when provider=local.",
+    )
+
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+    connect_timeout_seconds: float = Field(default=5.0, gt=0)
+    max_retries: int = Field(
+        default=2, ge=0, description="Retries for transient failures only; never for a 4xx."
+    )
+
+
 class ObservabilitySettings(_EnvFileSettings):
     """Logging and monitoring configuration."""
 
@@ -645,6 +704,7 @@ class Settings(_EnvFileSettings):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
+    ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
     @classmethod

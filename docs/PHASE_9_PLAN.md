@@ -184,4 +184,37 @@ tests passing, gates green — rather than seventeen half-built systems. A phase
 tag should mean the work behind it was verified, and `phase-9-complete` will not
 be created until every stage in §3 is done and its verification executed.
 
-**Stage 1 begins next.**
+---
+
+## 8. Progress
+
+### Stage 1 — Provider abstraction: done
+
+| Delivered | Where |
+|---|---|
+| `AIProvider` protocol, request/result contract types | `app/ai/provider.py` |
+| `AIError`, `AIProviderNotConfiguredError` | `app/ai/exceptions.py` |
+| `StubProvider` — deterministic, clearly-synthetic | `app/ai/stub_provider.py` |
+| `AIProviderName` enum, `AISettings` (`AI_*`) | `app/core/config.py` |
+| `get_ai_provider()` resolver | `app/ai/factory.py` |
+| Unit tests (29) | `tests/unit/test_ai_{provider,stub_provider,config,factory}.py` |
+
+**A scope decision worth recording.** §2's architecture sketch named five
+concrete providers (`OpenAIProvider`, `AnthropicProvider`, `GeminiProvider`,
+`LocalProvider`, `StubProvider`). Only `StubProvider` was built. `AIProviderName`
+lists all five so the configuration surface will not change shape later, and
+`get_ai_provider()` raises `AIProviderNotConfiguredError` — loudly, not a
+silent fallback to the stub — for any of the other four. Building HTTP clients
+against three different real APIs with no key to verify any of them against
+would have meant a stage that is all code and no confidence; CLAUDE.md's "no
+abstraction without a second caller" applies here too — a concrete provider
+gets built in the stage that first has a caller for it (stage 4, generation
+services), not ahead of one. This is narrower than §2 implied, stated here
+rather than left for someone to notice later.
+
+**Verified:** `ruff check`, `ruff format --check`, `mypy app` (strict, 150
+files), `pytest` (681 passed — 652 baseline + 29 new), `scripts/check_secrets.py`.
+All against `StubProvider`; no live model call was made or claimed, because
+none is possible without a key (§1's finding stands unchanged).
+
+**Stage 2 — Prompt management — begins next.**
