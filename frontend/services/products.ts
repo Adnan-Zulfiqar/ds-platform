@@ -13,6 +13,9 @@ import type {
   ProductDetail,
   ProductImportPayload,
   ProductImportRecord,
+  ProductOptimizePayload,
+  ProductOptimizeResult,
+  ProductVersion,
 } from "@/types/api";
 
 /**
@@ -33,6 +36,7 @@ export const productKeys = {
   detail: (id: string) => [...productKeys.details(), id] as const,
   imports: () => [...productKeys.all, "imports"] as const,
   importList: (query: ListQuery) => [...productKeys.imports(), query] as const,
+  versions: (id: string) => [...productKeys.detail(id), "versions"] as const,
 };
 
 async function fetchProducts(query: ListQuery): Promise<Page<Product>> {
@@ -121,6 +125,82 @@ export function useSyncProduct() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: productKeys.all });
+    },
+  });
+}
+
+async function fetchProductVersions(id: string): Promise<Page<ProductVersion>> {
+  const { data } = await apiClient.get<Page<ProductVersion>>(
+    `/products/${id}/versions`,
+    { params: { size: 50 } },
+  );
+  return data;
+}
+
+/** Version history for a product's AI optimisation — newest first. */
+export function useProductVersions(
+  id: string,
+): UseQueryResult<Page<ProductVersion>> {
+  return useQuery({
+    queryKey: productKeys.versions(id),
+    queryFn: () => fetchProductVersions(id),
+    enabled: Boolean(id),
+  });
+}
+
+/**
+ * Generate a new AI-optimised title and description for a product.
+ *
+ * Uses `StubProvider` — no real AI key is configured on this platform yet
+ * (Phase 9 stages 1–2), so the result is deterministic, clearly-synthetic
+ * text. Invalidates the product's detail and version-history caches, both
+ * of which the response changes.
+ */
+export function useOptimizeProduct(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: ProductOptimizePayload = {}) => {
+      const { data } = await apiClient.post<ProductOptimizeResult>(
+        `/products/${productId}/optimize`,
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: productKeys.detail(productId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: productKeys.versions(productId),
+      });
+      void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+    },
+  });
+}
+
+/**
+ * Activate a version — including the original — rolling the product back
+ * or forward to it.
+ */
+export function useActivateProductVersion(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (versionId: string) => {
+      const { data } = await apiClient.post<ProductDetail>(
+        `/products/${productId}/versions/${versionId}/activate`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: productKeys.detail(productId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: productKeys.versions(productId),
+      });
+      void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
     },
   });
 }

@@ -28,10 +28,14 @@ from app.schemas.product import (
     ProductImageRead,
     ProductImportRead,
     ProductImportRequest,
+    ProductOptimizeRequest,
+    ProductOptimizeResponse,
     ProductRead,
     ProductVariantRead,
+    ProductVersionRead,
 )
 from app.services.product_import import ProductImportService
+from app.services.product_optimization import ProductOptimizationService
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -154,6 +158,39 @@ async def get_product(
     return _to_detail(product)
 
 
+@router.get(
+    "/{product_id}/versions",
+    response_model=Page[ProductVersionRead],
+    summary="List a product's optimisation version history",
+)
+async def list_product_versions(
+    session: DbSession,
+    _authorized: RequireViewer,
+    product_id: Annotated[uuid.UUID, Path()],
+    params: Annotated[ListQueryParams, Depends(list_query_params)],
+) -> Page[ProductVersionRead]:
+    """Return every version of a product, newest first.
+
+    Empty for a product that has never been optimised — version 1 (the
+    original snapshot) is created lazily on first optimisation, not at
+    import time, so "no versions yet" is the true state rather than a gap.
+
+    Paginated in Python rather than SQL, the same simplification Phase 9
+    stage 2's prompt-history endpoint makes: per-product version counts are
+    small, and real OFFSET/LIMIT for a list that never reaches page 2 in
+    practice would be complexity without a caller who needs it.
+    """
+    versions = await ProductOptimizationService(session).list_versions(product_id)
+    total = len(versions)
+    page_items = versions[params.offset : params.offset + params.limit]
+    return Page[ProductVersionRead].build(
+        items=[ProductVersionRead.from_model(v) for v in page_items],
+        page=params.page,
+        size=params.size,
+        total_items=total,
+    )
+
+
 @router.post(
     "/import",
     response_model=ProductDetailRead,
@@ -214,4 +251,64 @@ async def sync_product(
         external_id=existing.external_id,
         requested_by_user_id=principal.user_id,
     )
+    return _to_detail(product)
+
+
+@router.post(
+    "/{product_id}/optimize",
+    response_model=ProductOptimizeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate an AI-optimised title and description",
+)
+async def optimize_product(
+    session: DbSession,
+    principal: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: ProductOptimizeRequest | None = None,
+) -> ProductOptimizeResponse:
+    """Generate a new title and description and make them active.
+
+    Admin or owner: this changes what the whole workspace's listing says,
+    the same reasoning `import`/`sync` already apply.
+
+    **Uses `StubProvider`, not a real model.** No `AI_PROVIDER` is configured
+    in this deployment (Phase 9 stages 1 and 2), so every generated result is
+    deterministic, obviously-synthetic text — see `app.ai.stub_provider`. The
+    response's `version.aiProvider` will read `"stub"` until a real provider
+    is wired in a later stage.
+
+    Never overwrites `title`/`description` — those stay exactly as the
+    supplier described the product. Only the dedicated `optimizedTitle`/
+    `optimizedDescription` fields change.
+    """
+    tone = payload.tone if payload is not None else ProductOptimizeRequest().tone
+    product, version = await ProductOptimizationService(session).optimize_product(
+        product_id,
+        tone=tone,
+        requested_by_user_id=principal.user_id,
+    )
+    return ProductOptimizeResponse(
+        product=_to_detail(product), version=ProductVersionRead.from_model(version)
+    )
+
+
+@router.post(
+    "/{product_id}/versions/{version_id}/activate",
+    response_model=ProductDetailRead,
+    summary="Activate a version — also how rollback works",
+)
+async def activate_product_version(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    version_id: Annotated[uuid.UUID, Path()],
+) -> ProductDetailRead:
+    """Make `version_id` the active version of a product.
+
+    The same operation serves both "activate a newly-created optimisation"
+    and "roll back to an older one, including the original supplier
+    content" — there is no separate rollback endpoint because there is no
+    separate mechanism.
+    """
+    product = await ProductOptimizationService(session).activate_version(product_id, version_id)
     return _to_detail(product)

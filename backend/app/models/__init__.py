@@ -56,11 +56,14 @@ from app.models.pricing import (
 from app.models.product import (
     ImportStatus,
     Product,
+    ProductAIStatus,
     ProductImage,
     ProductImport,
     ProductSource,
     ProductStatus,
     ProductVariant,
+    ProductVersion,
+    ProductVersionSource,
 )
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role, RoleName, UserRole
@@ -101,11 +104,14 @@ __all__ = [
     "PricingScope",
     "PricingStrategy",
     "Product",
+    "ProductAIStatus",
     "ProductImage",
     "ProductImport",
     "ProductSource",
     "ProductStatus",
     "ProductVariant",
+    "ProductVersion",
+    "ProductVersionSource",
     "PromptExecution",
     "PromptExecutionStatus",
     "ReferenceBase",

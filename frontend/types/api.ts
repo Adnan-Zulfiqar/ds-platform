@@ -208,6 +208,9 @@ export interface ProductImage {
   position: number;
 }
 
+/** Where a product sits relative to AI optimisation. */
+export type ProductAIStatus = "not_optimized" | "optimized" | "failed";
+
 export interface Product {
   id: string;
   source: ProductSource;
@@ -229,11 +232,58 @@ export interface Product {
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   createdAt: string;
+
+  // --- SEO / marketplace (Phase 9 stage 3) ---
+  seoTitle: string | null;
+  seoDescription: string | null;
+  metaKeywords: string | null;
+  slug: string | null;
+  vendor: string | null;
+  tags: string[];
+
+  // --- AI optimisation (Phase 9 stage 3) ---
+  //
+  // `optimizedTitle`/`optimizedDescription` are AI-generated text — always
+  // `StubProvider` output until a real provider is configured (Phase 9
+  // stage 4+). Render as plain text, the same rule that already applies to
+  // every other AI-produced field on this platform.
+  aiStatus: ProductAIStatus;
+  aiLastGeneratedAt: string | null;
+  aiProvider: string | null;
+  aiVersion: number | null;
+  optimizedTitle: string | null;
+  optimizedDescription: string | null;
 }
 
 export interface ProductDetail extends Product {
   variants: ProductVariant[];
   images: ProductImage[];
+}
+
+/** Where a product's optimisable content came from. */
+export type ProductVersionSource = "original" | "ai_generated";
+
+/** One version of a product's title/description — one row of history. */
+export interface ProductVersion {
+  id: string;
+  versionNumber: number;
+  source: ProductVersionSource;
+  title: string | null;
+  description: string | null;
+  active: boolean;
+  aiProvider: string | null;
+  promptExecutionId: string | null;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+export interface ProductOptimizePayload {
+  tone?: string;
+}
+
+export interface ProductOptimizeResult {
+  product: ProductDetail;
+  version: ProductVersion;
 }
 
 export interface ProductImportRecord {

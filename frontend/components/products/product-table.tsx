@@ -15,9 +15,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useProducts } from "@/services/products";
-import type { Product, ProductStatus } from "@/types/api";
+import type { Product, ProductAIStatus, ProductStatus } from "@/types/api";
 
 import { ImportProductDialog } from "./import-product-dialog";
+import { OptimizeProductButton } from "./optimize-product-button";
+import { ProductVersionHistorySheet } from "./product-version-history-sheet";
 
 const STATUS_VARIANT: Record<
   ProductStatus,
@@ -27,6 +29,21 @@ const STATUS_VARIANT: Record<
   draft: "secondary",
   archived: "outline",
   unavailable: "destructive",
+};
+
+const AI_STATUS_VARIANT: Record<
+  ProductAIStatus,
+  "default" | "secondary" | "outline" | "destructive"
+> = {
+  optimized: "default",
+  not_optimized: "secondary",
+  failed: "destructive",
+};
+
+const AI_STATUS_LABEL: Record<ProductAIStatus, string> = {
+  optimized: "Optimized",
+  not_optimized: "Not optimized",
+  failed: "Failed",
 };
 
 /**
@@ -97,6 +114,8 @@ export function ProductTable() {
             <TableHead>Supplier price</TableHead>
             <TableHead className="text-right">Stock</TableHead>
             <TableHead>Supplier</TableHead>
+            <TableHead>AI status</TableHead>
+            <TableHead>Optimization</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -121,6 +140,23 @@ export function ProductTable() {
               </TableCell>
               <TableCell className="text-muted-foreground">
                 {product.supplierName ?? "—"}
+              </TableCell>
+              <TableCell>
+                <Badge
+                  variant={AI_STATUS_VARIANT[product.aiStatus]}
+                  data-testid="ai-status-badge"
+                >
+                  {AI_STATUS_LABEL[product.aiStatus]}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <OptimizeProductButton productId={product.id} />
+                  <ProductVersionHistorySheet
+                    productId={product.id}
+                    productTitle={product.title}
+                  />
+                </div>
               </TableCell>
             </TableRow>
           ))}

@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-07-31
+Last updated: 2026-08-02
 
 ## Status
 
@@ -18,6 +18,7 @@ Last updated: 2026-07-31
 | 6 | Inventory, pricing, multi-store, automation & tracking | ✅ **Complete** |
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
+| 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 
 ---
 
@@ -223,7 +224,7 @@ in mind. Nothing here is committed to a phase number.
 |---|---|
 | Additional store channels | WooCommerce / eBay / Etsy / TikTok — Shopify shipped in Phase 8 |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
-| AI optimisation | Listing content generation and enhancement |
+| AI optimisation (Phase 9) | Stages 1–3 done — provider, prompts, product versions; generation/editor remaining |
 | Real FX for pricing | Currency conversion hook is identity today |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |

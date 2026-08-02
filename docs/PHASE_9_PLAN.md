@@ -305,4 +305,22 @@ and re-seeded correctly after both cycles), `scripts/check_secrets.py`. No
 real AI provider call was made or claimed — every execution in every test
 carries `provider=stub`, `is_synthetic=true`.
 
-**Stage 3 — Product extension — begins next.**
+### Stage 3 — Product extension: done
+
+| Delivered | Where |
+|---|---|
+| SEO / marketplace / AI cache columns on `products` | `app/models/product.py`, migration `0011` |
+| `product_versions` (original + AI, activate/rollback) | same migration + `ProductVersionRepository` |
+| `ProductOptimizationService` via Stage 2 prompts + `StubProvider` | `app/services/product_optimization.py` |
+| `GET .../versions`, `POST .../optimize`, `POST .../versions/{id}/activate` | `app/api/v1/products/router.py` |
+| UI foundation (status, optimize, history) | `frontend/components/products/` |
+| Tests | unit scoping + integration + Playwright foundation |
+
+Full report: [PHASE_9_STAGE_3_COMPLETION.md](PHASE_9_STAGE_3_COMPLETION.md).
+Plan: [PHASE_9_STAGE_3_PLAN.md](PHASE_9_STAGE_3_PLAN.md).
+
+**Verified:** ruff, mypy strict, pytest **740** passed, frontend lint/typecheck/build,
+Playwright optimisation foundation **3 passed / 1 skipped** (live AliExpress seed).
+No real AI provider call — every execution uses `StubProvider`.
+
+**Stage 4 — Generation services — begins next.**

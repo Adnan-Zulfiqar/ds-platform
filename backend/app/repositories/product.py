@@ -13,6 +13,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import NotFoundError
 from app.models.product import (
     ImportStatus,
     Product,
@@ -21,6 +22,7 @@ from app.models.product import (
     ProductSource,
     ProductStatus,
     ProductVariant,
+    ProductVersion,
 )
 from app.repositories.base import TenantScopedRepository
 
@@ -196,9 +198,78 @@ class ProductImportRepository(TenantScopedRepository[ProductImport]):
         return result.scalars().first()
 
 
+class ProductVersionRepository(TenantScopedRepository[ProductVersion]):
+    """Versions — the optimisation history. Rows are never deleted or edited.
+
+    Activation mirrors `PromptRepository.activate` in
+    `app.repositories.ai_prompt`: two sequential flushes, deactivate then
+    activate, so the database is never asked to hold two active rows for the
+    same product at once — the partial unique index on `product_versions`
+    would reject that.
+    """
+
+    sortable_fields = frozenset({"created_at", "version_number"})
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, ProductVersion)
+
+    async def list_for_product(self, product_id: uuid.UUID) -> list[ProductVersion]:
+        """Every version of a product, newest first — the history view."""
+        query = (
+            self._base_query()
+            .where(ProductVersion.product_id == product_id)
+            .order_by(ProductVersion.version_number.desc())
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_active(self, product_id: uuid.UUID) -> ProductVersion | None:
+        query = self._base_query().where(
+            ProductVersion.product_id == product_id, ProductVersion.active.is_(True)
+        )
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def get_by_id_for_product(
+        self, *, product_id: uuid.UUID, version_id: uuid.UUID
+    ) -> ProductVersion | None:
+        query = self._base_query().where(
+            ProductVersion.product_id == product_id, ProductVersion.id == version_id
+        )
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def next_version_number(self, product_id: uuid.UUID) -> int:
+        query = select(func.max(ProductVersion.version_number)).where(
+            ProductVersion.product_id == product_id
+        )
+        current = (await self.session.execute(query)).scalar_one_or_none()
+        return (current or 0) + 1
+
+    async def activate(self, *, product_id: uuid.UUID, version_id: uuid.UUID) -> ProductVersion:
+        """Make `version_id` the active version of `product_id`.
+
+        The same operation serves both "activate a newly-created version" and
+        "roll back to an older one" — there is no separate rollback mechanism.
+        """
+        target = await self.get_by_id_for_product(product_id=product_id, version_id=version_id)
+        if target is None:
+            raise NotFoundError.for_resource("ProductVersion", version_id)
+        if target.active:
+            return target
+
+        current = await self.get_active(product_id)
+        if current is not None:
+            current.active = False
+            await self.session.flush()
+
+        target.active = True
+        await self.session.flush()
+        return target
+
+
 __all__ = [
     "ProductImageRepository",
     "ProductImportRepository",
     "ProductRepository",
     "ProductVariantRepository",
+    "ProductVersionRepository",
 ]

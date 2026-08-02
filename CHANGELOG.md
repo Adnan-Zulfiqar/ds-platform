@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 9 Stage 3** — product optimisation data architecture: migration
+  `0011` (SEO/marketplace/AI columns + `product_versions`),
+  `ProductOptimizationService` (StubProvider via Stage 2 prompts), versions /
+  optimize / activate APIs, products-table AI status + Optimize + History UI.
+  See [PHASE_9_STAGE_3_COMPLETION.md](docs/PHASE_9_STAGE_3_COMPLETION.md).
+
 ### Fixed
 
 - AliExpress connect is platform-credential only: merchants no longer enter App

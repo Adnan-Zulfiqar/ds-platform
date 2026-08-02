@@ -23,8 +23,10 @@ compose smoke job is now **blocking** and asserts cross-container connectivity
 rather than merely that processes started. M15 narrowed. C1 remains open;
 the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
+**Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
+through `StubProvider`; M19 records that live model output remains unverified.
 
-**Current count: 1 critical (narrowed), 1 high (narrowed), ~11 medium, 5 low.**
+**Current count: 1 critical (narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
 ---
 
@@ -308,6 +310,18 @@ returning **200** (no retry-storm). Global rate-limit exemption remains for the
 same reason.
 
 **Residual:** tune shed limits under real delivery volume.
+
+### M19 — Phase 9 AI output is StubProvider-only (no live model key)
+
+Stages 1–3 exercise the full provider → prompt → product-version pipeline, but
+every generation uses `StubProvider`. No `OPENAI_API_KEY` / Anthropic / Gemini
+key is configured, so marketplace-ready copy quality cannot be verified.
+
+**Impact:** Optimise UI and APIs work; published AI text would be obviously
+synthetic (`[STUB-AI]`).
+**Trigger:** before merchants rely on AI copy in production.
+**Fix:** configure a real `AI_PROVIDER` + key; build the concrete provider in
+Stage 4+; capture one live fixture per generator (same pattern as M10).
 
 ### M17 — Shopify live Partner OAuth and Admin API unverified
 

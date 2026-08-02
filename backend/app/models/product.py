@@ -19,8 +19,10 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -30,7 +32,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -80,6 +84,28 @@ class ImportStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class ProductAIStatus(StrEnum):
+    """Where a product sits relative to AI optimisation.
+
+    Two terminal values plus the unstarted default — no `pending`/
+    `generating`. Phase 9 stage 3's optimisation call is a single synchronous
+    request; a Celery-backed asynchronous path (stage 9) is what would need an
+    in-flight state, and adding one now would be a status this stage never
+    writes.
+    """
+
+    NOT_OPTIMIZED = "not_optimized"
+    OPTIMIZED = "optimized"
+    FAILED = "failed"
+
+
+class ProductVersionSource(StrEnum):
+    """What produced a `ProductVersion` row."""
+
+    ORIGINAL = "original"
+    AI_GENERATED = "ai_generated"
+
+
 class Product(TenantScopedBase):
     """A product in a tenant's catalogue."""
 
@@ -105,6 +131,10 @@ class Product(TenantScopedBase):
         Index("ix_products_tenant_status", "tenant_id", "status"),
         Index("ix_products_tenant_created", "tenant_id", "created_at"),
         Index("ix_products_tenant_category", "tenant_id", "category_id"),
+        # Postgres treats multiple NULLs as distinct under a unique
+        # constraint, so unoptimised products (no slug yet) never collide —
+        # this only starts enforcing once a tenant actually sets one.
+        UniqueConstraint("tenant_id", "slug", name="uq_products_tenant_slug"),
     )
 
     # --- Provenance ---------------------------------------------------------
@@ -184,6 +214,63 @@ class Product(TenantScopedBase):
     # --- Sync state ---------------------------------------------------------
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    # --- SEO (Phase 9 stage 3) -----------------------------------------------
+    seo_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    seo_description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: Comma-separated, matching how a `<meta name="keywords">` tag is
+    #: actually rendered — not an array for a value that is one string on the
+    #: way out.
+    meta_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Marketplace (Phase 9 stage 3) ---------------------------------------
+    #
+    # `brand` already exists above (Phase 4, supplier-populated) and is reused
+    # rather than duplicated.
+    slug: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    vendor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: `server_default` alongside the Python-side `default`, unlike most
+    #: columns in this file — this one adds a NOT NULL column to a table the
+    #: migration expects to already hold rows (existing imported products),
+    #: and `ALTER TABLE ... ADD COLUMN ... NOT NULL` needs a database-side
+    #: default to backfill them or the migration fails outright.
+    tags: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+
+    # --- AI optimisation status (Phase 9 stage 3) ----------------------------
+    #
+    # These five columns are a cache of the currently active `ProductVersion`,
+    # not independent state. Activating a version (see `ProductVersion`
+    # below) always rewrites all five together from that version's data;
+    # nothing else in the application assigns to them — which is what
+    # guarantees `title`/`description` above can never be overwritten by AI
+    # content, since no code path does so.
+    ai_status: Mapped[ProductAIStatus] = mapped_column(
+        Enum(
+            ProductAIStatus,
+            name="product_ai_status",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        default=ProductAIStatus.NOT_OPTIMIZED,
+        # Same reasoning as `tags.server_default` above.
+        server_default=text("'not_optimized'"),
+    )
+    ai_last_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ai_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The active `ProductVersion.version_number`, denormalised so a list or
+    #: detail view never needs to join `product_versions` to show it.
+    ai_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- AI-optimised content (Phase 9 stage 3) ------------------------------
+    #
+    # Populated only when the active version's source is AI_GENERATED; a
+    # rollback to the ORIGINAL version clears both back to `None`.
+    optimized_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    optimized_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     variants: Mapped[list[ProductVariant]] = relationship(
         back_populates="product",
@@ -353,12 +440,101 @@ class ProductImport(TenantScopedBase):
         )
 
 
+class ProductVersion(TenantScopedBase):
+    """One version of a product's optimisable content.
+
+    Versions are rows, not a nested history table — the same shape Phase 9
+    stage 2 uses for `AIPrompt`. Version 1 is always a snapshot of the
+    product exactly as its supplier described it (`source=ORIGINAL`),
+    created lazily on first optimisation rather than at import time — see
+    `ProductOptimizationService`. Versions 2 and up are AI-generated. History
+    is every row sharing a `product_id`; rollback is activating an older
+    version through the same mechanism that activates a new one.
+
+    Immutable once written: nothing in this codebase updates `content` after
+    creation. A correction is a new version, never an edit to an old one —
+    an audit trail that can be rewritten is not one.
+    """
+
+    __tablename__ = "product_versions"
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "version_number", name="uq_product_versions_product_number"),
+        Index("ix_product_versions_tenant_product", "tenant_id", "product_id"),
+        # Partial unique index: at most one row per product may have
+        # `active = true`, enforced by the database rather than a
+        # read-then-write check — identical mechanism to
+        # `uq_ai_prompts_name_active` in migration 0010.
+        Index(
+            "uq_product_versions_product_active",
+            "product_id",
+            unique=True,
+            postgresql_where=text("active"),
+        ),
+    )
+
+    #: Tenant-owned data, unlike `PromptExecution.prompt_id` which points at
+    #: a reference table — so this cascades like `ProductVariant`/
+    #: `ProductImage` already do, rather than SET NULL.
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[ProductVersionSource] = mapped_column(
+        Enum(
+            ProductVersionSource,
+            name="product_version_source",
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+    )
+
+    #: `{"title": ..., "description": ...}` today. JSONB rather than discrete
+    #: columns so a later stage can add `seoTitle`/`seoDescription`/`tags`
+    #: to the shape without a migration — the same reasoning
+    #: `AutomationRule.config` already established in this codebase.
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    #: Null for ORIGINAL. Copied from the provider that produced this
+    #: version, the same denormalisation `PromptExecution.provider` uses.
+    ai_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: Links to the `PromptExecution` that produced this version, so the
+    #: full record (prompt, rendered text, provider, tokens, status) is
+    #: reachable without duplicating any of those columns here. Two
+    #: executions (title, description) currently produce one version; this
+    #: points at one of them as the representative link.
+    prompt_execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("prompt_executions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    #: Null for the lazily-created original snapshot, which no user
+    #: explicitly requested. SET NULL so removing a user does not erase the
+    #: record that they triggered an optimisation.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
 __all__ = [
     "ImportStatus",
     "Product",
+    "ProductAIStatus",
     "ProductImage",
     "ProductImport",
     "ProductSource",
     "ProductStatus",
     "ProductVariant",
+    "ProductVersion",
+    "ProductVersionSource",
 ]
