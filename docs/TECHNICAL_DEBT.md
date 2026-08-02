@@ -326,7 +326,7 @@ mismatches.
 **Fix:** configure `SHOPIFY_*` against a development store; run OAuth once;
 publish one product; confirm webhook HMAC; commit fixtures from live payloads.
 
-### M13 — The Playwright suite is flaky under load / rate limits
+### M13 — The Playwright suite is flaky under load / rate limits — **root cause confirmed, local fix applied**
 
 Phase 7 re-run (chromium):
 
@@ -335,13 +335,69 @@ Phase 7 re-run (chromium):
 * `--workers=1 --retries=2`: **73 passed, 3 flaky, 2 failed** — remaining hard
   failures were still API registration 429 after retries exhausted.
 
-E2E helpers now back off on 429 for API and UI registration. That reduces but
-does not eliminate shared-IP bucket exhaustion on a long suite against a live
-local backend.
+E2E helpers back off on 429 for API and UI registration. That reduces but does
+not eliminate shared-IP bucket exhaustion on a long suite against a live local
+backend.
 
-**Impact:** merge confidence still requires serial workers and/or a higher
-local rate-limit ceiling for e2e.
-**Trigger:** before the suite gates a merge without retries.
+**2026-08-02 investigation.** A prior checkpoint reported 8 failures (13
+passed, 8 failed, 18 skipped) and left them uninvestigated. Reproduced and
+root-caused rather than assumed:
+
+1. **Compounding, now-fixed environmental fault:** three stray `next dev`
+   processes (from an unrelated earlier session) were squatting on port 3000.
+   `playwright.config.ts` sets `reuseExistingServer: true` locally, so
+   Playwright silently attached to a dev-mode server instead of the
+   `npm run start` production build the config declares. Stopping them and
+   rebuilding cleanly (`rm -rf .next && npm run build`) alone fixed 7 of the 8
+   reported failures.
+2. **Real root cause of the remainder:** `SECURITY_RATE_LIMIT_REQUESTS=100`
+   (the production default, also the local `.env` default) is genuinely
+   exceeded by one legitimate serial run of the full suite. Confirmed directly
+   — polling `ratelimit:ip:127.0.0.1` in Redis mid-run showed the counter
+   reaching **101, 103, 106, 110** against a limit of 100, in a single clean
+   `--workers=1` pass. This is unauthenticated traffic (registration, and
+   anything before a session exists) sharing one IP-keyed bucket — the same
+   bucket a credential-stuffing attempt would hit — and a 77-test suite
+   generates more than 100 such requests inside one 60-second window even run
+   serially. Confirmed not a test-logic bug: the one failure without the
+   "registration" signature (`products.spec.ts` AliExpress-import test) was
+   re-run in isolation and skipped cleanly, as designed.
+
+**Fix applied (local only):** raised `SECURITY_RATE_LIMIT_REQUESTS` to `1000`
+in the local, gitignored `.env` — not `.env.example`, not the `config.py`
+default, not any CI job. The production default is unchanged. Raising the
+ceiling rather than setting `SECURITY_RATE_LIMIT_ENABLED=false` (the fix
+`docs/DevelopmentSetup.md` previously suggested) keeps the limiter itself
+exercised during e2e instead of switched off — a regression that made the
+limiter *too* lenient would still be caught; one that made it too strict for
+real traffic would not have been. `docs/DevelopmentSetup.md`'s troubleshooting
+entry now recommends this instead of disabling the control.
+
+**Result:** full suite, both projects, re-run clean after the fix —
+chromium 74 passed / 0 failed / 3 skipped, mobile-chrome 74 passed / 0 failed
+/ 3 skipped. The 3 skips per project are the documented live-AliExpress-OAuth
+tests, which correctly skip when the live gateway rejects a synthetic auth
+code (see M10).
+
+**What this does NOT close:** there is still no CI job that runs Playwright.
+This fix makes the local suite trustworthy for a developer to run before
+opening a PR; it does not gate merges. A CI e2e job would need its own
+higher-ceiling backend configuration (e.g. via job-level env, not committed
+defaults) to avoid reintroducing exactly this flake in that environment.
+
+**Separately noticed, not fixed (out of scope for this pass):** starting the
+frontend via `npm run start` (`next start`) against a build produced with
+`output: "standalone"` in `next.config.ts` prints
+`⚠ "next start" does not work with "output: standalone" configuration` on
+every Playwright run. It did not cause a test failure — `next start` still
+served correctly — but it is a real mismatch between how `playwright.config.ts`
+boots the app locally and how the Docker image (`output: standalone`) actually
+runs it in `docs/PRODUCTION_DEPLOYMENT_GUIDE.md`. Worth resolving before C1's
+Docker path is exercised for real, not required for this suite to be green.
+
+**Impact:** merge confidence requires either serial workers with the local
+ceiling raised, or (still to build) a CI e2e job with its own ceiling.
+**Trigger:** before the suite gates a merge without a human running it first.
 **Fix:** dedicated e2e rate-limit bypass header (authenticated test-only) or
 `RATE_LIMIT` env raised for local e2e; await drawer/theme transitions.
 

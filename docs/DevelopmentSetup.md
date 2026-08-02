@@ -196,5 +196,12 @@ time. Rebuild: `docker compose up --build frontend`.
 left the enums behind. `alembic downgrade base` then upgrade again, or recreate
 the database with `docker compose down -v`.
 
-**Rate limit errors locally** — set `SECURITY_RATE_LIMIT_ENABLED=false` in
-`.env`.
+**Rate limit errors running the full Playwright suite locally** — a serial
+run of the full suite legitimately issues more than 100 real backend requests
+per 60-second window from one IP (registration, dashboard fetches, ...),
+which trips the same per-IP bucket a credential-stuffing attempt would. Raise
+the ceiling rather than disabling the control: set
+`SECURITY_RATE_LIMIT_REQUESTS=1000` in `.env` and restart the backend
+(`--reload` does not pick up `.env` changes — only source changes). Leave
+`SECURITY_RATE_LIMIT_ENABLED=true`, so the limiter stays exercised by the
+suite. See [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md) M13.
