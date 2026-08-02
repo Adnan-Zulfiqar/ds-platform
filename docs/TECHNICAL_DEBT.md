@@ -17,9 +17,12 @@ OAuth/Admin verification still open (M17).
 rather than reading, all now closed and pinned by tests (see S1–S5 below).
 **Security hardening 2026-08-01** — M18 resolved (Compose secret defaults
 removed and the guard proved in CI); `.env.production.example`,
-`docs/PRODUCTION_SECURITY.md` and `scripts/check_secrets.py` added. **C1 still
-open**: Docker and WSL are both absent from this machine, so the deployment path
-remains unexecuted here.
+`docs/PRODUCTION_SECURITY.md` and `scripts/check_secrets.py` added.
+**Production readiness checkpoint 2026-08-01** — C1 narrowed again: the CI
+compose smoke job is now **blocking** and asserts cross-container connectivity
+rather than merely that processes started. M15 narrowed. C1 remains open;
+the exact blocker is now known and is one elevated command away. See
+[PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 
 **Current count: 1 critical (narrowed), 1 high (narrowed), ~11 medium, 5 low.**
 
