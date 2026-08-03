@@ -51,6 +51,17 @@ HMAC (`X-Shopify-Hmac-SHA256`) required. Replay protection via Redis NX.
 Topics registered on connect: products/update, inventory_levels/update,
 orders/create, orders/updated.
 
+### Delivery URL
+
+| `SHOPIFY_WEBHOOK_CALLBACK_BASE` | Registered address |
+|---|---|
+| ends with `/webhooks` | `{base}/{topic-with-hyphens}` → `POST .../webhooks/orders-create` |
+| anything else (e.g. OAuth callback) | `{base}` for every topic → `POST` on that path; topic from `X-Shopify-Topic` |
+
+Path-scoped Cloudflare tunnels that only forward the OAuth callback should set
+the webhook base to the same callback URL. `GET` stays OAuth; `POST` is the
+webhook receiver.
+
 ## Security
 
 - Tokens Fernet-encrypted at rest

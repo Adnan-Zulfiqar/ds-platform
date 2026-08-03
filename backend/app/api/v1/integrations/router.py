@@ -311,6 +311,21 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
     return RedirectResponse(f"{return_url}?shopify=connected", status_code=303)
 
 
+@router.post(
+    "/shopify/callback",
+    response_model=ShopifyWebhookAckResponse,
+    summary="Receive Shopify webhooks (shared callback URL)",
+)
+async def shopify_webhook_via_callback(request: Request) -> ShopifyWebhookAckResponse:
+    """Accept webhooks on the OAuth callback path when the tunnel only forwards that URL.
+
+    GET remains OAuth. POST is HMAC-verified webhook delivery; topic comes from
+    ``X-Shopify-Topic``.
+    """
+    topic = (request.headers.get("x-shopify-topic") or "").strip().replace("/", "-")
+    return await receive_shopify_webhook(request, topic=topic or "unknown")
+
+
 @router.get(
     "/shopify/status",
     response_model=ShopifyStatusResponse,

@@ -38,6 +38,8 @@ domain normaliser (correct). The real myshopify domain is `mriy3s-zv.myshopify.c
 | Scopes | `read_products,write_products,read_inventory,write_inventory,read_orders,read_locations` |
 | Whitespace issues | none |
 | Public callback tunnel | reaches this backend (empty probe → 303 to frontend) |
+| Public `/shopify/webhooks/*` | **404** (tunnel path allowlist; not forwarded) |
+| Webhook delivery workaround | `SHOPIFY_WEBHOOK_CALLBACK_BASE` = callback URL; `POST` on callback |
 
 ---
 

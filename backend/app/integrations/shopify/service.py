@@ -51,6 +51,23 @@ logger = get_logger(__name__)
 _STATE_KEY_PREFIX = "shopify:oauth:state:"
 
 
+def webhook_delivery_address(*, base: str, topic: str) -> str:
+    """Build the address a webhook topic should be registered against.
+
+    Normally each topic gets its own path under ``.../webhooks/{topic}``. A
+    path-scoped tunnel (e.g. a Cloudflare tunnel that only forwards the OAuth
+    callback path in local development) cannot reach that — so when
+    ``base`` is anything other than a ``.../webhooks`` address, every topic
+    shares that one URL instead, and the receiver tells topics apart using
+    the ``X-Shopify-Topic`` header. See
+    ``docs/SHOPIFY_INTEGRATION.md``.
+    """
+    trimmed = base.rstrip("/")
+    if trimmed.endswith("/webhooks"):
+        return f"{trimmed}/{topic.replace('/', '-')}"
+    return trimmed
+
+
 class ShopifyService(BaseService):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -335,12 +352,17 @@ class ShopifyService(BaseService):
 
     async def register_webhooks(self, store_id: uuid.UUID) -> None:
         client, connection = await self.client_for_store(store_id)
-        base = settings.shopify.webhook_callback_base.rstrip("/")
+        base = settings.shopify.webhook_callback_base
         topics = (
+            "products/create",
             "products/update",
             "inventory_levels/update",
             "orders/create",
             "orders/updated",
+            # Lets DropPilot notice an uninstall immediately rather than only
+            # discovering it the next time a call to this shop's Admin API
+            # fails with 401 — see `receive_shopify_webhook`'s handling.
+            "app/uninstalled",
         )
         for topic in topics:
             await client.post(
@@ -348,7 +370,7 @@ class ShopifyService(BaseService):
                 json_body={
                     "webhook": {
                         "topic": topic,
-                        "address": f"{base}/{topic.replace('/', '-')}",
+                        "address": webhook_delivery_address(base=base, topic=topic),
                         "format": "json",
                     }
                 },

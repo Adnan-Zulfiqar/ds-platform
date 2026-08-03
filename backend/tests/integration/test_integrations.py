@@ -602,3 +602,33 @@ class TestWebhook:
             in operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
         )
         assert operation.get("security") is None
+
+
+SHOPIFY_CALLBACK_URL = "/api/v1/integrations/shopify/callback"
+
+
+class TestShopifyWebhookViaCallback:
+    async def test_post_on_callback_rejects_invalid_hmac(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import SecretStr
+
+        monkeypatch.setattr(
+            "app.integrations.shopify.webhook.settings.shopify.api_secret",
+            SecretStr("shpss_integration_test_secret"),
+        )
+        response = await client.post(
+            SHOPIFY_CALLBACK_URL,
+            content=b'{"id":1}',
+            headers={
+                "content-type": "application/json",
+                "x-shopify-topic": "orders/create",
+                "x-shopify-hmac-sha256": "not-a-valid-hmac",
+            },
+        )
+        assert response.status_code == 401
+
+    async def test_post_callback_documented_in_openapi(self, client: AsyncClient) -> None:
+        spec = (await client.get("/openapi.json")).json()
+        operation = spec["paths"][SHOPIFY_CALLBACK_URL]["post"]
+        assert "webhook" in operation["summary"].lower()
