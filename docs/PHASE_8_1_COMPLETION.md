@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-08-03 |
 | Branch | `develop` (**not** `main`) |
-| Tag | `phase-8-1-complete` → `ccb70b6` |
+| Tag | `phase-8-1-complete` on `develop` |
 | Plan | [PHASE_8_1_PLAN.md](PHASE_8_1_PLAN.md) |
 | Depends on | Phase 8 (`phase-8-complete`), install-flow audit |
 
@@ -41,8 +41,10 @@ Merchants are **never** asked for API key, secret, or access token.
 | `b4fa464` | feat(frontend): Shopify connect dialog and claim-install UX |
 | `1192e4b` | test(shopify): cover App URL install and dialog OAuth flow |
 | `598306b` | docs: close Phase 8.1 with honest live-verification gaps |
----
+| `ccb70b6` | docs: record Phase 8.1 tip hash and commit list |
+| `f8adb79`+ | tip-hash pin commits (see `git log phase-8-1-complete`) |
 
+Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
 ## 3. Quality gates (verified this session)
 
 | Gate | Result |
