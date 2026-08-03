@@ -162,7 +162,19 @@ class Product(TenantScopedBase):
     external_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     # --- Catalogue ----------------------------------------------------------
+    #
+    # `title`, `brand`, and `description` share one pattern (Product Editor
+    # stages 1-2): each has a `supplier_*` twin that always reflects the
+    # supplier's current value, while the bare column is merchant-editable
+    # and only refreshed by a sync while it still equals its twin — see
+    # `ProductImportService._upsert`. `category_name`/`vendor`/`tags`/SEO
+    # fields below need no such protection: `map_product` never sets them,
+    # so a sync never touches them regardless.
     title: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    #: The supplier's title as of the last sync. Always overwritten on
+    #: import/refresh; not itself editable.
+    supplier_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     #: The merchant-editable description. Sanitized HTML
     #: (``app.core.sanitize.sanitize_html``) — never raw supplier markup.
@@ -183,6 +195,10 @@ class Product(TenantScopedBase):
     category_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     category_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    #: The supplier's brand attribute as of the last sync. Same protection
+    #: as `supplier_title`.
+    supplier_brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     status: Mapped[ProductStatus] = mapped_column(
         Enum(

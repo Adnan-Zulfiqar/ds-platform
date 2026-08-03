@@ -49,9 +49,10 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
     existing product's status is the service's decision, and encoding it here
     would mean a re-sync silently reverting a product the tenant had activated.
 
-    ``supplier_description`` is likewise not applied directly to
-    ``Product.description`` here. It is the always-fresh supplier snapshot;
-    whether it is safe to also refresh the merchant-editable ``description``
+    ``supplier_title``/``supplier_brand``/``supplier_description`` are
+    likewise not applied directly to ``Product.title``/``Product.brand``/
+    ``Product.description`` here. Each is the always-fresh supplier
+    snapshot; whether it is safe to also refresh the merchant-editable twin
     is a sync-policy decision belonging to
     :meth:`ProductImportService._upsert`, the same reasoning that already
     keeps ``status`` out of this function.
@@ -85,13 +86,13 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
         "external_url": _ITEM_URL.format(product_id=external_id) if external_id else None,
         # A product with no title is still a product. The placeholder is visible
         # in the UI, which is better than an import that fails on one field.
-        "title": _truncate(base.title, _TITLE_LIMIT) or f"Untitled product {external_id}",
+        "supplier_title": _truncate(base.title, _TITLE_LIMIT) or f"Untitled product {external_id}",
         # Sanitized here, once, before the value ever reaches the mapper's
         # caller — never at render time, and never left as raw supplier HTML
         # for something downstream to forget to sanitize.
         "supplier_description": sanitize_html(base.description_html),
         "category_id": str(base.category_id) if base.category_id is not None else None,
-        "brand": _truncate(brand, 255),
+        "supplier_brand": _truncate(brand, 255),
         "currency": base.currency_code,
         "cost_price_min": low,
         "cost_price_max": high,

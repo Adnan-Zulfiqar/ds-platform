@@ -152,6 +152,14 @@ class ProductImportService(BaseService):
         )
         return product
 
+    #: Fields with a merchant-editable column and a `supplier_{field}` twin
+    #: that always tracks the supplier (Product Editor stages 1-2: `title`/
+    #: `brand` joined `description`). Every one of these is popped out of
+    #: `values` in `_upsert` and handled by the loop there instead of the
+    #: blanket `setattr` — the same reasoning that already keeps `status`
+    #: out of a blanket update.
+    _SYNCED_FIELDS = ("title", "brand", "description")
+
     async def _upsert(self, values: dict[str, Any]) -> Product:
         """Create the product, or update it if this tenant already has it.
 
@@ -159,33 +167,39 @@ class ProductImportService(BaseService):
         the tenant has activated back to draft — that would silently unpublish
         their catalogue every time prices refreshed.
 
-        ``description`` gets the same protection, by a different mechanism.
-        ``supplier_description`` (popped out of ``values`` here) always
-        refreshes to what the supplier currently says. ``description`` only
-        refreshes *while it still equals the previous supplier snapshot* —
-        the moment a merchant edit (once a write API exists) diverges the
-        two, a sync stops touching ``description`` so the edit is never
-        silently overwritten, while ``supplier_description`` keeps tracking
-        the supplier regardless.
+        ``title``/``brand``/``description`` get the same protection, by the
+        same mechanism. Each ``supplier_{field}`` value (popped out of
+        ``values`` here) always refreshes to what the supplier currently
+        says. The merchant-editable twin only refreshes *while it still
+        equals the previous supplier snapshot* — the moment a merchant edit
+        (via ``PATCH /products/{id}``) diverges the two, a sync stops
+        touching that field so the edit is never silently overwritten,
+        while its ``supplier_*`` twin keeps tracking the supplier regardless.
         """
         existing = await self.products.get_by_external_id(
             source=ProductSource.ALIEXPRESS, external_id=values["external_id"]
         )
 
-        supplier_description = values.pop("supplier_description", None)
+        supplier_values = {
+            field: values.pop(f"supplier_{field}", None) for field in self._SYNCED_FIELDS
+        }
         values = {**values, "last_synced_at": datetime.now(UTC)}
 
         if existing is None:
+            synced = {field: supplier_values[field] for field in self._SYNCED_FIELDS}
+            supplier_synced = {f"supplier_{field}": val for field, val in synced.items()}
             return await self.products.create(
                 status=ProductStatus.DRAFT,
-                description=supplier_description,
-                supplier_description=supplier_description,
+                **synced,
+                **supplier_synced,
                 **values,
             )
 
-        if existing.description == existing.supplier_description:
-            existing.description = supplier_description
-        existing.supplier_description = supplier_description
+        for field in self._SYNCED_FIELDS:
+            supplier_field = f"supplier_{field}"
+            if getattr(existing, field) == getattr(existing, supplier_field):
+                setattr(existing, field, supplier_values[field])
+            setattr(existing, supplier_field, supplier_values[field])
 
         for field, value in values.items():
             setattr(existing, field, value)

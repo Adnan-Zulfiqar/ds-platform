@@ -134,6 +134,50 @@ class ProductDetailRead(ProductRead):
     supplier_description: str | None = None
 
 
+class ProductUpdateRequest(CamelCaseModel):
+    """Merchant edits to a product's editable fields (Product Editor stage 2).
+
+    Every field is optional and PATCH semantics apply — only fields actually
+    present in the request body are changed; the router reads
+    ``model_dump(exclude_unset=True)`` rather than treating an absent field
+    the same as an explicit ``null``.
+
+    ``title``/``brand``/``description`` are supplier-sourced fields that are
+    now safe to edit because they have a ``supplier_*`` twin
+    (`ProductImportService._upsert`) protecting them from being silently
+    reverted by the next sync. The rest — ``category_name``, ``vendor``,
+    ``tags``, and the SEO fields — have no supplier equivalent at all and
+    were never at risk.
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=512)
+    description: str | None = None
+    brand: str | None = Field(default=None, max_length=255)
+    category_name: str | None = Field(default=None, max_length=255)
+    vendor: str | None = Field(default=None, max_length=255)
+    tags: list[str] | None = None
+    seo_title: str | None = Field(default=None, max_length=512)
+    seo_description: str | None = Field(default=None, max_length=512)
+    meta_keywords: str | None = None
+    slug: str | None = Field(default=None, max_length=255)
+    status: ProductStatus | None = None
+
+    @field_validator("title", "brand", "category_name", "vendor", "seo_title", "slug")
+    @classmethod
+    def _reject_blank_when_provided(cls, value: str | None) -> str | None:
+        """`str_strip_whitespace` already trims; an explicitly-sent empty
+        string here almost always means "the field was cleared" from a form,
+        which is ambiguous with "no change" for `exclude_unset`-style PATCH
+        semantics on a field where blank isn't a meaningful value. `title` in
+        particular is `NOT NULL` — silently writing `""` would pass
+        validation here and then fail (or worse, succeed and corrupt display)
+        at the database.
+        """
+        if value is not None and value == "":
+            raise ValueError("This field cannot be set to an empty string.")
+        return value
+
+
 class ProductImportRead(CamelCaseModel):
     """One import attempt — the audit record.
 

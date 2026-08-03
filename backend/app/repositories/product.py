@@ -67,6 +67,17 @@ class ProductRepository(TenantScopedRepository[Product]):
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_by_slug(self, slug: str) -> Product | None:
+        """Find a product by its merchant-set URL slug, within this tenant.
+
+        Used only to pre-check uniqueness before a `PATCH` writes one —
+        `uq_products_tenant_slug` is the real backstop, this just turns a raw
+        constraint violation into a clean, specific error before the insert.
+        """
+        query = self._base_query().where(Product.slug == slug)
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
     async def count_by_status(self) -> dict[str, int]:
         """Catalogue totals per status, for the products page header.
 

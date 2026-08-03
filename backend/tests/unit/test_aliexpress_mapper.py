@@ -49,7 +49,7 @@ class TestProductMapping:
 
         assert values["source"] is ProductSource.ALIEXPRESS
         assert values["external_id"] == "3256806389000685"
-        assert "Realme GT Neo5" in values["title"]
+        assert "Realme GT Neo5" in values["supplier_title"]
         assert values["currency"] == "USD"
 
     def test_keeps_both_supplier_identifiers(self, product: ProductDetail) -> None:
@@ -80,7 +80,7 @@ class TestProductMapping:
 
     def test_brand_is_lifted_from_the_attributes(self, product: ProductDetail) -> None:
         """Brand is an attribute row, not a top-level field."""
-        assert map_product(product)["brand"] == "NoEnName_Null"
+        assert map_product(product)["supplier_brand"] == "NoEnName_Null"
 
     def test_supplier_description_is_sanitized_html_from_the_real_fixture(
         self, product: ProductDetail
@@ -94,13 +94,17 @@ class TestProductMapping:
         # content (the image) does.
         assert "<div" not in values["supplier_description"]
 
-    def test_supplier_description_is_not_set_by_the_mapper_onto_description(
+    def test_synced_fields_are_not_set_by_the_mapper_onto_their_editable_twin(
         self, product: ProductDetail
     ) -> None:
-        """`description` (the merchant-editable field) is a sync-policy
-        decision for `ProductImportService._upsert`, not the mapper -- the
-        same reasoning that already keeps `status` out of this function."""
-        assert "description" not in map_product(product)
+        """`title`/`brand`/`description` (the merchant-editable fields) are a
+        sync-policy decision for `ProductImportService._upsert`, not the
+        mapper -- the same reasoning that already keeps `status` out of this
+        function."""
+        values = map_product(product)
+        assert "title" not in values
+        assert "brand" not in values
+        assert "description" not in values
 
     def test_a_product_with_no_description_maps_to_none(self) -> None:
         detail = ProductDetail.model_validate({"ae_item_base_info_dto": {"product_id": 1}})
@@ -120,7 +124,7 @@ class TestProductMapping:
         detail = ProductDetail.model_validate({"ae_item_base_info_dto": {"product_id": 42}})
         values = map_product(detail)
 
-        assert values["title"] == "Untitled product 42"
+        assert values["supplier_title"] == "Untitled product 42"
         assert values["external_id"] == "42"
 
     def test_an_over_long_title_is_truncated_not_rejected(self) -> None:
@@ -131,7 +135,7 @@ class TestProductMapping:
         detail = ProductDetail.model_validate(
             {"ae_item_base_info_dto": {"product_id": 1, "subject": "x" * 900}}
         )
-        assert len(map_product(detail)["title"]) == 512
+        assert len(map_product(detail)["supplier_title"]) == 512
 
     def test_an_empty_product_maps_without_raising(self) -> None:
         values = map_product(ProductDetail.model_validate({}))

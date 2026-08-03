@@ -23,6 +23,36 @@ supplier-vs-merchant overwrite-protection mechanism is built but not yet
 exercised by a real edit — see `docs/TECHNICAL_DEBT.md`. Every other row in
 §2 is unchanged from the original audit; stages 2+ remain as scoped in §4.
 
+**Stage 2 — product write API: done (2026-08-03).** `PATCH /products/{id}`
+now lets a merchant edit `title`, `description`, `brand`, `categoryName`,
+`vendor`, `tags`, `seoTitle`, `seoDescription`, `metaKeywords`, `slug`, and
+`status`. The overwrite-protection pattern from stage 1 is generalised
+(`ProductImportService._SYNCED_FIELDS`) to cover `title`/`brand` as well as
+`description` — each gets a `supplier_*` twin (migration `0014`) so a sync
+only refreshes the merchant-editable column while it still matches the
+supplier's last-known value. Slug uniqueness is enforced per-tenant with a
+clean `409` (`ConflictError`) ahead of the database constraint. Merchant-
+submitted `description` is sanitized identically to supplier `description`
+before storage.
+
+**Stage 2 finding — variant/image editing is blocked on the current sync
+strategy, not merely unbuilt.** `ProductImportService.import_product` calls
+`ProductVariantRepository.delete_for_product` and
+`ProductImageRepository.delete_for_product` before recreating every
+variant/image row from the latest supplier payload on **every** sync —
+including a manual "Sync from supplier" click. A per-field overwrite-
+protection column (the stage 1/2 pattern) cannot help here: the row itself
+is deleted and a new one inserted with a new UUID, so any merchant edit to a
+variant or image — and any other system that stored a foreign key to that
+row's id — is destroyed regardless of which columns changed. Adding
+`PATCH /products/{id}/variants/{variantId}` or the image endpoints before
+fixing this would ship a feature that silently reverts on the next sync,
+exactly the failure mode stages 1-2 exist to prevent for the product level.
+**This must be resolved first** (matching each variant/image by
+`external_variant_id`/`url` and diffing rather than delete-and-recreate)
+before stage 3 can safely add variant/image editing. See
+`docs/TECHNICAL_DEBT.md`.
+
 ---
 
 ## 1. Method

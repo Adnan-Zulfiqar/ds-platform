@@ -492,6 +492,41 @@ write API to actually diverge the two yet — that is stage 3. Until then it is
 inert but correct, verified in integration tests that simulate a merchant
 edit by writing the column directly.
 
+**Product Editor stage 2 (2026-08-03):** `PATCH /products/{id}` lets a
+merchant edit `title`/`description`/`brand`/`categoryName`/`vendor`/`tags`/
+SEO fields/`slug`/`status`. The stage 1 overwrite-protection pattern is now
+real, not inert: `title`/`brand` got their own `supplier_title`/
+`supplier_brand` twins (migration `0014`, generalised in
+`ProductImportService._SYNCED_FIELDS`), verified by editing a field through
+the API and then re-syncing. See **M20** below for what stage 2 explicitly
+does *not* cover yet (variants, images) and why.
+
+### M20 — Variant and image editing is blocked on the current sync strategy
+
+`ProductImportService.import_product` calls `ProductVariantRepository.delete_for_product`
+and `ProductImageRepository.delete_for_product` before recreating every
+variant/image row from the supplier payload on **every** sync, including a
+manual "Sync from supplier" click. This predates Product Editor work — it is
+how Phase 4 was built — but it directly blocks the natural next step: a
+per-field overwrite-protection column (the pattern stage 1/2 just proved for
+`title`/`brand`/`description`) cannot protect a row that gets deleted and
+recreated with a new UUID. A merchant edit to a variant's price, or an
+image's alt text, or its position, would silently revert on the next sync
+regardless of which columns it touched — and any other row that had come to
+reference a variant/image by id (a future order line item, an audit
+reference) would dangle.
+
+**Impact:** none today — no variant/image write API exists yet, so nothing
+is currently at risk. It becomes real the moment stage 3 tries to add one.
+**Trigger:** before implementing `PATCH /products/{id}/variants/{variantId}`
+or any `/products/{id}/images/*` endpoint.
+**Fix:** change the sync strategy from delete-and-recreate to a diff:
+match existing variants by `external_variant_id` and images by `url`, update
+in place, insert genuinely new ones, and only delete rows the supplier no
+longer lists — preserving id stability (and, once it exists, per-field
+overwrite protection) across a sync the same way products already do via
+`ProductRepository.get_by_external_id`.
+
 **Live deploy follow-up (2026-08-03):** Local uvicorn restart exposes Phase 8.1
 routes. Public `/install` remains **404** because Cloudflare Tunnel is
 **path-scoped** (callback + AliExpress webhook forwarded; install/webhook/health

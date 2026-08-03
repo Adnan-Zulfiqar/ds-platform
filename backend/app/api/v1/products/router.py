@@ -31,9 +31,11 @@ from app.schemas.product import (
     ProductOptimizeRequest,
     ProductOptimizeResponse,
     ProductRead,
+    ProductUpdateRequest,
     ProductVariantRead,
     ProductVersionRead,
 )
+from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
 
@@ -159,6 +161,31 @@ async def get_product(
     safer and true from this tenant's perspective.
     """
     product = await ProductRepository(session).get_by_id_or_raise(product_id)
+    return _to_detail(product)
+
+
+@router.patch(
+    "/{product_id}",
+    response_model=ProductDetailRead,
+    summary="Update a product's editable fields",
+)
+async def update_product(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: ProductUpdateRequest,
+) -> ProductDetailRead:
+    """Apply merchant edits to a product.
+
+    Admin or owner: editing catalogue content that customers see is the same
+    weight of decision as importing or optimising it.
+
+    PATCH semantics: only fields present in the request body change. A
+    field the merchant never mentions is left exactly as it was — sending
+    `{"tags": [...]}` does not touch `title`, and vice versa.
+    """
+    changes = payload.model_dump(exclude_unset=True)
+    product = await ProductService(session).update_product(product_id, changes)
     return _to_detail(product)
 
 
