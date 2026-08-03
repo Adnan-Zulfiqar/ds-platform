@@ -176,10 +176,13 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
       args:
-        # Points at the host-published backend port, because this URL is
-        # resolved by the user's browser — which is outside the Compose network
-        # and cannot resolve the service name `backend`.
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        # Resolved by the browser, not by containers. Default is the nginx
+        # public origin so the SPA calls same-origin `/api` (proxied to the
+        # backend) rather than `:8000` — which would skip nginx and break the
+        # cookie/CORS story documented in `nginx/conf.d/default.conf` (audit A-05).
+        # Override to `http://localhost:8000` only when browsing the frontend
+        # port directly without nginx.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost}
         NEXT_PUBLIC_ENVIRONMENT: local
     restart: unless-stopped
     ports:

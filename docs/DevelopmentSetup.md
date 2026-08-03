@@ -186,8 +186,14 @@ correct. The application refuses to start in a deployed environment with the
 default key. Set a real one, or keep `ENVIRONMENT=local`.
 
 **Frontend cannot reach the API** — `NEXT_PUBLIC_API_URL` is resolved by the
-browser, not by the container. It must be `http://localhost:8000`, never
-`http://backend:8000`.
+browser, not by the container. Never use `http://backend:8000` (Compose DNS
+is invisible to the browser).
+
+- **Via nginx (`http://localhost`)** — bake `NEXT_PUBLIC_API_URL=http://localhost`
+  so the SPA calls same-origin `/api` (proxied to the backend). This is the
+  Compose default (audit A-05).
+- **Direct backend (`npm run dev` or `:8000`)** — use
+  `http://localhost:8000` (see `frontend/.env.example`).
 
 **Changing a `NEXT_PUBLIC_*` value has no effect** — those are inlined at build
 time. Rebuild: `docker compose up --build frontend`.

@@ -694,7 +694,7 @@ class Settings(_EnvFileSettings):
     # `NoDecode` suppresses that pre-parse and hands the raw string to the
     # validator, which accepts both the comma-separated and JSON-array forms.
     cors_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["http://localhost:3000"]
+        default_factory=lambda: ["http://localhost:3000", "http://localhost"]
     )
     allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 

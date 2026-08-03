@@ -233,7 +233,7 @@ jobs:
           RABBITMQ_USER=droppilot
           RABBITMQ_PASSWORD=droppilot
           SECURITY_SECRET_KEY=ci-only-secret-not-used-anywhere-else
-          NEXT_PUBLIC_API_URL=http://localhost:8000
+          NEXT_PUBLIC_API_URL=http://localhost
           EOF
           docker compose config --quiet
           docker compose config --services | grep -E '^(postgres|redis|rabbitmq|backend|worker|beat|frontend|nginx)$'
@@ -379,7 +379,8 @@ jobs:
           RABBITMQ_USER=droppilot
           RABBITMQ_PASSWORD=ci-only-rabbitmq-password
           SECURITY_SECRET_KEY=ci-only-secret-not-used-anywhere-else-32chars
-          NEXT_PUBLIC_API_URL=http://localhost:8000
+          NEXT_PUBLIC_API_URL=http://localhost
+          CORS_ORIGINS=http://localhost:3000,http://localhost
           ENVIRONMENT=local
           EOF
 
@@ -481,6 +482,19 @@ jobs:
             echo "::error::nginx does not route to the frontend."
             docker compose logs --tail=100 nginx; exit 1; }
           echo "nginx routes to backend and frontend"
+
+      - name: Frontend bundle uses nginx origin (A-05)
+        run: |
+          # NEXT_PUBLIC_API_URL is inlined at build time. If it still points at
+          # :8000, browsers via :80 bypass nginx /api and hit CORS/cookie bugs.
+          hits=$(docker compose exec -T frontend sh -c \
+            "grep -R --include='*.js' -F 'localhost:8000' /app 2>/dev/null | head -5" || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Frontend image embeds localhost:8000 — bake http://localhost for compose."
+            echo "$hits"
+            exit 1
+          fi
+          echo "frontend bundle does not embed localhost:8000"
 
       - name: Diagnostics on failure
         if: failure()

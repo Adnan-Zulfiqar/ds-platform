@@ -25,8 +25,8 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
-**Full application audit fix pass (2026-08-03)** — A-01, A-03, and A-04
-resolved (see below). Remaining audit priorities: A-05, A-02, A-06.
+**Full application audit fix pass (2026-08-03)** — A-01, A-03, A-04, and A-05
+resolved (see below). Remaining audit priorities: A-02, A-06.
 
 **Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
@@ -74,6 +74,20 @@ product from a prior attempt.
 
 **Verified:** ruff, mypy strict, pytest **748** passed (new unit coverage for
 handle + adopt-vs-post). Untracked WIP webhook tests excluded from this gate.
+
+### ~~A-05 — Nginx same-origin story broken by baked `NEXT_PUBLIC_API_URL`~~ ✅ RESOLVED
+
+**Root cause:** Compose baked `NEXT_PUBLIC_API_URL=http://localhost:8000`, so
+browsers entering via nginx `:80` still called the published API port — CORS /
+cookie failures and an unused `/api` proxy.
+
+**Fix:** Compose default and `.env.example` use `http://localhost`; CORS lists
+both `:3000` and the nginx origin; CI compose smoke asserts the frontend image
+does not embed `localhost:8000`; docs corrected.
+
+**Verified:** ruff, mypy strict, pytest **751** passed (compose-default + CORS
+default coverage). Compose smoke bundle assertion is in CI (not executed in
+this local pass).
 
 ---
 

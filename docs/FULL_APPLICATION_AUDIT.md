@@ -90,7 +90,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Recommended fix** | Idempotency: lookup by handle/SKU before create; or pending listing row before outbound call. |
 | **Resolution** | Deterministic handle `droppilot-{product_id}`; lookup-before-create adopts an existing Shopify product on retry. |
 
-### A-05 — Nginx “same-origin” story broken by baked `NEXT_PUBLIC_API_URL`
+### ~~A-05 — Nginx “same-origin” story broken by baked `NEXT_PUBLIC_API_URL`~~ ✅ RESOLVED
 
 | | |
 |---|---|
@@ -98,6 +98,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Location** | `docker-compose.yml` frontend build arg default `http://localhost:8000`; `frontend/lib/api-client.ts`; `nginx/conf.d/default.conf` comments |
 | **Impact** | Browser via nginx `:80` still calls `:8000` → CORS/cookie failures; nginx `/api` proxy unused by SPA. |
 | **Recommended fix** | Bake public origin (e.g. `http://localhost`) for compose; align `CORS_ORIGINS`; smoke-test the built client URL, not only nginx `/api`. |
+| **Resolution** | Compose default `http://localhost`; CORS includes nginx origin; CI smoke rejects `:8000` in the frontend image. |
 
 ### A-06 — Playwright not in CI; rate-limit flakes on default env (M13)
 
@@ -291,7 +292,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Compose secret defaults removed | Resolved (M18) |
 | CI compose smoke blocking | Present — not re-run here |
 | Local Docker | **NOT VERIFIED** (C1) |
-| Nginx + SPA API URL | **Misaligned** (A-05) |
+| Nginx + SPA API URL | **Aligned** (A-05 — Compose defaults to nginx origin) |
 
 ---
 
@@ -323,7 +324,7 @@ Do **not** start until this report is accepted. Suggested sequence:
 4. **A-07 / A-08 / A-09** — Status authz, safe errors, Shopify replay fail-closed
 5. ~~**A-04** — Publish idempotency~~ ✅
 6. **A-16** — Commit or discard Shopify tunnel webhook WIP
-7. **A-05 / A-06** — Compose API URL + CI Playwright
+7. ~~**A-05**~~ ✅ / **A-06** — Compose API URL + CI Playwright
 8. Medium/Low UX and docs (A-14, A-15, …)
 
 For every fix: root-cause note, tests, re-run quality gates. Do not remove tests to go green.

@@ -12,6 +12,9 @@ production release.
 
 ### Fixed
 
+- **A-05** — Compose frontend defaults to `NEXT_PUBLIC_API_URL=http://localhost`
+  so the SPA uses nginx same-origin `/api`; CORS includes the nginx origin; CI
+  smoke asserts the bundle does not embed `:8000`.
 - **A-04** — Shopify product publish is Celery-safe: create uses deterministic
   handle `droppilot-{product_id}` and adopts an existing Shopify product on
   redelivery instead of posting a duplicate.

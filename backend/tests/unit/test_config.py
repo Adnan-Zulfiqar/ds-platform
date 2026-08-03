@@ -64,7 +64,7 @@ class TestListParsing:
 
         settings = Settings()
 
-        assert settings.cors_origins == ["http://localhost:3000"]
+        assert settings.cors_origins == ["http://localhost:3000", "http://localhost"]
         assert settings.allowed_hosts == ["*"]
 
 
