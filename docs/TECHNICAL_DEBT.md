@@ -25,8 +25,29 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
+**Full application audit fix pass (2026-08-03)** — A-01 resolved: Shopify
+`shop_domain` is globally unique; webhook tenant resolution is an indexed
+lookup (see A-01 below).
 
-**Current count: 1 critical (narrowed), 1 high (narrowed), ~12 medium, 5 low.**
+**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
+
+---
+
+## Resolved by the full application audit fix pass (2026-08-03)
+
+### ~~A-01 — Shopify shop domain not globally unique; webhook routing ambiguous~~ ✅ RESOLVED
+
+**Root cause:** uniqueness was only `(tenant_id, shop_domain)`, and webhooks
+resolved tenants by scanning up to 1000 connected rows and taking the first
+domain match — two tenants could own one shop; HMAC-valid webhooks could write
+orders into the wrong workspace.
+
+**Fix:** migration `0012` (dedupe + global unique on `shop_domain`);
+`ShopifyMaintenanceRepository.get_connected_by_shop_domain`; connect rejects
+foreign ownership (`ShopifyShopTakenError`); webhook uses indexed lookup.
+
+**Verified:** ruff, mypy strict, pytest **745** passed (including new unit +
+integration coverage).
 
 ---
 

@@ -43,6 +43,10 @@ class ShopifyConnection(IdentifiedBase):
     __table_args__ = (
         UniqueConstraint("tenant_id", "shop_domain", name="uq_shopify_connections_tenant_shop"),
         UniqueConstraint("tenant_id", "store_id", name="uq_shopify_connections_tenant_store"),
+        # Global: one Shopify shop belongs to at most one DropPilot tenant.
+        # Without this, webhook resolution by domain can write into the wrong
+        # workspace (audit A-01).
+        UniqueConstraint("shop_domain", name="uq_shopify_connections_shop_domain"),
         Index("ix_shopify_connections_tenant_status", "tenant_id", "status"),
     )
 

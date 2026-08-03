@@ -37,11 +37,12 @@ from app.integrations.shopify.exceptions import (
     ShopifyOAuthExchangeError,
     ShopifyOAuthHmacError,
     ShopifyOAuthStateError,
+    ShopifyShopTakenError,
 )
 from app.models.integration import IntegrationStatus
 from app.models.shopify import ShopifyConnection
 from app.models.store import StorePlatform, StoreStatus
-from app.repositories.shopify import ShopifyConnectionRepository
+from app.repositories.shopify import ShopifyConnectionRepository, ShopifyMaintenanceRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
 
@@ -108,6 +109,13 @@ class ShopifyService(BaseService):
 
         shop_domain = normalise_shop_domain(shop)
         tenant_id = require_tenant_id()
+
+        # Reject before sending the merchant to Shopify consent: a second
+        # tenant connecting the same shop would make webhook routing ambiguous.
+        owner = await ShopifyMaintenanceRepository(self.session).get_by_shop_domain(shop_domain)
+        if owner is not None and owner.tenant_id != tenant_id:
+            raise ShopifyShopTakenError()
+
         state = OAuthState.issue().token
 
         await self._store_state(
@@ -196,6 +204,12 @@ class ShopifyService(BaseService):
             raise ShopifyOAuthExchangeError() from exc
         access_token = str(token_payload["access_token"])
         scopes = str(token_payload.get("scope") or settings.shopify.scopes)
+
+        # Race-safe ownership check after token exchange (begin_connection also
+        # checked; the unique constraint is the final backstop).
+        owner = await ShopifyMaintenanceRepository(self.session).get_by_shop_domain(shop_domain)
+        if owner is not None and owner.tenant_id != tenant_id:
+            raise ShopifyShopTakenError()
 
         existing = await self.connections.get_by_shop_domain(shop_domain)
         store_name = str(saved.get("store_name") or shop_domain)

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.exceptions import AuthenticationError, ExternalServiceError, ValidationError
+from app.core.exceptions import (
+    AuthenticationError,
+    ConflictError,
+    ExternalServiceError,
+    ValidationError,
+)
 
 SERVICE_NAME = "shopify"
 
@@ -80,3 +85,14 @@ class ShopifyInvalidShopError(ValidationError):
         "Enter the store's *.myshopify.com domain (Shopify Admin -> Settings -> Domains), "
         "not a custom storefront domain."
     )
+
+
+class ShopifyShopTakenError(ConflictError):
+    """This *.myshopify.com domain is already bound to another tenant.
+
+    Cross-tenant installs of the same shop would make webhook routing by
+    ``X-Shopify-Shop-Domain`` ambiguous — audit A-01.
+    """
+
+    code = "shopify_shop_taken"
+    message = "This Shopify shop is already connected to another workspace."

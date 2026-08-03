@@ -74,8 +74,7 @@ async def receive_shopify_webhook(request: Request, *, topic: str) -> ShopifyWeb
             from app.repositories.shopify import ShopifyMaintenanceRepository
 
             maint = ShopifyMaintenanceRepository(session)
-            rows = await maint.list_connected(limit=1000)
-            match = next((row for row in rows if row.shop_domain == shop_domain), None)
+            match = await maint.get_connected_by_shop_domain(shop_domain)
             if match is None:
                 logger.warning("shopify_webhook_unknown_shop", shop_domain=shop_domain)
                 return ShopifyWebhookAckResponse()

@@ -74,9 +74,11 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
 
 
 class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
-    """Unscoped sweep for Celery — fourth documented unscoped repository.
+    """Unscoped sweep / webhook lookup — documented unscoped repository.
 
-    HTTP handlers must never use this class. Tasks bind tenant context per row.
+    HTTP handlers must never use this class for ordinary CRUD. Celery tasks and
+    inbound Shopify webhooks bind tenant context per row after an unscoped
+    domain lookup.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -92,3 +94,22 @@ class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
         )
         result = await self.session.execute(query)
         return list(result.scalars().all())
+
+    async def get_by_shop_domain(self, shop_domain: str) -> ShopifyConnection | None:
+        """Any status — used to reject connect when another tenant owns the shop."""
+        result = await self.session.execute(
+            select(ShopifyConnection).where(ShopifyConnection.shop_domain == shop_domain)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_connected_by_shop_domain(self, shop_domain: str) -> ShopifyConnection | None:
+        """Indexed domain lookup for HMAC-verified webhooks — not a table scan."""
+        from app.models.integration import IntegrationStatus
+
+        result = await self.session.execute(
+            select(ShopifyConnection).where(
+                ShopifyConnection.shop_domain == shop_domain,
+                ShopifyConnection.status == IntegrationStatus.CONNECTED,
+            )
+        )
+        return result.scalar_one_or_none()

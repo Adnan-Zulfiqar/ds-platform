@@ -10,6 +10,18 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A-01** — Shopify `shop_domain` is globally unique (migration `0012`);
+  webhooks resolve the owning tenant by indexed domain lookup instead of a
+  capped table scan; connect rejects a shop already bound to another workspace.
+- AliExpress connect is platform-credential only: merchants no longer enter App
+  Key / App Secret. OAuth uses `ALIEXPRESS_APP_*` from the environment; tenant
+  rows store encrypted seller tokens only (migration `0009`).
+- Shopify connect rejects custom storefront domains; OAuth callback failures are
+  classified (`hmac` / `state` / `exchange`) without logging secrets. See
+  [SHOPIFY_CONNECTION_DEBUG_REPORT.md](docs/SHOPIFY_CONNECTION_DEBUG_REPORT.md).
+
 ### Added
 
 - **Phase 9 Stage 3** — product optimisation data architecture: migration
@@ -17,15 +29,6 @@ production release.
   `ProductOptimizationService` (StubProvider via Stage 2 prompts), versions /
   optimize / activate APIs, products-table AI status + Optimize + History UI.
   See [PHASE_9_STAGE_3_COMPLETION.md](docs/PHASE_9_STAGE_3_COMPLETION.md).
-
-### Fixed
-
-- AliExpress connect is platform-credential only: merchants no longer enter App
-  Key / App Secret. OAuth uses `ALIEXPRESS_APP_*` from the environment; tenant
-  rows store encrypted seller tokens only (migration `0009`).
-- Shopify connect rejects custom storefront domains; OAuth callback failures are
-  classified (`hmac` / `state` / `exchange`) without logging secrets. See
-  [SHOPIFY_CONNECTION_DEBUG_REPORT.md](docs/SHOPIFY_CONNECTION_DEBUG_REPORT.md).
 
 ---
 
