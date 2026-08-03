@@ -33,11 +33,13 @@ from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.exceptions import (
     ShopifyAuthError,
     ShopifyConfigError,
+    ShopifyInstallTicketError,
     ShopifyNotConnectedError,
     ShopifyOAuthExchangeError,
     ShopifyOAuthHmacError,
     ShopifyOAuthStateError,
     ShopifyShopTakenError,
+    ShopifyWebhookConfigError,
 )
 from app.models.integration import IntegrationStatus
 from app.models.shopify import ShopifyConnection
@@ -49,6 +51,28 @@ from app.services.base import BaseService
 logger = get_logger(__name__)
 
 _STATE_KEY_PREFIX = "shopify:oauth:state:"
+_INSTALL_TICKET_PREFIX = "shopify:install:ticket:"
+
+#: Topics registered after every successful OAuth. Keep in sync with
+#: ``docs/PHASE_8_1_PLAN.md`` Part 5 and the webhook receiver.
+WEBHOOK_TOPICS: tuple[str, ...] = (
+    "products/create",
+    "products/update",
+    "inventory_levels/update",
+    "orders/create",
+    "orders/updated",
+    "app/uninstalled",
+)
+
+
+def validate_webhook_callback_base(base: str) -> str:
+    """Return a normalised base that maps to a real DropPilot receiver."""
+    trimmed = base.strip().rstrip("/")
+    if not trimmed:
+        raise ShopifyWebhookConfigError()
+    if trimmed.endswith(("/webhooks", "/callback", "/webhook")):
+        return trimmed
+    raise ShopifyWebhookConfigError()
 
 
 def webhook_delivery_address(*, base: str, topic: str) -> str:
@@ -57,15 +81,28 @@ def webhook_delivery_address(*, base: str, topic: str) -> str:
     Normally each topic gets its own path under ``.../webhooks/{topic}``. A
     path-scoped tunnel (e.g. a Cloudflare tunnel that only forwards the OAuth
     callback path in local development) cannot reach that — so when
-    ``base`` is anything other than a ``.../webhooks`` address, every topic
-    shares that one URL instead, and the receiver tells topics apart using
+    ``base`` ends with ``/callback`` or singular ``/webhook``, every topic
+    shares that one URL, and the receiver tells topics apart using
     the ``X-Shopify-Topic`` header. See
     ``docs/SHOPIFY_INTEGRATION.md``.
     """
-    trimmed = base.rstrip("/")
+    trimmed = validate_webhook_callback_base(base)
     if trimmed.endswith("/webhooks"):
         return f"{trimmed}/{topic.replace('/', '-')}"
     return trimmed
+
+
+def append_frontend_query(return_url: str, *, shopify: str, **extra: str) -> str:
+    """Append ``shopify=…`` (and optional extras) without breaking an existing query."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(return_url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["shopify"] = shopify
+    for key, value in extra.items():
+        if value:
+            query[key] = value
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 class ShopifyService(BaseService):
@@ -112,6 +149,118 @@ class ShopifyService(BaseService):
         base = shop_domain.removesuffix(".myshopify.com")
         slug = re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-")[:48]
         return slug or "shopify-store"
+
+    async def _store_install_ticket(self, token: str, payload: dict[str, Any]) -> None:
+        client = get_redis(RedisPurpose.CACHE)
+        try:
+            await client.set(
+                f"{_INSTALL_TICKET_PREFIX}{token}",
+                json.dumps(payload),
+                ex=settings.shopify.oauth_state_ttl_seconds,
+            )
+        except RedisError as exc:
+            raise ShopifyInstallTicketError() from exc
+
+    async def _consume_install_ticket(self, token: str) -> dict[str, Any]:
+        client = get_redis(RedisPurpose.CACHE)
+        key = f"{_INSTALL_TICKET_PREFIX}{token}"
+        try:
+            raw = await client.get(key)
+            if raw is None:
+                raise ShopifyInstallTicketError()
+            await client.delete(key)
+        except RedisError as exc:
+            raise ShopifyInstallTicketError() from exc
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not data.get("shop_domain"):
+            raise ShopifyInstallTicketError()
+        return data
+
+    async def begin_app_url_install(
+        self,
+        *,
+        query_string: str,
+        tenant_id: uuid.UUID | None,
+        user_id: uuid.UUID | None,
+    ) -> str:
+        """Handle Shopify App URL GET — verify HMAC, then authorize or claim.
+
+        Returns a redirect URL (Shopify authorize or DropPilot frontend).
+        """
+        if not is_encryption_configured():
+            raise EncryptionNotConfiguredError()
+        _, api_secret = self._require_app_credentials()
+
+        items = parse_qsl(query_string, keep_blank_values=True)
+        params = dict(items)
+        shop = params.get("shop")
+        hmac_value = params.get("hmac")
+        timestamp = params.get("timestamp")
+        if not shop or not hmac_value or not timestamp:
+            from app.core.exceptions import ValidationError
+
+            raise ValidationError(
+                "Shopify App URL installs require shop, hmac, and timestamp query parameters."
+            )
+        if not verify_oauth_hmac(query_items=items, secret=api_secret):
+            logger.warning(
+                "shopify_install_hmac_invalid",
+                param_names=sorted(k for k, _ in items if k),
+            )
+            raise ShopifyOAuthHmacError()
+
+        shop_domain = normalise_shop_domain(shop)
+        return_url = settings.shopify.frontend_return_url
+
+        if tenant_id is None:
+            ticket = OAuthState.issue().token
+            await self._store_install_ticket(
+                ticket,
+                {
+                    "shop_domain": shop_domain,
+                    "host": params.get("host"),
+                    "verified": True,
+                },
+            )
+            logger.info(
+                "shopify_install_claim_needed",
+                shop_domain=shop_domain,
+            )
+            return append_frontend_query(
+                return_url,
+                shopify="claim_needed",
+                shop=shop_domain,
+                install_token=ticket,
+            )
+
+        from app.core.context import set_tenant_id, set_user_id
+
+        set_tenant_id(tenant_id)
+        if user_id is not None:
+            set_user_id(user_id)
+
+        authorization_url, _state = await self.begin_connection(
+            shop=shop_domain,
+            store_name=None,
+            user_id=user_id,
+        )
+        return authorization_url
+
+    async def claim_install(
+        self,
+        *,
+        install_token: str,
+        store_name: str | None,
+        user_id: uuid.UUID | None,
+    ) -> tuple[str, str]:
+        """Consume a verified App URL ticket and start OAuth for this tenant."""
+        saved = await self._consume_install_ticket(install_token)
+        shop_domain = normalise_shop_domain(str(saved["shop_domain"]))
+        return await self.begin_connection(
+            shop=shop_domain,
+            store_name=store_name,
+            user_id=user_id,
+        )
 
     async def begin_connection(
         self,
@@ -252,15 +401,30 @@ class ShopifyService(BaseService):
                 user_id=user_id,
             )
         else:
-            store = await self.stores.create(
-                name=store_name,
-                slug=self._slug_for_shop(shop_domain),
-                platform=StorePlatform.SHOPIFY,
-                status=StoreStatus.CONNECTED,
-                storefront_url=f"https://{shop_domain}",
-                external_store_id=shop_domain,
-                connected_by_user_id=user_id,
-            )
+            # Reconnect after disconnect leaves the Store row; reusing it
+            # avoids uq_stores_tenant_slug collisions (Phase 8.1 H1).
+            slug = self._slug_for_shop(shop_domain)
+            store = await self.stores.get_by_slug(slug)
+            if store is None:
+                store = await self.stores.create(
+                    name=store_name,
+                    slug=slug,
+                    platform=StorePlatform.SHOPIFY,
+                    status=StoreStatus.CONNECTED,
+                    storefront_url=f"https://{shop_domain}",
+                    external_store_id=shop_domain,
+                    connected_by_user_id=user_id,
+                )
+            else:
+                await self.stores.update(
+                    store,
+                    name=store_name or store.name,
+                    status=StoreStatus.CONNECTED,
+                    storefront_url=f"https://{shop_domain}",
+                    external_store_id=shop_domain,
+                    last_error=None,
+                    connected_by_user_id=user_id,
+                )
             connection = await self.connections.create(
                 store_id=store.id,
                 shop_domain=shop_domain,
@@ -284,26 +448,75 @@ class ShopifyService(BaseService):
             settings.shopify.api_key.strip()
             and settings.shopify.api_secret
             and settings.shopify.api_secret.get_secret_value()
+            and is_encryption_configured()
         )
         return configured, list(await self.connections.list_all())
 
-    async def disconnect(self, *, store_id: uuid.UUID) -> None:
-        connection = await self.connections.get_by_store(store_id)
-        if connection is None:
-            raise ShopifyNotConnectedError()
+    async def release_shop(
+        self,
+        connection: ShopifyConnection,
+        *,
+        reason: str,
+        revoke_remote: bool,
+    ) -> None:
+        """Delete the connection row and mark the store disconnected.
+
+        When ``revoke_remote`` is true, best-effort delete webhooks and revoke
+        the offline token at Shopify before wiping local ciphertext. Failures
+        must not block local cleanup — the merchant asked to disconnect (or
+        Shopify already uninstalled the app).
+        """
+        shop_domain = connection.shop_domain
+        store_id = connection.store_id
+        if revoke_remote and connection.encrypted_access_token:
+            try:
+                token = decrypt(connection.encrypted_access_token)
+                client = ShopifyClient(
+                    shop_domain=shop_domain,
+                    access_token=token,
+                    tenant_id=str(connection.tenant_id),
+                )
+                await client.delete_registered_webhooks()
+                await client.revoke_access_token()
+            except Exception:
+                logger.exception(
+                    "shopify_remote_cleanup_failed",
+                    shop_domain=shop_domain,
+                    store_id=str(store_id),
+                )
+
         store = await self.stores.get_by_id(store_id)
         if store is not None:
             await self.stores.update(
                 store,
                 status=StoreStatus.DISCONNECTED,
-                last_error=None,
+                last_error=reason[:512] if reason else None,
             )
         await self.session.delete(connection)
         await self.session.flush()
         logger.info(
-            "shopify_disconnected",
+            "shopify_shop_released",
             store_id=str(store_id),
-            shop_domain=connection.shop_domain,
+            shop_domain=shop_domain,
+            reason=reason[:128] if reason else None,
+        )
+
+    async def disconnect(self, *, store_id: uuid.UUID) -> None:
+        connection = await self.connections.get_by_store(store_id)
+        if connection is None:
+            raise ShopifyNotConnectedError()
+        await self.release_shop(
+            connection,
+            reason="Disconnected from DropPilot.",
+            revoke_remote=True,
+        )
+
+    async def handle_app_uninstalled(self, connection: ShopifyConnection) -> None:
+        """Release the global shop claim after Shopify uninstalls the app."""
+        await self.release_shop(
+            connection,
+            reason="The app was uninstalled from the Shopify admin.",
+            revoke_remote=False,
         )
 
     async def client_for_store(
@@ -352,25 +565,30 @@ class ShopifyService(BaseService):
 
     async def register_webhooks(self, store_id: uuid.UUID) -> None:
         client, connection = await self.client_for_store(store_id)
-        base = settings.shopify.webhook_callback_base
-        topics = (
-            "products/create",
-            "products/update",
-            "inventory_levels/update",
-            "orders/create",
-            "orders/updated",
-            # Lets DropPilot notice an uninstall immediately rather than only
-            # discovering it the next time a call to this shop's Admin API
-            # fails with 401 — see `receive_shopify_webhook`'s handling.
-            "app/uninstalled",
-        )
-        for topic in topics:
+        base = validate_webhook_callback_base(settings.shopify.webhook_callback_base)
+
+        existing_payload = await client.get("/webhooks.json")
+        existing_rows = existing_payload.get("webhooks")
+        existing: dict[str, str] = {}
+        if isinstance(existing_rows, list):
+            for row in existing_rows:
+                if not isinstance(row, dict):
+                    continue
+                topic = row.get("topic")
+                address = row.get("address")
+                if isinstance(topic, str) and isinstance(address, str):
+                    existing[topic] = address
+
+        for topic in WEBHOOK_TOPICS:
+            address = webhook_delivery_address(base=base, topic=topic)
+            if existing.get(topic) == address:
+                continue
             await client.post(
                 "/webhooks.json",
                 json_body={
                     "webhook": {
                         "topic": topic,
-                        "address": webhook_delivery_address(base=base, topic=topic),
+                        "address": address,
                         "format": "json",
                     }
                 },

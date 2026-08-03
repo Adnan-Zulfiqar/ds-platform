@@ -115,15 +115,11 @@ async def receive_shopify_webhook(request: Request, *, topic: str) -> ShopifyWeb
                     sync = ShopifySyncService(session)
                     await sync.upsert_order_from_shopify(store_id=match.store_id, raw=payload)
                 elif topic in {"app-uninstalled", "app/uninstalled"}:
-                    # The access token is dead the instant Shopify sends
-                    # this — mark the connection so `client_for_store`
-                    # refuses to use it, rather than waiting for the first
-                    # call that fails with a 401 to notice.
+                    # Token is dead; release the global shop_domain claim so
+                    # another workspace (or reconnect) is not blocked.
                     from app.integrations.shopify.service import ShopifyService
 
-                    await ShopifyService(session).mark_error(
-                        match, "The app was uninstalled from the Shopify admin."
-                    )
+                    await ShopifyService(session).handle_app_uninstalled(match)
                     logger.info("shopify_app_uninstalled", shop_domain=shop_domain)
                 # product/inventory updates are acknowledged; DropPilot remains
                 # source of truth for catalogue pushes in Phase 8.
@@ -131,6 +127,14 @@ async def receive_shopify_webhook(request: Request, *, topic: str) -> ShopifyWeb
                 clear_context()
     except Exception:
         logger.exception("shopify_webhook_processing_failed", topic=topic)
+        if topic in _MUTATING_TOPICS:
+            # Fail closed so Shopify retries mutating deliveries (Phase 8.1 C3).
+            from app.core.exceptions import ExternalServiceError
+
+            raise ExternalServiceError(
+                "Shopify webhook processing failed; delivery will be retried.",
+                service="shopify",
+            ) from None
 
     return ShopifyWebhookAckResponse()
 

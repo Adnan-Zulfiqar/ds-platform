@@ -96,3 +96,18 @@ class ShopifyShopTakenError(ConflictError):
 
     code = "shopify_shop_taken"
     message = "This Shopify shop is already connected to another workspace."
+
+
+class ShopifyWebhookConfigError(ValidationError):
+    """``SHOPIFY_WEBHOOK_CALLBACK_BASE`` does not match a live receiver path."""
+
+    code = "shopify_webhook_base_invalid"
+    message = (
+        "SHOPIFY_WEBHOOK_CALLBACK_BASE must end with /webhooks, /callback, or /webhook "
+        "so registered addresses hit a DropPilot receiver."
+    )
+
+
+class ShopifyInstallTicketError(AuthenticationError):
+    code = "shopify_install_ticket_invalid"
+    message = "The Shopify install ticket is invalid or has expired."

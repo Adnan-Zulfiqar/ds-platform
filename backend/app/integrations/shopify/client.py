@@ -160,6 +160,37 @@ class ShopifyClient:
     async def put(self, path: str, *, json_body: dict[str, Any]) -> dict[str, Any]:
         return await self.request("PUT", path, json_body=json_body)
 
+    async def delete(self, path: str) -> dict[str, Any]:
+        return await self.request("DELETE", path)
+
+    async def delete_registered_webhooks(self) -> None:
+        """Best-effort wipe of webhooks DropPilot registered for this shop."""
+        payload = await self.get("/webhooks.json")
+        rows = payload.get("webhooks")
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            webhook_id = row.get("id")
+            if webhook_id is None:
+                continue
+            try:
+                await self.delete(f"/webhooks/{webhook_id}.json")
+            except ShopifyError:
+                logger.warning(
+                    "shopify_webhook_delete_failed",
+                    shop_domain=self._shop,
+                    webhook_id=str(webhook_id),
+                )
+
+    async def revoke_access_token(self) -> None:
+        """Revoke the offline access token (app uninstall from API side)."""
+        try:
+            await self.delete("/api_permissions/current.json")
+        except ShopifyError:
+            logger.warning("shopify_token_revoke_failed", shop_domain=self._shop)
+
     @staticmethod
     async def exchange_token(
         *,

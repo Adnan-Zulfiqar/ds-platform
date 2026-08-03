@@ -17,7 +17,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentPrincipal, DbSession, RequireAdmin
+from app.api.deps import CurrentPrincipal, DbSession, OptionalPrincipal, RequireAdmin
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.integrations.aliexpress.schemas import (
@@ -30,6 +30,7 @@ from app.integrations.aliexpress.service import AliExpressService
 from app.integrations.aliexpress.webhook import receive_webhook
 from app.integrations.shopify.schemas import (
     ShopifyAuthorizationResponse,
+    ShopifyClaimInstallRequest,
     ShopifyConnectionRead,
     ShopifyConnectRequest,
     ShopifyPublishRequest,
@@ -37,10 +38,11 @@ from app.integrations.shopify.schemas import (
     ShopifySyncRequest,
     ShopifyWebhookAckResponse,
 )
-from app.integrations.shopify.service import ShopifyService
+from app.integrations.shopify.service import ShopifyService, append_frontend_query
 from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.models.integration import AliExpressConnection
+from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
 from app.schemas.common import MessageResponse
 
@@ -240,17 +242,106 @@ def _shopify_to_read(connection: ShopifyConnection) -> ShopifyConnectionRead:
     )
 
 
+@router.get(
+    "/shopify/install",
+    summary="Shopify App URL install entry (HMAC-verified)",
+    response_class=RedirectResponse,
+)
+async def shopify_install(
+    request: Request,
+    session: DbSession,
+    principal: OptionalPrincipal,
+) -> RedirectResponse:
+    """App Store / install-link entry — shop comes from Shopify, not a form.
+
+    Partner Dashboard **App URL** must point here. Merchants never supply API
+    keys. Anonymous installs receive a claim ticket on the frontend; signed-in
+    admins continue straight to Shopify authorize.
+    """
+    return_url = settings.shopify.frontend_return_url
+    tenant_id = None
+    user_id = None
+    if principal is not None:
+        held_ranks: list[int] = []
+        for name in principal.roles:
+            try:
+                held_ranks.append(RoleName(name).rank)
+            except ValueError:
+                continue
+        if held_ranks and max(held_ranks) >= RoleName.ADMIN.rank:
+            tenant_id = principal.tenant_id
+            user_id = principal.user_id
+    try:
+        redirect_to = await ShopifyService(session).begin_app_url_install(
+            query_string=str(request.url.query),
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        from app.core.exceptions import ValidationError
+        from app.integrations.shopify.exceptions import (
+            ShopifyInvalidShopError,
+            ShopifyOAuthHmacError,
+            ShopifyShopTakenError,
+        )
+
+        reason = "failed"
+        if isinstance(exc, ShopifyOAuthHmacError):
+            reason = "hmac"
+        elif isinstance(exc, ShopifyInvalidShopError):
+            reason = "invalid_shop"
+        elif isinstance(exc, ShopifyShopTakenError):
+            reason = "taken"
+        elif isinstance(exc, ValidationError):
+            reason = "invalid"
+        logger.exception(
+            "shopify_install_failed",
+            reason=reason,
+            error_type=type(exc).__name__,
+            shop=request.query_params.get("shop"),
+        )
+        return RedirectResponse(
+            append_frontend_query(return_url, shopify=reason),
+            status_code=303,
+        )
+    return RedirectResponse(redirect_to, status_code=303)
+
+
+@router.post(
+    "/shopify/claim-install",
+    response_model=ShopifyAuthorizationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Claim a HMAC-verified App URL install for this workspace",
+)
+async def claim_shopify_install(
+    payload: ShopifyClaimInstallRequest,
+    session: DbSession,
+    principal: RequireAdmin,
+) -> ShopifyAuthorizationResponse:
+    authorization_url, state = await ShopifyService(session).claim_install(
+        install_token=payload.install_token,
+        store_name=payload.store_name,
+        user_id=principal.user_id,
+    )
+    return ShopifyAuthorizationResponse(
+        authorization_url=authorization_url,
+        state=state,
+        expires_in_seconds=settings.shopify.oauth_state_ttl_seconds,
+    )
+
+
 @router.post(
     "/shopify/connect",
     response_model=ShopifyAuthorizationResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Begin a Shopify OAuth install",
+    summary="Begin a Shopify OAuth install from a typed store domain",
 )
 async def connect_shopify(
     payload: ShopifyConnectRequest,
     session: DbSession,
     principal: RequireAdmin,
 ) -> ShopifyAuthorizationResponse:
+    """Connect button path — merchant enters ``*.myshopify.com`` only."""
     authorization_url, state = await ShopifyService(session).begin_connection(
         shop=payload.shop,
         store_name=payload.store_name,
@@ -277,7 +368,10 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             error=request.query_params.get("error"),
             shop=request.query_params.get("shop"),
         )
-        return RedirectResponse(f"{return_url}?shopify=denied", status_code=303)
+        return RedirectResponse(
+            append_frontend_query(return_url, shopify="denied"),
+            status_code=303,
+        )
     try:
         connection = await ShopifyService(session).complete_connection(
             query_string=str(request.url.query),
@@ -292,6 +386,7 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             ShopifyOAuthExchangeError,
             ShopifyOAuthHmacError,
             ShopifyOAuthStateError,
+            ShopifyShopTakenError,
         )
 
         reason = "failed"
@@ -301,14 +396,22 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             reason = "state"
         elif isinstance(exc, ShopifyOAuthExchangeError):
             reason = "exchange"
+        elif isinstance(exc, ShopifyShopTakenError):
+            reason = "taken"
         logger.exception(
             "shopify_callback_failed",
             reason=reason,
             error_type=type(exc).__name__,
             shop=request.query_params.get("shop"),
         )
-        return RedirectResponse(f"{return_url}?shopify={reason}", status_code=303)
-    return RedirectResponse(f"{return_url}?shopify=connected", status_code=303)
+        return RedirectResponse(
+            append_frontend_query(return_url, shopify=reason),
+            status_code=303,
+        )
+    return RedirectResponse(
+        append_frontend_query(return_url, shopify="connected"),
+        status_code=303,
+    )
 
 
 @router.post(
@@ -322,6 +425,17 @@ async def shopify_webhook_via_callback(request: Request) -> ShopifyWebhookAckRes
     GET remains OAuth. POST is HMAC-verified webhook delivery; topic comes from
     ``X-Shopify-Topic``.
     """
+    topic = (request.headers.get("x-shopify-topic") or "").strip().replace("/", "-")
+    return await receive_shopify_webhook(request, topic=topic or "unknown")
+
+
+@router.post(
+    "/shopify/webhook",
+    response_model=ShopifyWebhookAckResponse,
+    summary="Receive Shopify webhooks (singular shared base)",
+)
+async def shopify_webhook_singular(request: Request) -> ShopifyWebhookAckResponse:
+    """Shared receiver when ``SHOPIFY_WEBHOOK_CALLBACK_BASE`` ends with ``/webhook``."""
     topic = (request.headers.get("x-shopify-topic") or "").strip().replace("/", "-")
     return await receive_shopify_webhook(request, topic=topic or "unknown")
 

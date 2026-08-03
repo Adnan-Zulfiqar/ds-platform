@@ -11,9 +11,16 @@ from app.schemas.base import CamelCaseModel
 
 
 class ShopifyConnectRequest(CamelCaseModel):
-    """Begin OAuth for a shop domain."""
+    """Begin OAuth for a shop domain (typed Connect — no merchant credentials)."""
 
     shop: str = Field(min_length=3, max_length=255)
+    store_name: str | None = Field(default=None, max_length=255)
+
+
+class ShopifyClaimInstallRequest(CamelCaseModel):
+    """Bind a HMAC-verified App URL install ticket to the current tenant."""
+
+    install_token: str = Field(min_length=16, max_length=128)
     store_name: str | None = Field(default=None, max_length=255)
 
 

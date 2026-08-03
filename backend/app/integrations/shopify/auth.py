@@ -33,6 +33,11 @@ def normalise_shop_domain(shop: str) -> str:
     value = value.removeprefix("https://").removeprefix("http://")
     value = value.split("/")[0]
     value = value.removeprefix("www.")
+    value = value.split(":")[0]  # drop accidental :443 / :80
+    if value in {"localhost", "127.0.0.1"} or value.endswith(".localhost"):
+        raise ShopifyInvalidShopError(
+            "Localhost is not a Shopify store domain. Use your *.myshopify.com admin domain."
+        )
     if value.endswith(".myshopify.com"):
         label = value.removesuffix(".myshopify.com")
         if not label or "." in label or not label.replace("-", "").isalnum():
