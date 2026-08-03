@@ -51,11 +51,31 @@ production release.
 
 ### Added
 
+- **Phase 8.1 — Shopify OAuth production quality** — App URL install
+  (`GET …/shopify/install` with HMAC), claim-install for anonymous App Store
+  entry, Connect dialog (domain only), webhook base validation + singular
+  `/webhook` receiver, idempotent webhook registration, disconnect revoke,
+  uninstall releases shop claim, reconnect store reuse. Plan/completion:
+  [PHASE_8_1_PLAN.md](docs/PHASE_8_1_PLAN.md),
+  [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md). Live Partner OAuth
+  consent remains open (M17).
+- **Shopify production install plan** — Partner checklist, AutoDS migration
+  steps, webhook base mismatch findings. See
+  [SHOPIFY_PRODUCTION_INSTALL_PLAN.md](docs/SHOPIFY_PRODUCTION_INSTALL_PLAN.md).
+- **Shopify install-flow audit** — why shop domain is required for
+  authorization-code grant and why AutoDS-like UX needs App URL architecture.
+  See [SHOPIFY_INSTALL_FLOW_AUDIT.md](docs/SHOPIFY_INSTALL_FLOW_AUDIT.md).
 - **Phase 9 Stage 3** — product optimisation data architecture: migration
   `0011` (SEO/marketplace/AI columns + `product_versions`),
   `ProductOptimizationService` (StubProvider via Stage 2 prompts), versions /
   optimize / activate APIs, products-table AI status + Optimize + History UI.
   See [PHASE_9_STAGE_3_COMPLETION.md](docs/PHASE_9_STAGE_3_COMPLETION.md).
+
+### Changed
+
+- **Phase 8.1** — `app/uninstalled` now deletes the Shopify connection (releases
+  the global shop claim) instead of leaving an ERROR row; mutating webhook
+  processing failures no longer ACK silently.
 
 ---
 

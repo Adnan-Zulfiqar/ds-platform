@@ -18,6 +18,7 @@ Last updated: 2026-08-03
 | 6 | Inventory, pricing, multi-store, automation & tracking | ✅ **Complete** |
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
+| 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 
 ---
@@ -222,6 +223,25 @@ failing open on a Redis outage for mutating topics (A-09), and a disconnect
 button with no error handling (A-15, Shopify surface only). Full write-up:
 [SHOPIFY_OAUTH_IMPLEMENTATION.md](docs/SHOPIFY_OAUTH_IMPLEMENTATION.md). Live
 Shopify Partner OAuth verification remains open (M17) — unchanged by this pass.
+
+---
+
+## Phase 8.1 — Shopify OAuth production quality ✅
+
+**Tag:** `phase-8-1-complete`
+
+Brings Shopify install to AutoDS-like production quality without asking merchants
+for API keys or tokens:
+
+- `GET /api/v1/integrations/shopify/install` — App URL entry (HMAC → authorize or claim)
+- `POST /shopify/claim-install` — bind anonymous App URL installs to a workspace
+- Typed Connect remains domain-only with a dialog UX (skippable when shop is known)
+- Webhook base validation (`/webhooks`, `/callback`, or singular `/webhook`)
+- Idempotent webhook registration; uninstall releases the global shop claim
+- Disconnect best-effort revokes Shopify access; reconnect reuses the store row
+
+Live Partner consent/callback still blocked by Dashboard eligibility (M17).
+Full report: [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md).
 
 ---
 

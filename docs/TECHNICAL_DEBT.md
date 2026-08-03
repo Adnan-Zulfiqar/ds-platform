@@ -13,6 +13,8 @@ M11/M12 mitigated (HMAC opt-in + shed); H4 foundation shipped (enforcement
 off); M15 CI broker job added (local RabbitMQ still absent).
 **Phase 8 release review 2026-08-01** — Shopify channel shipped; live Partner
 OAuth/Admin verification still open (M17).
+**Phase 8.1 2026-08-03** — App URL install/claim + webhook hardening shipped;
+live Partner consent still M17.
 **Pre-production authentication audit 2026-08-01** — five gaps found by probing
 rather than reading, all now closed and pinned by tests (see S1–S5 below).
 **Security hardening 2026-08-01** — M18 resolved (Compose secret defaults
@@ -458,20 +460,31 @@ Stage 4+; capture one live fixture per generator (same pattern as M10).
 
 ### M17 — Shopify live Partner OAuth and Admin API unverified
 
+**Related:** [SHOPIFY_INSTALL_FLOW_AUDIT.md](SHOPIFY_INSTALL_FLOW_AUDIT.md),
+[SHOPIFY_PRODUCTION_INSTALL_PLAN.md](SHOPIFY_PRODUCTION_INSTALL_PLAN.md),
+[PHASE_8_1_COMPLETION.md](PHASE_8_1_COMPLETION.md).
+
+**Phase 8.1 (2026-08-03):** App URL install + claim path, webhook base
+validation (including singular `/webhook` receiver), disconnect revoke, and
+uninstall claim release are implemented and unit/integration tested. Live
+Partner authorize for the development store is still **403** before consent —
+Dashboard App URL / Allowed redirection / distribution eligibility remain a
+human configuration gap. Do not treat Phase 8.1 as live-OAuth complete.
+
 **2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
 and the failure is Shopify's authorize screen (Unauthorized / 403) before
 callback — typically Allowed redirection URL / app install eligibility. See
 `docs/SHOPIFY_CONNECTION_DEBUG_REPORT.md`.
 
 Phase 8 implemented OAuth, Admin REST client, publish/inventory/price/order
-import, and HMAC webhooks. No Shopify Partner app credentials were available on
-the development machine, so nothing was exercised against a real shop.
+import, and HMAC webhooks. No completed live consent/callback has produced a
+`shopify_connections` row on this machine.
 
-**Impact:** first live install may surface scope, API version, or webhook HMAC
-mismatches.
+**Impact:** first live install may still surface Partner Dashboard mismatches.
 **Trigger:** before advertising Shopify to customers.
-**Fix:** configure `SHOPIFY_*` against a development store; run OAuth once;
-publish one product; confirm webhook HMAC; commit fixtures from live payloads.
+**Fix:** set Partner App URL to `…/shopify/install`; match Allowed redirection
+to `SHOPIFY_CALLBACK_URL`; complete one browser consent; publish one product;
+confirm webhook delivery; commit fixtures from live payloads.
 
 ### M13 — The Playwright suite is flaky under load / rate limits — **mitigated (A-06)**
 
