@@ -12,6 +12,10 @@ can connect one or more Shopify shops; each shop creates a `Store` row
 (`platform=shopify`) and a `shopify_connections` row holding the encrypted
 access token.
 
+Merchants enter a `*.myshopify.com` domain to start OAuth (custom/Partner app
+entrypoint). For why that is required and what an AutoDS-like App Store flow
+entails, see [SHOPIFY_INSTALL_FLOW_AUDIT.md](SHOPIFY_INSTALL_FLOW_AUDIT.md).
+
 ## Configuration
 
 ```
