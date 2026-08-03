@@ -158,15 +158,34 @@ class ProductImportService(BaseService):
         ``status`` is preserved on update. A re-sync must not revert a product
         the tenant has activated back to draft — that would silently unpublish
         their catalogue every time prices refreshed.
+
+        ``description`` gets the same protection, by a different mechanism.
+        ``supplier_description`` (popped out of ``values`` here) always
+        refreshes to what the supplier currently says. ``description`` only
+        refreshes *while it still equals the previous supplier snapshot* —
+        the moment a merchant edit (once a write API exists) diverges the
+        two, a sync stops touching ``description`` so the edit is never
+        silently overwritten, while ``supplier_description`` keeps tracking
+        the supplier regardless.
         """
         existing = await self.products.get_by_external_id(
             source=ProductSource.ALIEXPRESS, external_id=values["external_id"]
         )
 
+        supplier_description = values.pop("supplier_description", None)
         values = {**values, "last_synced_at": datetime.now(UTC)}
 
         if existing is None:
-            return await self.products.create(status=ProductStatus.DRAFT, **values)
+            return await self.products.create(
+                status=ProductStatus.DRAFT,
+                description=supplier_description,
+                supplier_description=supplier_description,
+                **values,
+            )
+
+        if existing.description == existing.supplier_description:
+            existing.description = supplier_description
+        existing.supplier_description = supplier_description
 
         for field, value in values.items():
             setattr(existing, field, value)

@@ -479,6 +479,27 @@ and Playwright Shopify/integrations/shell are now green. Production
 consent + Dashboard confirmation still required. Tag `phase-8-1-complete` was
 **not** moved.
 
+**Product Editor stage 1 (2026-08-03):** AliExpress `detail`/`mobile_detail`
+are now parsed, sanitized (`nh3` allowlist), and imported into
+`Product.description` (merchant-editable) and the new `Product.supplier_description`
+(always-current supplier snapshot) — previously `description` was a real
+column that stayed permanently `NULL`, and `ProductOptimizationService` was
+silently generating AI copy from empty text. See
+[PRODUCT_EDITOR_GAP_AUDIT.md](PRODUCT_EDITOR_GAP_AUDIT.md). **Not yet
+exercised in production:** the overwrite-protection mechanism (a sync only
+refreshes `description` while it still equals `supplier_description`) has no
+write API to actually diverge the two yet — that is stage 3. Until then it is
+inert but correct, verified in integration tests that simulate a merchant
+edit by writing the column directly.
+
+**Live deploy follow-up (2026-08-03):** Local uvicorn restart exposes Phase 8.1
+routes. Public `/install` remains **404** because Cloudflare Tunnel is
+**path-scoped** (callback + AliExpress webhook forwarded; install/webhook/health
+not). See [PHASE_8_1_LIVE_DEPLOY.md](PHASE_8_1_LIVE_DEPLOY.md). Typed Connect
+authorize URL opened for `mriy3s-zv`; consent not completed — **M17 still open**.
+`SHOPIFY_WEBHOOK_CALLBACK_BASE` aligned to public POST callback (explicit HMAC
+webhook receiver) until tunnel forwards `/webhook(s)`.
+
 **2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
 and the failure is Shopify's authorize screen (Unauthorized / 403) before
 callback — typically Allowed redirection URL / app install eligibility. See

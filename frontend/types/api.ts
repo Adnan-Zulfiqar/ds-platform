@@ -258,6 +258,15 @@ export interface Product {
 export interface ProductDetail extends Product {
   variants: ProductVariant[];
   images: ProductImage[];
+
+  // --- Description (Product Editor stage 1) ---
+  //
+  // Both already sanitized server-side — never raw supplier HTML. `description`
+  // is the merchant-editable field (no edit UI yet); `supplierDescription` is
+  // the always-current supplier snapshot, kept separate so a future edit can
+  // never be silently overwritten by the next sync.
+  description: string | null;
+  supplierDescription: string | null;
 }
 
 /** Where a product's optimisable content came from. */

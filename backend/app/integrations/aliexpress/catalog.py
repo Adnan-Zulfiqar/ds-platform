@@ -30,6 +30,8 @@ stops on the first one.
 
 from __future__ import annotations
 
+import html as _html_entities
+import json
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -215,13 +217,69 @@ class StoreInfo(WireModel):
     shipping_speed_rating: str | None = None
 
 
+def _mobile_detail_fallback_html(raw: str | None) -> str | None:
+    """Reconstruct a minimal description from ``mobile_detail``'s module JSON.
+
+    Used only when ``detail`` (the real HTML) is unavailable. AliExpress's
+    mobile-app description is a module list —
+    ``{"moduleList": [{"type": "text", "data": {"text": ...}}, {"type":
+    "image", "data": {"url": ...}}, ...]}`` — describing a rich, app-specific
+    layout (image sizing, spacing, decoration) that this platform has no way
+    to render. Rebuilding that layout from the JSON alone would mean
+    inventing a presentation AliExpress never actually described in a form
+    this platform understands, which is exactly what this function does not
+    attempt: it recovers only the ``text`` and ``image`` module bodies, in
+    order, as plain paragraphs and images — a strictly smaller, honest
+    approximation rather than an invented rich page.
+
+    Returns ``None`` on anything unexpected (missing, not JSON, wrong shape)
+    rather than raising — a malformed fallback field must not fail an
+    otherwise-good import, the same tolerance every other field in this
+    module already gets.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    modules = parsed.get("moduleList")
+    if not isinstance(modules, list):
+        return None
+
+    parts: list[str] = []
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        data = module.get("data")
+        if not isinstance(data, dict):
+            continue
+        kind = module.get("type")
+        if kind == "text":
+            text = data.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(f"<p>{_html_entities.escape(text.strip())}</p>")
+        elif kind == "image":
+            url = data.get("url")
+            if isinstance(url, str) and url.strip():
+                escaped = _html_entities.escape(url.strip(), quote=True)
+                parts.append(f'<img src="{escaped}"/>')
+
+    return "".join(parts) if parts else None
+
+
 class ItemBaseInfo(WireModel):
     """Core product fields.
 
-    ``detail`` and ``mobile_detail`` are large HTML/JSON blobs. They are part of
-    the contract but are not stored: they are seller-authored markup that would
-    be injected into our pages, and Phase 4 has no sanitiser. Recorded as a
-    known limitation rather than stored and forgotten.
+    ``detail`` (HTML) and ``mobile_detail`` (a JSON module list) are the
+    supplier's description, in two different shapes for two different
+    surfaces. Both are **unsanitized seller-authored markup** — a caller must
+    run ``description_html`` through ``app.core.sanitize.sanitize_html``
+    before storing or rendering it; nothing in this module does that itself,
+    since sanitization is a platform-wide policy applied at the mapper, not
+    a per-supplier concern.
     """
 
     product_id: int | None = None
@@ -232,6 +290,8 @@ class ItemBaseInfo(WireModel):
     sales_count: str | None = None
     evaluation_count: str | None = None
     avg_evaluation_rating: str | None = None
+    detail: str | None = None
+    mobile_detail: str | None = None
 
     @property
     def title(self) -> str | None:
@@ -253,6 +313,21 @@ class ItemBaseInfo(WireModel):
     def is_active(self) -> bool:
         """AliExpress reports ``onSelling`` for a listing that can be bought."""
         return (self.product_status_type or "").lower() == "onselling"
+
+    @property
+    def description_html(self) -> str | None:
+        """Best available raw description markup, preferring ``detail``.
+
+        Falls back to a plain reconstruction from ``mobile_detail`` only
+        when ``detail`` is absent or blank — see
+        :func:`_mobile_detail_fallback_html` for exactly what that fallback
+        does and does not attempt to recover. **Always unsanitized** — the
+        caller must sanitize before storing or rendering, same as ``detail``
+        alone.
+        """
+        if self.detail and self.detail.strip():
+            return self.detail
+        return _mobile_detail_fallback_html(self.mobile_detail)
 
 
 class IdConverterResult(WireModel):

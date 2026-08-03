@@ -82,6 +82,30 @@ class TestProductMapping:
         """Brand is an attribute row, not a top-level field."""
         assert map_product(product)["brand"] == "NoEnName_Null"
 
+    def test_supplier_description_is_sanitized_html_from_the_real_fixture(
+        self, product: ProductDetail
+    ) -> None:
+        values = map_product(product)
+        assert values["supplier_description"] is not None
+        assert "<img" in values["supplier_description"]
+        # The real fixture's `detail` wraps everything in
+        # `<div class="detailmodule_html">...` -- div is not in the
+        # sanitizer's allowlist and must not survive, even though its
+        # content (the image) does.
+        assert "<div" not in values["supplier_description"]
+
+    def test_supplier_description_is_not_set_by_the_mapper_onto_description(
+        self, product: ProductDetail
+    ) -> None:
+        """`description` (the merchant-editable field) is a sync-policy
+        decision for `ProductImportService._upsert`, not the mapper -- the
+        same reasoning that already keeps `status` out of this function."""
+        assert "description" not in map_product(product)
+
+    def test_a_product_with_no_description_maps_to_none(self) -> None:
+        detail = ProductDetail.model_validate({"ae_item_base_info_dto": {"product_id": 1}})
+        assert map_product(detail)["supplier_description"] is None
+
     def test_status_is_not_set_by_the_mapper(self, product: ProductDetail) -> None:
         """The service decides.
 

@@ -216,6 +216,104 @@ class TestIdConversion:
         assert decoded == {"US": 3256806389000685}
 
 
+class TestDescriptionParsing:
+    """``detail``/``mobile_detail`` — the product-editor stage 1 gap.
+
+    Both fields were previously undeclared on `ItemBaseInfo`, so nothing ever
+    read them even though the real gateway sends both on every
+    `product.get` call — confirmed here against the same committed fixture
+    the rest of this file already trusts.
+    """
+
+    def test_detail_is_present_on_the_real_fixture(self, product: ProductDetail) -> None:
+        assert product.base.detail is not None
+        assert "<" in product.base.detail
+
+    def test_mobile_detail_is_present_on_the_real_fixture(self, product: ProductDetail) -> None:
+        assert product.base.mobile_detail is not None
+        parsed = json.loads(product.base.mobile_detail)
+        assert "moduleList" in parsed
+
+    def test_description_html_prefers_detail(self, product: ProductDetail) -> None:
+        assert product.base.description_html == product.base.detail
+
+    def test_description_html_falls_back_to_mobile_detail_when_detail_is_absent(self) -> None:
+        detail = ProductDetail.model_validate(
+            {
+                "ae_item_base_info_dto": {
+                    "product_id": 1,
+                    "mobile_detail": json.dumps(
+                        {
+                            "moduleList": [
+                                {"type": "text", "data": {"text": "Soft and durable."}},
+                                {"type": "image", "data": {"url": "https://ae01.example/a.jpg"}},
+                            ]
+                        }
+                    ),
+                }
+            }
+        )
+        html = detail.base.description_html
+        assert html is not None
+        assert "<p>Soft and durable.</p>" in html
+        assert '<img src="https://ae01.example/a.jpg"/>' in html
+
+    def test_description_html_is_none_when_neither_field_is_present(self) -> None:
+        detail = ProductDetail.model_validate({"ae_item_base_info_dto": {"product_id": 1}})
+        assert detail.base.description_html is None
+
+    def test_mobile_detail_fallback_ignores_non_text_non_image_modules(self) -> None:
+        detail = ProductDetail.model_validate(
+            {
+                "ae_item_base_info_dto": {
+                    "product_id": 1,
+                    "mobile_detail": json.dumps(
+                        {"moduleList": [{"type": "video", "data": {"url": "https://x/v.mp4"}}]}
+                    ),
+                }
+            }
+        )
+        assert detail.base.description_html is None
+
+    def test_mobile_detail_fallback_escapes_text_content(self) -> None:
+        """A module's `text` is still untrusted supplier content — even the
+        fallback path must not let it inject markup before sanitisation ever
+        runs."""
+        detail = ProductDetail.model_validate(
+            {
+                "ae_item_base_info_dto": {
+                    "product_id": 1,
+                    "mobile_detail": json.dumps(
+                        {"moduleList": [{"type": "text", "data": {"text": "<script>x</script>"}}]}
+                    ),
+                }
+            }
+        )
+        html = detail.base.description_html
+        assert html is not None
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "not json at all",
+            "[]",
+            "{}",
+            json.dumps({"moduleList": "not-a-list"}),
+            json.dumps({"moduleList": [1, 2, 3]}),
+            json.dumps({"moduleList": [{"type": "text", "data": "not-a-dict"}]}),
+        ],
+    )
+    def test_malformed_mobile_detail_never_raises(self, raw: str) -> None:
+        """A malformed fallback field must not fail an otherwise-good import —
+        the same tolerance every other field in this module already gets."""
+        detail = ProductDetail.model_validate(
+            {"ae_item_base_info_dto": {"product_id": 1, "mobile_detail": raw}}
+        )
+        assert detail.base.description_html is None
+
+
 class TestFeedParsing:
     def test_feed_products_are_parsed(self) -> None:
         products = parse_feed_products(load("feed_working.json"))

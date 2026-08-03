@@ -336,13 +336,15 @@ class TestProductDetail:
         assert response.json()["id"] == created["id"]
         assert len(response.json()["variants"]) == 12
 
-    async def test_the_supplier_html_description_is_never_exposed(
+    async def test_the_raw_supplier_html_is_never_exposed_only_the_sanitized_form(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """It is seller-authored markup and there is no sanitiser.
-
-        A field carrying it would eventually be rendered, and that is stored
-        XSS. The guarantee is structural: no response schema has the field.
+        """`description` is now exposed (Product Editor stage 1) -- but only
+        ever the sanitized result (`app.core.sanitize.sanitize_html`), never
+        the raw seller-authored markup AliExpress actually sent. The real
+        fixture's `detail` wraps everything in
+        `<div class="detailmodule_html">...`, which is exactly what must not
+        survive: `div` is not in the sanitizer's allowlist.
         """
         headers = await connected_tenant(client, monkeypatch)
         created = (
@@ -351,7 +353,7 @@ class TestProductDetail:
 
         response = await client.get(f"{PRODUCTS_URL}/{created['id']}", headers=headers)
 
-        assert "description" not in response.json()
+        assert response.json()["description"], "sanitized description should be present"
         assert "detailmodule_html" not in response.text
         assert "<div" not in response.text
 

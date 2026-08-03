@@ -45,13 +45,17 @@ def _to_detail(product: Product) -> ProductDetailRead:
 
     Fields are copied through an explicit schema rather than validating the ORM
     object wholesale, so adding a column to the model can never cause it to
-    appear in a response by accident — which is how ``description``, the
-    unsanitised supplier HTML, stays out of the API.
+    appear in a response by accident. ``description``/``supplier_description``
+    are exposed explicitly here because they are sanitized before storage
+    (``app.core.sanitize.sanitize_html``, Product Editor stage 1) — the raw
+    ``ItemBaseInfo.description_html`` never reaches this far.
     """
     return ProductDetailRead(
         **ProductRead.model_validate(product).model_dump(),
         variants=[ProductVariantRead.model_validate(v) for v in product.variants],
         images=[ProductImageRead.model_validate(i) for i in product.images],
+        description=product.description,
+        supplier_description=product.supplier_description,
     )
 
 

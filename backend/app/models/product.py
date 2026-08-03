@@ -164,10 +164,21 @@ class Product(TenantScopedBase):
     # --- Catalogue ----------------------------------------------------------
     title: Mapped[str] = mapped_column(String(512), nullable=False)
 
-    #: Supplier description. **Stored as text, never rendered as HTML.**
-    #: AliExpress returns seller-authored markup; rendering it unsanitised would
-    #: be stored XSS. Phase 4 has no sanitiser, so this is carried but not shown.
+    #: The merchant-editable description. Sanitized HTML
+    #: (``app.core.sanitize.sanitize_html``) — never raw supplier markup.
+    #: Seeded from ``supplier_description`` on first import. A sync only
+    #: refreshes it while it still equals ``supplier_description`` (see
+    #: ``ProductImportService._upsert``); once a merchant edit diverges the
+    #: two, sync stops touching this column so the edit is never silently
+    #: overwritten.
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    #: The supplier's own description, as of the last sync. Always
+    #: overwritten on every import/refresh — this is deliberately *not*
+    #: editable, so there is always an answer to "what does the supplier
+    #: currently say" independent of whatever the merchant has changed
+    #: ``description`` to. Sanitized the same way as ``description``.
+    supplier_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     category_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     category_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

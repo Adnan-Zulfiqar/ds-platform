@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.exceptions import AIError
+from app.core.sanitize import html_to_plain_text
 from app.models.ai_prompt import PromptExecution, PromptExecutionStatus
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductRepository, ProductVersionRepository
@@ -198,7 +199,10 @@ class ProductOptimizationService(BaseService):
 
     @staticmethod
     def _build_variables(product: Product, *, tone: str) -> dict[str, str]:
-        features = (product.description or "")[:_MAX_FEATURES_CHARS]
+        # `description` is sanitized HTML (Product Editor stage 1) — reduced
+        # to plain text here rather than fed to the prompt with markup still
+        # in it, which would put literal `<p>`/`<img>` tags into model input.
+        features = html_to_plain_text(product.description)[:_MAX_FEATURES_CHARS]
         return {
             "product_title": product.title,
             "category": product.category_name or "",

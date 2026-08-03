@@ -5,9 +5,12 @@ in ``integrations.aliexpress.catalog`` that describe what a supplier sends.
 
 Two things are deliberately absent from every response here:
 
-* **The raw supplier description.** It is seller-authored HTML, and there is no
-  sanitiser yet. A field that carried it would eventually be rendered, and that
-  is stored XSS. The column exists; nothing exposes it.
+* **The raw, unsanitized supplier description.** ``ItemBaseInfo.description_html``
+  is seller-authored HTML and never reaches a schema directly — it is
+  sanitized once, at import (``app.core.sanitize.sanitize_html``), before it
+  is even stored. ``ProductDetailRead.description``/``supplier_description``
+  carry the sanitized result, which is why they are safe to expose (Product
+  Editor stage 1) where the raw field never was.
 * **Any credential.** As elsewhere in this codebase, the guarantee is structural
   rather than a matter of care — there is no field capable of holding one.
 """
@@ -116,6 +119,19 @@ class ProductDetailRead(ProductRead):
 
     variants: list[ProductVariantRead] = Field(default_factory=list)
     images: list[ProductImageRead] = Field(default_factory=list)
+
+    # --- Description (Product Editor stage 1) --------------------------------
+    #
+    # Both already sanitized (`app.core.sanitize.sanitize_html`) before
+    # storage -- never the raw supplier `detail`/`mobile_detail`.
+    # `description` is the merchant-editable field, seeded from the supplier
+    # on first import. `supplier_description` is the always-current supplier
+    # snapshot, kept separately so a future edit can never be silently
+    # overwritten by the next sync -- see `ProductImportService._upsert`.
+    # Detail-only, like `variants`/`images` above: a list page for dozens of
+    # products should not carry a full description body per row.
+    description: str | None = None
+    supplier_description: str | None = None
 
 
 class ProductImportRead(CamelCaseModel):

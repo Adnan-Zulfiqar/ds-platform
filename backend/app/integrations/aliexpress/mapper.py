@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.sanitize import sanitize_html
 from app.integrations.aliexpress.catalog import FeedProduct, ProductDetail
 from app.models.product import ProductSource, ProductStatus
 
@@ -48,6 +49,13 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
     existing product's status is the service's decision, and encoding it here
     would mean a re-sync silently reverting a product the tenant had activated.
 
+    ``supplier_description`` is likewise not applied directly to
+    ``Product.description`` here. It is the always-fresh supplier snapshot;
+    whether it is safe to also refresh the merchant-editable ``description``
+    is a sync-policy decision belonging to
+    :meth:`ProductImportService._upsert`, the same reasoning that already
+    keeps ``status`` out of this function.
+
     **Package dimensions and weight are parsed but not stored.** The contract
     layer reads them, and nothing consumes them until shipping estimates arrive
     in a later phase. Adding the columns now would mean four columns nothing
@@ -78,6 +86,10 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
         # A product with no title is still a product. The placeholder is visible
         # in the UI, which is better than an import that fails on one field.
         "title": _truncate(base.title, _TITLE_LIMIT) or f"Untitled product {external_id}",
+        # Sanitized here, once, before the value ever reaches the mapper's
+        # caller — never at render time, and never left as raw supplier HTML
+        # for something downstream to forget to sanitize.
+        "supplier_description": sanitize_html(base.description_html),
         "category_id": str(base.category_id) if base.category_id is not None else None,
         "brand": _truncate(brand, 255),
         "currency": base.currency_code,
