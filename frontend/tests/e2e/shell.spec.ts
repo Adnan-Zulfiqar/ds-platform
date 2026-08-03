@@ -193,6 +193,64 @@ test.describe("User menu", () => {
     await page.waitForURL(/\/login/, { timeout: 15_000 });
   });
 
+  test("signing out clears the React Query cache (A-02)", async ({ page }) => {
+    /**
+     * `router.refresh()` does not wipe TanStack Query. Seed a probe entry,
+     * log out, and assert it is gone — otherwise User B on a shared browser
+     * can briefly see User A's cached catalogue/orders.
+     */
+    await signIn(page);
+
+    await page.evaluate(() => {
+      const client = (
+        window as Window & {
+          __DROPPLOT_QUERY_CLIENT__?: {
+            setQueryData: (key: unknown, data: unknown) => void;
+            getQueryData: (key: unknown) => unknown;
+          };
+        }
+      ).__DROPPLOT_QUERY_CLIENT__;
+      if (!client) {
+        throw new Error("QueryClient probe handle missing (non-production only)");
+      }
+      client.setQueryData(["a02-tenant-probe"], { tenant: "should-not-survive-logout" });
+    });
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const client = (
+            window as Window & {
+              __DROPPLOT_QUERY_CLIENT__?: {
+                getQueryData: (key: unknown) => unknown;
+              };
+            }
+          ).__DROPPLOT_QUERY_CLIENT__;
+          return client?.getQueryData(["a02-tenant-probe"]) ?? null;
+        }),
+      )
+      .toEqual({ tenant: "should-not-survive-logout" });
+
+    await page.getByRole("button", { name: "Account menu" }).click();
+    await page.getByRole("menuitem", { name: /Log out/ }).click();
+    await page.waitForURL(/\/login/, { timeout: 15_000 });
+
+    await expect
+      .poll(async () =>
+        page.evaluate(() => {
+          const client = (
+            window as Window & {
+              __DROPPLOT_QUERY_CLIENT__?: {
+                getQueryData: (key: unknown) => unknown;
+              };
+            }
+          ).__DROPPLOT_QUERY_CLIENT__;
+          return client?.getQueryData(["a02-tenant-probe"]) ?? null;
+        }),
+      )
+      .toBeNull();
+  });
+
   test("a signed-out user cannot return to the dashboard", async ({ page }) => {
     // The back button must not restore an authenticated screen.
     await signIn(page);

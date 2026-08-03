@@ -12,6 +12,9 @@ production release.
 
 ### Fixed
 
+- **A-02** — Logout (and mid-session token clear) call `queryClient.clear()` so
+  a shared browser cannot show the previous tenant's React Query cache;
+  `router.refresh()` alone was insufficient.
 - **A-05** — Compose frontend defaults to `NEXT_PUBLIC_API_URL=http://localhost`
   so the SPA uses nginx same-origin `/api`; CORS includes the nginx origin; CI
   smoke asserts the bundle does not embed `:8000`.

@@ -60,7 +60,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 
 ## 4. High
 
-### A-02 — Logout does not clear React Query cache (comment lies)
+### ~~A-02 — Logout does not clear React Query cache (comment lies)~~ ✅ RESOLVED
 
 | | |
 |---|---|
@@ -69,6 +69,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Evidence** | Comment claims React Query cache is discarded; implementation only `clearAccessToken` + `router.replace` + `router.refresh()` (Next RSC). **No** `queryClient.clear()`. `staleTime: 60_000` in query provider. |
 | **Impact** | On a shared browser, User B can briefly see User A’s cached catalogue/orders until refetch — UI-level multi-tenant leak (API still auth-gated). |
 | **Recommended fix** | Inject `QueryClient`; call `queryClient.clear()` on logout and `onTokenCleared`; optionally clear on login. Add Playwright/regression for cache wipe. |
+| **Resolution** | `queryClient.clear()` on logout / token-cleared / login / register; Playwright probe in `shell.spec.ts`. |
 
 ### ~~A-03 — Tenant admin can mutate platform-global AI prompts~~ ✅ RESOLVED
 
@@ -136,13 +137,14 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Impact** | Internal/provider fragments can reach API consumers. |
 | **Fix** | Stable error codes + short safe messages; raw detail logs/DB only. |
 
-### A-09 — Shopify webhook replay fails open into mutating upserts
+### ~~A-09 — Shopify webhook replay fails open into mutating upserts~~ ✅ RESOLVED
 
 | | |
 |---|---|
 | **Location** | `backend/app/integrations/shopify/webhook.py` — on `RedisError`, continues processing |
 | **Impact** | Redis outage → replayed webhooks re-upsert orders (load + any non-idempotent edges). AliExpress path is non-mutating by design — Shopify is not. |
 | **Fix** | Fail closed (5xx) when replay store unavailable, or durable idempotency first. |
+| **Resolution** | Fails closed (503) for mutating topics (`orders/create`, `orders/updated`, `app/uninstalled`) on a Redis error; non-mutating topics (`products/*`, `inventory_levels/*`) still acknowledge, since DropPilot never actually processes those today — a dedup failure there cannot cause a duplicate write. |
 
 ### A-10 — No production guard against default Postgres/RabbitMQ credentials
 
@@ -253,7 +255,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Fetch via `services/` | **Sound** |
 | React Query vs Zustand | **Sound** (UI-only Zustand) |
 | Mock data as truth | **Gone** from code; docs stale (A-14) |
-| Auth cache hygiene | **Broken** (A-02) |
+| Auth cache hygiene | **Fixed** (A-02) |
 | Type safety | No `any`; hand-written types (A-12) |
 
 ### AI (Phase 9 stages 1–3)
@@ -307,7 +309,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Log redaction | Pass (S5) |
 | Cross-tenant Shopify webhook | **Fail** (A-01) |
 | Prompt privilege boundary | **Pass (gated)** (A-03 — `AI_ALLOW_PROMPT_MUTATION`) |
-| Logout cache wipe | **Fail** (A-02) |
+| Logout cache wipe | **Pass** (A-02) |
 | CSRF on cookie refresh | Cookie + CORS model — **NOT fully re-proven** in browser this session |
 | Webhook HMAC Shopify | Pass when configured |
 | Compose password defaults | Pass in Compose; app-level defaults still Medium (A-10) |
@@ -319,7 +321,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 Do **not** start until this report is accepted. Suggested sequence:
 
 1. **A-01** — Global Shopify `shop_domain` uniqueness + webhook lookup (security)
-2. **A-02** — React Query clear on logout (security / tenancy UI)
+2. ~~**A-02** — React Query clear on logout (security / tenancy UI)~~ ✅
 3. ~~**A-03** — Lock AI prompt writes or introduce platform operator~~ ✅
 4. **A-07 / A-08 / A-09** — Status authz, safe errors, Shopify replay fail-closed
 5. ~~**A-04** — Publish idempotency~~ ✅

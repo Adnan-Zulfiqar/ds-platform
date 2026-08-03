@@ -17,8 +17,8 @@ import { ThemeProvider } from "@/providers/theme-provider";
  *
  * 1. `ThemeProvider` — only writes a class onto <html>; depends on nothing.
  * 2. `QueryProvider` — must wrap `AuthProvider`, because signing out calls
- *    `router.refresh()` to discard cached server data, and the query client has
- *    to exist for that cache to be discarded.
+ *    `queryClient.clear()` (and `router.refresh()` for RSC) and needs the
+ *    client in tree.
  * 3. `AuthProvider` — innermost of the three, so its consumers can use both
  *    theming and data fetching.
  */

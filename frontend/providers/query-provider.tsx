@@ -1,9 +1,10 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { ApiError } from "@/lib/api-client";
+import { isProduction } from "@/lib/env";
 
 /**
  * React Query provider.
@@ -48,6 +49,19 @@ export function QueryProvider({ children }: { children: ReactNode }) {
         },
       }),
   );
+
+  useEffect(() => {
+    // E2E probes (audit A-02) need a handle to assert cache wipe on logout.
+    // Never expose in production builds.
+    if (isProduction) return;
+    const handle = window as Window & {
+      __DROPPLOT_QUERY_CLIENT__?: QueryClient;
+    };
+    handle.__DROPPLOT_QUERY_CLIENT__ = queryClient;
+    return () => {
+      delete handle.__DROPPLOT_QUERY_CLIENT__;
+    };
+  }, [queryClient]);
 
   return (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>

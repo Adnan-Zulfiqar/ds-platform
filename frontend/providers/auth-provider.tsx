@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   createContext,
@@ -49,6 +50,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<SessionStatus>("loading");
   const [identity, setIdentity] = useState<AuthenticatedIdentity | null>(null);
 
@@ -93,43 +95,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     return onTokenCleared(() => {
+      // Same wipe as logout: a mid-session refresh failure must not leave the
+      // previous tenant's catalogue/orders in memory for the next sign-in
+      // (audit A-02).
+      queryClient.clear();
       setIdentity(null);
       setStatus("unauthenticated");
     });
-  }, []);
+  }, [queryClient]);
 
   const login = useCallback(
     async (payload: LoginPayload) => {
       const response = await authApi.login(payload);
+      // Drop any stale cache from a prior session on this tab before mounting
+      // the new identity's queries.
+      queryClient.clear();
       setIdentity(response.identity);
       setStatus("authenticated");
       router.replace("/dashboard");
     },
-    [router],
+    [router, queryClient],
   );
 
   const register = useCallback(
     async (payload: RegisterPayload) => {
       const response = await authApi.register(payload);
+      queryClient.clear();
       setIdentity(response.identity);
       setStatus("authenticated");
       router.replace("/dashboard");
     },
-    [router],
+    [router, queryClient],
   );
 
   const logout = useCallback(async () => {
-    await authApi.logout();
-    clearAccessToken();
-    setIdentity(null);
-    setStatus("unauthenticated");
-    // `replace`, not `push`: the browser back button must not return to an
-    // authenticated screen after signing out.
-    router.replace("/login");
-    // Discards any cached server data held by React Query, so the next user of
-    // this browser cannot see the previous one's records.
-    router.refresh();
-  }, [router]);
+    try {
+      await authApi.logout();
+    } finally {
+      clearAccessToken();
+      // React Query holds tenant data in the tab; `router.refresh()` only
+      // resets Next RSC payloads — it does not clear the QueryClient (A-02).
+      queryClient.clear();
+      setIdentity(null);
+      setStatus("unauthenticated");
+      // `replace`, not `push`: the browser back button must not return to an
+      // authenticated screen after signing out.
+      router.replace("/login");
+      router.refresh();
+    }
+  }, [router, queryClient]);
 
   const refreshIdentity = useCallback(async () => {
     try {

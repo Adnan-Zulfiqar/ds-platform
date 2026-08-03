@@ -25,8 +25,8 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
-**Full application audit fix pass (2026-08-03)** — A-01, A-03, A-04, and A-05
-resolved (see below). Remaining audit priorities: A-02, A-06.
+**Full application audit fix pass (2026-08-03)** — A-01, A-02, A-03, A-04, and
+A-05 resolved (see below). Remaining audit priority: A-06.
 
 **Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
@@ -88,6 +88,19 @@ does not embed `localhost:8000`; docs corrected.
 **Verified:** ruff, mypy strict, pytest **751** passed (compose-default + CORS
 default coverage). Compose smoke bundle assertion is in CI (not executed in
 this local pass).
+
+### ~~A-02 — Logout does not clear React Query cache~~ ✅ RESOLVED
+
+**Root cause:** `logout` commented that React Query was discarded, but only
+called `router.refresh()` (Next RSC). The `QueryClient` retained the previous
+tenant's queries (`staleTime: 60s`).
+
+**Fix:** `queryClient.clear()` on logout (in `finally`), on `onTokenCleared`,
+and on login/register before mounting the new identity. Non-production
+exposes a probe handle for Playwright.
+
+**Verified:** `npm run lint`, `npm run typecheck`, `npm run build`; Playwright
+`signing out clears the React Query cache (A-02)` passed (chromium).
 
 ---
 
