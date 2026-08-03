@@ -34,8 +34,68 @@ class TestNormaliseShop:
         with pytest.raises(ShopifyInvalidShopError):
             normalise_shop_domain("tenwer.com")
 
+    def test_rejects_localhost(self) -> None:
+        with pytest.raises(ShopifyInvalidShopError):
+            normalise_shop_domain("localhost")
+        with pytest.raises(ShopifyInvalidShopError):
+            normalise_shop_domain("http://127.0.0.1/admin")
 
-class TestHmac:
+    def test_strips_trailing_slash_and_port(self) -> None:
+        assert (
+            normalise_shop_domain("https://mystore.myshopify.com:443/") == "mystore.myshopify.com"
+        )
+
+
+class TestWebhookDeliveryAddress:
+    def test_per_topic_under_webhooks_suffix(self) -> None:
+        from app.integrations.shopify.service import webhook_delivery_address
+
+        assert (
+            webhook_delivery_address(
+                base="https://api.example.com/api/v1/integrations/shopify/webhooks",
+                topic="orders/create",
+            )
+            == "https://api.example.com/api/v1/integrations/shopify/webhooks/orders-create"
+        )
+
+    def test_shared_callback_and_singular_webhook(self) -> None:
+        from app.integrations.shopify.service import webhook_delivery_address
+
+        shared = "https://api.example.com/api/v1/integrations/shopify/callback"
+        assert webhook_delivery_address(base=shared, topic="orders/create") == shared.rstrip("/")
+        singular = "https://api.example.com/api/v1/integrations/shopify/webhook"
+        assert webhook_delivery_address(base=singular, topic="app/uninstalled") == singular.rstrip(
+            "/"
+        )
+
+    def test_rejects_unknown_base(self) -> None:
+        from app.integrations.shopify.exceptions import ShopifyWebhookConfigError
+        from app.integrations.shopify.service import validate_webhook_callback_base
+
+        with pytest.raises(ShopifyWebhookConfigError):
+            validate_webhook_callback_base("https://api.example.com/hooks")
+
+
+class TestAppendFrontendQuery:
+    def test_appends_to_path_without_query(self) -> None:
+        from app.integrations.shopify.service import append_frontend_query
+
+        assert (
+            append_frontend_query("http://localhost:3000/settings/integrations", shopify="hmac")
+            == "http://localhost:3000/settings/integrations?shopify=hmac"
+        )
+
+    def test_preserves_existing_query(self) -> None:
+        from app.integrations.shopify.service import append_frontend_query
+
+        assert (
+            append_frontend_query(
+                "http://localhost:3000/settings/integrations?x=1",
+                shopify="connected",
+            )
+            == "http://localhost:3000/settings/integrations?x=1&shopify=connected"
+        )
+
     def test_oauth_hmac_round_trip(self) -> None:
         secret = "shpss_test_secret"
         items = [

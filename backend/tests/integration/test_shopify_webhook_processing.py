@@ -2,8 +2,8 @@
 
 - A-09: replay-check failure fails **closed** for mutating topics, open for
   non-mutating ones.
-- `app/uninstalled` marks the connection unusable rather than being silently
-  acknowledged and ignored.
+- Phase 8.1: ``app/uninstalled`` releases the global shop claim (deletes the
+  connection) rather than leaving an ERROR row that still blocks other tenants.
 
 Reuses the direct-DB connection-seeding pattern from
 `test_shopify_shop_domain_db.py` rather than a live OAuth round trip — this
@@ -153,21 +153,13 @@ class TestReplayFailClosed:
 
 
 class TestAppUninstalled:
-    async def test_marks_the_connection_unusable(
+    async def test_releases_the_shop_claim(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
             "app.integrations.shopify.webhook.settings.shopify.api_secret",
             SecretStr(WEBHOOK_SECRET),
         )
-        # A fresh in-process Redis rather than the real cached client: the
-        # module-level client cache in `app.core.redis` binds a connection to
-        # whichever event loop first created it, and pytest-asyncio's default
-        # function-scoped loop means a client created by an earlier test in
-        # the same run is bound to an already-closed loop by the time this
-        # test's replay check tries to use it ("Event loop is closed"). A
-        # fake client sidesteps that entirely, and this test is about the
-        # webhook's own logic, not about exercising a real Redis connection.
         monkeypatch.setattr(
             "app.integrations.shopify.webhook.get_redis",
             lambda _purpose: fake_aioredis.FakeRedis(decode_responses=True),
@@ -176,12 +168,6 @@ class TestAppUninstalled:
         domain = f"uninstall-{uuid.uuid4().hex[:10]}.myshopify.com"
         tenant_id, connection_id = await _insert_connected_shop(shop_domain=domain)
 
-        # The body must be unique per test run: Redis's replay-dedup key is
-        # derived from the body hash (no `X-Shopify-Webhook-Id` header here),
-        # and that dedup store is real, not mocked, in this test — a repeat
-        # of a body Redis has already seen (from a prior run in the same
-        # suite/session) is correctly treated as a duplicate and skipped,
-        # which would look identical to this fix not working.
         body = f'{{"id": 999, "domain": "{domain}"}}'.encode()
         response = await client.post(
             "/api/v1/integrations/shopify/webhooks/app-uninstalled",
@@ -201,8 +187,12 @@ class TestAppUninstalled:
             finally:
                 clear_context()
 
-            assert refreshed is not None
-            assert refreshed.id == connection_id
-            assert refreshed.status is IntegrationStatus.ERROR
-            assert refreshed.last_error is not None
-            assert "uninstall" in refreshed.last_error.lower()
+            assert refreshed is None
+
+        # Global claim released — maintenance lookup must also be empty.
+        async with transaction() as session:
+            from app.repositories.shopify import ShopifyMaintenanceRepository
+
+            owner = await ShopifyMaintenanceRepository(session).get_by_shop_domain(domain)
+            assert owner is None
+            assert connection_id  # was created; now gone
