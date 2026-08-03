@@ -45,7 +45,18 @@ Merchants are **never** asked for API key, secret, or access token.
 | `f8adb79`+ | tip-hash pin commits (see `git log phase-8-1-complete`) |
 
 Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
-## 3. Quality gates (verified this session)
+
+> **Tag honesty:** `phase-8-1-complete` was created and pushed **before** frontend
+> production build, Playwright re-run, and live OAuth were fully verified. That
+> tag was **not moved**. Follow-up verification is recorded in
+> [PHASE_8_1_VERIFICATION.md](PHASE_8_1_VERIFICATION.md) without rewriting the
+> original tag tip.
+
+---
+
+## 3. Quality gates
+
+### At tag time (`phase-8-1-complete`)
 
 | Gate | Result |
 |---|---|
@@ -55,8 +66,17 @@ Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
 | `pytest` | **767 passed** |
 | `npm run lint` | Pass |
 | `npm run typecheck` | Pass |
-| `npm run build` | **Not verified** — concurrent `next build` processes hung after the Next.js banner in this environment; lint/typecheck passed. Re-run build on a clean machine before release. |
-| Playwright Shopify OAuth | Updated for dialog flow; **not re-run** in this session (needs live API + Redis). |
+| `npm run build` | **Not verified** at tag time (hung behind locked `.next/standalone`) |
+| Playwright Shopify OAuth | Spec updated; **not re-run** at tag time |
+
+### Follow-up verification (2026-08-03, after tag — see VERIFICATION doc)
+
+| Gate | Result |
+|---|---|
+| `npm run build` | **Pass (exit 0)** after stopping e2e lock + clearing `.next` |
+| Playwright Shopify (chromium + mobile) | **26 passed** |
+| Playwright integrations + shell | **62 passed** |
+| Live Shopify OAuth round trip | **Still not verified** (M17) |
 
 ---
 
@@ -65,14 +85,15 @@ Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
 | Step | Status |
 |---|---|
 | Install URL HMAC path (unit) | Verified with synthetic HMAC |
-| Consent page (browser) | **Not verified** — Partner authorize still **403** for `mriy3s-zv.myshopify.com` (M17) |
+| Production `GET …/install` | **404** — Phase 8.1 not deployed to `api.whiteto.com` |
+| Consent page (browser) | **Not verified** — needs human session; unauthenticated curl ends **403** on `admin.shopify.com` (expected without login). Prior browser “Unauthorized Access” still open (M17). |
 | Callback / token exchange / DB row | **Not verified** live |
 | Webhook registration against Shopify | **Not verified** live |
 | Disconnect / reconnect live | **Not verified** live |
 
-**Gap (unchanged M17):** Partner Dashboard App URL, Allowed redirection URL, and distribution/install eligibility must be confirmed by a human. Code now exposes App URL `…/shopify/install`; until Dashboard points there and authorize returns 200/consent, live OAuth remains incomplete.
+**Gap (M17):** Partner Dashboard settings cannot be read from the repo. Deploy `/install` before pointing App URL at it. Complete one browser consent on `mriy3s-zv.myshopify.com`.
 
-**Webhook base:** Local `.env` historically used singular `…/webhook`. Code now accepts it via `POST …/shopify/webhook`. Prefer `…/webhooks` or shared `…/callback` in production.
+**Webhook base:** Local `.env` uses singular `…/webhook`. Production probes: only POST `/callback` is alive (**401** without HMAC); `/webhook` and `/webhooks/*` return **404**. Until the tunnel exposes those paths, point `SHOPIFY_WEBHOOK_CALLBACK_BASE` at the callback URL.
 
 ---
 
@@ -82,20 +103,22 @@ Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
 |---|---|---|
 | OAuth security (HMAC, state, encryption) | 8 | App URL + claim paths; live consent unproven |
 | Merchant UX (no secrets) | 9 | Domain-only dialog; App URL claim path |
-| Webhooks | 8 | Validated bases, idempotent register, fail-closed mutate |
+| Webhooks | 7 | Code OK; production `/webhook(s)` still 404 |
 | Tenant isolation / shop claim | 8 | Global uniqueness preserved; uninstall releases claim |
-| Live Partner install | 3 | M17 still open |
-| **Overall Phase 8.1** | **~7 / 10** | Code ready; Dashboard + live OAuth still required |
+| Automated gates (build + Playwright) | 9 | Verified after tag — see VERIFICATION doc |
+| Live Partner install | 2 | M17; production `/install` 404 until deploy |
+| **Overall Phase 8.1** | **~6.5 / 10** | Implementation-complete; **not** live-verification-complete |
 
 ---
 
 ## 6. Limitations
 
 1. Live Shopify OAuth consent not completed (M17).
-2. Frontend `next build` hung in this session — re-verify before deploy.
+2. Production API has not deployed Phase 8.1 `/install` (404).
 3. Disconnect remote revoke is best-effort; local cleanup always proceeds.
 4. Embedded App Bridge / session tokens still out of scope.
 5. Playwright disconnect/reconnect against a real connected store still needs live Partner credentials.
+6. Full Playwright suite (all specs) was not re-run in the verification pass — Shopify + integrations + shell were.
 
 ---
 
@@ -103,5 +126,6 @@ Use `git rev-parse phase-8-1-complete^{commit}` for the exact tip.
 
 - `docs/PHASE_8_1_PLAN.md` (audit + plan)
 - `docs/PHASE_8_1_COMPLETION.md` (this file)
+- `docs/PHASE_8_1_VERIFICATION.md` (follow-up gates; tag not moved)
 - `PROJECT_ROADMAP.md`, `CHANGELOG.md`, `TECHNICAL_DEBT.md`
 - Prior: `SHOPIFY_INSTALL_FLOW_AUDIT.md`, `SHOPIFY_PRODUCTION_INSTALL_PLAN.md`

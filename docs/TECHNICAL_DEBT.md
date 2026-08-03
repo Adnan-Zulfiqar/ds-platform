@@ -471,6 +471,14 @@ Partner authorize for the development store is still **403** before consent —
 Dashboard App URL / Allowed redirection / distribution eligibility remain a
 human configuration gap. Do not treat Phase 8.1 as live-OAuth complete.
 
+**Verification follow-up (2026-08-03):** See
+[PHASE_8_1_VERIFICATION.md](PHASE_8_1_VERIFICATION.md). Frontend `next build`
+and Playwright Shopify/integrations/shell are now green. Production
+`GET …/shopify/install` still **404** (not deployed). Unauthenticated curl to
+`admin.shopify.com` oauth remains **403** (no merchant session). Browser
+consent + Dashboard confirmation still required. Tag `phase-8-1-complete` was
+**not** moved.
+
 **2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
 and the failure is Shopify's authorize screen (Unauthorized / 403) before
 callback — typically Allowed redirection URL / app install eligibility. See

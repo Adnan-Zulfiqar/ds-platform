@@ -228,7 +228,7 @@ Shopify Partner OAuth verification remains open (M17) — unchanged by this pass
 
 ## Phase 8.1 — Shopify OAuth production quality ✅
 
-**Tag:** `phase-8-1-complete`
+**Tag:** `phase-8-1-complete` (implementation tip; **not** live-OAuth verified)
 
 Brings Shopify install to AutoDS-like production quality without asking merchants
 for API keys or tokens:
@@ -240,7 +240,11 @@ for API keys or tokens:
 - Idempotent webhook registration; uninstall releases the global shop claim
 - Disconnect best-effort revokes Shopify access; reconnect reuses the store row
 
-Live Partner consent/callback still blocked by Dashboard eligibility (M17).
+**Follow-up verification** ([PHASE_8_1_VERIFICATION.md](docs/PHASE_8_1_VERIFICATION.md)):
+frontend build + Playwright Shopify/integrations/shell green; production
+`/install` still 404; live Partner consent still M17. The original tag was not
+moved.
+
 Full report: [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md).
 
 ---

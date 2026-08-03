@@ -59,6 +59,11 @@ production release.
   [PHASE_8_1_PLAN.md](docs/PHASE_8_1_PLAN.md),
   [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md). Live Partner OAuth
   consent remains open (M17).
+- **Phase 8.1 verification follow-up** — documents that `phase-8-1-complete`
+  was tagged before build/Playwright/live OAuth were fully verified; records
+  subsequent green `next build`, Playwright Shopify (26) + integrations/shell
+  (62), production `/install` 404, and remaining M17. Tag **not** moved. See
+  [PHASE_8_1_VERIFICATION.md](docs/PHASE_8_1_VERIFICATION.md).
 - **Shopify production install plan** — Partner checklist, AutoDS migration
   steps, webhook base mismatch findings. See
   [SHOPIFY_PRODUCTION_INSTALL_PLAN.md](docs/SHOPIFY_PRODUCTION_INSTALL_PLAN.md).
