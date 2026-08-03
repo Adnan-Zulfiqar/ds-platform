@@ -51,6 +51,11 @@ production release.
 
 ### Added
 
+- **Phase 8.1 Cloudflare wildcard verify** — public `*` route makes
+  `/install`, `/webhook`, and `/health/live` reach FastAPI; path-specific
+  tunnel rules 1–4 redundant; canonical webhook base set to
+  `…/shopify/webhook`; live merchant consent still pending (M17). See
+  [PHASE_8_1_LIVE_DEPLOY.md](docs/PHASE_8_1_LIVE_DEPLOY.md).
 - **Phase 8.1 public routing re-verify** — Cloudflare Tunnel still path-scoped;
   public `/install` and `/webhook` remain 404; canonical webhook documented as
   `…/shopify/webhook`; Product Editor stashes left untouched; M17 still open.

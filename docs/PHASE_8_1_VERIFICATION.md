@@ -13,6 +13,8 @@
 
 **Public routing re-verify (2026-08-03, base `df9c22b`):** Cloudflare ingress still path-scoped. Exact public codes: GET `/install` **404**, GET `/callback` **303**, POST `/callback` **401**, POST `/webhook` **404**, POST `/claim-install` **404**, GET `/health/live` **404**. Local: install/callback **303**, claim/webhook **401**, health **200**. Canonical webhook URL documented as `…/shopify/webhook`. Live OAuth **not** started (install still 404). M17 open. Tag not moved. Product Editor stashes preserved.
 
+**Wildcard Cloudflare re-verify (2026-08-03):** Operator added path `*` → `http://localhost:8000`. Public probes now match local: GET `/install` **303**, POST `/webhook` **401**, GET `/health/live` **200** (all FastAPI). Path-specific rules 1–4 are **redundant** (same service). Canonical webhook base set to public `…/shopify/webhook`. Live OAuth: authorize URL issued; Shopify login reached; merchant consent **pending**. **M17 still open.** Worktree `cursor/shopify-cloudflare-verification`; main PE tree/stashes untouched.
+
 ---
 
 ## 1. Partner Dashboard configuration checklist
@@ -94,7 +96,7 @@ Do **not** change application code to paper over Dashboard misconfiguration.
 | `mypy app --strict` | Pass (159 files) |
 | `pytest` | **829 passed**, 0 failed, 11 warnings |
 | `npm run lint` / `typecheck` / `build` | Pass (build exit 0) |
-| Playwright Shopify + integrations + shell (chromium + mobile-chrome, workers=1) | **88 passed**, 0 failed, 0 skipped, 0 flaky |
+| Playwright Shopify + integrations + shell (chromium + mobile-chrome, workers=1) | **Not green this pass** (timeouts / port contention). Prior: **88 passed**. |
 
 ---
 

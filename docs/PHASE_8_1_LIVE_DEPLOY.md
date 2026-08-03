@@ -3,138 +3,134 @@
 | | |
 |---|---|
 | Date | 2026-08-03 |
-| Branch | `develop` |
+| Branch | `cursor/shopify-cloudflare-verification` (from `origin/develop`) |
 | Prior tag | `phase-8-1-complete` → `315d65f` (**not moved**) |
 | Follow-up from | [PHASE_8_1_VERIFICATION.md](PHASE_8_1_VERIFICATION.md) |
-| Re-verify tip base | `df9c22b` |
+| Worktree | `../droppilot-shopify-live` (clean; Product Editor main tree untouched) |
 
 ---
 
-## 1. Git (2026-08-03 re-verify)
+## 1. Git
 
 | Item | Value |
 |---|---|
-| Branch | `develop` @ `df9c22b` (synced `origin/develop`) |
-| `main` | Untouched (`82de677`) |
-| Dirty tree (left alone) | `backend/app/models/product.py` — Product Editor parallel WIP; **not** part of Shopify commits |
-| Stashes **preserved** (not restored) | `stash@{0}: On develop: wip: leftover product editor test` |
-| | `stash@{1}: On develop: wip: product editor (parked for Shopify live deploy)` |
+| Base | `origin/develop` (includes `c93e52d` Shopify docs + later PE commits on develop) |
+| `main` | Untouched |
+| Main-repo stashes (read-only check) | `stash@{0}: wip: leftover product editor test` |
+| | `stash@{1}: wip: product editor (parked for Shopify live deploy)` |
+| Stashes | **Not** restored / deleted / modified |
 
 ---
 
 ## 2. Local routes
 
-Backend on `127.0.0.1:8000` (Redis `6379` reachable).
+Redis `6379` and Postgres `5432` reachable. Backend on `127.0.0.1:8000`.
 
 | Method | Path | Status |
 |---|---|---|
+| GET | `/health/live` | **200** |
 | GET | `/api/v1/integrations/shopify/install` | **303** |
 | GET | `/api/v1/integrations/shopify/callback` | **303** |
 | POST | `/api/v1/integrations/shopify/claim-install` | **401** |
 | POST | `/api/v1/integrations/shopify/webhook` | **401** |
-| GET | `/health/live` | **200** |
+
+No local 404 on implemented Shopify routes.
 
 ---
 
-## 3. Cloudflare routing — before and after
+## 3. Cloudflare routing — wildcard added
 
-### Agent
+### Configured Public Hostname rules (operator-reported)
 
-Windows service `cloudflared` (Automatic), `tunnel run --token-file C:\ProgramData\cloudflared\token`. Remotely managed; **no** local ingress `config.yml`. This repository cannot change Public Hostname rules.
+1. `/api/v1/integrations/aliexpress/callback` → `http://localhost:8000`
+2. `/api/v1/integrations/aliexpress/webhook` → `http://localhost:8000`
+3. `/api/v1/integrations/shopify/callback` → `http://localhost:8000`
+4. `/api/v1/integrations/shopify/webhook` → `http://localhost:8000`
+5. `*` → `http://localhost:8000` (**new**)
 
-### Before (first live-deploy pass) and after (this re-verify)
+### Public probes after wildcard (all hit FastAPI — `x-request-id` present)
 
-**Unchanged.** Still path-scoped — not a full hostname → `http://localhost:8000` proxy.
+| Method | Path | Public | Local | Match? |
+|---|---|---|---|---|
+| GET | `/health/live` | **200** | 200 | Yes |
+| GET | `/api/v1/integrations/shopify/install` | **303** | 303 | Yes |
+| GET | `/api/v1/integrations/shopify/callback` | **303** | 303 | Yes |
+| POST | `/api/v1/integrations/shopify/claim-install` | **401** | 401 | Yes |
+| POST | `/api/v1/integrations/shopify/webhook` | **401** | 401 | Yes |
+| GET | `/api/v1/integrations/aliexpress/callback` | **303** | — | FastAPI |
+| POST | `/api/v1/integrations/aliexpress/webhook` | **200** | — | FastAPI |
 
-| Path | Public result | Hits FastAPI? (`x-request-id`) |
-|---|---|---|
-| GET `/api/v1/integrations/shopify/callback` | **303** | **Yes** |
-| POST `/api/v1/integrations/shopify/callback` | **401** | **Yes** |
-| GET `/api/v1/integrations/shopify/install` | **404** bare CF | **No** |
-| POST `/api/v1/integrations/shopify/claim-install` | **404** bare CF | **No** |
-| POST `/api/v1/integrations/shopify/webhook` | **404** bare CF | **No** |
-| POST `/api/v1/integrations/shopify/webhooks/orders-create` | **404** bare CF | **No** |
-| GET `/health/live` | **404** bare CF | **No** |
+**Before:** public `/install`, `/webhook`, `/health/live` were bare Cloudflare **404**.  
+**After:** same paths reach FastAPI with expected auth/redirect codes.
 
-**Conclusion:** Cloudflare ingress remains incorrect for Phase 8.1 App URL installs. Backend code was **not** changed to paper over the 404.
+### Recommendation on routes 1–4
 
-### Required human fix (Zero Trust)
+The `*` rule successfully forwards every tested AliExpress and Shopify path to the same service. **Routes 1–4 are redundant** and may be removed from the Public Hostname list once you are satisfied, leaving:
 
-Preferred: Public Hostname `api.whiteto.com` → service `http://localhost:8000` with path `*` / empty.
+- Hostname: `api.whiteto.com`
+- Path: `*`
+- Service: `http://localhost:8000`
+- Keep Cloudflare’s catch-all 404 for unmatched hostnames
 
-Minimum paths if keep allowlist: `/install`, `/webhook`, `/webhooks/*`, keep `/callback`. Do not alter unrelated DNS.
+This agent did **not** delete Cloudflare routes (no Zero Trust write access from the repo).
 
 ---
 
-## 4. Canonical webhook architecture
+## 4. Canonical webhook URL
 
-| Role | Route | Notes |
-|---|---|---|
-| **Canonical shared webhook** | `POST …/shopify/webhook` | Dedicated; topic from `X-Shopify-Topic`; HMAC + replay |
-| Per-topic alternative | `POST …/shopify/webhooks/{topic}` | When base ends with `/webhooks` |
-| OAuth callback | `GET …/shopify/callback` | Code exchange only |
-| Shared fallback | `POST …/shopify/callback` | Explicit HMAC webhook receiver (`shopify_webhook_via_callback`) for path-scoped tunnels only |
+| Role | URL |
+|---|---|
+| OAuth callback (GET) | `https://api.whiteto.com/api/v1/integrations/shopify/callback` |
+| **Canonical webhook (POST)** | `https://api.whiteto.com/api/v1/integrations/shopify/webhook` |
 
-**Canonical public URL once Cloudflare forwards it:**
+Runtime `.env` updated this pass:
 
-`https://api.whiteto.com/api/v1/integrations/shopify/webhook`
+`SHOPIFY_WEBHOOK_CALLBACK_BASE=https://api.whiteto.com/api/v1/integrations/shopify/webhook`
 
-Until then, live registration must use the only public HMAC receiver:
+Backend restarted so registration uses the dedicated receiver. OAuth GET callback and webhook POST remain separate handlers.
 
-`https://api.whiteto.com/api/v1/integrations/shopify/callback`
-
-`.env.example` now defaults the example base to singular `/webhook` and documents the callback fallback. Do **not** point production webhooks at callback after `/webhook` is public.
-
-Covered by existing unit/integration tests: HMAC reject, topic dispatch, replay/idempotency, `app/uninstalled`, fail-closed mutating topics. **Live** webhook registration still unverified (no completed OAuth).
+Public POST `/webhook` without HMAC → **401** (handler alive). Valid HMAC / topic / replay / `app/uninstalled` covered by existing Shopify pytest (`37` shopify-selected tests passed). Live registration still depends on a completed OAuth install.
 
 ---
 
 ## 5. Partner Dashboard
 
-| Setting | Value | Verifiable from code? |
+| Setting | Required value | From code? |
 |---|---|---|
-| App URL | `https://api.whiteto.com/api/v1/integrations/shopify/install` | Route exists; **Dashboard value** visual only |
-| Allowed redirection | `https://api.whiteto.com/api/v1/integrations/shopify/callback` | Matches config field name; Dashboard visual only |
-| Embedded | Off | Code has no App Bridge / session-token path |
+| App URL | `https://api.whiteto.com/api/v1/integrations/shopify/install` | Route exists; Dashboard visual confirm |
+| Allowed redirection | `https://api.whiteto.com/api/v1/integrations/shopify/callback` | Matches `SHOPIFY_CALLBACK_URL` |
+| Embedded | Off | No App Bridge path in code |
 | Scopes | `read_products,write_products,read_inventory,write_inventory,read_orders,read_locations` | Code default + `.env.example` |
-| Distribution / custom link | Custom and/or Public | **Dashboard only** |
+| Client ID / distribution / install eligibility | — | **Dashboard visual only** |
 
-API secret: never printed.
+Client secret never printed.
 
 ---
 
 ## 6. Live OAuth
 
-**Blocked** by public GET `/install` **404**. Per verification gate, App URL / full public-install round trip was not started this pass.
-
 | Step | Result |
 |---|---|
-| Public install reachable | **No** (404) |
-| Merchant consent / callback / encrypt / tenant / UI / webhooks / disconnect / reconnect | **Not run** |
-| **M17** | **Still open** |
-
-Typed Connect can still start OAuth against localhost API with public callback, but closing M17 for this pass requires public `/install` per the live-deploy checklist.
-
----
-
-## 7. Global shop ownership safety
-
-| Control | Status |
-|---|---|
-| Global unique `shop_domain` | Model + migration `20260803_0800_0012_shopify_shop_domain_global_unique` |
-| Connect rejects foreign owner | `ShopifyShopTakenError` via maintenance repo lookup |
-| Webhook resolve | `get_connected_by_shop_domain` → `scalar_one_or_none()` (not ambiguous `.first()`) |
-| Tests | `test_shopify_shop_domain_db.py`, `test_shopify_shop_domain_uniqueness.py` |
-
-Not a release blocker for uniqueness — already fixed. Live multi-tenant collision still unverified without real installs.
+| Public `/install` | **303** (no longer 404) |
+| `POST /shopify/connect` for `mriy3s-zv.myshopify.com` | **201** — authorize URL issued (`redirect_uri` = public callback) |
+| Shopify login/consent | **Reached** real Shopify login UI; **awaiting merchant approve** |
+| Callback / encrypt / tenant / webhooks / UI / disconnect / reconnect | **Pending consent** |
+| **M17** | **Still open** until consent + token exchange succeed |
 
 ---
 
-## 8. Gates (re-verify)
+## 7. Shop ownership
+
+Global unique `shop_domain` + maintenance lookup (`scalar_one_or_none`) remain in place (migration `0012`). Not re-opened as a blocker.
+
+---
+
+## 8. Gates (this worktree)
 
 | Gate | Result |
 |---|---|
-| Backend ruff check / mypy / pytest | Pass / Pass / **829 passed** |
-| `ruff format --check .` | Contaminated by parallel PE migration WIP; `app`+`tests` format clean |
+| `ruff check app tests` / `ruff format --check app tests` / `mypy app --strict` | Pass |
+| `pytest -k shopify` | **37 passed** |
+| Full `pytest` on develop tip | **78 failed / 773 passed** — failures concentrated in product/orders PE surface (local DB vs develop tip); **not** treated as Shopify regressions |
 | Frontend lint / typecheck / build | Pass |
-| Playwright Shopify + integrations + shell (chromium + mobile-chrome) | **88 passed**, 0 failed, 0 skipped, 0 flaky |
+| Playwright Shopify + integrations + shell | **Not green this pass** — timeouts against local e2e server (port contention / auth). Prior verification pass: **88 passed**. Re-run when e2e port is free. |

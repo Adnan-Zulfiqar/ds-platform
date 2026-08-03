@@ -543,6 +543,13 @@ attempted while `/install` is 404. Product Editor stashes left intact
 (`stash@{0}` leftover product editor test; `stash@{1}` product editor parked).
 **M17 still open.** Tag `phase-8-1-complete` **not** moved.
 
+**Wildcard Cloudflare (2026-08-03):** Operator added `*` → `localhost:8000`.
+Public `/install` **303**, `/webhook` **401**, `/health/live` **200** — FastAPI
+reached. Path rules for AliExpress/Shopify callback/webhook are redundant with
+`*`. `SHOPIFY_WEBHOOK_CALLBACK_BASE` pointed at canonical `…/shopify/webhook`.
+Authorize URL issued for `mriy3s-zv`; real Shopify login reached; consent not
+completed in-session (Cursor browser captcha/offline). **M17 still open.**
+
 **2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
 and the failure is Shopify's authorize screen (Unauthorized / 403) before
 callback — typically Allowed redirection URL / app install eligibility. See
