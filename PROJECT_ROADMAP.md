@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-08-02
+Last updated: 2026-08-03
 
 ## Status
 
@@ -212,6 +212,16 @@ Live Shopify Partner OAuth was **not** available on the development machine —
 unit/integration coverage uses mocks where needed; see
 [PHASE_8_COMPLETION.md](docs/PHASE_8_COMPLETION.md) and
 [SHOPIFY_INTEGRATION.md](docs/SHOPIFY_INTEGRATION.md).
+
+**Audit fix pass (2026-08-03).** A full-application audit
+([FULL_APPLICATION_AUDIT.md](docs/FULL_APPLICATION_AUDIT.md)) found and closed
+three Shopify-specific gaps without changing the OAuth architecture itself:
+an uncommitted webhook-tunnel workaround that was actually broken (A-16), two
+missing webhook topics plus `app/uninstalled` handling, webhook replay-dedup
+failing open on a Redis outage for mutating topics (A-09), and a disconnect
+button with no error handling (A-15, Shopify surface only). Full write-up:
+[SHOPIFY_OAUTH_IMPLEMENTATION.md](docs/SHOPIFY_OAUTH_IMPLEMENTATION.md). Live
+Shopify Partner OAuth verification remains open (M17) — unchanged by this pass.
 
 ---
 

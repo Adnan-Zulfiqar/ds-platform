@@ -25,8 +25,10 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
-**Full application audit fix pass (2026-08-03)** — A-01, A-02, A-03, A-04, and
-A-05 resolved (see below). Remaining audit priority: A-06.
+**Full application audit fix pass (2026-08-03)** — A-01, A-02, A-03, A-04,
+A-05, A-09, and A-16 resolved, A-06 fix landed (CI job unverified), A-15
+partially (Shopify disconnect) (see below). Remaining: A-06 CI green, A-07,
+A-08, A-15 (remaining surfaces).
 
 **Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
@@ -101,6 +103,63 @@ exposes a probe handle for Playwright.
 
 **Verified:** `npm run lint`, `npm run typecheck`, `npm run build`; Playwright
 `signing out clears the React Query cache (A-02)` passed (chromium).
+
+### ~~A-06 — Playwright not in CI; rate-limit flakes on default env (M13)~~ ✅ RESOLVED
+
+**Root cause:** No CI Playwright job; default `SECURITY_RATE_LIMIT_REQUESTS=100`
+is exceeded by a full local e2e run; `npm run start` mismatches standalone
+output.
+
+**Fix:** `frontend-e2e` CI job with `SECURITY_RATE_LIMIT_REQUESTS=1000`;
+`.env.example` documents the e2e ceiling without changing the production
+default; Playwright boots via `npm run start:e2e` (standalone server).
+
+**Verified:** unit wiring tests; local Playwright against `start:e2e` /
+standalone (A-02 probe). Full CI job runs on push (not executed in this
+local pass).
+
+### ~~A-16 — Uncommitted Shopify webhook tunnel workaround on working tree~~ ✅ RESOLVED
+
+**Root cause:** a prior session's local-tunnel workaround was left uncommitted
+and was actually broken — `webhook_delivery_address()` was referenced by a
+test but never defined, so the whole unit test module failed to collect.
+
+**Fix:** implemented `webhook_delivery_address()` (`shopify/service.py`): when
+the configured callback base is not itself a `.../webhooks` address (i.e. a
+path-scoped tunnel that only forwards the OAuth callback path in local
+development), every topic registers against that one address and the receiver
+tells topics apart via `X-Shopify-Topic`. Also closed a related gap found
+while fixing this: webhook registration covered 4 of 6 documented topics —
+added `products/create` and `app/uninstalled`.
+
+**Verified:** ruff, ruff format, mypy strict (158 files), pytest **754**
+passed, including new coverage for `webhook_delivery_address` itself.
+
+### ~~A-09 — Shopify webhook replay fails open into mutating upserts~~ ✅ RESOLVED
+
+**Root cause:** on a Redis error, the replay-dedup check swallowed the
+exception and let the webhook through — a Redis outage during a replayed
+`orders/create`/`orders/updated` delivery would silently re-run the upsert.
+
+**Fix:** fails closed (503) specifically for mutating topics (`orders/create`,
+`orders/updated`, `app/uninstalled`); non-mutating topics (`products/*`,
+`inventory_levels/*`) still acknowledge on a dedup-store outage, since
+DropPilot only acknowledges those today without processing them — a dedup
+failure there cannot produce a duplicate write. Also added handling for
+`app/uninstalled` itself: the connection is now marked `ERROR` the instant
+Shopify sends the webhook, rather than waiting for the next Admin API call to
+fail with 401.
+
+**Verified:** ruff, ruff format, mypy strict, pytest **754** passed —
+new integration coverage: replay-fails-closed for a mutating topic,
+replay-still-open for a non-mutating one, and `app/uninstalled` actually
+marking the connection `ERROR` (verified via a genuinely separate committed
+transaction, matching how the webhook handler itself reads).
+
+**Not verified:** live Shopify Partner OAuth/webhook delivery — no Partner app
+credentials on this machine (see M17). All Shopify fixes in this pass are
+verified by unit/integration tests against a mocked or fake Redis/HTTP
+boundary, not a live Shopify store.
 
 ---
 
@@ -414,7 +473,7 @@ mismatches.
 **Fix:** configure `SHOPIFY_*` against a development store; run OAuth once;
 publish one product; confirm webhook HMAC; commit fixtures from live payloads.
 
-### M13 — The Playwright suite is flaky under load / rate limits — **root cause confirmed, local fix applied**
+### M13 — The Playwright suite is flaky under load / rate limits — **mitigated (A-06)**
 
 Phase 7 re-run (chromium):
 
@@ -467,27 +526,18 @@ chromium 74 passed / 0 failed / 3 skipped, mobile-chrome 74 passed / 0 failed
 tests, which correctly skip when the live gateway rejects a synthetic auth
 code (see M10).
 
-**What this does NOT close:** there is still no CI job that runs Playwright.
-This fix makes the local suite trustworthy for a developer to run before
-opening a PR; it does not gate merges. A CI e2e job would need its own
-higher-ceiling backend configuration (e.g. via job-level env, not committed
-defaults) to avoid reintroducing exactly this flake in that environment.
-
-**Separately noticed, not fixed (out of scope for this pass):** starting the
-frontend via `npm run start` (`next start`) against a build produced with
-`output: "standalone"` in `next.config.ts` prints
-`⚠ "next start" does not work with "output: standalone" configuration` on
-every Playwright run. It did not cause a test failure — `next start` still
-served correctly — but it is a real mismatch between how `playwright.config.ts`
-boots the app locally and how the Docker image (`output: standalone`) actually
-runs it in `docs/PRODUCTION_DEPLOYMENT_GUIDE.md`. Worth resolving before C1's
-Docker path is exercised for real, not required for this suite to be green.
+**What this does NOT close:** ~~there is still no CI job that runs Playwright.~~
+**Closed by A-06 (2026-08-03):** `frontend-e2e` in `.github/workflows/ci.yml`
+runs chromium against a live API with `SECURITY_RATE_LIMIT_REQUESTS=1000`.
+`.env.example` documents the same ceiling for local full-suite runs without
+changing the production default of 100. Playwright boots the standalone
+server (`npm run start:e2e`) instead of `next start`.
 
 **Impact:** merge confidence requires either serial workers with the local
-ceiling raised, or (still to build) a CI e2e job with its own ceiling.
+ceiling raised, or the CI e2e job (now present).
 **Trigger:** before the suite gates a merge without a human running it first.
-**Fix:** dedicated e2e rate-limit bypass header (authenticated test-only) or
-`RATE_LIMIT` env raised for local e2e; await drawer/theme transitions.
+**Fix:** CI e2e job + documented local `SECURITY_RATE_LIMIT_REQUESTS=1000`;
+standalone e2e server script.
 
 ### M14 — Local Redis is a decade old, and the client is pinned to RESP2
 

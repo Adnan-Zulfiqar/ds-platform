@@ -101,14 +101,15 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Recommended fix** | Bake public origin (e.g. `http://localhost`) for compose; align `CORS_ORIGINS`; smoke-test the built client URL, not only nginx `/api`. |
 | **Resolution** | Compose default `http://localhost`; CORS includes nginx origin; CI smoke rejects `:8000` in the frontend image. |
 
-### A-06 — Playwright not in CI; rate-limit flakes on default env (M13)
+### A-06 — Playwright not in CI; rate-limit flakes on default env (M13) — FIX LANDED, CI UNVERIFIED
 
 | | |
 |---|---|
 | **Severity** | High (reliability / release gate) |
-| **Location** | `.github/workflows/ci.yml` (no e2e job); `.env.example` `SECURITY_RATE_LIMIT_REQUESTS=100`; `docs/TECHNICAL_DEBT.md` M13 |
+| **Location** | `.github/workflows/ci.yml`; `.env.example`; `frontend/playwright.config.ts` |
 | **Impact** | UI regressions never gated on push; full suite 429s on fresh clone. |
-| **Recommended fix** | CI e2e job with elevated rate-limit env; document/template e2e ceiling without weakening production defaults. |
+| **Fix landed** | `frontend-e2e` job + e2e ceiling docs + `start:e2e` standalone server. |
+| **Verification gap** | Unit wiring tests passed locally; **the GitHub Actions `frontend-e2e` job has not been run in this pass** — leave open until that job is green on `develop`. |
 
 ### Existing High (not reopened)
 
@@ -170,13 +171,14 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Impact** | Silent drift vs OpenAPI. |
 | **Fix** | `openapi-typescript` from `/openapi.json`. |
 
-### A-13 — `next start` vs `output: "standalone"` mismatch for Playwright
+### ~~A-13 — `next start` vs `output: "standalone"` mismatch for Playwright~~ ✅ RESOLVED (with A-06)
 
 | | |
 |---|---|
 | **Location** | `frontend/next.config.ts`, `playwright.config.ts` (`npm run start`) |
 | **Impact** | Local e2e production path ≠ Docker `node server.js`. |
 | **Fix** | Point Playwright at standalone server or dual config. |
+| **Resolution** | `npm run start:e2e` → `scripts/start-standalone.mjs`. |
 
 ### A-14 — Stale `docs/Frontend.md` still claims mock dashboard data
 
@@ -187,22 +189,24 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Impact** | False debugging assumptions. |
 | **Fix** | Rewrite to Phase 6+ reality. |
 
-### A-15 — Silent / weak error UX on ops surfaces
+### A-15 — Silent / weak error UX on ops surfaces — partially resolved
 
 | | |
 |---|---|
-| **Location** | `order-statistics-cards.tsx` (`isError → null`); `pricing-actions.tsx` / `sync-inventory-button.tsx` (errors muted); `shopify-card.tsx` disconnect no catch |
+| **Location** | `order-statistics-cards.tsx` (`isError → null`); `pricing-actions.tsx` / `sync-inventory-button.tsx` (errors muted); ~~`shopify-card.tsx` disconnect no catch~~ |
 | **Impact** | Failures look like empty success. |
 | **Fix** | ErrorState / destructive Alert; surface disconnect errors. |
+| **Resolution (Shopify only)** | `shopify-card.tsx` now wraps disconnect in try/catch and renders a per-store error message; the button no longer fails silently. `order-statistics-cards.tsx`, `pricing-actions.tsx`, and `sync-inventory-button.tsx` are unchanged — still open. |
 
-### A-16 — Uncommitted Shopify webhook tunnel workaround on working tree
+### ~~A-16 — Uncommitted Shopify webhook tunnel workaround on working tree~~ ✅ RESOLVED
 
 | | |
 |---|---|
-| **Location** | Dirty: `integrations/router.py` (POST `/shopify/callback`), `shopify/service.py` (`webhook_delivery_address`), tests, SHOPIFY docs, `.env.example` |
+| **Location** | Was dirty: `integrations/router.py` (POST `/shopify/callback`), `shopify/service.py` (`webhook_delivery_address`), tests, SHOPIFY docs, `.env.example` |
 | **Evidence** | Present in working tree; **absent from `HEAD`** (`git show HEAD:…` empty for these symbols) |
 | **Impact** | Path-scoped Cloudflare tunnels cannot deliver Shopify webhooks on clean `develop` tip; local-only fix can be lost. |
 | **Fix** | Finish review, commit as intentional `fix(shopify): …`, or discard if superseded. Do not leave indefinitely. |
+| **Resolution** | The WIP was actually broken — `webhook_delivery_address()` was referenced by a test but never defined, so the module failed to collect. Implemented it, committed as `fix(shopify): finish webhook tunnel workaround, add missing topics, fail closed on replay outage (A-16, A-09)`. |
 
 ### A-17 — Celery / broker end-to-end still not proven locally (M15)
 
@@ -285,7 +289,9 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Live Partner install | **NOT VERIFIED** (M17) |
 | Webhook HMAC | Required when secret set |
 | Tenant resolution | **Critical defect** (A-01) |
-| Tunnel webhook delivery on clean tip | **Missing unless A-16 committed** |
+| Tunnel webhook delivery on clean tip | **Fixed** (A-16 committed) |
+| Webhook replay/dedup on Redis outage | **Fails closed for mutating topics** (A-09) |
+| `app/uninstalled` handling | Registered and marks the connection `ERROR` immediately (previously not handled at all) |
 
 ### Infrastructure
 
@@ -323,11 +329,11 @@ Do **not** start until this report is accepted. Suggested sequence:
 1. **A-01** — Global Shopify `shop_domain` uniqueness + webhook lookup (security)
 2. ~~**A-02** — React Query clear on logout (security / tenancy UI)~~ ✅
 3. ~~**A-03** — Lock AI prompt writes or introduce platform operator~~ ✅
-4. **A-07 / A-08 / A-09** — Status authz, safe errors, Shopify replay fail-closed
+4. **A-07 / A-08** — Status authz, safe errors / ~~**A-09** — Shopify replay fail-closed~~ ✅
 5. ~~**A-04** — Publish idempotency~~ ✅
-6. **A-16** — Commit or discard Shopify tunnel webhook WIP
-7. ~~**A-05**~~ ✅ / **A-06** — Compose API URL + CI Playwright
-8. Medium/Low UX and docs (A-14, A-15, …)
+6. ~~**A-16** — Commit or discard Shopify tunnel webhook WIP~~ ✅
+7. ~~**A-05**~~ ✅ / **A-06** — Compose API URL + CI Playwright (fix landed; CI unverified)
+8. Medium/Low UX and docs (A-14, ~~A-15 (Shopify part)~~ ✅ / A-15 (remaining) …)
 
 For every fix: root-cause note, tests, re-run quality gates. Do not remove tests to go green.
 

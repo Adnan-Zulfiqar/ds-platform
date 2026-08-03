@@ -12,6 +12,21 @@ production release.
 
 ### Fixed
 
+- **A-06** — CI `frontend-e2e` job runs Playwright chromium against a live API
+  with `SECURITY_RATE_LIMIT_REQUESTS=1000`; `.env.example` documents the e2e
+  ceiling; Playwright serves the standalone build via `npm run start:e2e`
+  (also closes A-13 `next start` mismatch).
+- **A-16 / A-09** — Finished the uncommitted Shopify webhook-tunnel workaround
+  (was broken — a referenced function was never defined), added the two
+  missing webhook topics (`products/create`, `app/uninstalled`), handled
+  `app/uninstalled` by marking the connection `ERROR` immediately, and made
+  replay-dedup fail closed (503) on a Redis outage for mutating topics
+  (`orders/create`, `orders/updated`, `app/uninstalled`) while non-mutating
+  topics still acknowledge.
+- **A-15 (Shopify)** — Disconnecting a store now catches failures and shows a
+  per-store error message instead of failing silently; the connected stores
+  card also now shows when each store was originally connected, not just its
+  last sync time.
 - **A-02** — Logout (and mid-session token clear) call `queryClient.clear()` so
   a shared browser cannot show the previous tenant's React Query cache;
   `router.refresh()` alone was insufficient.
