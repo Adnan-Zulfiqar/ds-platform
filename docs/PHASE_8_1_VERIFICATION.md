@@ -11,6 +11,8 @@
 
 **Live deploy addendum:** [PHASE_8_1_LIVE_DEPLOY.md](PHASE_8_1_LIVE_DEPLOY.md) — local Phase 8.1 routes are live after uvicorn restart; public `/install` still 404 due to path-scoped Cloudflare Tunnel (not a missing code deploy).
 
+**Public routing re-verify (2026-08-03, base `df9c22b`):** Cloudflare ingress still path-scoped. Exact public codes: GET `/install` **404**, GET `/callback` **303**, POST `/callback` **401**, POST `/webhook` **404**, POST `/claim-install` **404**, GET `/health/live` **404**. Local: install/callback **303**, claim/webhook **401**, health **200**. Canonical webhook URL documented as `…/shopify/webhook`. Live OAuth **not** started (install still 404). M17 open. Tag not moved. Product Editor stashes preserved.
+
 ---
 
 ## 1. Partner Dashboard configuration checklist
@@ -78,8 +80,21 @@ Do **not** change application code to paper over Dashboard misconfiguration.
 | Local `SHOPIFY_WEBHOOK_CALLBACK_BASE` | `…/shopify/webhook` (singular) |
 | Code | Accepts base ending `/webhooks`, `/callback`, or `/webhook`; registers topics accordingly |
 | Production probes | POST `/callback` → **401** (HMAC expected — handler alive). GET/POST `/webhook`, `/webhooks`, `/webhooks/orders-create` → **404** (not exposed / not deployed) |
-| Recommendation | Until tunnel exposes `/webhooks/*` or `/webhook`, set webhook base to the **callback** URL so registrations hit a live POST handler. Do not invent a combined OAuth+webhook redesign beyond the existing shared-callback path. |
+| Recommendation | Canonical base: **`…/shopify/webhook`**. Until Cloudflare exposes it, runtime may use POST **callback** (explicit shared HMAC receiver). Move off callback the moment `/webhook` is public. |
 | Unit/integration | Idempotent registration helpers + uninstall claim release covered in pytest |
+
+---
+
+## 5a. Public routing re-verify gates (2026-08-03)
+
+| Gate | Result |
+|---|---|
+| `ruff check .` | Pass |
+| `ruff format --check .` | **Fail** on untracked PE migration `20260803_1232_0014_…` only; `ruff format --check app tests` **Pass** |
+| `mypy app --strict` | Pass (159 files) |
+| `pytest` | **829 passed**, 0 failed, 11 warnings |
+| `npm run lint` / `typecheck` / `build` | Pass (build exit 0) |
+| Playwright Shopify + integrations + shell (chromium + mobile-chrome, workers=1) | **88 passed**, 0 failed, 0 skipped, 0 flaky |
 
 ---
 

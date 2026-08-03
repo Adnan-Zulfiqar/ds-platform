@@ -51,6 +51,10 @@ production release.
 
 ### Added
 
+- **Phase 8.1 public routing re-verify** — Cloudflare Tunnel still path-scoped;
+  public `/install` and `/webhook` remain 404; canonical webhook documented as
+  `…/shopify/webhook`; Product Editor stashes left untouched; M17 still open.
+  See [PHASE_8_1_LIVE_DEPLOY.md](docs/PHASE_8_1_LIVE_DEPLOY.md).
 - **Phase 8.1 live deploy notes** — local Phase 8.1 routes confirmed after
   uvicorn restart; public `/install` still 404 due to path-scoped Cloudflare
   Tunnel; webhook base aligned to public POST callback; Partner/Cloudflare

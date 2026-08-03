@@ -500,6 +500,14 @@ authorize URL opened for `mriy3s-zv`; consent not completed — **M17 still open
 `SHOPIFY_WEBHOOK_CALLBACK_BASE` aligned to public POST callback (explicit HMAC
 webhook receiver) until tunnel forwards `/webhook(s)`.
 
+**Public routing re-verify (2026-08-03):** Re-probed after `df9c22b` — Cloudflare
+ingress **unchanged**. Public GET `/install`, POST `/webhook`, GET `/health/live`
+still bare CF **404**; POST `/callback` still FastAPI **401**. Canonical webhook
+documented as `…/shopify/webhook` (separate from OAuth GET). Live OAuth not
+attempted while `/install` is 404. Product Editor stashes left intact
+(`stash@{0}` leftover product editor test; `stash@{1}` product editor parked).
+**M17 still open.** Tag `phase-8-1-complete` **not** moved.
+
 **2026-08-01 update:** Live connect tracing shows DropPilot OAuth *start* works
 and the failure is Shopify's authorize screen (Unauthorized / 403) before
 callback — typically Allowed redirection URL / app install eligibility. See
