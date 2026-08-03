@@ -56,13 +56,13 @@ const SHOPIFY_CALLBACK: Record<
     variant: "destructive",
     title: "Connection failed",
     body:
-      "Shopify could not be connected. Confirm the Partner/custom app Allowed redirection URL matches SHOPIFY_CALLBACK_URL exactly, and use your *.myshopify.com domain.",
+      "Shopify could not be connected. Confirm you used your *.myshopify.com domain and try again. If it keeps failing, ask your DropPilot operator to verify the app redirection URL.",
   },
   hmac: {
     variant: "destructive",
     title: "Shopify signature invalid",
     body:
-      "The OAuth callback signature did not match SHOPIFY_API_SECRET. Confirm the app secret in .env matches the Shopify app.",
+      "The install or callback signature did not match. Ask your DropPilot operator to verify the Shopify app secret.",
   },
   state: {
     variant: "destructive",
@@ -73,7 +73,22 @@ const SHOPIFY_CALLBACK: Record<
     variant: "destructive",
     title: "Token exchange failed",
     body:
-      "Shopify accepted consent but rejected the code exchange. Confirm API key/secret belong to the same app.",
+      "Shopify accepted consent but rejected the code exchange. Ask your DropPilot operator to verify the app Client ID and secret belong to the same app.",
+  },
+  taken: {
+    variant: "destructive",
+    title: "Store already linked",
+    body: "This Shopify store is already connected to another DropPilot workspace.",
+  },
+  claim_needed: {
+    variant: "default",
+    title: "Finish Shopify install",
+    body: "Sign in to DropPilot if needed — we will continue the Shopify authorization for this workspace.",
+  },
+  invalid_shop: {
+    variant: "destructive",
+    title: "Invalid store domain",
+    body: "Use a *.myshopify.com admin domain from Shopify Admin → Settings → Domains.",
   },
 };
 

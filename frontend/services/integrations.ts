@@ -125,6 +125,28 @@ export function useConnectShopify() {
   });
 }
 
+export function useClaimShopifyInstall() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: {
+      installToken: string;
+      storeName?: string;
+    }): Promise<ShopifyAuthorization> => {
+      const { data } = await apiClient.post<ShopifyAuthorization>(
+        "/integrations/shopify/claim-install",
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: integrationKeys.shopifyStatus(),
+      });
+    },
+  });
+}
+
 export function useDisconnectShopify() {
   const queryClient = useQueryClient();
 
