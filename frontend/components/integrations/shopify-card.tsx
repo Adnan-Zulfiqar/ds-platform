@@ -37,16 +37,21 @@ function ConnectionRow({
   connection,
   onDisconnect,
   disconnecting,
+  disconnectError,
 }: {
   connection: ShopifyConnection;
   onDisconnect: (storeId: string) => void;
   disconnecting: boolean;
+  disconnectError: string | null;
 }) {
   return (
     <div className="rounded-md border p-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="font-medium">{connection.shopDomain}</p>
+          <p className="text-muted-foreground">
+            Connected: {formatDate(connection.connectedAt)}
+          </p>
           <p className="text-muted-foreground">
             Last sync: {formatDate(connection.lastSyncAt)}
           </p>
@@ -59,6 +64,9 @@ function ConnectionRow({
       </div>
       {connection.lastError ? (
         <p className="mt-2 text-destructive">{connection.lastError}</p>
+      ) : null}
+      {disconnectError ? (
+        <p className="mt-2 text-destructive">{disconnectError}</p>
       ) : null}
       <Button
         variant="outline"
@@ -84,6 +92,24 @@ export function ShopifyCard() {
   const disconnect = useDisconnectShopify();
   const [shop, setShop] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [disconnectErrors, setDisconnectErrors] = useState<Record<string, string>>({});
+
+  async function handleDisconnect(storeId: string) {
+    setDisconnectErrors((previous) => {
+      const { [storeId]: _removed, ...rest } = previous;
+      return rest;
+    });
+    try {
+      await disconnect.mutateAsync(storeId);
+    } catch (error) {
+      setDisconnectErrors((previous) => ({
+        ...previous,
+        [storeId]: error instanceof ApiError
+          ? error.message
+          : "Could not disconnect this store.",
+      }));
+    }
+  }
 
   async function handleConnect() {
     setFormError(null);
@@ -153,8 +179,9 @@ export function ShopifyCard() {
             key={connection.id}
             connection={connection}
             disconnecting={disconnect.isPending}
+            disconnectError={disconnectErrors[connection.storeId] ?? null}
             onDisconnect={(storeId) => {
-              void disconnect.mutateAsync(storeId);
+              void handleDisconnect(storeId);
             }}
           />
         ))}
