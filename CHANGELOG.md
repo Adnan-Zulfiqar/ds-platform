@@ -51,6 +51,11 @@ production release.
 
 ### Added
 
+- **Phase 8.1 live deploy notes** — local Phase 8.1 routes confirmed after
+  uvicorn restart; public `/install` still 404 due to path-scoped Cloudflare
+  Tunnel; webhook base aligned to public POST callback; Partner/Cloudflare
+  checklist. See [PHASE_8_1_LIVE_DEPLOY.md](docs/PHASE_8_1_LIVE_DEPLOY.md).
+  M17 remains open pending merchant consent + tunnel path updates.
 - **Phase 8.1 — Shopify OAuth production quality** — App URL install
   (`GET …/shopify/install` with HMAC), claim-install for anonymous App Store
   entry, Connect dialog (domain only), webhook base validation + singular

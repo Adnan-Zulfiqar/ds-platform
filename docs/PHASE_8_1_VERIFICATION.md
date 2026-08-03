@@ -9,6 +9,8 @@
 
 **Status:** Implementation-complete. **Not** live-OAuth-complete (M17 remains open). Frontend build and Playwright Shopify/integrations/shell gates are now verified on this machine.
 
+**Live deploy addendum:** [PHASE_8_1_LIVE_DEPLOY.md](PHASE_8_1_LIVE_DEPLOY.md) — local Phase 8.1 routes are live after uvicorn restart; public `/install` still 404 due to path-scoped Cloudflare Tunnel (not a missing code deploy).
+
 ---
 
 ## 1. Partner Dashboard configuration checklist
@@ -17,7 +19,7 @@ Required values (from DropPilot code + local `.env` / production probes):
 
 | Setting | Required value | Status |
 |---|---|---|
-| **App URL** | `https://api.whiteto.com/api/v1/integrations/shopify/install` | **Mismatched / not live** — production GET returns **404** (Phase 8.1 route not deployed to the public API yet). Code on `develop` has the route. |
+| **App URL** | `https://api.whiteto.com/api/v1/integrations/shopify/install` | **Blocked by tunnel** — local backend serves route (303); public GET still **404** (Cloudflare path allowlist). See LIVE_DEPLOY. |
 | **Allowed redirection URL(s)** | `https://api.whiteto.com/api/v1/integrations/shopify/callback` | **Cannot verify from repository** (Dashboard only). Matches `SHOPIFY_CALLBACK_URL` in local `.env`. Public GET callback → **303** (route alive). |
 | **Client ID** | Same app as `SHOPIFY_API_KEY` tip `a7dd…a53a` | **Correct** in local `.env` (len 32). Dashboard match **cannot verify from repo**. |
 | **Client Secret** | Same app as `SHOPIFY_API_SECRET` (`shpss_…`) | Present locally; **never printed**. Dashboard match **cannot verify from repo**. |
