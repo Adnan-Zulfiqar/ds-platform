@@ -70,7 +70,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Impact** | On a shared browser, User B can briefly see User A’s cached catalogue/orders until refetch — UI-level multi-tenant leak (API still auth-gated). |
 | **Recommended fix** | Inject `QueryClient`; call `queryClient.clear()` on logout and `onTokenCleared`; optionally clear on login. Add Playwright/regression for cache wipe. |
 
-### A-03 — Tenant admin can mutate platform-global AI prompts
+### ~~A-03 — Tenant admin can mutate platform-global AI prompts~~ ✅ RESOLVED
 
 | | |
 |---|---|
@@ -78,6 +78,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Location** | `backend/app/repositories/ai_prompt.py` (unscoped); `backend/app/api/v1/ai/router.py` (`RequireAdmin`); documented in `docs/PHASE_9_PLAN.md` |
 | **Impact** | Any tenant admin can change `product_title_generator` (etc.) for **all** tenants — sabotage, prompt injection, or brand damage at scale. |
 | **Recommended fix** | Freeze write APIs until a platform-operator role exists; or tenant-scoped prompts with immutable platform defaults. |
+| **Resolution** | `AI_ALLOW_PROMPT_MUTATION` defaults false; `PromptService` gates create / version / activate. Platform-operator role remains future work. |
 
 ### A-04 — Shopify `publish_product` not Celery-idempotent
 
@@ -260,7 +261,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Provider abstraction + StubProvider | **Sound** |
 | Prompt render → execute → record | **Sound** under stub |
 | Product versions / supplier overwrite protection | **Sound** by construction |
-| Prompt admin privilege | **High risk** (A-03) |
+| Prompt admin privilege | **Mitigated** (A-03 — env gate; operator role still future) |
 | Live model quality | **NOT VERIFIED** (M19) |
 
 ### AliExpress
@@ -303,7 +304,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | Fernet encryption startup guards | Pass (S1–S4) |
 | Log redaction | Pass (S5) |
 | Cross-tenant Shopify webhook | **Fail** (A-01) |
-| Prompt privilege boundary | **Fail** (A-03) |
+| Prompt privilege boundary | **Pass (gated)** (A-03 — `AI_ALLOW_PROMPT_MUTATION`) |
 | Logout cache wipe | **Fail** (A-02) |
 | CSRF on cookie refresh | Cookie + CORS model — **NOT fully re-proven** in browser this session |
 | Webhook HMAC Shopify | Pass when configured |
@@ -317,7 +318,7 @@ Do **not** start until this report is accepted. Suggested sequence:
 
 1. **A-01** — Global Shopify `shop_domain` uniqueness + webhook lookup (security)
 2. **A-02** — React Query clear on logout (security / tenancy UI)
-3. **A-03** — Lock AI prompt writes or introduce platform operator
+3. ~~**A-03** — Lock AI prompt writes or introduce platform operator~~ ✅
 4. **A-07 / A-08 / A-09** — Status authz, safe errors, Shopify replay fail-closed
 5. **A-04** — Publish idempotency
 6. **A-16** — Commit or discard Shopify tunnel webhook WIP

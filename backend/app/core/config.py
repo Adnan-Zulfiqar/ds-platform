@@ -624,6 +624,15 @@ class AISettings(_EnvFileSettings):
     max_retries: int = Field(
         default=2, ge=0, description="Retries for transient failures only; never for a 4xx."
     )
+    allow_prompt_mutation: bool = Field(
+        default=False,
+        description=(
+            "When false (default), create/version/activate of platform-global "
+            "AI prompts is refused. Tenant admins must not edit prompts that "
+            "affect every workspace (audit A-03). Enable only for platform "
+            "operators or automated tests."
+        ),
+    )
 
 
 class ObservabilitySettings(_EnvFileSettings):

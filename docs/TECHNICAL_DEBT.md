@@ -25,9 +25,8 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
-**Full application audit fix pass (2026-08-03)** — A-01 resolved: Shopify
-`shop_domain` is globally unique; webhook tenant resolution is an indexed
-lookup (see A-01 below).
+**Full application audit fix pass (2026-08-03)** — A-01 and A-03 resolved
+(see below). Remaining audit priorities: A-04, A-05, A-02, A-06.
 
 **Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
@@ -48,6 +47,20 @@ foreign ownership (`ShopifyShopTakenError`); webhook uses indexed lookup.
 
 **Verified:** ruff, mypy strict, pytest **745** passed (including new unit +
 integration coverage).
+
+### ~~A-03 — Tenant admin can mutate platform-global AI prompts~~ ✅ RESOLVED
+
+**Root cause:** `ai_prompts` is unscoped platform reference data, but create /
+version / activate were available to any tenant admin (`RequireAdmin`). One
+workspace could change prompts that drive every other tenant's AI output.
+
+**Fix:** `AISettings.allow_prompt_mutation` defaults to `false`
+(`AI_ALLOW_PROMPT_MUTATION`). `PromptService` refuses create / create_version /
+activate unless the flag is on. Reads and test-render remain. Tests set the
+flag so existing prompt suites keep exercising the write path.
+
+**Verified:** ruff, mypy strict, full pytest **746** passed (including new unit +
+HTTP coverage for the lock).
 
 ---
 

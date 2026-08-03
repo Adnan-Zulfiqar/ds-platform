@@ -12,6 +12,9 @@ production release.
 
 ### Fixed
 
+- **A-03** — Platform-global AI prompt create / version / activate are refused
+  unless `AI_ALLOW_PROMPT_MUTATION=true` (default off). Tenant admins can still
+  list, history, and test-render. Tests opt in via conftest.
 - **A-01** — Shopify `shop_domain` is globally unique (migration `0012`);
   webhooks resolve the owning tenant by indexed domain lookup instead of a
   capped table scan; connect rejects a shop already bound to another workspace.

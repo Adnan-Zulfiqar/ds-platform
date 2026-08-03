@@ -38,6 +38,9 @@ os.environ.setdefault(
     "SECURITY_ENCRYPTION_KEYS",
     "dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=,dGVzdC1rZXktMi1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
 )
+# Prompt mutation is off by default (audit A-03). The suite exercises create /
+# version / activate, so tests opt in explicitly without weakening production.
+os.environ.setdefault("AI_ALLOW_PROMPT_MUTATION", "true")
 # ---------------------------------------------------------------------------
 
 from app.core import context as ctx

@@ -21,7 +21,7 @@ from app.ai.factory import get_ai_provider
 from app.ai.prompt_renderer import PromptRenderer
 from app.ai.provider import CompletionRequest
 from app.core.config import settings
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.models.ai_prompt import AIPrompt, PromptExecution, PromptExecutionStatus
 from app.repositories.ai_prompt import PromptExecutionRepository, PromptRepository
 from app.schemas.common import ListQueryParams
@@ -33,6 +33,21 @@ class PromptService(BaseService):
         super().__init__(session)
         self.prompts = PromptRepository(session)
         self.executions = PromptExecutionRepository(session)
+
+    @staticmethod
+    def _require_prompt_mutation_allowed() -> None:
+        """Refuse mutating platform-global prompts unless explicitly enabled.
+
+        ``ai_prompts`` is shared across every tenant. A workspace admin editing
+        ``product_title_generator`` would change every other tenant's output —
+        audit A-03. Reads and test-render remain available; only create /
+        version / activate are gated.
+        """
+        if not settings.ai.allow_prompt_mutation:
+            raise PermissionDeniedError(
+                "Editing platform AI prompts is disabled. "
+                "Set AI_ALLOW_PROMPT_MUTATION=true only for platform operators."
+            )
 
     # -- Creation and versioning ---------------------------------------------
 
@@ -54,6 +69,7 @@ class PromptService(BaseService):
         both winning a race to create the same new name, by rejecting the
         second INSERT outright.
         """
+        self._require_prompt_mutation_allowed()
         existing = await self.prompts.list_versions(name)
         if existing:
             raise ConflictError(f"A prompt named {name!r} already exists.")
@@ -83,6 +99,7 @@ class PromptService(BaseService):
         Activate it explicitly with :meth:`activate_version` when it is
         ready; until then the previous version keeps serving.
         """
+        self._require_prompt_mutation_allowed()
         versions = await self.prompts.list_versions(name)
         if not versions:
             raise NotFoundError.for_resource("Prompt", name)
@@ -106,6 +123,7 @@ class PromptService(BaseService):
         and "roll back to an older one" — there is no separate rollback
         endpoint because there is no separate mechanism.
         """
+        self._require_prompt_mutation_allowed()
         return await self.prompts.activate(name=name, version=version)
 
     # -- Reads ----------------------------------------------------------------

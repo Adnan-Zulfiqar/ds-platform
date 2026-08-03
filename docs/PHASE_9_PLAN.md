@@ -270,14 +270,13 @@ unchanged by this stage.
 
 1. **Every endpoint requires `RequireAdmin`, which is a *tenant* admin, not a
    platform operator.** `ai_prompts` is platform-global — one tenant's admin
-   editing `product_title_generator` changes what every other tenant's
-   generations produce. This platform has no role above tenant-admin yet
-   (`PROJECT_ROADMAP.md`'s "Admin panel: platform operations across tenants"
-   is an unscheduled later phase). `RequireAdmin` is the strongest existing
-   check and what the brief asked for ("respect tenant/admin permissions"),
-   but it does not close this gap — a tenant admin has real, unaudited
-   leverage over every other tenant's output today. This needs a genuine
-   platform-operator role before production use with multiple real tenants.
+   editing `product_title_generator` would change every other tenant's
+   generations. **Mitigated (audit A-03):** `AI_ALLOW_PROMPT_MUTATION`
+   defaults to `false`, so create / version / activate raise
+   `PermissionDeniedError` unless a platform operator explicitly enables
+   mutation. Reads and test-render stay available. A genuine
+   platform-operator role (`PROJECT_ROADMAP.md` admin panel) remains the
+   longer-term replacement for the env gate.
 2. **`PromptExecution` rows are written but not independently readable.**
    The brief's admin-capability list (list, create, update, activate,
    history, test) does not include an execution log viewer, so none was
