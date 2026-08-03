@@ -25,8 +25,8 @@ the exact blocker is now known and is one elevated command away. See
 [PRODUCTION_READINESS_AUDIT.md](PRODUCTION_READINESS_AUDIT.md).
 **Phase 9 Stage 3 (2026-08-02)** — product optimisation architecture shipped
 through `StubProvider`; M19 records that live model output remains unverified.
-**Full application audit fix pass (2026-08-03)** — A-01 and A-03 resolved
-(see below). Remaining audit priorities: A-04, A-05, A-02, A-06.
+**Full application audit fix pass (2026-08-03)** — A-01, A-03, and A-04
+resolved (see below). Remaining audit priorities: A-05, A-02, A-06.
 
 **Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
 
@@ -61,6 +61,19 @@ flag so existing prompt suites keep exercising the write path.
 
 **Verified:** ruff, mypy strict, full pytest **746** passed (including new unit +
 HTTP coverage for the lock).
+
+### ~~A-04 — Shopify `publish_product` not Celery-idempotent~~ ✅ RESOLVED
+
+**Root cause:** `task_acks_late` delivers at least once. Publish POSTed to
+Shopify then persisted `StoreListing`. A crash between those steps left no
+local listing; redelivery POSTed again and created a duplicate Shopify product.
+
+**Fix:** deterministic handle `droppilot-{product_id}`;
+`_create_or_adopt` looks up by handle before create and adopts any existing
+product from a prior attempt.
+
+**Verified:** ruff, mypy strict, pytest **748** passed (new unit coverage for
+handle + adopt-vs-post). Untracked WIP webhook tests excluded from this gate.
 
 ---
 

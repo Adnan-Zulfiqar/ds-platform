@@ -80,7 +80,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Recommended fix** | Freeze write APIs until a platform-operator role exists; or tenant-scoped prompts with immutable platform defaults. |
 | **Resolution** | `AI_ALLOW_PROMPT_MUTATION` defaults false; `PromptService` gates create / version / activate. Platform-operator role remains future work. |
 
-### A-04 — Shopify `publish_product` not Celery-idempotent
+### ~~A-04 — Shopify `publish_product` not Celery-idempotent~~ ✅ RESOLVED
 
 | | |
 |---|---|
@@ -88,6 +88,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | **Location** | `backend/app/tasks/integrations/shopify.py`; `backend/app/integrations/shopify/sync.py` (`POST /products.json` then persist listing); `celery_app` `task_acks_late` |
 | **Impact** | At-least-once delivery after Shopify create / before listing persist → duplicate Shopify products. |
 | **Recommended fix** | Idempotency: lookup by handle/SKU before create; or pending listing row before outbound call. |
+| **Resolution** | Deterministic handle `droppilot-{product_id}`; lookup-before-create adopts an existing Shopify product on retry. |
 
 ### A-05 — Nginx “same-origin” story broken by baked `NEXT_PUBLIC_API_URL`
 
@@ -242,7 +243,7 @@ Production readiness (honest): **~5.5/10** — strong architecture and test suit
 | TenantScopedRepository | **Sound** — isolation tests present; Shopify webhook resolution is the outlier |
 | Auth (Argon2id, JWT `typ`, refresh rotation) | **Sound** — S1–S5 closed |
 | Error envelope | **Sound** for unhandled/SQLAlchemy; **weak** for `str(exc)` on some integration paths |
-| Celery | Configured correctly in code; **idempotency gaps** (A-04); broker path CI-only (M15) |
+| Celery | Configured correctly in code; publish idempotency **mitigated** (A-04); broker path CI-only (M15) |
 
 ### Frontend architecture
 
@@ -320,7 +321,7 @@ Do **not** start until this report is accepted. Suggested sequence:
 2. **A-02** — React Query clear on logout (security / tenancy UI)
 3. ~~**A-03** — Lock AI prompt writes or introduce platform operator~~ ✅
 4. **A-07 / A-08 / A-09** — Status authz, safe errors, Shopify replay fail-closed
-5. **A-04** — Publish idempotency
+5. ~~**A-04** — Publish idempotency~~ ✅
 6. **A-16** — Commit or discard Shopify tunnel webhook WIP
 7. **A-05 / A-06** — Compose API URL + CI Playwright
 8. Medium/Low UX and docs (A-14, A-15, …)

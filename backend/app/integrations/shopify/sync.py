@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
+from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.service import ShopifyService
 from app.models.order import (
     FulfillmentStatus,
@@ -26,6 +27,18 @@ from app.repositories.shopify import StoreListingRepository
 from app.services.base import BaseService
 
 logger = get_logger(__name__)
+
+
+def _deterministic_handle(product_id: uuid.UUID) -> str:
+    """A stable Shopify product handle derived from the DropPilot product id.
+
+    Not the display title-derived slug Shopify would generate on its own —
+    deliberately unrelated to `title`, so a title change never changes which
+    Shopify product a given DropPilot product maps to, and a create retry
+    always searches for exactly the same handle regardless of what changed
+    since the first attempt.
+    """
+    return f"droppilot-{product_id}"
 
 
 class ShopifySyncService(BaseService):
@@ -56,8 +69,11 @@ class ShopifySyncService(BaseService):
     ) -> dict[str, Any]:
         """Create or update a Shopify product for a DropPilot catalogue product.
 
-        Idempotent via :class:`StoreListing` — never creates a second Shopify
-        product for the same store/product pair.
+        Idempotent two ways: a local :class:`StoreListing` drives update vs
+        create; when no listing exists yet, :meth:`_create_or_adopt` uses a
+        deterministic handle so a Celery redelivery after Shopify create /
+        before the listing commit adopts the existing product instead of
+        duplicating it (audit A-04).
         """
         product = await self._load_product(product_id)
         client, connection = await self.shopify.client_for_store(store_id)
@@ -111,7 +127,9 @@ class ShopifySyncService(BaseService):
                     json_body=body,
                 )
             else:
-                payload = await client.post("/products.json", json_body=body)
+                payload = await self._create_or_adopt(
+                    client, body=body, handle=_deterministic_handle(product_id)
+                )
 
             shopify_product = payload.get("product") or {}
             external_id = str(shopify_product.get("id") or "")
@@ -167,6 +185,33 @@ class ShopifySyncService(BaseService):
                 )
             await self.shopify.mark_error(connection, str(exc))
             raise
+
+    @staticmethod
+    async def _create_or_adopt(
+        client: ShopifyClient, *, body: dict[str, Any], handle: str
+    ) -> dict[str, Any]:
+        """Create a new Shopify product, or adopt one that already exists at
+        `handle` from an earlier attempt whose local commit never landed.
+
+        Shopify's REST Admin API has no create-idempotency key, so the
+        deterministic handle *is* the idempotency mechanism. `publish_product`
+        runs behind a Celery task with `task_acks_late` (at-least-once
+        delivery — see `app.tasks.integrations.shopify`): if the worker
+        crashes after Shopify successfully creates the product but before the
+        local transaction commits `StoreListing`, a redelivery finds no
+        listing and would otherwise POST again, creating a second Shopify
+        product for the same DropPilot product — audit A-04. Searching by
+        handle first means the retry finds and adopts the product Shopify
+        already has, rather than duplicating it.
+        """
+        existing = await client.get("/products.json", params={"handle": handle, "limit": 1})
+        found = existing.get("products") or []
+        if found:
+            logger.info("shopify_publish_adopted_existing_product", handle=handle)
+            return {"product": found[0]}
+
+        body["product"]["handle"] = handle
+        return await client.post("/products.json", json_body=body)
 
     async def push_inventory(self, *, store_id: uuid.UUID, product_id: uuid.UUID) -> dict[str, Any]:
         client, connection = await self.shopify.client_for_store(store_id)

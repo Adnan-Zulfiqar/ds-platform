@@ -12,6 +12,9 @@ production release.
 
 ### Fixed
 
+- **A-04** — Shopify product publish is Celery-safe: create uses deterministic
+  handle `droppilot-{product_id}` and adopts an existing Shopify product on
+  redelivery instead of posting a duplicate.
 - **A-03** — Platform-global AI prompt create / version / activate are refused
   unless `AI_ALLOW_PROMPT_MUTATION=true` (default off). Tenant admins can still
   list, history, and test-render. Tests opt in via conftest.
