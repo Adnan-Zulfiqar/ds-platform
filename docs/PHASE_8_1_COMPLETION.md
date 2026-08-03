@@ -6,7 +6,7 @@
 |---|---|
 | Date | 2026-08-03 |
 | Branch | `develop` (**not** `main`) |
-| Tag | `phase-8-1-complete` (pending push) |
+| Tag | `phase-8-1-complete` → `598306b` |
 | Plan | [PHASE_8_1_PLAN.md](PHASE_8_1_PLAN.md) |
 | Depends on | Phase 8 (`phase-8-complete`), install-flow audit |
 
@@ -32,18 +32,15 @@ Merchants are **never** asked for API key, secret, or access token.
 
 ---
 
-## 2. Commits (logical stages)
+## 2. Commits
 
-Documented after git push — see `git log` on `develop` for Phase 8.1 range.
-
-Expected sequence:
-
-1. Docs: prior install audit + `PHASE_8_1_PLAN.md`
-2. Backend: install/claim, webhooks, disconnect/uninstall, normalisation
-3. Frontend: Connect dialog + claim + status UX
-4. Tests + Playwright updates
-5. Completion docs / roadmap / changelog / debt
-
+| Hash | Message |
+|---|---|
+| `b4b2bcf` | docs(shopify): audit install flow and write Phase 8.1 plan |
+| `59ae05e` | feat(shopify): App URL install, claim, and OAuth hardening |
+| `b4fa464` | feat(frontend): Shopify connect dialog and claim-install UX |
+| `1192e4b` | test(shopify): cover App URL install and dialog OAuth flow |
+| `598306b` | docs: close Phase 8.1 with honest live-verification gaps |
 ---
 
 ## 3. Quality gates (verified this session)
