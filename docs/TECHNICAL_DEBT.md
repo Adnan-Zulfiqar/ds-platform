@@ -104,7 +104,7 @@ exposes a probe handle for Playwright.
 **Verified:** `npm run lint`, `npm run typecheck`, `npm run build`; Playwright
 `signing out clears the React Query cache (A-02)` passed (chromium).
 
-### ~~A-06 — Playwright not in CI; rate-limit flakes on default env (M13)~~ ✅ RESOLVED
+### A-06 — Playwright not in CI; rate-limit flakes on default env (M13) — FIX LANDED
 
 **Root cause:** No CI Playwright job; default `SECURITY_RATE_LIMIT_REQUESTS=100`
 is exceeded by a full local e2e run; `npm run start` mismatches standalone
@@ -114,9 +114,9 @@ output.
 `.env.example` documents the e2e ceiling without changing the production
 default; Playwright boots via `npm run start:e2e` (standalone server).
 
-**Verified:** unit wiring tests; local Playwright against `start:e2e` /
-standalone (A-02 probe). Full CI job runs on push (not executed in this
-local pass).
+**Verified locally:** unit wiring tests (754 suite); lint/typecheck; standalone
+serve path. **Not verified:** GitHub Actions `frontend-e2e` job — remains open
+until that run is green.
 
 ### ~~A-16 — Uncommitted Shopify webhook tunnel workaround on working tree~~ ✅ RESOLVED
 

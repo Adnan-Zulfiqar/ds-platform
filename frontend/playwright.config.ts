@@ -35,9 +35,10 @@ export default defineConfig({
     { name: "mobile-chrome", use: { ...devices["Pixel 7"] } },
   ],
 
-  // Start the app automatically unless one is already running.
+  // Start the standalone server (matches Docker). `next start` is wrong when
+  // `output: "standalone"` — see TECHNICAL_DEBT M13 / audit A-06.
   webServer: {
-    command: "npm run start",
+    command: "npm run start:e2e",
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
