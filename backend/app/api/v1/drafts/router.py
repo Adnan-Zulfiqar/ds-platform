@@ -16,8 +16,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.integrations.shopify.schemas import StoreListingRead
 from app.models.product import Product
 from app.repositories.product import ProductRepository
+from app.repositories.shopify import StoreListingRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.draft_pricing import DraftPricingApplyRequest, DraftPricingWorkspaceRead
 from app.schemas.product import (
@@ -32,10 +34,12 @@ from app.schemas.product import (
     ProductVariantUpdateRequest,
     ProductVersionRead,
 )
+from app.schemas.seo import SeoScoreRead
 from app.services.pricing_engine import PricingEngine
 from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
+from app.services.seo_score import seo_score_dict
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -245,6 +249,36 @@ async def update_draft_variant(
         product_id, variant_id, payload.model_dump(exclude_unset=True)
     )
     return _to_detail(product)
+
+
+@router.get(
+    "/{product_id}/listings",
+    response_model=list[StoreListingRead],
+    summary="Channel listings for a draft/product",
+)
+async def list_draft_listings(
+    session: DbSession,
+    _authorized: RequireViewer,
+    product_id: Annotated[uuid.UUID, Path()],
+) -> list[StoreListingRead]:
+    await ProductRepository(session).get_by_id_or_raise(product_id)
+    rows = await StoreListingRepository(session).list_for_product(product_id)
+    return [StoreListingRead.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/{product_id}/seo-score",
+    response_model=SeoScoreRead,
+    summary="Transparent advisory SEO quality score",
+)
+async def get_draft_seo_score(
+    session: DbSession,
+    _authorized: RequireViewer,
+    product_id: Annotated[uuid.UUID, Path()],
+) -> SeoScoreRead:
+    product = await ProductRepository(session).get_by_id_or_raise(product_id)
+    data = seo_score_dict(product)
+    return SeoScoreRead(**data)
 
 
 @router.get(

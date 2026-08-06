@@ -114,3 +114,49 @@ export async function registerAndSignIn(
 
   throw new Error("Registration did not reach /dashboard after retries");
 }
+
+/**
+ * Register via the API, then sign in through the login form.
+ *
+ * Avoids flaky full-page registration UI under rate limits while still proving
+ * the cookie/token path the SPA uses after a real login.
+ */
+export async function registerViaApiAndSignIn(
+  page: Page,
+  account: TestAccount = buildAccount(),
+): Promise<TestAccount> {
+  let lastStatus = 0;
+  let lastBody = "";
+  let candidate = account;
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    candidate = attempt === 0 ? account : buildAccount();
+    const response = await page.request.post(`${API_URL}/api/v1/auth/register`, {
+      data: {
+        companyName: candidate.companyName,
+        email: candidate.email,
+        password: candidate.password,
+        firstName: "E2E",
+        lastName: "Operator",
+      },
+    });
+
+    if (response.ok()) {
+      await page.goto("/login");
+      await page.getByLabel("Email").fill(candidate.email);
+      await page.getByLabel("Password", { exact: true }).fill(candidate.password);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+      return candidate;
+    }
+
+    lastStatus = response.status();
+    lastBody = await response.text();
+    if (lastStatus !== 429) {
+      break;
+    }
+    await page.waitForTimeout(1500 * (attempt + 1));
+  }
+
+  throw new Error(`API registration failed (${lastStatus}): ${lastBody}`);
+}

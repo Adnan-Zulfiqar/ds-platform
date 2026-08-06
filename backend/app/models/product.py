@@ -244,6 +244,13 @@ class Product(TenantScopedBase):
     ship_to_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     shipping_cost: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     warehouse_origin: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requires_shipping: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    hs_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    country_of_origin: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    customs_description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    handling_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    dimension_unit: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     #: Destination used for the last *successful* AliExpress detail call.
     #: Distinct from ``ship_to_country`` on the logistics DTO: that is what the
@@ -268,10 +275,20 @@ class Product(TenantScopedBase):
     # --- SEO (Phase 9 stage 3) -----------------------------------------------
     seo_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     seo_description: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    #: Comma-separated, matching how a `<meta name="keywords">` tag is
-    #: actually rendered — not an array for a value that is one string on the
-    #: way out.
+    #: Legacy column — **not** exported to Shopify as a meta-keywords tag.
+    #: Prefer ``search_topics`` for planning inputs.
     meta_keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Planning topics for AI/content — never an HTML meta keywords tag.
+    search_topics: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    #: SEO specialist planning context (intent, audience, differentiators…).
+    seo_planning: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    og_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    og_description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    redirect_old_handle: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # --- Marketplace (Phase 9 stage 3) ---------------------------------------
     #

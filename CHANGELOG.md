@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Premium draft editor header** — Three-layer sticky chrome with thumbnail,
+  breadcrumb, supplier-sync/readiness/SEO badges, Publish-primary action
+  hierarchy, More menu for tertiary tools, Draft Preview sheet (not a tab
+  switch), tablet wrap + mobile bottom action bar. Unsupported Duplicate /
+  Archive / Delete actions are hidden until APIs exist. See
+  `docs/PREMIUM_PRODUCT_EDITOR_UI.md`.
+
 ### Added
 
 - **AliExpress import destinations** — Import as Draft records `ship_to_country`
@@ -19,6 +28,11 @@ production release.
   `DEFAULT_SHIP_TO_COUNTRY`, then the last successful import — never a silent
   US default. Publish warns/blocks when the store market differs from the
   import destination.
+- **Premium Product Editor** — Sticky header/inspector, autosave, SEO workspace
+  + advisory score (no meta-keywords export), editable shipping/customs,
+  target-margin pricing, post-publish View in Store / Manage in Shopify when
+  URLs are verified. Migration `0018` persists listing handle/admin/storefront
+  fields. See `docs/PREMIUM_PRODUCT_EDITOR_UI.md`.
 - **Draft Product Editor Stage 5** — Pricing workspace (`GET/POST …/pricing`)
   with Decimal profit/margin/break-even; inventory freshness + supplier stock
   labels; shipping package/logistics columns (migration `0017`). Missing

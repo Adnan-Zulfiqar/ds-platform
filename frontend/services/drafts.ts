@@ -14,6 +14,8 @@ import type {
   Product,
   ProductDetail,
   ProductUpdatePayload,
+  SeoScore,
+  StoreListing,
 } from "@/types/api";
 
 /**
@@ -30,6 +32,8 @@ export const draftKeys = {
   details: () => [...draftKeys.all, "detail"] as const,
   detail: (id: string) => [...draftKeys.details(), id] as const,
   pricing: (id: string) => [...draftKeys.all, "pricing", id] as const,
+  listings: (id: string) => [...draftKeys.all, "listings", id] as const,
+  seoScore: (id: string) => [...draftKeys.all, "seo-score", id] as const,
 };
 
 async function fetchDrafts(query: ListQuery): Promise<Page<Product>> {
@@ -239,5 +243,35 @@ export function useApplyDraftPricing(productId: string) {
         queryKey: draftKeys.pricing(productId),
       });
     },
+  });
+}
+
+export function useDraftListings(
+  productId: string,
+): UseQueryResult<StoreListing[]> {
+  return useQuery({
+    queryKey: draftKeys.listings(productId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<StoreListing[]>(
+        `/drafts/${productId}/listings`,
+      );
+      return data;
+    },
+    enabled: Boolean(productId),
+  });
+}
+
+export function useDraftSeoScore(
+  productId: string,
+): UseQueryResult<SeoScore> {
+  return useQuery({
+    queryKey: draftKeys.seoScore(productId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<SeoScore>(
+        `/drafts/${productId}/seo-score`,
+      );
+      return data;
+    },
+    enabled: Boolean(productId),
   });
 }

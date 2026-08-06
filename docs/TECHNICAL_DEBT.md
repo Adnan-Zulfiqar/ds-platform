@@ -502,6 +502,29 @@ true destination quotes or converted-currency costs.
 **Trigger:** before publish readiness treats shipping as a hard block by policy.
 **Fix:** wire FX feed + freight option fetch; extend readiness policy.
 
+### M24 — Online Store publications API and shipping profile scopes
+
+Premium editor persists REST handle/admin URLs and soft storefront URLs from
+`published_at` + `active`. True Online Store channel control needs
+`write_publications` (+ publications GraphQL). Delivery profile UI needs
+`read_shipping`/`write_shipping` and merchant confirmation. Neither is in the
+default scope string yet — documented in `.env.example` only.
+
+**Impact:** View in Store may be unavailable when Shopify omits `published_at`;
+profile assignment is not offered.
+**Trigger:** before claiming full Online Store / shipping-profile control.
+**Fix:** Partner app version + reauth + `currentAppInstallation` scope verify;
+graceful fallbacks already hide broken storefront buttons.
+
+### M25 — Live premium edit→Shopify acceptance not completed this session
+
+End-to-end live publish with SEO/pricing/shipping + View in Store was not run
+in the premium-editor session. Do not treat mocks as proof.
+
+**Impact:** Production confidence gap.
+**Trigger:** before completion tag.
+**Fix:** run the live acceptance checklist in the prompt against one real draft.
+
 ### M19 — Phase 9 AI output is StubProvider-only (no live model key)
 
 Stages 1–3 exercise the full provider → prompt → product-version pipeline, but

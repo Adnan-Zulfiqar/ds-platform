@@ -72,6 +72,12 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
         )
         return list(result.scalars().all())
 
+    async def list_for_product(self, product_id: uuid.UUID) -> Sequence[StoreListing]:
+        result = await self.session.execute(
+            self._base_query().where(StoreListing.product_id == product_id)
+        )
+        return list(result.scalars().all())
+
 
 class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
     """Unscoped sweep / webhook lookup — documented unscoped repository.

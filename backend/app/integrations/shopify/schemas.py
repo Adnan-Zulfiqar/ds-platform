@@ -56,5 +56,38 @@ class ShopifyPublishRequest(CamelCaseModel):
     store_id: uuid.UUID
 
 
+class ShopifyPublishResponse(CamelCaseModel):
+    """Structured publish result — includes verified storefront/admin links."""
+
+    message: str
+    listing_id: uuid.UUID
+    external_product_id: str
+    external_handle: str | None = None
+    external_graphql_id: str | None = None
+    shop_domain: str | None = None
+    storefront_url: str | None = None
+    admin_url: str | None = None
+    online_store_published: bool | None = None
+    updated: bool = True
+
+
+class StoreListingRead(CamelCaseModel):
+    id: uuid.UUID
+    store_id: uuid.UUID
+    product_id: uuid.UUID
+    external_product_id: str
+    external_handle: str | None = None
+    external_graphql_id: str | None = None
+    shop_domain: str | None = None
+    storefront_url: str | None = None
+    admin_url: str | None = None
+    online_store_published: bool | None = None
+    status: str
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
+    published_at: datetime | None = None
+    last_failed_sync_at: datetime | None = None
+
+
 class ShopifySyncRequest(CamelCaseModel):
     store_id: uuid.UUID | None = None

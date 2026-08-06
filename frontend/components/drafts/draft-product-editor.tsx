@@ -1,22 +1,27 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  ArrowLeft,
-  Loader2,
-  RefreshCw,
-  Save,
-  Store,
-} from "lucide-react";
+import { Loader2, Store } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
 import { DraftMediaPanel } from "@/components/drafts/draft-media-panel";
+import { DraftPostPublishPanel } from "@/components/drafts/draft-post-publish-panel";
 import { DraftPricingPanel } from "@/components/drafts/draft-pricing-panel";
+import { DraftSeoPanel } from "@/components/drafts/draft-seo-panel";
 import { DraftShippingPanel } from "@/components/drafts/draft-shipping-panel";
 import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
-import { OptimizeProductButton } from "@/components/products/optimize-product-button";
+import { DraftPreviewPanel } from "@/components/drafts/draft-preview-panel";
+import {
+  ProductEditorHeader,
+  ProductEditorHeaderSkeleton,
+} from "@/components/drafts/editor-header/product-editor-header";
+import {
+  EDITOR_TAB_LABEL,
+  isEditorTab,
+  type EditorTab,
+} from "@/components/drafts/editor-header/product-editor-tabs";
+import { readinessFor } from "@/components/drafts/editor-header/readiness";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -24,112 +29,46 @@ import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { cn, formatDateTime, formatMoney } from "@/lib/utils";
 import {
+  draftKeys,
   useDraft,
+  useDraftListings,
+  useDraftSeoScore,
   useRefreshDraft,
   useUpdateDraft,
 } from "@/services/drafts";
+import { useOptimizeProduct } from "@/services/products";
 import { useStores } from "@/services/stores";
 import { apiClient } from "@/lib/api-client";
-import type { ProductDetail, ProductUpdatePayload } from "@/types/api";
-
-const TABS = [
-  "overview",
-  "description",
-  "media",
-  "variants",
-  "pricing",
-  "inventory",
-  "shipping",
-  "seo",
-  "ai-studio",
-  "publishing",
-  "history",
-] as const;
-
-type EditorTab = (typeof TABS)[number];
-
-const TAB_LABEL: Record<EditorTab, string> = {
-  overview: "Overview",
-  description: "Description",
-  media: "Media",
-  variants: "Variants",
-  pricing: "Pricing",
-  inventory: "Inventory",
-  shipping: "Shipping",
-  seo: "SEO",
-  "ai-studio": "AI Studio",
-  publishing: "Publishing",
-  history: "History",
-};
-
-function isEditorTab(value: string | null): value is EditorTab {
-  return value !== null && (TABS as readonly string[]).includes(value);
-}
-
-function readinessFor(product: ProductDetail): {
-  score: number;
-  level: string;
-  issues: string[];
-} {
-  const issues: string[] = [];
-  let score = 0;
-
-  if (product.title.trim().length >= 8) score += 20;
-  else issues.push("Title is too short");
-
-  if (product.description && product.description.replace(/<[^>]+>/g, "").trim())
-    score += 20;
-  else issues.push("Description is missing");
-
-  if (product.images.length > 0) score += 15;
-  else issues.push("Add at least one image");
-
-  if (product.variants.length > 0) score += 15;
-  else issues.push("No variants imported");
-
-  if (product.costPriceMin) score += 10;
-  else issues.push("Supplier cost missing");
-
-  if (product.seoTitle) score += 10;
-  else issues.push("SEO title missing");
-
-  if (product.slug) score += 10;
-  else issues.push("URL slug missing");
-
-  const level =
-    issues.length === 0
-      ? "Ready"
-      : score >= 60
-        ? "Needs Review"
-        : score >= 30
-          ? "Incomplete"
-          : "Blocked";
-
-  return { score, level, issues };
-}
+import { useQueryClient } from "@tanstack/react-query";
+import type {
+  ProductUpdatePayload,
+  ShopifyPublishResult,
+} from "@/types/api";
 
 interface DraftProductEditorProps {
   productId: string;
 }
 
 /**
- * Premium draft editor shell — Overview + Description are fully editable;
- * remaining tabs are structured placeholders until Stages 4–7.
+ * Premium draft product workspace — sticky header, inspector, autosave.
  */
 export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const tabParam = useSearchParams().get("tab");
   const [tab, setTab] = useState<EditorTab>(
     isEditorTab(tabParam) ? tabParam : "overview",
   );
 
   const { data, isPending, isError, error, refetch } = useDraft(productId);
+  const listingsQuery = useDraftListings(productId);
+  const seoScoreQuery = useDraftSeoScore(productId);
   const updateDraft = useUpdateDraft(productId);
   const refreshDraft = useRefreshDraft(productId);
+  const optimizeProduct = useOptimizeProduct(productId);
   const storesQuery = useStores({ size: 50 });
 
   const [title, setTitle] = useState("");
@@ -141,6 +80,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [seoTitle, setSeoTitle] = useState("");
   const [seoDescription, setSeoDescription] = useState("");
   const [slug, setSlug] = useState("");
+  const [searchTopics, setSearchTopics] = useState("");
+  const [primaryIntent, setPrimaryIntent] = useState("");
+  const [primaryTopic, setPrimaryTopic] = useState("");
+  const [redirectOldHandle, setRedirectOldHandle] = useState(true);
+  const [ogTitle, setOgTitle] = useState("");
+  const [ogDescription, setOgDescription] = useState("");
   const [dirty, setDirty] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
@@ -150,6 +95,16 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishPending, setPublishPending] = useState(false);
   const [publishOk, setPublishOk] = useState<string | null>(null);
+  const [publishResult, setPublishResult] =
+    useState<ShopifyPublishResult | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  function selectTab(next: EditorTab) {
+    setTab(next);
+    router.replace(`/drafts/${productId}?tab=${next}`);
+  }
 
   useEffect(() => {
     if (!data) return;
@@ -162,6 +117,17 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setSeoTitle(data.seoTitle ?? "");
     setSeoDescription(data.seoDescription ?? "");
     setSlug(data.slug ?? "");
+    setSearchTopics((data.searchTopics ?? []).join(", "));
+    const planning = data.seoPlanning ?? {};
+    setPrimaryIntent(
+      String(planning.primarySearchIntent ?? planning.primary_search_intent ?? ""),
+    );
+    setPrimaryTopic(
+      String(planning.primaryTopic ?? planning.primary_topic ?? ""),
+    );
+    setRedirectOldHandle(data.redirectOldHandle ?? true);
+    setOgTitle(data.ogTitle ?? "");
+    setOgDescription(data.ogDescription ?? "");
     setDirty(false);
     setSaveState("idle");
   }, [data]);
@@ -198,21 +164,63 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       seoTitle: seoTitle.trim() || null,
       seoDescription: seoDescription.trim() || null,
       slug: slug.trim() || null,
+      searchTopics: searchTopics
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean),
+      seoPlanning: {
+        primarySearchIntent: primaryIntent || null,
+        primaryTopic: primaryTopic || null,
+      },
+      redirectOldHandle,
+      ogTitle: ogTitle.trim() || null,
+      ogDescription: ogDescription.trim() || null,
     };
 
     try {
       await updateDraft.mutateAsync(payload);
       setDirty(false);
       setSaveState("saved");
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.seoScore(productId),
+      });
     } catch (err) {
       setSaveState("error");
       setFormError(err instanceof Error ? err.message : "Save failed.");
     }
   }
 
+  // Debounced autosave for merchant text fields.
+  useEffect(() => {
+    if (!dirty || !data) return;
+    const timer = window.setTimeout(() => {
+      void handleSave();
+    }, 1800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave on dirty only
+  }, [dirty, title, description, seoTitle, seoDescription, slug, tags]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const meta = event.metaKey || event.ctrlKey;
+      if (meta && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void handleSave();
+      }
+      if (meta && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        selectTab("publishing");
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productId, title, description, seoTitle, seoDescription, slug, tags]);
+
   async function handlePublish() {
     setPublishError(null);
     setPublishOk(null);
+    setPublishResult(null);
     if (!publishStoreId) {
       setPublishError("Select a connected Shopify store.");
       return;
@@ -220,15 +228,19 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setPublishPending(true);
     try {
       if (dirty) await handleSave();
-      const { data: result } = await apiClient.post<{ message: string }>(
+      const { data: result } = await apiClient.post<ShopifyPublishResult>(
         "/integrations/shopify/publish",
         {
           productId,
           storeId: publishStoreId,
         },
       );
+      setPublishResult(result);
       setPublishOk(result.message || "Publish completed.");
       void refetch();
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.listings(productId),
+      });
     } catch (err) {
       setPublishError(
         err instanceof Error ? err.message : "Publish to Store failed.",
@@ -240,9 +252,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
 
   if (isPending) {
     return (
-      <div className="space-y-4" data-testid="draft-editor-loading">
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-64 w-full" />
+      <div className="space-y-4">
+        <ProductEditorHeaderSkeleton />
+        <div className="h-64 animate-pulse rounded-lg border bg-muted/30" />
       </div>
     );
   }
@@ -263,122 +275,64 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const shopifyStores =
     storesQuery.data?.items.filter((store) => store.platform === "shopify") ??
     [];
+  const syncedListing =
+    listingsQuery.data?.find((row) => row.status === "synced") ??
+    listingsQuery.data?.[0] ??
+    null;
 
   return (
-    <div className="space-y-4 pb-24 md:pb-6" data-testid="draft-editor">
-      <div className="sticky top-0 z-20 -mx-1 space-y-3 border-b bg-background/95 px-1 py-3 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="ghost" size="sm" asChild>
-            <Link href="/drafts">
-              <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden="true" />
-              Back to Drafts
-            </Link>
-          </Button>
-          <Badge variant="secondary">{data.status}</Badge>
-          <span className="text-xs text-muted-foreground">
-            Supplier sync:{" "}
-            {data.lastSyncedAt
-              ? formatDateTime(data.lastSyncedAt)
-              : "never refreshed"}
-          </span>
-          <span
-            className={cn(
-              "text-xs font-medium",
-              dirty ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground",
-            )}
-            data-testid="draft-save-state"
-          >
-            {saveState === "saving"
-              ? "Saving…"
-              : dirty
-                ? "Unsaved changes"
-                : saveState === "saved"
-                  ? "Saved"
-                  : "Up to date"}
-          </span>
-        </div>
+    <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
+      <ProductEditorHeader
+        product={{ ...data, title: title || data.title }}
+        activeTab={tab}
+        onTabChange={selectTab}
+        dirty={dirty}
+        saveState={saveState}
+        saving={updateDraft.isPending || saveState === "saving"}
+        publishPending={publishPending}
+        publishFailed={Boolean(publishError)}
+        listing={syncedListing}
+        seoScore={seoScoreQuery.data}
+        readiness={readiness}
+        refreshing={refreshDraft.isPending}
+        optimizing={optimizeProduct.isPending}
+        inspectorOpen={inspectorOpen}
+        onToggleInspector={() => setInspectorOpen((open) => !open)}
+        onPreview={() => setPreviewOpen(true)}
+        onSave={() => void handleSave()}
+        onPublish={() => selectTab("publishing")}
+        onRefresh={() => void refreshDraft.mutateAsync()}
+        onOptimize={() => optimizeProduct.mutate({})}
+        onViewHistory={() => setHistoryOpen(true)}
+      />
 
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0 space-y-1">
-            <h1 className="truncate text-xl font-semibold tracking-tight md:text-2xl">
-              {title || data.title}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              AliExpress {data.externalId}
-              {data.supplierName ? ` · ${data.supplierName}` : ""}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={refreshDraft.isPending}
-              onClick={() => void refreshDraft.mutateAsync()}
-            >
-              {refreshDraft.isPending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-4 w-4" />
-              )}
-              Refresh Supplier Data
-            </Button>
-            <OptimizeProductButton productId={productId} />
-            <ProductVersionHistorySheet
-              productId={productId}
-              productTitle={data.title}
-            />
-            <Button
-              size="sm"
-              disabled={updateDraft.isPending || !dirty}
-              onClick={() => void handleSave()}
-              data-testid="save-draft"
-            >
-              {updateDraft.isPending ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="mr-1.5 h-4 w-4" />
-              )}
-              Save Draft
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => {
-                setTab("publishing");
-                router.replace(`/drafts/${productId}?tab=publishing`);
-              }}
-            >
-              <Store className="mr-1.5 h-4 w-4" />
-              Publish to Store
-            </Button>
-          </div>
-        </div>
+      <DraftPreviewPanel
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        product={data}
+        title={title}
+        description={description}
+        seoTitle={seoTitle}
+        seoDescription={seoDescription}
+      />
 
-        <nav
-          aria-label="Editor sections"
-          className="flex gap-1 overflow-x-auto pb-1"
-        >
-          {TABS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => {
-                setTab(id);
-                router.replace(`/drafts/${productId}?tab=${id}`);
-              }}
-              className={cn(
-                "shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                tab === id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-              )}
-              data-testid={`editor-tab-${id}`}
-            >
-              {TAB_LABEL[id]}
-            </button>
-          ))}
-        </nav>
-      </div>
+      <ProductVersionHistorySheet
+        productId={productId}
+        productTitle={data.title}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        hideTrigger
+      />
+
+      {optimizeProduct.isError ? (
+        <Alert variant="destructive">
+          <AlertDescription>
+            {optimizeProduct.error instanceof Error
+              ? optimizeProduct.error.message
+              : "Optimization failed."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {formError ? (
         <Alert variant="destructive">
@@ -563,45 +517,39 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           ) : null}
 
           {tab === "seo" ? (
-            <section className="space-y-4">
-              <h2 className="text-lg font-semibold">SEO</h2>
-              <div className="space-y-2">
-                <Label htmlFor="seo-title">SEO title</Label>
-                <Input
-                  id="seo-title"
-                  value={seoTitle}
-                  onChange={(event) => {
-                    setSeoTitle(event.target.value);
-                    setDirty(true);
-                  }}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {seoTitle.length} characters
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="seo-description">Meta description</Label>
-                <Textarea
-                  id="seo-description"
-                  value={seoDescription}
-                  onChange={(event) => {
-                    setSeoDescription(event.target.value);
-                    setDirty(true);
-                  }}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="seo-slug">URL slug</Label>
-                <Input
-                  id="seo-slug"
-                  value={slug}
-                  onChange={(event) => {
-                    setSlug(event.target.value);
-                    setDirty(true);
-                  }}
-                />
-              </div>
-            </section>
+            <DraftSeoPanel
+              productId={productId}
+              productTitle={title || data.title}
+              seoTitle={seoTitle}
+              seoDescription={seoDescription}
+              slug={slug}
+              tags={tags}
+              searchTopics={searchTopics}
+              primaryIntent={primaryIntent}
+              primaryTopic={primaryTopic}
+              redirectOldHandle={redirectOldHandle}
+              ogTitle={ogTitle}
+              ogDescription={ogDescription}
+              onChange={(patch) => {
+                if (patch.seoTitle !== undefined) setSeoTitle(patch.seoTitle);
+                if (patch.seoDescription !== undefined)
+                  setSeoDescription(patch.seoDescription);
+                if (patch.slug !== undefined) setSlug(patch.slug);
+                if (patch.tags !== undefined) setTags(patch.tags);
+                if (patch.searchTopics !== undefined)
+                  setSearchTopics(patch.searchTopics);
+                if (patch.primaryIntent !== undefined)
+                  setPrimaryIntent(patch.primaryIntent);
+                if (patch.primaryTopic !== undefined)
+                  setPrimaryTopic(patch.primaryTopic);
+                if (patch.redirectOldHandle !== undefined)
+                  setRedirectOldHandle(patch.redirectOldHandle);
+                if (patch.ogTitle !== undefined) setOgTitle(patch.ogTitle);
+                if (patch.ogDescription !== undefined)
+                  setOgDescription(patch.ogDescription);
+                setDirty(true);
+              }}
+            />
           ) : null}
 
           {tab === "publishing" ? (
@@ -612,6 +560,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 means supplier ingestion only — this action is channel
                 publishing.
               </p>
+              {(publishResult || syncedListing) && (
+                <DraftPostPublishPanel
+                  listing={syncedListing}
+                  publishResult={publishResult}
+                  onContinueEditing={() => selectTab("overview")}
+                />
+              )}
               {readiness.issues.length > 0 ? (
                 <Alert>
                   <AlertDescription>
@@ -692,18 +647,23 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           tab !== "inventory" &&
           tab !== "shipping" ? (
             <section className="rounded-lg border border-dashed p-8 text-center">
-              <h2 className="text-lg font-semibold">{TAB_LABEL[tab]}</h2>
+              <h2 className="text-lg font-semibold">{EDITOR_TAB_LABEL[tab]}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {tab === "ai-studio" &&
-                  "Use Optimize with AI in the header for now. Side-by-side proposal studio is Stage 6."}
+                  "Use Optimize with AI from More actions for now. Side-by-side proposal studio is Stage 6."}
                 {tab === "history" &&
-                  "Open History in the header for AI version restore. Full edit timeline is Stage 6."}
+                  "Use View History in More actions for AI version restore. Full edit timeline is Stage 6."}
               </p>
             </section>
           ) : null}
         </div>
 
-        <aside className="space-y-4 xl:sticky xl:top-36 xl:self-start">
+        <aside
+          className={cn(
+            "space-y-4 xl:sticky xl:top-36 xl:self-start",
+            !inspectorOpen && "hidden xl:hidden",
+          )}
+        >
           <div className="rounded-lg border p-4">
             <h3 className="text-sm font-semibold">Publish readiness</h3>
             <p className="mt-2 text-3xl font-semibold tabular-nums">
@@ -715,6 +675,22 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             <Badge className="mt-2" variant="outline">
               {readiness.level}
             </Badge>
+            {seoScoreQuery.data ? (
+              <p className="mt-3 text-sm text-muted-foreground">
+                SEO score {seoScoreQuery.data.score}/100 (
+                {seoScoreQuery.data.status})
+              </p>
+            ) : null}
+            {syncedListing ? (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Listing {syncedListing.status}
+                {syncedListing.onlineStorePublished === false
+                  ? " · not on Online Store"
+                  : syncedListing.storefrontUrl
+                    ? " · storefront URL verified"
+                    : ""}
+              </p>
+            ) : null}
             {readiness.issues.length > 0 ? (
               <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
                 {readiness.issues.map((issue) => (
@@ -755,27 +731,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         </aside>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 p-3 backdrop-blur md:hidden">
-        <div className="flex gap-2">
-          <Button
-            className="flex-1"
-            disabled={updateDraft.isPending || !dirty}
-            onClick={() => void handleSave()}
-          >
-            Save Draft
-          </Button>
-          <Button
-            className="flex-1"
-            variant="secondary"
-            onClick={() => {
-              setTab("publishing");
-              router.replace(`/drafts/${productId}?tab=publishing`);
-            }}
-          >
-            Publish
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }
