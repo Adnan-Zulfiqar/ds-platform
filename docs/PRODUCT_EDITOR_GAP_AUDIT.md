@@ -53,6 +53,21 @@ exactly the failure mode stages 1-2 exist to prevent for the product level.
 before stage 3 can safely add variant/image editing. See
 `docs/TECHNICAL_DEBT.md`.
 
+**Stage 2b — fix the sync strategy: done (2026-08-03).** Resolves the
+finding above (`docs/TECHNICAL_DEBT.md` M20). `ProductVariantRepository`/
+`ProductImageRepository` gained `sync_for_product(product_id, mapped)`,
+matching existing rows by `external_variant_id`/`url`, updating in place,
+inserting genuinely new ones, and hard-deleting only what the supplier no
+longer lists — replacing the old delete-everything-then-recreate call in
+`ProductImportService.import_product`. No schema change. New tests prove
+row identity specifically (not just "the data still matches," which the old
+behaviour would also produce): unchanged rows keep their id across a
+re-sync, a removed row is deleted while the rest keep their ids, an added
+row gets a new id without disturbing existing ones, and an in-place field
+change (price) updates the existing row rather than replacing it. Variant
+and image **editing** (a write API) is still not built — this stage only
+removes the blocker M20 identified; see §4 for where that lands next.
+
 ---
 
 ## 1. Method

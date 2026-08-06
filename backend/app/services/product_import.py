@@ -120,13 +120,11 @@ class ProductImportService(BaseService):
         values = map_product(detail)
         product = await self._upsert(values)
 
-        await self.variants.delete_for_product(product.id)
-        for variant in map_variants(detail):
-            await self.variants.create(product_id=product.id, **variant)
-
-        await self.images.delete_for_product(product.id)
-        for image in map_images(detail):
-            await self.images.create(product_id=product.id, **image)
+        # Reconciled in place, not wiped and reinserted -- a variant/image's
+        # id now survives a re-sync, matching by `external_variant_id`/`url`
+        # (M20). Only rows the supplier no longer lists are actually deleted.
+        await self.variants.sync_for_product(product.id, map_variants(detail))
+        await self.images.sync_for_product(product.id, map_images(detail))
 
         record.status = ImportStatus.SUCCEEDED
         record.product_id = product.id

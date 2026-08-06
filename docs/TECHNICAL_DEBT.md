@@ -501,31 +501,44 @@ real, not inert: `title`/`brand` got their own `supplier_title`/
 the API and then re-syncing. See **M20** below for what stage 2 explicitly
 does *not* cover yet (variants, images) and why.
 
-### M20 — Variant and image editing is blocked on the current sync strategy
+**Product Editor stage 2b (2026-08-03):** M20 resolved — variant/image sync
+now reconciles in place (`ProductVariantRepository`/`ProductImageRepository.sync_for_product`)
+instead of deleting and recreating every row, so a variant/image's id
+survives a re-sync. This was the real prerequisite M20 identified; it does
+not itself add variant/image editing (see M20's "Still open" note).
 
-`ProductImportService.import_product` calls `ProductVariantRepository.delete_for_product`
-and `ProductImageRepository.delete_for_product` before recreating every
-variant/image row from the supplier payload on **every** sync, including a
-manual "Sync from supplier" click. This predates Product Editor work — it is
-how Phase 4 was built — but it directly blocks the natural next step: a
-per-field overwrite-protection column (the pattern stage 1/2 just proved for
+### ~~M20 — Variant and image editing is blocked on the current sync strategy~~ ✅ RESOLVED
+
+**Root cause:** `ProductImportService.import_product` called
+`ProductVariantRepository.delete_for_product`/`ProductImageRepository.delete_for_product`
+before recreating every variant/image row from the supplier payload on
+**every** sync, including a manual "Sync from supplier" click. A per-field
+overwrite-protection column (the pattern stage 1/2 proved for
 `title`/`brand`/`description`) cannot protect a row that gets deleted and
-recreated with a new UUID. A merchant edit to a variant's price, or an
-image's alt text, or its position, would silently revert on the next sync
-regardless of which columns it touched — and any other row that had come to
-reference a variant/image by id (a future order line item, an audit
-reference) would dangle.
+recreated with a new UUID — a merchant edit, or any other row that came to
+reference a variant/image by id, would be destroyed or dangle regardless of
+which columns changed.
 
-**Impact:** none today — no variant/image write API exists yet, so nothing
-is currently at risk. It becomes real the moment stage 3 tries to add one.
-**Trigger:** before implementing `PATCH /products/{id}/variants/{variantId}`
-or any `/products/{id}/images/*` endpoint.
-**Fix:** change the sync strategy from delete-and-recreate to a diff:
-match existing variants by `external_variant_id` and images by `url`, update
-in place, insert genuinely new ones, and only delete rows the supplier no
-longer lists — preserving id stability (and, once it exists, per-field
-overwrite protection) across a sync the same way products already do via
-`ProductRepository.get_by_external_id`.
+**Fix:** replaced `delete_for_product` on both repositories with
+`sync_for_product(product_id, mapped)` — matches existing rows by
+`external_variant_id`/`url` (both already unique per product), updates
+matches in place, inserts genuinely new ones, and only hard-deletes rows the
+supplier no longer lists. `ProductImportService.import_product` now calls
+`sync_for_product` instead of delete-then-recreate. No schema change, no
+migration — a pure identity-preserving refactor of how the same data lands.
+
+**Verified:** ruff, ruff format --check, mypy app --strict (160 files),
+pytest **857** passed — including new coverage that specifically proves the
+fix (not just "the same data comes back," which the old delete-and-recreate
+behaviour would also produce): a variant/image kept across a resync retains
+its id, a removed one is deleted, an added one gets a new row without
+disturbing existing ids, and a changed price updates the existing row rather
+than replacing it.
+
+**Still open:** this resolves the *prerequisite* only. No
+`PATCH /products/{id}/variants/{variantId}` or `/products/{id}/images/*`
+endpoint exists yet — that write API, and the `supplier_*`-twin protection
+those fields will need once it does, remains future work.
 
 **Live deploy follow-up (2026-08-03):** Local uvicorn restart exposes Phase 8.1
 routes. Public `/install` remains **404** because Cloudflare Tunnel is

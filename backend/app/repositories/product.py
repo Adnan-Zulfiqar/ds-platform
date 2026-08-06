@@ -9,6 +9,7 @@ and the defence is that the correct behaviour is the default one.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,16 +132,37 @@ class ProductVariantRepository(TenantScopedRepository[ProductVariant]):
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def delete_for_product(self, product_id: uuid.UUID) -> None:
-        """Remove every variant of a product.
+    async def sync_for_product(self, product_id: uuid.UUID, mapped: list[dict[str, Any]]) -> None:
+        """Reconcile a product's variants with the supplier's current list.
 
-        A hard delete, unlike most of this codebase. A variant the supplier has
-        withdrawn is not history worth keeping - it is a purchasable option that
-        no longer exists, and a soft-deleted row risks being offered for sale by
-        a query that forgets the filter.
+        Matches existing rows by `external_variant_id` (unique per product —
+        `uq_variants_product_external`) and updates in place, rather than
+        deleting every row and reinserting fresh ones on every sync (the
+        pre-Product-Editor behaviour). A variant's id now stays stable across
+        syncs, which is what lets anything come to reference one by id — a
+        future `PATCH`, an order line item — without that reference dangling
+        the next time the product refreshes.
+
+        A variant the supplier no longer lists is still **hard deleted**,
+        exactly as before: it is not history worth keeping, it is a
+        purchasable option that no longer exists, and a soft-deleted row
+        risks being offered for sale by a query that forgets the filter.
         """
-        for variant in await self.list_for_product(product_id):
-            await self.session.delete(variant)
+        existing = {v.external_variant_id: v for v in await self.list_for_product(product_id)}
+        seen: set[str] = set()
+
+        for values in mapped:
+            external_variant_id = values["external_variant_id"]
+            seen.add(external_variant_id)
+            current = existing.get(external_variant_id)
+            if current is None:
+                await self.create(product_id=product_id, **values)
+            else:
+                await self.update(current, **values)
+
+        for external_variant_id, row in existing.items():
+            if external_variant_id not in seen:
+                await self.session.delete(row)
         await self.session.flush()
 
 
@@ -161,15 +183,36 @@ class ProductImageRepository(TenantScopedRepository[ProductImage]):
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def delete_for_product(self, product_id: uuid.UUID) -> None:
-        """Replace rather than merge on re-import.
+    async def sync_for_product(self, product_id: uuid.UUID, mapped: list[dict[str, Any]]) -> None:
+        """Reconcile a product's images with the supplier's current list.
 
-        Supplier image sets are reordered and rotated between syncs. Diffing
-        them would mean guessing which remote URL corresponds to which stored
-        row; replacing is both simpler and correct.
+        Matches existing rows by `url` (unique per product —
+        `uq_images_product_url`) and updates only `position` in place, rather
+        than deleting every row and reinserting fresh ones on every sync (the
+        pre-Product-Editor behaviour, whose docstring here used to argue that
+        matching by URL was "guessing which remote URL corresponds to which
+        stored row" — it is not a guess: the URL *is* the identity the
+        unique constraint already enforces, not a heuristic this method
+        invents). An image's id now stays stable across syncs, the same
+        reasoning `ProductVariantRepository.sync_for_product` documents.
+
+        An image the supplier no longer lists is deleted, same as before.
         """
-        for image in await self.list_for_product(product_id):
-            await self.session.delete(image)
+        existing = {img.url: img for img in await self.list_for_product(product_id)}
+        seen: set[str] = set()
+
+        for values in mapped:
+            url = values["url"]
+            seen.add(url)
+            current = existing.get(url)
+            if current is None:
+                await self.create(product_id=product_id, **values)
+            else:
+                await self.update(current, position=values["position"])
+
+        for url, row in existing.items():
+            if url not in seen:
+                await self.session.delete(row)
         await self.session.flush()
 
 
