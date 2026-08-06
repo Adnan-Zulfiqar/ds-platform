@@ -9,9 +9,10 @@ and the defence is that the correct behaviour is the default one.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, Exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
@@ -25,7 +26,9 @@ from app.models.product import (
     ProductVariant,
     ProductVersion,
 )
+from app.models.shopify import ListingSyncStatus, StoreListing
 from app.repositories.base import TenantScopedRepository
+from app.schemas.common import ListQueryParams
 
 
 class ProductRepository(TenantScopedRepository[Product]):
@@ -51,6 +54,69 @@ class ProductRepository(TenantScopedRepository[Product]):
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, Product)
+
+    def _synced_listing_exists(self) -> Exists:
+        """Whether this product has at least one successfully published listing.
+
+        Drafts vs Products are lifecycle projections over the same product row
+        (Product Workspace V2). Publication truth is channel-specific
+        ``StoreListing`` state — not ``Product.status``, which import leaves as
+        ``draft`` and Shopify publish does not flip.
+        """
+        return (
+            select(StoreListing.id)
+            .where(
+                StoreListing.product_id == Product.id,
+                StoreListing.tenant_id == Product.tenant_id,
+                StoreListing.status == ListingSyncStatus.SYNCED,
+                StoreListing.deleted_at.is_(None),
+            )
+            .exists()
+        )
+
+    def _publication_predicate(
+        self, publication: Literal["draft", "published"]
+    ) -> ColumnElement[bool]:
+        exists = self._synced_listing_exists()
+        return exists if publication == "published" else ~exists
+
+    async def list_by_publication(
+        self,
+        params: ListQueryParams,
+        *,
+        publication: Literal["draft", "published"],
+    ) -> tuple[Sequence[Product], int]:
+        """Page of drafts or published products for the workspace lists."""
+        query = self._base_query().where(self._publication_predicate(publication))
+        query = self._apply_search(query, params)
+
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await self.session.execute(count_query)).scalar_one()
+
+        query = self._apply_sorting(query, params)
+        query = query.offset(params.offset).limit(params.limit)
+        rows = (await self.session.execute(query)).scalars().all()
+        return rows, total
+
+    async def list_drafts(self, params: ListQueryParams) -> tuple[Sequence[Product], int]:
+        """Products with no synced channel listing — the Drafts inbox."""
+        return await self.list_by_publication(params, publication="draft")
+
+    async def list_published(self, params: ListQueryParams) -> tuple[Sequence[Product], int]:
+        """Products with at least one synced StoreListing — the Products page."""
+        return await self.list_by_publication(params, publication="published")
+
+    async def count_workspace(self) -> dict[str, int]:
+        """Draft and published totals for sidebar badges."""
+        draft_q = select(func.count()).select_from(
+            self._base_query().where(self._publication_predicate("draft")).subquery()
+        )
+        published_q = select(func.count()).select_from(
+            self._base_query().where(self._publication_predicate("published")).subquery()
+        )
+        draft_count = int((await self.session.execute(draft_q)).scalar_one())
+        published_count = int((await self.session.execute(published_q)).scalar_one())
+        return {"drafts": draft_count, "products": published_count}
 
     async def get_by_external_id(
         self, *, source: ProductSource, external_id: str

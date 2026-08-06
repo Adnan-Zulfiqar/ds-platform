@@ -32,7 +32,9 @@ A-05, A-09, and A-16 resolved, A-06 fix landed (CI job unverified), A-15
 partially (Shopify disconnect) (see below). Remaining: A-06 CI green, A-07,
 A-08, A-15 (remaining surfaces).
 
-**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~12 medium, 5 low.**
+**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~13 medium, 5 low.**
+**Product Workspace V2 Stage 0 (2026-08-06)** — Drafts/Products query split
+shipped on `cursor/product-workspace-v2`; M21 records Inventory/Pricing lag.
 
 ---
 
@@ -445,6 +447,20 @@ returning **200** (no retry-storm). Global rate-limit exemption remains for the
 same reason.
 
 **Residual:** tune shed limits under real delivery volume.
+
+### M21 — Inventory and Pricing pages still list unpublished drafts
+
+Product Workspace V2 Stage 0 splits `GET /products` and `GET /drafts` by
+synced `StoreListing`, but Inventory and Pricing still call unfiltered product
+list helpers (or the previous catalogue shape). Merchants can see draft rows
+outside the Drafts inbox on those pages.
+
+**Impact:** Confusing dual visibility until those surfaces adopt the same
+publication projection (or an explicit “include drafts” toggle).
+**Trigger:** Product Workspace V2 Stage 1+ polish, or before merchants rely on
+Inventory/Pricing as the published catalogue.
+**Fix:** reuse `list_published` / `list_drafts` (or a shared publication filter)
+in inventory and pricing list paths; update Playwright accordingly.
 
 ### M19 — Phase 9 AI output is StubProvider-only (no live model key)
 

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { NavItem } from "@/components/navigation/nav-item";
 import { NAV_SECTIONS, isNavItemActive } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
+import { useProductWorkspaceCounts } from "@/services/products";
 
 interface SidebarNavProps {
   collapsed?: boolean;
@@ -22,6 +23,7 @@ interface SidebarNavProps {
  */
 export function SidebarNav({ collapsed, onNavigate, className }: SidebarNavProps) {
   const pathname = usePathname();
+  const { data: counts } = useProductWorkspaceCounts();
 
   return (
     <nav
@@ -46,6 +48,11 @@ export function SidebarNav({ collapsed, onNavigate, className }: SidebarNavProps
               active={isNavItemActive(item, pathname)}
               collapsed={collapsed}
               onNavigate={onNavigate}
+              badgeCount={
+                item.badgeKey && counts
+                  ? counts[item.badgeKey]
+                  : undefined
+              }
             />
           ))}
         </div>

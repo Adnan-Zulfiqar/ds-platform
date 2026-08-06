@@ -34,6 +34,7 @@ from app.schemas.product import (
     ProductUpdateRequest,
     ProductVariantRead,
     ProductVersionRead,
+    ProductWorkspaceCounts,
 )
 from app.services.product import ProductService
 from app.services.product_import import ProductImportService
@@ -58,31 +59,50 @@ def _to_detail(product: Product) -> ProductDetailRead:
         images=[ProductImageRead.model_validate(i) for i in product.images],
         description=product.description,
         supplier_description=product.supplier_description,
+        supplier_title=product.supplier_title,
+        supplier_brand=product.supplier_brand,
     )
 
 
 @router.get(
     "",
     response_model=Page[ProductRead],
-    summary="List products in the current tenant",
+    summary="List published products in the current tenant",
 )
 async def list_products(
     session: DbSession,
     params: Annotated[ListQueryParams, Depends(list_query_params)],
     _authorized: RequireViewer,
 ) -> Page[ProductRead]:
-    """Return a page of the tenant's catalogue.
+    """Return products successfully published to at least one channel.
 
-    Readable by every real role: knowing what is in the catalogue is operational
-    information the whole team needs, even those who cannot change it.
+    Imported drafts without a synced ``StoreListing`` live under
+    ``GET /drafts`` (Product Workspace V2). Filtering here — not only in the
+    UI — keeps pagination and badge counts honest for every client.
     """
-    products, total = await ProductRepository(session).list(params)
+    products, total = await ProductRepository(session).list_published(params)
     return Page[ProductRead].build(
         items=[ProductRead.model_validate(p) for p in products],
         page=params.page,
         size=params.size,
         total_items=total,
     )
+
+
+@router.get(
+    "/workspace-counts",
+    response_model=ProductWorkspaceCounts,
+    summary="Draft and published product counts for workspace navigation",
+)
+async def workspace_counts(
+    session: DbSession,
+    _authorized: RequireViewer,
+) -> ProductWorkspaceCounts:
+    """Sidebar badge totals. Declared before ``/{product_id}`` so the path
+    cannot be parsed as a product UUID.
+    """
+    counts = await ProductRepository(session).count_workspace()
+    return ProductWorkspaceCounts.model_validate(counts)
 
 
 @router.get(

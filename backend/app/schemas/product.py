@@ -133,6 +133,11 @@ class ProductDetailRead(ProductRead):
     description: str | None = None
     supplier_description: str | None = None
 
+    # Supplier twins for title/brand (Product Editor stage 2 / draft editor).
+    # Read-only provenance for the merchant Overview tab.
+    supplier_title: str | None = None
+    supplier_brand: str | None = None
+
 
 class ProductUpdateRequest(CamelCaseModel):
     """Merchant edits to a product's editable fields (Product Editor stage 2).
@@ -318,6 +323,13 @@ class ProductOptimizeResponse(CamelCaseModel):
     version: ProductVersionRead
 
 
+class ProductWorkspaceCounts(CamelCaseModel):
+    """Sidebar badge totals for the Drafts / Products workspace split."""
+
+    drafts: int
+    products: int
+
+
 __all__ = [
     "FeedProductRead",
     "ProductDetailRead",
@@ -329,4 +341,5 @@ __all__ = [
     "ProductRead",
     "ProductVariantRead",
     "ProductVersionRead",
+    "ProductWorkspaceCounts",
 ]

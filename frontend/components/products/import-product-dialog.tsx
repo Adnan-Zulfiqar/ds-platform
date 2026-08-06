@@ -105,17 +105,18 @@ export function ImportProductDialog() {
       <DialogTrigger asChild>
         <Button>
           <PackagePlus className="mr-2 h-4 w-4" aria-hidden="true" />
-          Import product
+          Import as Draft
         </Button>
       </DialogTrigger>
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Import from AliExpress</DialogTitle>
+          <DialogTitle>Import as Draft from AliExpress</DialogTitle>
           <DialogDescription>
-            Paste an AliExpress product ID or the full listing URL. Importing
-            the same product again refreshes its price, stock and variants
-            rather than creating a duplicate.
+            Paste an AliExpress product ID or the full listing URL. The product
+            lands in Drafts for review — it does not appear under Products until
+            you Publish to Store. Importing the same product again refreshes
+            supplier data rather than creating a duplicate.
           </DialogDescription>
         </DialogHeader>
 
@@ -157,7 +158,7 @@ export function ImportProductDialog() {
                 Importing…
               </>
             ) : (
-              "Import"
+              "Import as Draft"
             )}
           </Button>
         </DialogFooter>
