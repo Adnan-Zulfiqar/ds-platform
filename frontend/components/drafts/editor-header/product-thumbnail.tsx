@@ -36,7 +36,7 @@ export function ProductThumbnail({
       // eslint-disable-next-line @next/next/no-img-element -- remote supplier CDN URLs vary by host
       <img
         src={url}
-        alt=""
+        alt={title ? `Product image: ${title}` : "Product image"}
         className={cn(
           "h-16 w-16 shrink-0 rounded-lg border border-border/80 object-cover md:h-[72px] md:w-[72px]",
           className,

@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Premium draft editor header** — Three-layer sticky chrome with thumbnail,
+  breadcrumb, supplier-sync/readiness/SEO badges, Publish-primary action
+  hierarchy, More menu for tertiary tools, Draft Preview sheet (not a tab
+  switch), tablet wrap + mobile bottom action bar. Unsupported Duplicate /
+  Archive / Delete actions are hidden until APIs exist. See
+  `docs/PREMIUM_PRODUCT_EDITOR_UI.md`.
+
 ### Added
 
 - **AliExpress import destinations** — Import as Draft records `ship_to_country`

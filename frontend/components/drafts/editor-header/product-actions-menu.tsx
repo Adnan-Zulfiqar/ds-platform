@@ -25,8 +25,8 @@ interface ProductActionsMenuProps {
 /**
  * Tertiary actions — keeps the identity row focused on Preview / Save / Publish.
  *
- * Duplicate/Archive/Delete remain listed but disabled until those APIs exist,
- * so the menu hierarchy matches the product brief without inventing behaviour.
+ * Duplicate / Archive / Delete are intentionally omitted until their APIs exist.
+ * Showing unusable disabled rows that do nothing is worse than hiding them.
  */
 export function ProductActionsMenu({
   refreshing,
@@ -70,21 +70,12 @@ export function ProductActionsMenu({
         >
           Open AliExpress Listing
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onViewHistory()}>
           View History
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onGoHistoryTab()}>
           Open History tab
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled>Duplicate Draft</DropdownMenuItem>
-        <DropdownMenuItem disabled>Archive Draft</DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          disabled
-          className="text-destructive focus:text-destructive"
-        >
-          Delete Draft
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

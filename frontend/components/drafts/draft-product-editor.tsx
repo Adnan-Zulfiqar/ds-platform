@@ -11,6 +11,7 @@ import { DraftPricingPanel } from "@/components/drafts/draft-pricing-panel";
 import { DraftSeoPanel } from "@/components/drafts/draft-seo-panel";
 import { DraftShippingPanel } from "@/components/drafts/draft-shipping-panel";
 import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
+import { DraftPreviewPanel } from "@/components/drafts/draft-preview-panel";
 import {
   ProductEditorHeader,
   ProductEditorHeaderSkeleton,
@@ -98,6 +99,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     useState<ShopifyPublishResult | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   function selectTab(next: EditorTab) {
     setTab(next);
@@ -296,12 +298,22 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         optimizing={optimizeProduct.isPending}
         inspectorOpen={inspectorOpen}
         onToggleInspector={() => setInspectorOpen((open) => !open)}
-        onPreview={() => selectTab("description")}
+        onPreview={() => setPreviewOpen(true)}
         onSave={() => void handleSave()}
         onPublish={() => selectTab("publishing")}
         onRefresh={() => void refreshDraft.mutateAsync()}
         onOptimize={() => optimizeProduct.mutate({})}
         onViewHistory={() => setHistoryOpen(true)}
+      />
+
+      <DraftPreviewPanel
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        product={data}
+        title={title}
+        description={description}
+        seoTitle={seoTitle}
+        seoDescription={seoDescription}
       />
 
       <ProductVersionHistorySheet
