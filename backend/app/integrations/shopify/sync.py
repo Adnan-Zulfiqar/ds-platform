@@ -122,15 +122,37 @@ class ShopifySyncService(BaseService):
                 payload_img["alt"] = alt
             images.append(payload_img)
 
-        body = {
-            "product": {
-                "title": product.title,
-                "body_html": getattr(product, "description", None) or "",
-                "status": "active" if product.status.value == "active" else "draft",
-                "variants": variants_payload,
-                "images": images[:20],
-            }
+        # Prefer merchant slug for handle when present; fall back to the
+        # deterministic idempotency handle so retries never invent a new product.
+        create_handle = (product.slug or "").strip() or _deterministic_handle(product_id)
+        product_body: dict[str, Any] = {
+            "title": product.title,
+            "body_html": getattr(product, "description", None) or "",
+            "vendor": product.vendor or product.brand or "",
+            "product_type": product.category_name or "",
+            "tags": ", ".join(product.tags or []),
+            "status": "active" if product.status.value == "active" else "draft",
+            "variants": variants_payload,
+            "images": images[:20],
         }
+        # Shopify REST SEO title/description fields — never meta keywords.
+        if product.seo_title:
+            product_body["metafields_global_title_tag"] = product.seo_title
+        if product.seo_description:
+            product_body["metafields_global_description_tag"] = product.seo_description
+        # Weight / shipping flags on the first variant when physical.
+        if product.requires_shipping and product.package_weight_kg is not None:
+            grams = int((product.package_weight_kg * Decimal("1000")).to_integral_value())
+            for entry in variants_payload:
+                entry["weight"] = float(product.package_weight_kg)
+                entry["weight_unit"] = product.weight_unit or "kg"
+                entry["grams"] = grams
+                entry["requires_shipping"] = True
+        elif product.requires_shipping is False:
+            for entry in variants_payload:
+                entry["requires_shipping"] = False
+
+        body = {"product": product_body}
 
         try:
             if listing is not None:
@@ -139,18 +161,36 @@ class ShopifySyncService(BaseService):
                     json_body=body,
                 )
             else:
-                payload = await self._create_or_adopt(
-                    client, body=body, handle=_deterministic_handle(product_id)
-                )
+                payload = await self._create_or_adopt(client, body=body, handle=create_handle)
 
             shopify_product = payload.get("product") or {}
             external_id = str(shopify_product.get("id") or "")
             if not external_id:
                 raise NotFoundError("Shopify did not return a product id.")
 
+            handle = str(shopify_product.get("handle") or create_handle)
+            shop_domain = connection.shop_domain
+            graphql_id = f"gid://shopify/Product/{external_id}"
+            admin_url = f"https://{shop_domain}/admin/products/{external_id}"
+            # Online Store visibility is not verified without publications API.
+            # Prefer Shopify's published_at / status as a soft signal only.
+            shopify_status = str(shopify_product.get("status") or "").lower()
+            published_at_raw = shopify_product.get("published_at")
+            online_store_published: bool | None
+            storefront_url: str | None
+            if shopify_status == "active" and published_at_raw and handle:
+                online_store_published = True
+                storefront_url = f"https://{shop_domain}/products/{handle}"
+            elif shopify_status == "draft":
+                online_store_published = False
+                storefront_url = None
+            else:
+                online_store_published = None
+                storefront_url = None
+
             variant_map: dict[str, str] = {}
             inventory_map: dict[str, str] = {}
-            live_variants = list(product.variants)
+            live_variants = [v for v in product.variants if getattr(v, "is_enabled", True)]
             for index, shop_variant in enumerate(shopify_product.get("variants") or []):
                 if index < len(live_variants):
                     key = str(live_variants[index].id)
@@ -160,32 +200,42 @@ class ShopifySyncService(BaseService):
                 if shop_variant.get("inventory_item_id") is not None:
                     inventory_map[key] = str(shop_variant["inventory_item_id"])
 
+            now = datetime.now(UTC)
+            listing_fields = {
+                "external_product_id": external_id,
+                "external_variant_map": variant_map,
+                "inventory_item_map": inventory_map,
+                "external_handle": handle,
+                "external_graphql_id": graphql_id,
+                "shop_domain": shop_domain,
+                "storefront_url": storefront_url,
+                "admin_url": admin_url,
+                "online_store_published": online_store_published,
+                "published_at": now if online_store_published else None,
+                "status": ListingSyncStatus.SYNCED,
+                "last_synced_at": now,
+                "last_error": None,
+            }
+
             if listing is None:
                 listing = await self.listings.create(
                     store_id=store_id,
                     product_id=product_id,
-                    external_product_id=external_id,
-                    external_variant_map=variant_map,
-                    inventory_item_map=inventory_map,
-                    status=ListingSyncStatus.SYNCED,
-                    last_synced_at=datetime.now(UTC),
-                    last_error=None,
+                    **listing_fields,
                 )
             else:
-                await self.listings.update(
-                    listing,
-                    external_product_id=external_id,
-                    external_variant_map=variant_map,
-                    inventory_item_map=inventory_map,
-                    status=ListingSyncStatus.SYNCED,
-                    last_synced_at=datetime.now(UTC),
-                    last_error=None,
-                )
+                await self.listings.update(listing, **listing_fields)
 
             await self.shopify.mark_synced(connection)
             return {
                 "listing_id": str(listing.id),
                 "external_product_id": external_id,
+                "external_handle": handle,
+                "external_graphql_id": graphql_id,
+                "shop_domain": shop_domain,
+                "storefront_url": storefront_url,
+                "admin_url": admin_url,
+                "online_store_published": online_store_published,
                 "updated": True,
             }
         except Exception as exc:
@@ -194,6 +244,7 @@ class ShopifySyncService(BaseService):
                     listing,
                     status=ListingSyncStatus.ERROR,
                     last_error=str(exc)[:1000],
+                    last_failed_sync_at=datetime.now(UTC),
                 )
             await self.shopify.mark_error(connection, str(exc))
             raise

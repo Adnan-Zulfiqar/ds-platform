@@ -13,7 +13,16 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -133,6 +142,21 @@ class StoreListing(TenantScopedBase):
     )
     #: DropPilot variant id (str) → Shopify inventory_item_id.
     inventory_item_map: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: Shopify product handle returned by Admin API (not guessed client-side).
+    external_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: ``gid://shopify/Product/{id}`` derived from the REST numeric id.
+    external_graphql_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    shop_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Customer-facing product URL when verified; null when Online Store status unknown.
+    storefront_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    admin_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    #: True/False when known; null when publications API/scopes are unavailable.
+    online_store_published: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failed_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     status: Mapped[ListingSyncStatus] = mapped_column(
         Enum(
