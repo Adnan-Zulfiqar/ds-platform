@@ -241,6 +241,13 @@ export interface Product {
   shipToCountry: string | null;
   shippingCost: string | null;
   warehouseOrigin: string | null;
+  requiresShipping: boolean;
+  hsCode: string | null;
+  countryOfOrigin: string | null;
+  customsDescription: string | null;
+  handlingTimeDays: number | null;
+  weightUnit: string | null;
+  dimensionUnit: string | null;
   supplierName: string | null;
   rating: string | null;
   reviewCount: number | null;
@@ -252,7 +259,13 @@ export interface Product {
   // --- SEO / marketplace (Phase 9 stage 3) ---
   seoTitle: string | null;
   seoDescription: string | null;
+  /** Legacy; not exported to Shopify. Prefer searchTopics. */
   metaKeywords: string | null;
+  searchTopics: string[];
+  seoPlanning: Record<string, unknown>;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  redirectOldHandle: boolean;
   slug: string | null;
   vendor: string | null;
   tags: string[];
@@ -289,6 +302,7 @@ export interface ProductDetail extends Product {
 export type DraftPricingApplyMode =
   | "percentage_markup"
   | "fixed_markup"
+  | "target_margin"
   | "set_sell_price"
   | "set_compare_at";
 
@@ -331,12 +345,18 @@ export interface DraftPricingApplyPayload {
   mode: DraftPricingApplyMode;
   markupPercent?: string;
   markupFixed?: string;
+  targetMarginPercent?: string;
+  minProfit?: string;
+  minSellPrice?: string;
+  maxSellPrice?: string;
   sellPrice?: string;
   compareAtPrice?: string;
   variantIds?: string[];
   roundToCents?: boolean;
+  psychologicalRounding?: boolean;
   handlingCost?: string;
   feePercent?: string;
+  includeShippingInCost?: boolean;
 }
 
 /** PATCH body for merchant draft/product edits — only sent fields change. */
@@ -350,8 +370,65 @@ export interface ProductUpdatePayload {
   seoTitle?: string | null;
   seoDescription?: string | null;
   metaKeywords?: string | null;
+  searchTopics?: string[];
+  seoPlanning?: Record<string, unknown>;
+  ogTitle?: string | null;
+  ogDescription?: string | null;
+  redirectOldHandle?: boolean;
   slug?: string | null;
   status?: ProductStatus;
+  requiresShipping?: boolean;
+  hsCode?: string | null;
+  countryOfOrigin?: string | null;
+  customsDescription?: string | null;
+  handlingTimeDays?: number | null;
+  packageWeightKg?: string | null;
+  packageLengthCm?: number | null;
+  packageWidthCm?: number | null;
+  packageHeightCm?: number | null;
+  weightUnit?: string | null;
+  dimensionUnit?: string | null;
+}
+
+export interface StoreListing {
+  id: string;
+  storeId: string;
+  productId: string;
+  externalProductId: string;
+  externalHandle: string | null;
+  externalGraphqlId: string | null;
+  shopDomain: string | null;
+  storefrontUrl: string | null;
+  adminUrl: string | null;
+  onlineStorePublished: boolean | null;
+  status: string;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  publishedAt: string | null;
+  lastFailedSyncAt: string | null;
+}
+
+export interface ShopifyPublishResult {
+  message: string;
+  listingId: string;
+  externalProductId: string;
+  externalHandle: string | null;
+  externalGraphqlId: string | null;
+  shopDomain: string | null;
+  storefrontUrl: string | null;
+  adminUrl: string | null;
+  onlineStorePublished: boolean | null;
+  updated: boolean;
+}
+
+export interface SeoScore {
+  score: number;
+  status: string;
+  sections: Record<string, number>;
+  warnings: string[];
+  explanations: string[];
+  metaKeywordsExported: boolean;
+  note: string;
 }
 
 /** Where a product's optimisable content came from. */
