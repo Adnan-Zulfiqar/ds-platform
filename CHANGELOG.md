@@ -12,11 +12,16 @@ production release.
 
 ### Added
 
+- **Draft Product Editor Stage 4** — Media reorder/featured/alt text/add-by-URL/
+  remove; variant merchant SKU, sell/compare-at prices, enable/disable.
+  Migration `0016`. Supplier sync preserves merchant image order/alt and
+  merchant variant pricing fields.
 - **Draft Product Editor (Stages 1–3)** — Clickable Drafts rows open
   `/drafts/{id}` with Overview/Description/SEO editing, Save Draft
   (`PATCH /api/v1/drafts/{id}`), Refresh Supplier Data, readiness sidebar, and
   Publish to Store panel. Reuses Product Editor write/sanitize APIs. See
   [DRAFT_PRODUCT_EDITOR_PLAN.md](docs/DRAFT_PRODUCT_EDITOR_PLAN.md).
+  Merged to `develop` (`da83d52`).
 - **Product Workspace V2 Stage 0** — Drafts vs Products are publication
   projections over the same `Product` aggregate. `GET /api/v1/drafts` lists
   products with no synced `StoreListing`; `GET /api/v1/products` lists only

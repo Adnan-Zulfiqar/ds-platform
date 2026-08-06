@@ -11,6 +11,8 @@ import {
   Store,
 } from "lucide-react";
 
+import { DraftMediaPanel } from "@/components/drafts/draft-media-panel";
+import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
 import { OptimizeProductButton } from "@/components/products/optimize-product-button";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -657,21 +659,27 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             </section>
           ) : null}
 
+          {tab === "media" ? (
+            <DraftMediaPanel productId={productId} product={data} />
+          ) : null}
+
+          {tab === "variants" ? (
+            <DraftVariantsPanel productId={productId} product={data} />
+          ) : null}
+
           {tab !== "overview" &&
           tab !== "description" &&
           tab !== "seo" &&
-          tab !== "publishing" ? (
+          tab !== "publishing" &&
+          tab !== "media" &&
+          tab !== "variants" ? (
             <section className="rounded-lg border border-dashed p-8 text-center">
               <h2 className="text-lg font-semibold">{TAB_LABEL[tab]}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                {tab === "media" &&
-                  `${data.images.length} image(s) imported. Reorder, featured image, and uploads land in Stage 4.`}
-                {tab === "variants" &&
-                  `${data.variants.length} variant(s) imported. Structured option editing lands in Stage 4.`}
                 {tab === "pricing" &&
-                  "Decimal-safe selling price / profit workspace lands in Stage 5."}
+                  "Decimal-safe selling price / profit workspace lands in Stage 5. Set per-variant sell prices under Variants today."}
                 {tab === "inventory" &&
-                  `Cached supplier stock total: ${data.stockQuantity.toLocaleString()}. Stage 5 clarifies buffers and freshness.`}
+                  `Cached supplier stock total: ${data.stockQuantity.toLocaleString()}. Per-variant stock is on the Variants tab. Stage 5 adds buffers and freshness.`}
                 {tab === "shipping" &&
                   "Supplier shipping options and delivery estimates land in Stage 5."}
                 {tab === "ai-studio" &&
@@ -679,23 +687,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 {tab === "history" &&
                   "Open History in the header for AI version restore. Full edit timeline is Stage 6."}
               </p>
-              {(tab === "media" || tab === "variants") && (
-                <ul className="mx-auto mt-4 max-w-lg space-y-2 text-left text-sm text-muted-foreground">
-                  {tab === "media"
-                    ? data.images.slice(0, 6).map((image) => (
-                        <li key={image.url} className="truncate">
-                          #{image.position} {image.url}
-                        </li>
-                      ))
-                    : data.variants.slice(0, 8).map((variant) => (
-                        <li key={variant.id}>
-                          {variant.label ?? variant.externalVariantId} · cost{" "}
-                          {formatMoney(variant.costPrice, variant.currency)} ·
-                          stock {variant.stockQuantity}
-                        </li>
-                      ))}
-                </ul>
-              )}
             </section>
           ) : null}
         </div>

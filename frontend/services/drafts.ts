@@ -106,3 +106,89 @@ export function useRefreshDraft(productId: string) {
     },
   });
 }
+
+export function useReorderDraftImages(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (imageIds: string[]) => {
+      const { data } = await apiClient.patch<ProductDetail>(
+        `/drafts/${productId}/images/reorder`,
+        { imageIds },
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
+export function useAddDraftImage(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { url: string; altText?: string | null }) => {
+      const { data } = await apiClient.post<ProductDetail>(
+        `/drafts/${productId}/images`,
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
+export function useUpdateDraftImage(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      imageId,
+      altText,
+    }: {
+      imageId: string;
+      altText: string | null;
+    }) => {
+      const { data } = await apiClient.patch<ProductDetail>(
+        `/drafts/${productId}/images/${imageId}`,
+        { altText },
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
+export function useRemoveDraftImage(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (imageId: string) => {
+      const { data } = await apiClient.delete<ProductDetail>(
+        `/drafts/${productId}/images/${imageId}`,
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
+export function useUpdateDraftVariant(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      variantId,
+      ...payload
+    }: {
+      variantId: string;
+      label?: string | null;
+      merchantSku?: string | null;
+      sellPrice?: string | null;
+      compareAtPrice?: string | null;
+      imageUrl?: string | null;
+      isEnabled?: boolean;
+    }) => {
+      const { data } = await apiClient.patch<ProductDetail>(
+        `/drafts/${productId}/variants/${variantId}`,
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
