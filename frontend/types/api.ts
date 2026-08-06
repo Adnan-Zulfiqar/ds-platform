@@ -241,6 +241,8 @@ export interface Product {
   shipToCountry: string | null;
   shippingCost: string | null;
   warehouseOrigin: string | null;
+  importShipToCountry: string | null;
+  importShipToCheckedAt: string | null;
   supplierName: string | null;
   rating: string | null;
   reviewCount: number | null;
@@ -397,6 +399,7 @@ export interface ProductImportPayload {
   externalId: string;
   shipToCountry?: string;
   currency?: string;
+  storeId?: string;
 }
 
 /** A feed entry: a summary, with no variants and no stock. */

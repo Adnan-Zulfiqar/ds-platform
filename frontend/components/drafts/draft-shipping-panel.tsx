@@ -3,6 +3,7 @@
 import { Loader2, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { countryName } from "@/lib/countries";
 import { formatMoney } from "@/lib/utils";
 import { useRefreshDraft } from "@/services/drafts";
 import type { ProductDetail } from "@/types/api";
@@ -60,7 +61,8 @@ export function DraftShippingPanel({
           <h2 className="text-lg font-semibold">Shipping</h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Package and logistics snapshot from the supplier product payload.
-            Missing freight is shown explicitly — never as $0.
+            Missing freight is shown explicitly — never as $0. Availability is
+            destination-specific — do not assume another country ships the same.
           </p>
         </div>
         <Button
@@ -75,8 +77,29 @@ export function DraftShippingPanel({
           ) : (
             <RefreshCw className="mr-2 h-4 w-4" />
           )}
-          Refresh supplier shipping
+          Refresh for this destination
         </Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Imported for"
+          value={
+            product.importShipToCountry
+              ? countryName(product.importShipToCountry)
+              : "Not recorded"
+          }
+          warn={product.importShipToCountry == null}
+        />
+        <Field
+          label="Last checked"
+          value={
+            product.importShipToCheckedAt
+              ? new Date(product.importShipToCheckedAt).toLocaleString()
+              : "Not recorded"
+          }
+          warn={product.importShipToCheckedAt == null}
+        />
       </div>
 
       {product.shippingCost == null ? (

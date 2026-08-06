@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Loader2, PackagePlus } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -17,23 +18,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api-client";
+import {
+  countryName,
+  filterCountries,
+  persistLastShipTo,
+  readLastShipTo,
+} from "@/lib/countries";
 import { useImportProduct } from "@/services/products";
+import { useStores, type Store } from "@/services/stores";
 
 /** Matches the numeric id in an AliExpress listing URL. */
 const ITEM_ID_IN_URL = /\/item\/(\d+)/;
-
-const SHIP_TO_OPTIONS = [
-  { value: "US", label: "United States (US)" },
-  { value: "GB", label: "United Kingdom (GB)" },
-  { value: "CA", label: "Canada (CA)" },
-  { value: "AU", label: "Australia (AU)" },
-  { value: "DE", label: "Germany (DE)" },
-  { value: "FR", label: "France (FR)" },
-  { value: "NL", label: "Netherlands (NL)" },
-  { value: "IT", label: "Italy (IT)" },
-  { value: "ES", label: "Spain (ES)" },
-  { value: "PL", label: "Poland (PL)" },
-] as const;
 
 type ImportFeedback = {
   title: string;
@@ -41,7 +36,27 @@ type ImportFeedback = {
   action: string;
   requestId: string | null;
   listingUrl: string | null;
+  draftId: string | null;
+  isShipToError: boolean;
 };
+
+function storeCountry(store: Store | undefined): string | null {
+  if (!store) return null;
+  const settings = store.settings ?? {};
+  for (const key of [
+    "countryCode",
+    "country_code",
+    "country",
+    "shipToCountry",
+    "ship_to_country",
+  ]) {
+    const value = settings[key];
+    if (typeof value === "string" && /^[A-Za-z]{2}$/.test(value)) {
+      return value.toUpperCase();
+    }
+  }
+  return null;
+}
 
 /**
  * Accept either a bare product ID or a pasted listing URL.
@@ -83,15 +98,17 @@ function feedbackFromError(
       message: error.message,
       requestId: error.requestId,
       listingUrl,
+      draftId: null as string | null,
+      isShipToError: error.code === "aliexpress_ship_to_prohibited",
     };
 
     switch (error.code) {
       case "aliexpress_ship_to_prohibited":
         return {
           ...base,
-          title: "Ship-to country not allowed",
+          title: "Destination not available",
           action:
-            "Change Ship to country below and try again, or open the listing on AliExpress to see where it ships.",
+            "Change the ship-to country below and try again. Your product URL is kept.",
         };
       case "aliexpress_product_unavailable":
         return {
@@ -108,7 +125,6 @@ function feedbackFromError(
         };
       case "aliexpress_token_expired":
       case "aliexpress_auth_failed":
-      case "aliexpress_reauth_required":
         return {
           ...base,
           title: "AliExpress connection expired",
@@ -127,11 +143,18 @@ function feedbackFromError(
           title: "AliExpress temporarily unavailable",
           action: "Try again in a few minutes.",
         };
+      case "aliexpress_invalid_response":
+        return {
+          ...base,
+          title: "Unexpected AliExpress response",
+          action: "Try again. If it keeps failing, use the reference ID below.",
+        };
       case "validation_error":
         return {
           ...base,
-          title: "Invalid product ID or URL",
-          action: "Paste a bare AliExpress product ID or the full listing URL.",
+          title: "Check import details",
+          action:
+            "Confirm the product ID/URL and ship-to country, then try again.",
         };
       default:
         return {
@@ -148,6 +171,8 @@ function feedbackFromError(
     action: "Try again, or import another product.",
     requestId: null,
     listingUrl,
+    draftId: null,
+    isShipToError: false,
   };
 }
 
@@ -162,20 +187,63 @@ function feedbackFromError(
 export function ImportProductDialog() {
   const [open, setOpen] = useState(false);
   const [externalId, setExternalId] = useState("");
-  const [shipToCountry, setShipToCountry] = useState("US");
+  const [shipToCountry, setShipToCountry] = useState("");
+  const [storeId, setStoreId] = useState("");
+  const [countryQuery, setCountryQuery] = useState("");
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
+  const [successDraftId, setSuccessDraftId] = useState<string | null>(null);
 
+  const storesQuery = useStores({ size: 50 });
+  const stores = storesQuery.data?.items ?? [];
+  const connectedStores = stores.filter((s) => s.status === "connected");
   const importProduct = useImportProduct();
 
-  function reset() {
+  const recommendedCountry = useMemo(() => {
+    const selected = connectedStores.find((s) => s.id === storeId);
+    return (
+      storeCountry(selected) ??
+      storeCountry(connectedStores[0]) ??
+      readLastShipTo()
+    );
+  }, [connectedStores, storeId]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!shipToCountry) {
+      setShipToCountry(recommendedCountry ?? "");
+    }
+  }, [open, recommendedCountry, shipToCountry]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!storeId && connectedStores.length === 1) {
+      setStoreId(connectedStores[0]!.id);
+    }
+  }, [open, connectedStores, storeId]);
+
+  const filteredCountries = filterCountries(countryQuery);
+
+  function resetFormFields() {
     setExternalId("");
-    setShipToCountry("US");
+    setShipToCountry("");
+    setStoreId("");
+    setCountryQuery("");
     setFeedback(null);
+    setSuccessDraftId(null);
     importProduct.reset();
+  }
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next) {
+      // Closing clears everything; errors mid-flow keep the URL/country.
+      resetFormFields();
+    }
   }
 
   async function handleImport() {
     setFeedback(null);
+    setSuccessDraftId(null);
 
     const identifier = extractProductId(externalId);
     if (!identifier) {
@@ -185,30 +253,52 @@ export function ImportProductDialog() {
         action: "Use a bare ID (digits only) or a URL containing /item/<id>.",
         requestId: null,
         listingUrl: null,
+        draftId: null,
+        isShipToError: false,
+      });
+      return;
+    }
+
+    if (!shipToCountry) {
+      setFeedback({
+        title: "Ship-to country required",
+        message:
+          "Select a destination country. Availability and price depend on where the order ships.",
+        action: "Choose a country below, then import again.",
+        requestId: null,
+        listingUrl: `https://www.aliexpress.com/item/${identifier}.html`,
+        draftId: null,
+        isShipToError: false,
       });
       return;
     }
 
     try {
-      await importProduct.mutateAsync({
+      const product = await importProduct.mutateAsync({
         externalId: identifier,
         shipToCountry,
+        storeId: storeId || undefined,
       });
-      setOpen(false);
-      reset();
+      persistLastShipTo(shipToCountry);
+      setSuccessDraftId(product.id);
+      setFeedback({
+        title: "Draft ready",
+        message: `Imported for ${countryName(shipToCountry)}.`,
+        action: "Open the draft to edit, or import another product.",
+        requestId: null,
+        listingUrl: null,
+        draftId: product.id,
+        isShipToError: false,
+      });
     } catch (error) {
+      // Keep externalId + shipToCountry so destination retries do not force
+      // the merchant to paste the URL again.
       setFeedback(feedbackFromError(error, identifier));
     }
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) reset();
-      }}
-    >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button>
           <PackagePlus className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -216,19 +306,21 @@ export function ImportProductDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Import as Draft from AliExpress</DialogTitle>
           <DialogDescription>
             Paste an AliExpress product ID or the full listing URL. The product
             lands in Drafts for review — it does not appear under Products until
-            you Publish to Store. Importing the same product again refreshes
-            supplier data rather than creating a duplicate.
+            you Publish to Store.
           </DialogDescription>
         </DialogHeader>
 
         {feedback ? (
-          <Alert variant="destructive">
+          <Alert
+            variant={successDraftId ? "success" : "destructive"}
+            data-testid="import-feedback"
+          >
             <AlertTitle>{feedback.title}</AlertTitle>
             <AlertDescription className="space-y-2">
               <p>{feedback.message}</p>
@@ -250,6 +342,17 @@ export function ImportProductDialog() {
                   </a>
                 </p>
               ) : null}
+              {feedback.draftId ? (
+                <p>
+                  <Link
+                    href={`/drafts/${feedback.draftId}`}
+                    className="underline underline-offset-2"
+                    onClick={() => handleOpenChange(false)}
+                  >
+                    View Draft
+                  </Link>
+                </p>
+              ) : null}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -258,46 +361,89 @@ export function ImportProductDialog() {
           <Label htmlFor="external-id">AliExpress product ID or URL</Label>
           <Input
             id="external-id"
+            data-testid="import-external-id"
             placeholder="1005009558589813"
             value={externalId}
             onChange={(event) => setExternalId(event.target.value)}
             disabled={importProduct.isPending}
           />
-          <p className="text-sm text-muted-foreground">
-            Paste either the product ID or the whole listing URL — both work.
-          </p>
         </div>
 
+        {connectedStores.length > 1 ? (
+          <div className="space-y-2">
+            <Label htmlFor="import-store">Destination store</Label>
+            <select
+              id="import-store"
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={storeId}
+              onChange={(event) => {
+                const next = event.target.value;
+                setStoreId(next);
+                const country = storeCountry(
+                  connectedStores.find((s) => s.id === next),
+                );
+                if (country) setShipToCountry(country);
+              }}
+              disabled={importProduct.isPending}
+            >
+              <option value="">Select a store</option>
+              {connectedStores.map((store) => (
+                <option key={store.id} value={store.id}>
+                  {store.name}
+                  {storeCountry(store)
+                    ? ` — recommended: ${countryName(storeCountry(store))}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
         <div className="space-y-2">
-          <Label htmlFor="ship-to-country">Ship to country</Label>
+          <Label htmlFor="ship-to-search">Ship-to country</Label>
+          <Input
+            id="ship-to-search"
+            placeholder="Search countries…"
+            value={countryQuery}
+            onChange={(event) => setCountryQuery(event.target.value)}
+            disabled={importProduct.isPending}
+          />
           <select
             id="ship-to-country"
-            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="import-ship-to"
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={shipToCountry}
             onChange={(event) => setShipToCountry(event.target.value)}
             disabled={importProduct.isPending}
+            required
           >
-            {SHIP_TO_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
+            <option value="">Select a country</option>
+            {filteredCountries.map((option) => (
+              <option key={option.code} value={option.code}>
+                {option.name} ({option.code})
+                {recommendedCountry === option.code ? " — recommended" : ""}
               </option>
             ))}
           </select>
           <p className="text-sm text-muted-foreground">
-            Some listings are blocked for certain destinations. If import fails
-            with a ship-to error, try another country.
+            AliExpress availability, price and shipping methods may vary by
+            destination.
           </p>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-0">
           <Button
             variant="outline"
-            onClick={() => setOpen(false)}
+            onClick={() => handleOpenChange(false)}
             disabled={importProduct.isPending}
           >
             Cancel
           </Button>
-          <Button onClick={handleImport} disabled={importProduct.isPending}>
+          <Button
+            onClick={handleImport}
+            disabled={importProduct.isPending || Boolean(successDraftId)}
+            data-testid="import-as-draft-submit"
+          >
             {importProduct.isPending ? (
               <>
                 <Loader2
@@ -306,6 +452,8 @@ export function ImportProductDialog() {
                 />
                 Importing…
               </>
+            ) : feedback?.isShipToError ? (
+              "Try again"
             ) : (
               "Import as Draft"
             )}

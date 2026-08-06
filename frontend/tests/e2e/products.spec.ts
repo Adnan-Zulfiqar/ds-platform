@@ -109,7 +109,8 @@ test.describe("Drafts page", () => {
     });
 
     await page.getByRole("button", { name: "Import as Draft" }).first().click();
-    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
+    await page.getByTestId("import-ship-to").selectOption("US");
+    await page.getByTestId("import-as-draft-submit").click();
 
     await expect(
       page.getByText(/Enter an AliExpress product ID/),
@@ -122,19 +123,86 @@ test.describe("Drafts page", () => {
     await page.goto("/drafts");
 
     let sentId: string | null = null;
+    let sentShipTo: string | null = null;
     await page.route("**/products/import", async (route) => {
-      const body = route.request().postDataJSON() as { externalId?: string };
+      const body = route.request().postDataJSON() as {
+        externalId?: string;
+        shipToCountry?: string;
+      };
       sentId = body.externalId ?? null;
+      sentShipTo = body.shipToCountry ?? null;
       return route.abort();
     });
 
     await page.getByRole("button", { name: "Import as Draft" }).first().click();
     await page
-      .getByLabel(/AliExpress product ID/)
+      .getByTestId("import-external-id")
       .fill("https://www.aliexpress.com/item/1005009558589813.html");
-    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
+    await page.getByTestId("import-ship-to").selectOption("GB");
+    await page.getByTestId("import-as-draft-submit").click();
 
     await expect(() => expect(sentId).toBe("1005009558589813")).toPass();
+    await expect(() => expect(sentShipTo).toBe("GB")).toPass();
+  });
+
+  test("keeps the URL when destination is prohibited and country changes", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    await page.route("**/products/import", async (route) => {
+      const body = route.request().postDataJSON() as { shipToCountry?: string };
+      if (body.shipToCountry === "US") {
+        return route.fulfill({
+          status: 422,
+          contentType: "application/json",
+          body: JSON.stringify({
+            code: "aliexpress_ship_to_prohibited",
+            message:
+              "This product cannot currently be shipped to United States through your connected AliExpress account.",
+            details: [],
+            requestId: "test-req-482",
+          }),
+        });
+      }
+      return route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "11111111-1111-1111-1111-111111111111",
+          source: "aliexpress",
+          externalId: "1005010486653604",
+          title: "Anti-Snoring Mouthpiece",
+          status: "draft",
+          stockQuantity: 0,
+          tags: [],
+          aiStatus: "not_optimized",
+          variants: [],
+          images: [],
+          importShipToCountry: "GB",
+          createdAt: new Date().toISOString(),
+        }),
+      });
+    });
+
+    const url =
+      "https://www.aliexpress.com/item/1005010486653604.html";
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByTestId("import-external-id").fill(url);
+    await page.getByTestId("import-ship-to").selectOption("US");
+    await page.getByTestId("import-as-draft-submit").click();
+
+    await expect(page.getByTestId("import-feedback")).toContainText(
+      /Destination not available|United States/i,
+    );
+    await expect(page.getByTestId("import-external-id")).toHaveValue(url);
+
+    await page.getByTestId("import-ship-to").selectOption("GB");
+    await page.getByTestId("import-as-draft-submit").click();
+
+    await expect(page.getByTestId("import-feedback")).toContainText(/Draft ready/i);
+    await expect(page.getByRole("link", { name: "View Draft" })).toBeVisible();
   });
 
   test("surfaces the server's reason when no supplier is connected", async ({
@@ -144,12 +212,13 @@ test.describe("Drafts page", () => {
     await page.goto("/drafts");
 
     await page.getByRole("button", { name: "Import as Draft" }).first().click();
-    await page.getByLabel(/AliExpress product ID/).fill("3256806389000685");
+    await page.getByTestId("import-external-id").fill("3256806389000685");
+    await page.getByTestId("import-ship-to").selectOption("US");
 
     const response = page.waitForResponse((r) =>
       r.url().includes("/products/import"),
     );
-    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
+    await page.getByTestId("import-as-draft-submit").click();
 
     expect((await response).status()).toBe(409);
     await expect(page.getByRole("alert")).toBeVisible();
