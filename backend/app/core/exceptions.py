@@ -61,6 +61,20 @@ class ValidationError(AppError):
     message = "The request payload failed validation."
 
 
+class CurrencyMismatchError(ValidationError):
+    """Cross-currency arithmetic without an explicit conversion."""
+
+    code = "currency_mismatch"
+    message = "Monetary amounts in different currencies cannot be combined."
+
+
+class FxUnavailableError(ValidationError):
+    """A required FX rate is missing, expired, or the provider is unavailable."""
+
+    code = "fx_unavailable"
+    message = "Pricing cannot be calculated because a valid currency conversion is not available."
+
+
 class AuthenticationError(AppError):
     """No valid credentials were supplied."""
 
