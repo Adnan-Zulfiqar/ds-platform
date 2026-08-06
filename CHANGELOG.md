@@ -12,6 +12,11 @@ production release.
 
 ### Added
 
+- **Premium Product Editor** — Sticky header/inspector, autosave, SEO workspace
+  + advisory score (no meta-keywords export), editable shipping/customs,
+  target-margin pricing, post-publish View in Store / Manage in Shopify when
+  URLs are verified. Migration `0018` persists listing handle/admin/storefront
+  fields. See `docs/PREMIUM_PRODUCT_EDITOR_UI.md`.
 - **Draft Product Editor Stage 5** — Pricing workspace (`GET/POST …/pricing`)
   with Decimal profit/margin/break-even; inventory freshness + supplier stock
   labels; shipping package/logistics columns (migration `0017`). Missing
