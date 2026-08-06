@@ -126,6 +126,8 @@ class ProductRead(CamelCaseModel):
     ship_to_country: str | None = None
     shipping_cost: Decimal | None = None
     warehouse_origin: str | None = None
+    import_ship_to_country: str | None = None
+    import_ship_to_checked_at: datetime | None = None
     supplier_name: str | None = None
     rating: Decimal | None = None
     review_count: int | None = None
@@ -241,6 +243,9 @@ class ProductImportRead(CamelCaseModel):
     product_id: uuid.UUID | None = None
     error_code: str | None = None
     error_message: str | None = None
+    ship_to_country: str | None = None
+    currency: str | None = None
+    result_category: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
@@ -286,8 +291,24 @@ class ProductImportRequest(CamelCaseModel):
 
     #: Destination country and currency shape the prices the supplier quotes,
     #: so they are import parameters rather than display preferences.
-    ship_to_country: str = Field(default="US", min_length=2, max_length=2)
+    #:
+    #: No silent ``US`` default — when omitted the service resolves store /
+    #: workspace / last-success, or requires an explicit choice.
+    ship_to_country: str | None = Field(default=None, min_length=2, max_length=2)
     currency: str = Field(default="USD", min_length=3, max_length=3)
+    #: Optional store whose ``settings.countryCode`` seeds destination when
+    #: ``ship_to_country`` is omitted.
+    store_id: uuid.UUID | None = None
+
+    @field_validator("ship_to_country")
+    @classmethod
+    def _normalise_ship_to(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        code = value.strip().upper()
+        if len(code) != 2 or not code.isalpha():
+            raise ValueError("ship_to_country must be an ISO 3166-1 alpha-2 code.")
+        return code
 
 
 class FeedProductRead(CamelCaseModel):

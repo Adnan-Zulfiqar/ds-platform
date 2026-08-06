@@ -10,8 +10,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.service import ShopifyService
 from app.models.order import (
@@ -21,10 +22,13 @@ from app.models.order import (
 )
 from app.models.product import Product
 from app.models.shopify import ListingSyncStatus
+from app.models.store import Store
 from app.repositories.order import OrderRepository
 from app.repositories.product import ProductRepository
 from app.repositories.shopify import StoreListingRepository
+from app.repositories.store import StoreRepository
 from app.services.base import BaseService
+from app.services.import_destination import country_from_store_settings
 
 logger = get_logger(__name__)
 
@@ -48,6 +52,35 @@ class ShopifySyncService(BaseService):
         self.products = ProductRepository(session)
         self.listings = StoreListingRepository(session)
         self.orders = OrderRepository(session)
+        self.stores = StoreRepository(session)
+
+    def _assert_import_destination_matches_store(self, *, product: Product, store: Store) -> None:
+        """Block publish when the draft was imported for a different market.
+
+        GB availability does not prove US availability. When the store has a
+        configured ``settings.countryCode`` and the product's last successful
+        import destination differs, the merchant must refresh for that
+        destination first.
+        """
+        store_country = country_from_store_settings(store.settings)
+        import_country = product.import_ship_to_country
+        if not store_country or not import_country:
+            return
+        if store_country == import_country:
+            return
+        raise ValidationError(
+            (
+                f"This draft was imported for {country_display_name(import_country)}, "
+                f"but the store market is {country_display_name(store_country)}. "
+                f"Refresh supplier data for {country_display_name(store_country)} "
+                "before publishing — availability is destination-specific."
+            ),
+            details={
+                "import_ship_to_country": import_country,
+                "store_country": store_country,
+                "reason": "destination_mismatch",
+            },
+        )
 
     async def _load_product(self, product_id: uuid.UUID) -> Product:
         query = (
@@ -76,6 +109,8 @@ class ShopifySyncService(BaseService):
         duplicating it (audit A-04).
         """
         product = await self._load_product(product_id)
+        store = await self.stores.get_by_id_or_raise(store_id)
+        self._assert_import_destination_matches_store(product=product, store=store)
         client, connection = await self.shopify.client_for_store(store_id)
         listing = await self.listings.get_for_product(store_id=store_id, product_id=product_id)
 

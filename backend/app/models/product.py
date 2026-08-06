@@ -245,6 +245,15 @@ class Product(TenantScopedBase):
     shipping_cost: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     warehouse_origin: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    #: Destination used for the last *successful* AliExpress detail call.
+    #: Distinct from ``ship_to_country`` on the logistics DTO: that is what the
+    #: supplier reported; this is what we asked for. One product row per
+    #: tenant+external id — changing destination refreshes this snapshot.
+    import_ship_to_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    import_ship_to_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- Supplier reputation ------------------------------------------------
     supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     supplier_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -480,6 +489,13 @@ class ProductImport(TenantScopedBase):
     #: message below is for humans and may change wording freely.
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    #: Destination and currency used for this attempt (request parameters).
+    ship_to_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    #: Stable outcome taxonomy for UI branching, e.g. ``success``,
+    #: ``aliexpress_ship_to_prohibited``, ``aliexpress_product_unavailable``.
+    result_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

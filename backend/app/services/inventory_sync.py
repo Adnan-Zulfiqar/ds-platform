@@ -73,6 +73,7 @@ class InventorySyncService(BaseService):
                     refreshed = await self.imports.import_product(
                         external_id=product.external_id,
                         requested_by_user_id=requested_by_user_id,
+                        ship_to_country=(product.import_ship_to_country or product.ship_to_country),
                     )
                 except AliExpressError as exc:
                     logger.warning(

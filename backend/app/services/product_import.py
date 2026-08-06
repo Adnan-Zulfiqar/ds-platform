@@ -43,6 +43,7 @@ from app.repositories.product import (
     ProductVariantRepository,
 )
 from app.services.base import BaseService
+from app.services.import_destination import ImportDestinationService
 
 #: AliExpress method names. Named constants because a typo in a method string
 #: returns `InvalidApiPath` — an error that says nothing about which call site
@@ -61,6 +62,7 @@ class ProductImportService(BaseService):
         self.images = ProductImageRepository(session)
         self.imports = ProductImportRepository(session)
         self.integration = AliExpressService(session)
+        self.destinations = ImportDestinationService(session)
 
     # -- Import -------------------------------------------------------------
 
@@ -69,8 +71,9 @@ class ProductImportService(BaseService):
         *,
         external_id: str,
         requested_by_user_id: uuid.UUID | None = None,
-        ship_to_country: str = "US",
+        ship_to_country: str | None = None,
         currency: str = "USD",
+        store_id: uuid.UUID | None = None,
     ) -> Product:
         """Import or refresh a single supplier product.
 
@@ -81,10 +84,18 @@ class ProductImportService(BaseService):
 
         An in-flight import of the same product is rejected instead of started
         again, which is what a double-clicked button produces.
+
+        ``ship_to_country`` is resolved via :class:`ImportDestinationService`
+        when omitted — never silently forced to ``US``.
         """
         external_id = (external_id or "").strip()
         if not external_id:
             raise ValidationError("A product identifier is required.")
+
+        destination = await self.destinations.resolve(
+            ship_to_country=ship_to_country,
+            store_id=store_id,
+        )
 
         in_progress = await self.imports.find_in_progress(
             source=ProductSource.ALIEXPRESS, external_id=external_id
@@ -100,11 +111,13 @@ class ProductImportService(BaseService):
             status=ImportStatus.RUNNING,
             requested_by_user_id=requested_by_user_id,
             started_at=datetime.now(UTC),
+            ship_to_country=destination,
+            currency=currency,
         )
 
         try:
             payload = await self._fetch_product(
-                external_id, ship_to_country=ship_to_country, currency=currency
+                external_id, ship_to_country=destination, currency=currency
             )
             # Inspect rsp_code before treating an empty envelope as "not found".
             # Live: 482 SHIP_TO_COUNTRY_PROHIBITED returns {has_whole_sale:false}
@@ -112,13 +125,24 @@ class ProductImportService(BaseService):
             detail = require_usable_product_detail(
                 payload,
                 detail=parse_product_detail(payload),
-                ship_to_country=ship_to_country,
+                ship_to_country=destination,
             )
         except AliExpressError as exc:
-            await self._fail(record, code=exc.code, message=str(exc))
+            await self._fail(
+                record,
+                code=exc.code,
+                message=str(exc),
+                result_category=exc.code,
+            )
             raise
 
         values = map_product(detail)
+        checked_at = datetime.now(UTC)
+        values["import_ship_to_country"] = destination
+        values["import_ship_to_checked_at"] = checked_at
+        # Prefer the requested destination on the product snapshot so the draft
+        # editor shows "Imported for: GB" even when logistics DTO omits it.
+        values["ship_to_country"] = values.get("ship_to_country") or destination
         product = await self._upsert(values)
 
         # Reconciled in place, not wiped and reinserted -- a variant/image's
@@ -129,7 +153,8 @@ class ProductImportService(BaseService):
 
         record.status = ImportStatus.SUCCEEDED
         record.product_id = product.id
-        record.finished_at = datetime.now(UTC)
+        record.result_category = "success"
+        record.finished_at = checked_at
         await self.session.flush()
 
         # Load the children explicitly before returning.
@@ -205,9 +230,17 @@ class ProductImportService(BaseService):
         await self.session.flush()
         return existing
 
-    async def _fail(self, record: Any, *, code: str, message: str) -> None:
+    async def _fail(
+        self,
+        record: Any,
+        *,
+        code: str,
+        message: str,
+        result_category: str | None = None,
+    ) -> None:
         record.status = ImportStatus.FAILED
         record.error_code = code
+        record.result_category = result_category or code
         # Bounded: an upstream message is not ours and could be arbitrarily long.
         record.error_message = message[:2048]
         record.finished_at = datetime.now(UTC)
@@ -216,6 +249,7 @@ class ProductImportService(BaseService):
             "product_import_failed",
             external_id=record.external_id,
             error_code=code,
+            ship_to_country=getattr(record, "ship_to_country", None),
         )
 
     # -- Discovery ----------------------------------------------------------

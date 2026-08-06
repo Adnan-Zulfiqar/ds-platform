@@ -274,6 +274,7 @@ async def import_product(
         requested_by_user_id=principal.user_id,
         ship_to_country=payload.ship_to_country,
         currency=payload.currency,
+        store_id=payload.store_id,
     )
     return _to_detail(product)
 
@@ -298,9 +299,11 @@ async def sync_product(
     """
     existing = await ProductRepository(session).get_by_id_or_raise(product_id)
 
+    # Refresh for the destination last used successfully — never force US.
     product = await ProductImportService(session).import_product(
         external_id=existing.external_id,
         requested_by_user_id=principal.user_id,
+        ship_to_country=existing.import_ship_to_country or existing.ship_to_country,
     )
     return _to_detail(product)
 

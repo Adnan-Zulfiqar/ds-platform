@@ -75,7 +75,10 @@ async def _sync_one(product_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 logger.info("product_sync_skipped", product_id=str(product_id))
                 return False
 
-            await service.import_product(external_id=product.external_id)
+            await service.import_product(
+                external_id=product.external_id,
+                ship_to_country=product.import_ship_to_country or product.ship_to_country,
+            )
             return True
     finally:
         clear_context()

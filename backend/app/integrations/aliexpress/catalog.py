@@ -581,7 +581,14 @@ def require_usable_product_detail(
         details["rsp_code"] = code
 
     if code in _SHIP_TO_PROHIBITED_CODES or "SHIP_TO_COUNTRY_PROHIBITED" in msg_upper:
+        from app.integrations.aliexpress.countries import country_display_name
+
+        destination = country_display_name(ship_to_country)
         raise AliExpressShipToProhibitedError(
+            (
+                f"This product cannot currently be shipped to {destination} "
+                "through your connected AliExpress account."
+            ),
             upstream_code=str(code) if code is not None else "SHIP_TO_COUNTRY_PROHIBITED",
             details=details,
         )

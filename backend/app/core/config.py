@@ -705,6 +705,14 @@ class Settings(_EnvFileSettings):
         description="Hard ceiling; prevents a client from requesting a million rows.",
     )
 
+    #: Fallback AliExpress ship-to when the dialog/store/history cannot supply
+    #: one. Leave blank so merchants must choose rather than silently defaulting
+    #: every workspace to US (live: some listings return rsp_code 482 for US).
+    default_ship_to_country: str = Field(
+        default="",
+        description="Optional ISO 3166-1 alpha-2 default for AliExpress imports.",
+    )
+
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)

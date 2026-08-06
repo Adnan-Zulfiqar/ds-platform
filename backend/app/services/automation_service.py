@@ -172,7 +172,10 @@ class AutomationService(BaseService):
             from app.services.product_import import ProductImportService
 
             product = await ProductImportService(self.session).import_product(
-                external_id=str(external_id)
+                external_id=str(external_id),
+                ship_to_country=(
+                    str(config["ship_to_country"]) if config.get("ship_to_country") else None
+                ),
             )
             return f"Imported product {product.external_id}."
 
