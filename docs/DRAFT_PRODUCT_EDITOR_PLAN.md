@@ -37,7 +37,7 @@ Draft routes delegate writes to the same `ProductService` / import sync path.
 | 2 | `PATCH/GET /drafts/{id}`, refresh, versions | Done — on `develop` |
 | 3 | Editor shell + Overview / Description / SEO / Publish panel | Done (MVP) — on `develop` |
 | 4 | Media + structured variants | **Done (MVP)** — migration `0016`; reorder/featured/alt/add-URL/remove; variant sell price / merchant SKU / enable; sync preserves merchant fields |
-| 5 | Pricing / inventory / shipping | Pending |
+| 5 | Pricing / inventory / shipping | **Done (MVP)** — Decimal pricing workspace API; inventory freshness labels; shipping package fields (`0017`) |
 | 6 | AI Studio proposals + full readiness | Pending (basic readiness sidebar exists) |
 | 7 | Idempotent publish UX polish | Partial — Publish panel calls existing Shopify publish |
 | 8 | Bulk tools + live E2E verification | Pending |
@@ -48,6 +48,13 @@ Draft routes delegate writes to the same `ProductService` / import sync path.
 - Option axes are parsed from flattened `label` for display; renaming individual
   option keys as a matrix editor is not built.
 - Barcode and weight/dimensions columns not added.
+
+### Stage 5 limitations (honest)
+
+- FX conversion is identity (no live rate feed).
+- Freight quotes usually absent from product detail — UI shows “Shipping cost unavailable”.
+- No inventory buffer / reserved / Shopify-on-hand columns yet.
+- Catalogue `PricingEngine` product-level apply still separate; draft tab uses variant apply.
 
 ## Terminology
 

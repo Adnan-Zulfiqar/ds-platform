@@ -475,6 +475,17 @@ remain incomplete.
 **Fix:** continue Stages 4 polish + Stages 5–8 per
 [DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md).
 
+### M23 — Draft pricing FX and freight quotes incomplete
+
+Stage 5 Decimal workspace computes profit/margin/break-even and warns when
+shipping is unavailable. FX `convert_currency` remains identity; AliExpress
+product detail usually has no freight amount, so `shipping_cost` stays null.
+
+**Impact:** Merchants see honest “unavailable” freight, but cannot yet land
+true destination quotes or converted-currency costs.
+**Trigger:** before publish readiness treats shipping as a hard block by policy.
+**Fix:** wire FX feed + freight option fetch; extend readiness policy.
+
 ### M19 — Phase 9 AI output is StubProvider-only (no live model key)
 
 Stages 1–3 exercise the full provider → prompt → product-version pipeline, but

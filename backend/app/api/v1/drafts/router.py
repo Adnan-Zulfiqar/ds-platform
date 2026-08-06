@@ -19,6 +19,7 @@ from app.api.deps import DbSession, RequireAdmin, RequireViewer
 from app.models.product import Product
 from app.repositories.product import ProductRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
+from app.schemas.draft_pricing import DraftPricingApplyRequest, DraftPricingWorkspaceRead
 from app.schemas.product import (
     ProductDetailRead,
     ProductImageCreateRequest,
@@ -31,6 +32,7 @@ from app.schemas.product import (
     ProductVariantUpdateRequest,
     ProductVersionRead,
 )
+from app.services.pricing_engine import PricingEngine
 from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
@@ -243,3 +245,45 @@ async def update_draft_variant(
         product_id, variant_id, payload.model_dump(exclude_unset=True)
     )
     return _to_detail(product)
+
+
+@router.get(
+    "/{product_id}/pricing",
+    response_model=DraftPricingWorkspaceRead,
+    summary="Decimal-safe draft pricing workspace",
+)
+async def get_draft_pricing(
+    session: DbSession,
+    _authorized: RequireViewer,
+    product_id: Annotated[uuid.UUID, Path()],
+) -> DraftPricingWorkspaceRead:
+    """Profit/margin rows — authoritative math is server-side Decimal."""
+    return await PricingEngine(session).draft_workspace(product_id)
+
+
+@router.post(
+    "/{product_id}/pricing/preview",
+    response_model=DraftPricingWorkspaceRead,
+    summary="Preview draft variant pricing changes without writing",
+)
+async def preview_draft_pricing(
+    session: DbSession,
+    _authorized: RequireViewer,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: DraftPricingApplyRequest,
+) -> DraftPricingWorkspaceRead:
+    return await PricingEngine(session).draft_workspace(product_id, propose=payload)
+
+
+@router.post(
+    "/{product_id}/pricing/apply",
+    response_model=DraftPricingWorkspaceRead,
+    summary="Apply bulk pricing to draft variants",
+)
+async def apply_draft_pricing(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: DraftPricingApplyRequest,
+) -> DraftPricingWorkspaceRead:
+    return await PricingEngine(session).apply_draft_variant_pricing(product_id, payload)

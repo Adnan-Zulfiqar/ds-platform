@@ -263,8 +263,9 @@ synced). Plans:
 | 1 | Clickable draft rows + Edit / Publish actions | **Done on `develop`** |
 | 2 | Draft write APIs (reuse PE `ProductService`) | **Done on `develop`** |
 | 3 | Editor shell + Overview / Description / SEO / Publish panel | **Done (MVP) on `develop`** |
-| 4 | Media + structured variants | **Done (MVP) on `cursor/draft-product-editor`** |
-| 5–8 | Pricing, AI Studio, publish polish, E2E | Pending |
+| 4 | Media + structured variants | **Done (MVP) on `develop`** |
+| 5 | Pricing / inventory / shipping | **Done (MVP) on `cursor/draft-product-editor`** |
+| 6–8 | AI Studio, publish polish, E2E | Pending |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.

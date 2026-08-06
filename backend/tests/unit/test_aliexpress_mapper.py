@@ -141,6 +141,16 @@ class TestProductMapping:
         values = map_product(ProductDetail.model_validate({}))
         assert values["stock_quantity"] == 0
         assert values["cost_price_min"] is None
+        assert values["shipping_cost"] is None
+        assert values["package_weight_kg"] is None
+
+    def test_package_and_logistics_are_mapped(self, product: ProductDetail) -> None:
+        values = map_product(product)
+        # Fixture may or may not include package DTO — keys must always exist.
+        assert "package_weight_kg" in values
+        assert "delivery_time_days" in values
+        assert "ship_to_country" in values
+        assert values["shipping_cost"] is None
 
 
 class TestVariantMapping:

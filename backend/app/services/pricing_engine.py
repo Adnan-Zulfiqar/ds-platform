@@ -21,6 +21,12 @@ from app.models.product import Product
 from app.repositories.pricing import PriceChangeRepository, PricingRuleRepository
 from app.repositories.product import ProductRepository
 from app.schemas.common import ListQueryParams
+from app.schemas.draft_pricing import (
+    DraftPricingApplyMode,
+    DraftPricingApplyRequest,
+    DraftPricingWorkspaceRead,
+    DraftVariantPricingRow,
+)
 from app.schemas.pricing import (
     PricePreviewItem,
     PricePreviewResponse,
@@ -39,6 +45,11 @@ _SCOPE_RANK = {
 }
 
 _MONEY_QUANT = Decimal("0.0001")
+_CENT_QUANT = Decimal("0.01")
+_FX_IDENTITY_NOTE = (
+    "Currency conversion is identity until a live FX rate feed is wired — "
+    "converted cost equals supplier cost and conversionRateTimestamp is null."
+)
 
 
 def convert_currency(
@@ -273,3 +284,216 @@ class PricingEngine(BaseService):
             raise ValidationError("fixed_markup requires markup_fixed.")
         if payload.strategy is PricingStrategy.TIERED and not payload.tiers:
             raise ValidationError("tiered strategy requires at least one tier.")
+
+    async def draft_workspace(
+        self,
+        product_id: uuid.UUID,
+        *,
+        handling_cost: Decimal = Decimal("0"),
+        fee_percent: Decimal = Decimal("0"),
+        propose: DraftPricingApplyRequest | None = None,
+    ) -> DraftPricingWorkspaceRead:
+        """Decimal-safe per-variant margin rows for the draft Pricing tab."""
+        if handling_cost < 0 or fee_percent < 0:
+            raise ValidationError("Handling cost and fee percent must be non-negative.")
+        product = await self.products.get_by_id_or_raise(product_id)
+        shipping = product.shipping_cost
+        shipping_available = shipping is not None
+        shipping_warning = (
+            None
+            if shipping_available
+            else "Shipping cost unavailable — do not treat missing freight as zero."
+        )
+        rule_name: str | None = None
+        _, rule = await self._propose(product)
+        if rule is not None:
+            rule_name = rule.name
+
+        rows: list[DraftVariantPricingRow] = []
+        for variant in product.variants:
+            proposed = (
+                self._propose_variant_sell(
+                    cost=variant.cost_price,
+                    current=variant.sell_price,
+                    request=propose,
+                )
+                if propose is not None
+                else None
+            )
+            rows.append(
+                self._variant_row(
+                    variant_id=variant.id,
+                    label=variant.label,
+                    is_enabled=variant.is_enabled,
+                    supplier_cost=variant.cost_price,
+                    supplier_currency=variant.currency or product.currency,
+                    sell_price=variant.sell_price,
+                    compare_at_price=variant.compare_at_price,
+                    proposed_sell_price=proposed,
+                    shipping_cost=shipping,
+                    handling_cost=handling_cost,
+                    fee_percent=fee_percent,
+                    pricing_rule_source=rule_name,
+                )
+            )
+        return DraftPricingWorkspaceRead(
+            product_id=product.id,
+            currency=product.currency,
+            product_sell_price=product.sell_price,
+            cost_price_min=product.cost_price_min,
+            cost_price_max=product.cost_price_max,
+            shipping_cost=shipping,
+            shipping_cost_available=shipping_available,
+            shipping_warning=shipping_warning,
+            fx_note=_FX_IDENTITY_NOTE,
+            variants=rows,
+        )
+
+    async def apply_draft_variant_pricing(
+        self,
+        product_id: uuid.UUID,
+        request: DraftPricingApplyRequest,
+    ) -> DraftPricingWorkspaceRead:
+        """Write merchant sell/compare-at prices on variants (supplier cost untouched)."""
+        product = await self.products.get_by_id_or_raise(product_id)
+        target_ids = set(request.variant_ids) if request.variant_ids else None
+        for variant in product.variants:
+            if target_ids is not None and variant.id not in target_ids:
+                continue
+            if not variant.is_enabled and target_ids is None:
+                continue
+            if request.mode is DraftPricingApplyMode.SET_COMPARE_AT:
+                if request.compare_at_price is None:
+                    raise ValidationError("set_compare_at requires compare_at_price.")
+                if request.compare_at_price < 0:
+                    raise ValidationError("compare_at_price must be non-negative.")
+                variant.compare_at_price = self._quantize(
+                    request.compare_at_price, cents=request.round_to_cents
+                )
+                continue
+            proposed = self._propose_variant_sell(
+                cost=variant.cost_price,
+                current=variant.sell_price,
+                request=request,
+            )
+            if proposed is None:
+                continue
+            variant.sell_price = proposed
+        enabled_sells = [
+            v.sell_price for v in product.variants if v.is_enabled and v.sell_price is not None
+        ]
+        if enabled_sells:
+            product.sell_price = min(enabled_sells)
+        await self.session.flush()
+        return await self.draft_workspace(
+            product_id,
+            handling_cost=request.handling_cost,
+            fee_percent=request.fee_percent,
+        )
+
+    def _propose_variant_sell(
+        self,
+        *,
+        cost: Decimal | None,
+        current: Decimal | None,
+        request: DraftPricingApplyRequest,
+    ) -> Decimal | None:
+        if request.mode is DraftPricingApplyMode.SET_SELL_PRICE:
+            if request.sell_price is None:
+                raise ValidationError("set_sell_price requires sell_price.")
+            if request.sell_price < 0:
+                raise ValidationError("sell_price must be non-negative.")
+            return self._quantize(request.sell_price, cents=request.round_to_cents)
+        if cost is None:
+            return None
+        if request.mode is DraftPricingApplyMode.PERCENTAGE_MARKUP:
+            if request.markup_percent is None:
+                raise ValidationError("percentage_markup requires markup_percent.")
+            price = cost * (Decimal("1") + request.markup_percent / Decimal("100"))
+        elif request.mode is DraftPricingApplyMode.FIXED_MARKUP:
+            if request.markup_fixed is None:
+                raise ValidationError("fixed_markup requires markup_fixed.")
+            price = cost + request.markup_fixed
+        elif request.mode is DraftPricingApplyMode.SET_COMPARE_AT:
+            return current
+        else:
+            raise ValidationError(f"Unsupported pricing mode: {request.mode}")
+        if price < 0:
+            raise ValidationError("Proposed sell price must be non-negative.")
+        return self._quantize(price, cents=request.round_to_cents)
+
+    def _variant_row(
+        self,
+        *,
+        variant_id: uuid.UUID,
+        label: str | None,
+        is_enabled: bool,
+        supplier_cost: Decimal | None,
+        supplier_currency: str | None,
+        sell_price: Decimal | None,
+        compare_at_price: Decimal | None,
+        proposed_sell_price: Decimal | None,
+        shipping_cost: Decimal | None,
+        handling_cost: Decimal,
+        fee_percent: Decimal,
+        pricing_rule_source: str | None,
+    ) -> DraftVariantPricingRow:
+        converted = (
+            convert_currency(
+                supplier_cost, from_currency=supplier_currency, to_currency=supplier_currency
+            )
+            if supplier_cost is not None
+            else None
+        )
+        shipping_available = shipping_cost is not None
+        # Missing freight is excluded from landed-cost math (not invented as zero).
+        freight_component = shipping_cost if shipping_cost is not None else Decimal("0")
+        landed_extra = handling_cost + freight_component
+        fee_base = proposed_sell_price if proposed_sell_price is not None else sell_price
+        fee_estimate = (
+            (fee_base * fee_percent / Decimal("100")).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+            if fee_base is not None
+            else Decimal("0")
+        )
+        break_even: Decimal | None = None
+        profit: Decimal | None = None
+        margin: Decimal | None = None
+        if converted is not None:
+            break_even = (converted + landed_extra + fee_estimate).quantize(
+                _MONEY_QUANT, rounding=ROUND_HALF_UP
+            )
+            effective = proposed_sell_price if proposed_sell_price is not None else sell_price
+            if effective is not None:
+                profit = (effective - converted - landed_extra - fee_estimate).quantize(
+                    _MONEY_QUANT, rounding=ROUND_HALF_UP
+                )
+                if effective > 0:
+                    margin = (profit / effective * Decimal("100")).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
+        return DraftVariantPricingRow(
+            variant_id=variant_id,
+            label=label,
+            is_enabled=is_enabled,
+            supplier_cost=supplier_cost,
+            supplier_currency=supplier_currency,
+            converted_cost=converted,
+            conversion_rate_timestamp=None,
+            supplier_shipping_cost=shipping_cost,
+            shipping_cost_available=shipping_available,
+            handling_cost=handling_cost.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
+            fee_estimate=fee_estimate,
+            sell_price=sell_price,
+            compare_at_price=compare_at_price,
+            proposed_sell_price=proposed_sell_price,
+            profit=profit,
+            margin_percent=margin,
+            break_even_price=break_even,
+            pricing_rule_source=pricing_rule_source,
+            manual_override=sell_price is not None,
+        )
+
+    @staticmethod
+    def _quantize(amount: Decimal, *, cents: bool) -> Decimal:
+        quant = _CENT_QUANT if cents else _MONEY_QUANT
+        return amount.quantize(quant, rounding=ROUND_HALF_UP)

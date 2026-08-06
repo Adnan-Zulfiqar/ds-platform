@@ -231,7 +231,16 @@ export interface Product {
   currency: string | null;
   costPriceMin: string | null;
   costPriceMax: string | null;
+  sellPrice: string | null;
   stockQuantity: number;
+  packageWeightKg: string | null;
+  packageLengthCm: number | null;
+  packageWidthCm: number | null;
+  packageHeightCm: number | null;
+  deliveryTimeDays: number | null;
+  shipToCountry: string | null;
+  shippingCost: string | null;
+  warehouseOrigin: string | null;
   supplierName: string | null;
   rating: string | null;
   reviewCount: number | null;
@@ -275,6 +284,59 @@ export interface ProductDetail extends Product {
   supplierDescription: string | null;
   supplierTitle: string | null;
   supplierBrand: string | null;
+}
+
+export type DraftPricingApplyMode =
+  | "percentage_markup"
+  | "fixed_markup"
+  | "set_sell_price"
+  | "set_compare_at";
+
+export interface DraftVariantPricingRow {
+  variantId: string;
+  label: string | null;
+  isEnabled: boolean;
+  supplierCost: string | null;
+  supplierCurrency: string | null;
+  convertedCost: string | null;
+  conversionRateTimestamp: string | null;
+  supplierShippingCost: string | null;
+  shippingCostAvailable: boolean;
+  handlingCost: string;
+  feeEstimate: string;
+  sellPrice: string | null;
+  compareAtPrice: string | null;
+  proposedSellPrice: string | null;
+  profit: string | null;
+  marginPercent: string | null;
+  breakEvenPrice: string | null;
+  pricingRuleSource: string | null;
+  manualOverride: boolean;
+}
+
+export interface DraftPricingWorkspace {
+  productId: string;
+  currency: string | null;
+  productSellPrice: string | null;
+  costPriceMin: string | null;
+  costPriceMax: string | null;
+  shippingCost: string | null;
+  shippingCostAvailable: boolean;
+  shippingWarning: string | null;
+  fxNote: string;
+  variants: DraftVariantPricingRow[];
+}
+
+export interface DraftPricingApplyPayload {
+  mode: DraftPricingApplyMode;
+  markupPercent?: string;
+  markupFixed?: string;
+  sellPrice?: string;
+  compareAtPrice?: string;
+  variantIds?: string[];
+  roundToCents?: boolean;
+  handlingCost?: string;
+  feePercent?: string;
 }
 
 /** PATCH body for merchant draft/product edits — only sent fields change. */

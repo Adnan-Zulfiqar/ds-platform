@@ -12,6 +12,10 @@ production release.
 
 ### Added
 
+- **Draft Product Editor Stage 5** — Pricing workspace (`GET/POST …/pricing`)
+  with Decimal profit/margin/break-even; inventory freshness + supplier stock
+  labels; shipping package/logistics columns (migration `0017`). Missing
+  freight is never coerced to zero.
 - **Draft Product Editor Stage 4** — Media reorder/featured/alt text/add-by-URL/
   remove; variant merchant SKU, sell/compare-at prices, enable/disable.
   Migration `0016`. Supplier sync preserves merchant image order/alt and
