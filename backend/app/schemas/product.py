@@ -38,8 +38,11 @@ from app.schemas.base import CamelCaseModel
 class ProductImageRead(CamelCaseModel):
     """An image, with the ordering that decides which one leads a listing."""
 
+    id: uuid.UUID
     url: str
     position: int
+    alt_text: str | None = None
+    is_supplier: bool = True
 
 
 class ProductVariantRead(CamelCaseModel):
@@ -59,6 +62,38 @@ class ProductVariantRead(CamelCaseModel):
     currency: str | None = None
     stock_quantity: int
     image_url: str | None = None
+    merchant_sku: str | None = None
+    sell_price: Decimal | None = None
+    compare_at_price: Decimal | None = None
+    is_enabled: bool = True
+
+
+class ProductImageCreateRequest(CamelCaseModel):
+    """Add a merchant image by URL (S3 upload lands later)."""
+
+    url: str = Field(min_length=8, max_length=1024)
+    alt_text: str | None = Field(default=None, max_length=512)
+
+
+class ProductImageUpdateRequest(CamelCaseModel):
+    alt_text: str | None = Field(default=None, max_length=512)
+
+
+class ProductImageReorderRequest(CamelCaseModel):
+    """Ordered image ids — index 0 becomes the featured image."""
+
+    image_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+class ProductVariantUpdateRequest(CamelCaseModel):
+    """Merchant edits to a single variant (supplier ids stay read-only)."""
+
+    label: str | None = Field(default=None, max_length=512)
+    merchant_sku: str | None = Field(default=None, max_length=128)
+    sell_price: Decimal | None = None
+    compare_at_price: Decimal | None = None
+    image_url: str | None = Field(default=None, max_length=1024)
+    is_enabled: bool | None = None
 
 
 class ProductRead(CamelCaseModel):
@@ -333,13 +368,17 @@ class ProductWorkspaceCounts(CamelCaseModel):
 __all__ = [
     "FeedProductRead",
     "ProductDetailRead",
+    "ProductImageCreateRequest",
     "ProductImageRead",
+    "ProductImageReorderRequest",
+    "ProductImageUpdateRequest",
     "ProductImportRead",
     "ProductImportRequest",
     "ProductOptimizeRequest",
     "ProductOptimizeResponse",
     "ProductRead",
     "ProductVariantRead",
+    "ProductVariantUpdateRequest",
     "ProductVersionRead",
     "ProductWorkspaceCounts",
 ]

@@ -462,6 +462,19 @@ Inventory/Pricing as the published catalogue.
 **Fix:** reuse `list_published` / `list_drafts` (or a shared publication filter)
 in inventory and pricing list paths; update Playwright accordingly.
 
+### M22 — Draft editor Stage 4 media/variants are MVP, not full workspace
+
+Stage 4 shipped media reorder/featured/alt/add-by-URL/remove and variant
+merchant SKU / sell / compare-at / enable (migration `0016`). Still missing vs
+the full brief: binary upload/crop, drag-and-drop DnD, structured option-axis
+rename matrix, barcode/weight/dimensions columns, bulk variant actions.
+
+**Impact:** Merchants can prepare basic listings; advanced media/variant ops
+remain incomplete.
+**Trigger:** before claiming Draft Product Editor Stages 4–8 complete.
+**Fix:** continue Stages 4 polish + Stages 5–8 per
+[DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md).
+
 ### M19 — Phase 9 AI output is StubProvider-only (no live model key)
 
 Stages 1–3 exercise the full provider → prompt → product-version pipeline, but

@@ -11,12 +11,16 @@ documentation. No code changed while writing this document.
 
 ## 0. Stage progress
 
-**Draft Product Editor Stages 1–3 (2026-08-06, `cursor/draft-product-editor`).**
-Drafts vs Products publication split (synced `StoreListing`); Drafts list with
-Edit Draft → `/drafts/{id}`; editor shell with Overview/Description/SEO Save
-Draft via `PATCH /api/v1/drafts/{id}` (delegates to `ProductService`); Publish
-to Store panel. Media/variants/pricing/AI Studio still pending — see
-[DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md).
+**Draft Product Editor Stages 0–3 (2026-08-06).** Merged to `develop`
+(`da83d52`): Drafts vs Products by synced `StoreListing`; editor shell with
+Overview/Description/SEO; Save Draft / Refresh / Publish panel.
+
+**Draft Product Editor Stage 4 MVP (2026-08-06).** Media reorder/featured/alt/
+add-by-URL/remove; variant merchant SKU / sell / compare-at / enable;
+migration `0016`; sync preserves merchant media order/alt and variant pricing
+fields. Still pending vs full brief: binary upload, DnD, option-axis matrix,
+barcode/weight/dimensions, Stages 5–8 — see
+[DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md) and M22.
 
 **Stage 1 — AliExpress description import and sanitization: done (2026-08-03).**
 Closes the "Full description" / "HTML description" / "Plain-text

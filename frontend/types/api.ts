@@ -201,11 +201,18 @@ export interface ProductVariant {
   currency: string | null;
   stockQuantity: number;
   imageUrl: string | null;
+  merchantSku: string | null;
+  sellPrice: string | null;
+  compareAtPrice: string | null;
+  isEnabled: boolean;
 }
 
 export interface ProductImage {
+  id: string;
   url: string;
   position: number;
+  altText: string | null;
+  isSupplier: boolean;
 }
 
 /** Where a product sits relative to AI optimisation. */

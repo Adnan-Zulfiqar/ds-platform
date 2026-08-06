@@ -83,16 +83,22 @@ class ShopifySyncService(BaseService):
         for variant in product.variants:
             if getattr(variant, "deleted_at", None) is not None:
                 continue
-            price = variant.list_price or product.sell_price
-            variants_payload.append(
-                {
-                    "sku": variant.external_variant_id[:64],
-                    "price": str(price or "0"),
-                    "inventory_management": "shopify",
-                    "inventory_quantity": int(variant.stock_quantity or 0),
-                    "option1": variant.label or "Default",
-                }
-            )
+            if getattr(variant, "is_enabled", True) is False:
+                continue
+            # Merchant sell_price wins; list_price is supplier reference only.
+            price = getattr(variant, "sell_price", None) or variant.list_price or product.sell_price
+            sku = (getattr(variant, "merchant_sku", None) or variant.external_variant_id)[:64]
+            entry: dict[str, Any] = {
+                "sku": sku,
+                "price": str(price or "0"),
+                "inventory_management": "shopify",
+                "inventory_quantity": int(variant.stock_quantity or 0),
+                "option1": variant.label or "Default",
+            }
+            compare_at = getattr(variant, "compare_at_price", None)
+            if compare_at is not None:
+                entry["compare_at_price"] = str(compare_at)
+            variants_payload.append(entry)
         if not variants_payload:
             variants_payload.append(
                 {
@@ -104,11 +110,17 @@ class ShopifySyncService(BaseService):
                 }
             )
 
-        images = [
-            {"src": image.url}
-            for image in getattr(product, "images", []) or []
-            if getattr(image, "url", None)
-        ]
+        images = []
+        for image in getattr(product, "images", []) or []:
+            if not getattr(image, "url", None):
+                continue
+            if getattr(image, "deleted_at", None) is not None:
+                continue
+            payload_img: dict[str, Any] = {"src": image.url}
+            alt = getattr(image, "alt_text", None)
+            if alt:
+                payload_img["alt"] = alt
+            images.append(payload_img)
 
         body = {
             "product": {

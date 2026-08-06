@@ -217,14 +217,29 @@ class ProductVariantRepository(TenantScopedRepository[ProductVariant]):
         existing = {v.external_variant_id: v for v in await self.list_for_product(product_id)}
         seen: set[str] = set()
 
+        # Merchant listing fields are never present in the supplier map and must
+        # not be wiped if a caller accidentally includes them — strip to the
+        # supplier-owned keys only on update.
+        supplier_keys = (
+            "external_variant_id",
+            "external_attributes",
+            "label",
+            "cost_price",
+            "list_price",
+            "currency",
+            "stock_quantity",
+            "image_url",
+        )
+
         for values in mapped:
             external_variant_id = values["external_variant_id"]
             seen.add(external_variant_id)
             current = existing.get(external_variant_id)
+            supplier_values = {key: values[key] for key in supplier_keys if key in values}
             if current is None:
-                await self.create(product_id=product_id, **values)
+                await self.create(product_id=product_id, **supplier_values)
             else:
-                await self.update(current, **values)
+                await self.update(current, **supplier_values)
 
         for external_variant_id, row in existing.items():
             if external_variant_id not in seen:
@@ -266,19 +281,29 @@ class ProductImageRepository(TenantScopedRepository[ProductImage]):
         """
         existing = {img.url: img for img in await self.list_for_product(product_id)}
         seen: set[str] = set()
+        next_position = max((img.position for img in existing.values()), default=-1) + 1
 
         for values in mapped:
             url = values["url"]
             seen.add(url)
             current = existing.get(url)
             if current is None:
-                await self.create(product_id=product_id, **values)
-            else:
-                await self.update(current, position=values["position"])
+                # Append new supplier images after the merchant's current order
+                # rather than resetting every position from the supplier feed.
+                await self.create(
+                    product_id=product_id,
+                    url=url,
+                    position=next_position,
+                    is_supplier=True,
+                )
+                next_position += 1
+            # Existing rows: leave position and alt_text alone — merchant edit
+            # protection for the Media tab (Stage 4).
 
         for url, row in existing.items():
-            if url not in seen:
+            if url not in seen and row.is_supplier:
                 await self.session.delete(row)
+            # Merchant-added URLs are never removed by a supplier refresh.
         await self.session.flush()
 
 

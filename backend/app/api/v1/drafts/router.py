@@ -21,10 +21,14 @@ from app.repositories.product import ProductRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.product import (
     ProductDetailRead,
+    ProductImageCreateRequest,
     ProductImageRead,
+    ProductImageReorderRequest,
+    ProductImageUpdateRequest,
     ProductRead,
     ProductUpdateRequest,
     ProductVariantRead,
+    ProductVariantUpdateRequest,
     ProductVersionRead,
 )
 from app.services.product import ProductService
@@ -141,3 +145,101 @@ async def list_draft_versions(
         size=params.size,
         total_items=total,
     )
+
+
+@router.post(
+    "/{product_id}/images",
+    response_model=ProductDetailRead,
+    summary="Add a merchant image URL to a draft",
+)
+async def add_draft_image(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: ProductImageCreateRequest,
+) -> ProductDetailRead:
+    product = await ProductService(session).add_image(
+        product_id, url=payload.url, alt_text=payload.alt_text
+    )
+    return _to_detail(product)
+
+
+@router.patch(
+    "/{product_id}/images/reorder",
+    response_model=ProductDetailRead,
+    summary="Reorder draft images (index 0 is featured)",
+)
+async def reorder_draft_images(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: ProductImageReorderRequest,
+) -> ProductDetailRead:
+    product = await ProductService(session).reorder_images(product_id, payload.image_ids)
+    return _to_detail(product)
+
+
+@router.patch(
+    "/{product_id}/images/{image_id}",
+    response_model=ProductDetailRead,
+    summary="Update draft image metadata",
+)
+async def update_draft_image(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    image_id: Annotated[uuid.UUID, Path()],
+    payload: ProductImageUpdateRequest,
+) -> ProductDetailRead:
+    product = await ProductService(session).update_image(
+        product_id, image_id, payload.model_dump(exclude_unset=True)
+    )
+    return _to_detail(product)
+
+
+@router.delete(
+    "/{product_id}/images/{image_id}",
+    response_model=ProductDetailRead,
+    summary="Remove an image from the draft listing",
+)
+async def remove_draft_image(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    image_id: Annotated[uuid.UUID, Path()],
+) -> ProductDetailRead:
+    product = await ProductService(session).remove_image(product_id, image_id)
+    return _to_detail(product)
+
+
+@router.post(
+    "/{product_id}/images/{image_id}/restore",
+    response_model=ProductDetailRead,
+    summary="Restore a soft-deleted draft image",
+)
+async def restore_draft_image(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    image_id: Annotated[uuid.UUID, Path()],
+) -> ProductDetailRead:
+    product = await ProductService(session).restore_image(product_id, image_id)
+    return _to_detail(product)
+
+
+@router.patch(
+    "/{product_id}/variants/{variant_id}",
+    response_model=ProductDetailRead,
+    summary="Update a draft variant's merchant fields",
+)
+async def update_draft_variant(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    variant_id: Annotated[uuid.UUID, Path()],
+    payload: ProductVariantUpdateRequest,
+) -> ProductDetailRead:
+    product = await ProductService(session).update_variant(
+        product_id, variant_id, payload.model_dump(exclude_unset=True)
+    )
+    return _to_detail(product)

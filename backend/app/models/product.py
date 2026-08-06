@@ -356,6 +356,13 @@ class ProductVariant(TenantScopedBase):
     stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    #: Merchant listing SKU — never overwrite ``external_variant_id``.
+    merchant_sku: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Channel selling price. Distinct from ``list_price`` (supplier reference).
+    sell_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    compare_at_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
     product: Mapped[Product] = relationship(back_populates="variants")
 
 
@@ -385,6 +392,11 @@ class ProductImage(TenantScopedBase):
 
     #: Ordering is meaningful: position 0 is the image a listing leads with.
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    alt_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: Supplier-imported images may be refreshed; merchant-added URLs are not
+    #: deleted or reordered by sync.
+    is_supplier: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     product: Mapped[Product] = relationship(back_populates="images")
 
