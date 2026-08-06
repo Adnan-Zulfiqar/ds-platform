@@ -133,6 +133,38 @@ class AliExpressResponseError(AliExpressError):
     message = "AliExpress returned an unexpected response."
 
 
+class AliExpressProductUnavailableError(AliExpressError):
+    """The listing is missing, removed, or not visible to this account.
+
+    Distinct from a generic platform 404 so the UI can offer reconnect /
+    open-on-AliExpress actions instead of implying our product row is gone.
+    """
+
+    code = "aliexpress_product_unavailable"
+    message = (
+        "This AliExpress listing is unavailable, removed, restricted, or not "
+        "accessible through your connected AliExpress account."
+    )
+    status_code = 404
+
+
+class AliExpressShipToProhibitedError(AliExpressError):
+    """AliExpress refused product detail for the requested ship-to country.
+
+    Live observation (2026-08): rsp_code 482 / SHIP_TO_COUNTRY_PROHIBITED
+    returns an empty product envelope. Mapping that to a generic "not found"
+    hid the real fix (retry with another ship-to country).
+    """
+
+    code = "aliexpress_ship_to_prohibited"
+    message = (
+        "This listing cannot be imported for the selected ship-to country. "
+        "Try another destination country, or open the listing on AliExpress "
+        "to confirm where it ships."
+    )
+    status_code = 422
+
+
 class AliExpressOAuthStateError(AliExpressError):
     """The OAuth ``state`` parameter was missing, unknown, or expired.
 
@@ -152,8 +184,10 @@ __all__ = [
     "AliExpressError",
     "AliExpressNotConnectedError",
     "AliExpressOAuthStateError",
+    "AliExpressProductUnavailableError",
     "AliExpressRateLimitError",
     "AliExpressResponseError",
+    "AliExpressShipToProhibitedError",
     "AliExpressTimeoutError",
     "AliExpressTokenExpiredError",
     "AliExpressUnavailableError",

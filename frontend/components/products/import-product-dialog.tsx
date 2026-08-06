@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Loader2, PackagePlus } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,10 +16,32 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ApiError } from "@/lib/api-client";
 import { useImportProduct } from "@/services/products";
 
 /** Matches the numeric id in an AliExpress listing URL. */
 const ITEM_ID_IN_URL = /\/item\/(\d+)/;
+
+const SHIP_TO_OPTIONS = [
+  { value: "US", label: "United States (US)" },
+  { value: "GB", label: "United Kingdom (GB)" },
+  { value: "CA", label: "Canada (CA)" },
+  { value: "AU", label: "Australia (AU)" },
+  { value: "DE", label: "Germany (DE)" },
+  { value: "FR", label: "France (FR)" },
+  { value: "NL", label: "Netherlands (NL)" },
+  { value: "IT", label: "Italy (IT)" },
+  { value: "ES", label: "Spain (ES)" },
+  { value: "PL", label: "Poland (PL)" },
+] as const;
+
+type ImportFeedback = {
+  title: string;
+  message: string;
+  action: string;
+  requestId: string | null;
+  listingUrl: string | null;
+};
 
 /**
  * Accept either a bare product ID or a pasted listing URL.
@@ -48,6 +70,87 @@ export function extractProductId(value: string): string | null {
   return runs?.length === 1 ? (runs[0] ?? null) : null;
 }
 
+function feedbackFromError(
+  error: unknown,
+  productId: string | null,
+): ImportFeedback {
+  const listingUrl = productId
+    ? `https://www.aliexpress.com/item/${productId}.html`
+    : null;
+
+  if (error instanceof ApiError) {
+    const base = {
+      message: error.message,
+      requestId: error.requestId,
+      listingUrl,
+    };
+
+    switch (error.code) {
+      case "aliexpress_ship_to_prohibited":
+        return {
+          ...base,
+          title: "Ship-to country not allowed",
+          action:
+            "Change Ship to country below and try again, or open the listing on AliExpress to see where it ships.",
+        };
+      case "aliexpress_product_unavailable":
+        return {
+          ...base,
+          title: "Listing unavailable",
+          action:
+            "Open the listing on AliExpress, reconnect AliExpress if needed, or import another product.",
+        };
+      case "aliexpress_not_connected":
+        return {
+          ...base,
+          title: "AliExpress not connected",
+          action: "Connect AliExpress under Integrations, then retry.",
+        };
+      case "aliexpress_token_expired":
+      case "aliexpress_auth_failed":
+      case "aliexpress_reauth_required":
+        return {
+          ...base,
+          title: "AliExpress connection expired",
+          action: "Reconnect AliExpress under Integrations, then retry.",
+        };
+      case "aliexpress_rate_limited":
+        return {
+          ...base,
+          title: "Rate limited",
+          action: "Wait a moment, then try again.",
+        };
+      case "aliexpress_unavailable":
+      case "aliexpress_timeout":
+        return {
+          ...base,
+          title: "AliExpress temporarily unavailable",
+          action: "Try again in a few minutes.",
+        };
+      case "validation_error":
+        return {
+          ...base,
+          title: "Invalid product ID or URL",
+          action: "Paste a bare AliExpress product ID or the full listing URL.",
+        };
+      default:
+        return {
+          ...base,
+          title: "Import failed",
+          action: "Try again. If it keeps failing, use the reference ID below.",
+        };
+    }
+  }
+
+  return {
+    title: "Import failed",
+    message: error instanceof Error ? error.message : "The import failed.",
+    action: "Try again, or import another product.",
+    requestId: null,
+    listingUrl,
+  };
+}
+
 /**
  * Import a product by its AliExpress identifier.
  *
@@ -59,38 +162,42 @@ export function extractProductId(value: string): string | null {
 export function ImportProductDialog() {
   const [open, setOpen] = useState(false);
   const [externalId, setExternalId] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
+  const [shipToCountry, setShipToCountry] = useState("US");
+  const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
 
   const importProduct = useImportProduct();
 
   function reset() {
     setExternalId("");
-    setFormError(null);
+    setShipToCountry("US");
+    setFeedback(null);
     importProduct.reset();
   }
 
   async function handleImport() {
-    setFormError(null);
+    setFeedback(null);
 
     const identifier = extractProductId(externalId);
     if (!identifier) {
-      setFormError(
-        "Enter an AliExpress product ID, or paste the full listing URL.",
-      );
+      setFeedback({
+        title: "Invalid product ID or URL",
+        message: "Enter an AliExpress product ID, or paste the full listing URL.",
+        action: "Use a bare ID (digits only) or a URL containing /item/<id>.",
+        requestId: null,
+        listingUrl: null,
+      });
       return;
     }
 
     try {
-      await importProduct.mutateAsync({ externalId: identifier });
+      await importProduct.mutateAsync({
+        externalId: identifier,
+        shipToCountry,
+      });
       setOpen(false);
       reset();
     } catch (error) {
-      // The server's message is shown rather than a generic one. It
-      // distinguishes "not connected" from "product not found" from "already
-      // importing", and each has a different next step for the user.
-      const message =
-        error instanceof Error ? error.message : "The import failed.";
-      setFormError(message);
+      setFeedback(feedbackFromError(error, identifier));
     }
   }
 
@@ -120,9 +227,30 @@ export function ImportProductDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        {formError ? (
+        {feedback ? (
           <Alert variant="destructive">
-            <AlertDescription>{formError}</AlertDescription>
+            <AlertTitle>{feedback.title}</AlertTitle>
+            <AlertDescription className="space-y-2">
+              <p>{feedback.message}</p>
+              <p className="text-sm">{feedback.action}</p>
+              {feedback.requestId ? (
+                <p className="font-mono text-xs opacity-80">
+                  Reference: {feedback.requestId}
+                </p>
+              ) : null}
+              {feedback.listingUrl ? (
+                <p>
+                  <a
+                    href={feedback.listingUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    Open listing on AliExpress
+                  </a>
+                </p>
+              ) : null}
+            </AlertDescription>
           </Alert>
         ) : null}
 
@@ -137,6 +265,27 @@ export function ImportProductDialog() {
           />
           <p className="text-sm text-muted-foreground">
             Paste either the product ID or the whole listing URL — both work.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="ship-to-country">Ship to country</Label>
+          <select
+            id="ship-to-country"
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            value={shipToCountry}
+            onChange={(event) => setShipToCountry(event.target.value)}
+            disabled={importProduct.isPending}
+          >
+            {SHIP_TO_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-sm text-muted-foreground">
+            Some listings are blocked for certain destinations. If import fails
+            with a ship-to error, try another country.
           </p>
         </div>
 

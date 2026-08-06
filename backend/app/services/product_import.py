@@ -21,8 +21,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ValidationError
-from app.integrations.aliexpress.catalog import parse_feed_products, parse_product_detail
+from app.core.exceptions import ValidationError
+from app.integrations.aliexpress.catalog import (
+    parse_feed_products,
+    parse_product_detail,
+    require_usable_product_detail,
+)
 from app.integrations.aliexpress.exceptions import AliExpressError
 from app.integrations.aliexpress.mapper import map_images, map_product, map_variants
 from app.integrations.aliexpress.service import AliExpressService
@@ -102,20 +106,17 @@ class ProductImportService(BaseService):
             payload = await self._fetch_product(
                 external_id, ship_to_country=ship_to_country, currency=currency
             )
-        except AliExpressError as exc:
-            await self._fail(record, code=type(exc).__name__, message=str(exc))
-            raise
-
-        detail = parse_product_detail(payload)
-        if detail is None or not detail.product_id:
-            # A well-formed envelope with no result. Normal during a refresh:
-            # products get delisted, and that is information rather than a fault.
-            await self._fail(
-                record,
-                code="product_not_found",
-                message="AliExpress returned no product for this identifier.",
+            # Inspect rsp_code before treating an empty envelope as "not found".
+            # Live: 482 SHIP_TO_COUNTRY_PROHIBITED returns {has_whole_sale:false}
+            # with no product_id — previously mislabeled as product not found.
+            detail = require_usable_product_detail(
+                payload,
+                detail=parse_product_detail(payload),
+                ship_to_country=ship_to_country,
             )
-            raise NotFoundError("Product not found on AliExpress.")
+        except AliExpressError as exc:
+            await self._fail(record, code=exc.code, message=str(exc))
+            raise
 
         values = map_product(detail)
         product = await self._upsert(values)

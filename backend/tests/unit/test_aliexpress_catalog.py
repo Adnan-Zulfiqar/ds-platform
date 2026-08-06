@@ -27,8 +27,14 @@ from app.integrations.aliexpress.catalog import (
     parse_feed_names,
     parse_feed_products,
     parse_product_detail,
+    product_detail_envelope_status,
+    require_usable_product_detail,
     to_decimal,
     to_int,
+)
+from app.integrations.aliexpress.exceptions import (
+    AliExpressProductUnavailableError,
+    AliExpressShipToProhibitedError,
 )
 
 pytestmark = pytest.mark.unit
@@ -404,6 +410,48 @@ class TestDefensiveParsing:
             }
         }
         assert parse_product_detail(payload) is None
+
+    def test_envelope_status_reads_ship_to_prohibited(self) -> None:
+        payload = {
+            "aliexpress_ds_product_get_response": {
+                "rsp_code": 482,
+                "rsp_msg": "SHIP_TO_COUNTRY_PROHIBITED",
+                "result": {"has_whole_sale": False},
+            }
+        }
+        assert product_detail_envelope_status(payload) == (
+            482,
+            "SHIP_TO_COUNTRY_PROHIBITED",
+        )
+        detail = parse_product_detail(payload)
+        assert detail is not None
+        assert detail.product_id is None
+        with pytest.raises(AliExpressShipToProhibitedError) as exc_info:
+            require_usable_product_detail(payload, detail=detail, ship_to_country="US")
+        assert exc_info.value.code == "aliexpress_ship_to_prohibited"
+
+    def test_require_usable_maps_item_not_found(self) -> None:
+        payload = {
+            "aliexpress_ds_product_get_response": {
+                "rsp_code": 605,
+                "rsp_msg": "ITEM_ID_NOT_FOUND",
+            }
+        }
+        with pytest.raises(AliExpressProductUnavailableError) as exc_info:
+            require_usable_product_detail(
+                payload,
+                detail=parse_product_detail(payload),
+                ship_to_country="US",
+            )
+        assert exc_info.value.code == "aliexpress_product_unavailable"
+
+    def test_require_usable_returns_a_valid_detail(self, product_payload: dict[str, Any]) -> None:
+        detail = require_usable_product_detail(
+            product_payload,
+            detail=parse_product_detail(product_payload),
+            ship_to_country="US",
+        )
+        assert detail.product_id is not None
 
     def test_an_empty_product_parses_without_raising(self) -> None:
         detail = ProductDetail.model_validate({})

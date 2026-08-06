@@ -502,6 +502,32 @@ def normalise_product_id(value: str) -> str | None:
     return None
 
 
+#: Observed AliExpress ``ds.product.get`` business codes that mean the listing
+#: itself is gone or not visible. Distinct from ship-to refusals (482).
+_PRODUCT_UNAVAILABLE_CODES = frozenset({605})
+
+#: Observed when the product exists but cannot be quoted for the requested
+#: ``ship_to_country``. Live capture: empty ``result`` with only
+#: ``has_whole_sale: false`` — easy to misread as "product not found".
+_SHIP_TO_PROHIBITED_CODES = frozenset({482})
+
+
+def product_detail_envelope_status(
+    payload: dict[str, Any],
+) -> tuple[int | None, str | None]:
+    """Read ``rsp_code`` / ``rsp_msg`` from a ``ds.product.get`` envelope.
+
+    Same role as ``orders.envelope_status``: an empty result alone does not say
+    *why* AliExpress refused the detail call.
+    """
+    body = payload.get("aliexpress_ds_product_get_response") or payload
+    if not isinstance(body, dict):
+        return None, None
+    code = to_int(body.get("rsp_code"))
+    message = body.get("rsp_msg")
+    return code, str(message) if message else None
+
+
 def parse_product_detail(payload: dict[str, Any]) -> ProductDetail | None:
     """Extract the product from a raw ``ds.product.get`` envelope.
 
@@ -509,12 +535,67 @@ def parse_product_detail(payload: dict[str, Any]) -> ProductDetail | None:
     longer exists answers ``rsp_code 605 ITEM_ID_NOT_FOUND`` with a well-formed
     envelope and no payload, which is a normal outcome during a catalogue
     refresh rather than an error.
+
+    Callers that need to distinguish *why* the result is empty must also read
+    :func:`product_detail_envelope_status` (or
+    :func:`require_usable_product_detail`) — a 482 ship-to refusal and a 605
+    missing item both look like "no product" here.
     """
     body = payload.get("aliexpress_ds_product_get_response") or payload
     result = body.get("result")
     if not isinstance(result, dict):
         return None
     return ProductDetail.model_validate(result)
+
+
+def require_usable_product_detail(
+    payload: dict[str, Any],
+    *,
+    detail: ProductDetail | None,
+    ship_to_country: str,
+) -> ProductDetail:
+    """Return ``detail`` when it can become a draft; otherwise raise typed error.
+
+    The only essential gate is a supplier ``product_id``. Optional fields
+    (images, SKUs, description) must not block draft creation — that is
+    enforced by the wire models, not here.
+    """
+    # Local import keeps catalog free of a hard cycle with exceptions at module
+    # load; exceptions already depend on core only.
+    from app.integrations.aliexpress.exceptions import (
+        AliExpressProductUnavailableError,
+        AliExpressShipToProhibitedError,
+    )
+
+    if detail is not None and detail.product_id:
+        return detail
+
+    code, message = product_detail_envelope_status(payload)
+    msg_upper = (message or "").upper()
+    details: dict[str, Any] = {
+        "ship_to_country": ship_to_country,
+    }
+    if message:
+        details["rsp_msg"] = message
+    if code is not None:
+        details["rsp_code"] = code
+
+    if code in _SHIP_TO_PROHIBITED_CODES or "SHIP_TO_COUNTRY_PROHIBITED" in msg_upper:
+        raise AliExpressShipToProhibitedError(
+            upstream_code=str(code) if code is not None else "SHIP_TO_COUNTRY_PROHIBITED",
+            details=details,
+        )
+
+    if code in _PRODUCT_UNAVAILABLE_CODES or "ITEM_ID_NOT_FOUND" in msg_upper:
+        raise AliExpressProductUnavailableError(
+            upstream_code=str(code) if code is not None else "ITEM_ID_NOT_FOUND",
+            details=details,
+        )
+
+    raise AliExpressProductUnavailableError(
+        upstream_code=str(code) if code is not None else None,
+        details=details,
+    )
 
 
 def parse_feed_products(payload: dict[str, Any]) -> list[FeedProduct]:
@@ -594,6 +675,8 @@ __all__ = [
     "parse_feed_names",
     "parse_feed_products",
     "parse_product_detail",
+    "product_detail_envelope_status",
+    "require_usable_product_detail",
     "to_decimal",
     "to_int",
 ]

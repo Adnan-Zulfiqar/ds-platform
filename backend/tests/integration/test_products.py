@@ -126,6 +126,24 @@ def not_found_handler(request: httpx.Request) -> httpx.Response:
     )
 
 
+def ship_to_prohibited_handler(request: httpx.Request) -> httpx.Response:
+    """Live shape for rsp_code 482: empty-ish result, no product_id."""
+    if "/auth/token" in str(request.url):
+        return httpx.Response(
+            200, json={"access_token": "t", "refresh_token": "r", "expires_in": 8000}
+        )
+    return httpx.Response(
+        200,
+        json={
+            "aliexpress_ds_product_get_response": {
+                "rsp_code": 482,
+                "rsp_msg": "SHIP_TO_COUNTRY_PROHIBITED",
+                "result": {"has_whole_sale": False},
+            }
+        },
+    )
+
+
 async def register(client: AsyncClient, **overrides: Any) -> dict[str, Any]:
     response = await client.post("/api/v1/auth/register", json=registration_payload(**overrides))
     assert response.status_code == 201, response.text
@@ -261,6 +279,27 @@ class TestImport:
         response = await client.post(IMPORT_URL, json={"externalId": "999"}, headers=headers)
 
         assert response.status_code == 404
+        assert response.json()["code"] == "aliexpress_product_unavailable"
+        listing = (await client.get(PRODUCTS_URL, headers=headers)).json()
+        assert listing["meta"]["totalItems"] == 0
+
+    async def test_ship_to_prohibited_is_not_mislabeled_as_not_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """482 must surface as ship-to, not a generic product-not-found."""
+        headers = await connected_tenant(client, monkeypatch)
+        patch_aliexpress(monkeypatch, ship_to_prohibited_handler)
+
+        response = await client.post(
+            IMPORT_URL,
+            json={"externalId": "1005010486653604", "shipToCountry": "US"},
+            headers=headers,
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["code"] == "aliexpress_ship_to_prohibited"
+        assert "ship-to" in body["message"].lower() or "destination" in body["message"].lower()
         listing = (await client.get(PRODUCTS_URL, headers=headers)).json()
         assert listing["meta"]["totalItems"] == 0
 
@@ -276,7 +315,7 @@ class TestImport:
         history = (await client.get(IMPORTS_URL, headers=headers)).json()
         failed = [r for r in history["items"] if r["status"] == "failed"]
         assert failed
-        assert failed[0]["errorCode"] == "product_not_found"
+        assert failed[0]["errorCode"] == "aliexpress_product_unavailable"
         assert failed[0]["externalId"] == "999"
 
     async def test_import_without_a_connection_is_rejected(

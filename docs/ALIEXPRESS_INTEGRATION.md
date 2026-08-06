@@ -493,6 +493,26 @@ localised by design:
 
 ---
 
+## Product import errors (`ds.product.get`)
+
+Import uses `aliexpress.ds.product.get` with `ship_to_country` (default `US`)
+and `target_currency`. An empty product envelope is **not** always "not found":
+
+| Upstream `rsp_code` / `rsp_msg` | DropPilot code | HTTP | Meaning |
+|---|---|---|---|
+| `605` / `ITEM_ID_NOT_FOUND` | `aliexpress_product_unavailable` | 404 | Listing gone, restricted, or not visible to this account |
+| `482` / `SHIP_TO_COUNTRY_PROHIBITED` | `aliexpress_ship_to_prohibited` | 422 | Listing exists; retry with another ship-to country |
+| Other empty / unusable result | `aliexpress_product_unavailable` | 404 | Treat as unavailable; do not invent a draft |
+
+Live observation (2026-08): product `1005010486653604` returns **482** for
+`ship_to_country=US` and a full product for `GB` (and several other EU/AU
+destinations). The Import as Draft dialog exposes ship-to so merchants can
+retry without guessing.
+
+Mandatory field for draft creation: supplier `product_id`. Optional fields
+(images, SKUs, description, logistics) must not block import when present as
+null/empty on an otherwise valid detail payload.
+
 ## Known limitations
 
 1. **Never tested against the real AliExpress API.** See the banner above. The
