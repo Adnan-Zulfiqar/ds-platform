@@ -1,28 +1,24 @@
 import type { Metadata } from "next";
 
-import { ImportProductDialog } from "@/components/products/import-product-dialog";
 import { ProductTable } from "@/components/products/product-table";
 import { PageHeader } from "@/components/ui/page-header";
 
 export const metadata: Metadata = { title: "Products" };
 
 /**
- * The product catalogue.
+ * Published catalogue (Product Workspace V2).
  *
- * A Server Component rendering two client islands: the table owns its own data
- * fetching and the dialog owns its own form state. Neither needs this page to
- * hold state on its behalf, so it does not become a client component merely to
- * pass props down.
+ * Only products with at least one synced channel listing. Supplier ingestion
+ * uses Import as Draft on the Drafts page — not this list.
  */
 export default function ProductsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
         title="Products"
-        description="Products imported from your connected suppliers."
-        actions={<ImportProductDialog />}
+        description="Products successfully published to at least one connected store."
       />
-      <ProductTable />
+      <ProductTable variant="products" />
     </div>
   );
 }

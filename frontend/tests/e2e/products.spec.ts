@@ -10,13 +10,10 @@ import {
 } from "./helpers/catalogue";
 
 /**
- * Product catalogue tests.
+ * Product workspace tests (Drafts vs Products — Product Workspace V2 Stage 0).
  *
- * Run against the real API, so what the page shows is genuinely the server's
- * state. The import-flow suite seeds connection and catalogue rows through the
- * same HTTP endpoints the UI uses; when the live AliExpress gateway rejects the
- * synthetic OAuth code those tests skip rather than fail. Parsing and storage
- * are covered by the backend integration suite against captured payloads.
+ * Imports land in Drafts. Products stays empty until a channel listing is
+ * synced. Run against the real API when available.
  */
 
 test.beforeAll(async () => {
@@ -36,7 +33,7 @@ test.describe("Products page", () => {
     await page
       .getByRole("navigation")
       .first()
-      .getByRole("link", { name: "Products" })
+      .getByRole("link", { name: /^Products/ })
       .click();
 
     await expect(page).toHaveURL(/\/products$/);
@@ -45,16 +42,43 @@ test.describe("Products page", () => {
     ).toBeVisible();
   });
 
-  test("shows an empty state before anything is imported", async ({ page }) => {
+  test("shows an empty published state before anything is published", async ({
+    page,
+  }) => {
     await registerAndSignIn(page);
     await page.goto("/products");
 
-    // An empty state, not an error state. Nothing has gone wrong — a new
-    // workspace legitimately has no products, and it should be told the next
-    // useful step rather than shown a failure.
-    await expect(page.getByText("No products yet")).toBeVisible();
+    await expect(page.getByText("No published products yet")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Go to Drafts" })).toBeVisible();
+  });
+});
+
+test.describe("Drafts page", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("is reachable from the sidebar", async ({ page }) => {
+    await registerAndSignIn(page);
+    await page.goto("/dashboard");
+
+    await page
+      .getByRole("navigation")
+      .first()
+      .getByRole("link", { name: /^Drafts/ })
+      .click();
+
+    await expect(page).toHaveURL(/\/drafts$/);
     await expect(
-      page.getByRole("button", { name: "Import product" }).first(),
+      page.getByRole("heading", { name: "Drafts", level: 1 }),
+    ).toBeVisible();
+  });
+
+  test("shows an empty state before anything is imported", async ({ page }) => {
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    await expect(page.getByText("No drafts yet")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Import as Draft" }).first(),
     ).toBeVisible();
   });
 
@@ -62,21 +86,21 @@ test.describe("Products page", () => {
     page,
   }) => {
     await registerAndSignIn(page);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
 
     await expect(
-      page.getByRole("heading", { name: "Import from AliExpress" }),
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
     ).toBeVisible();
-    await expect(page.getByLabel("AliExpress product ID")).toBeVisible();
+    await expect(page.getByLabel(/AliExpress product ID/)).toBeVisible();
   });
 
   test("rejects an empty product id without calling the server", async ({
     page,
   }) => {
     await registerAndSignIn(page);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
     let requested = false;
     await page.route("**/products/import", (route) => {
@@ -84,8 +108,8 @@ test.describe("Products page", () => {
       return route.abort();
     });
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
-    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
 
     await expect(
       page.getByText(/Enter an AliExpress product ID/),
@@ -94,17 +118,8 @@ test.describe("Products page", () => {
   });
 
   test("accepts a pasted listing URL, not just a bare ID", async ({ page }) => {
-    /**
-     * The regression this guards. A full URL used to be forwarded verbatim, and
-     * AliExpress answers a malformed ID with "the input parameter product_id is
-     * not supplied" — reporting it as missing rather than wrong, which sends
-     * you hunting a serialisation bug that is not there.
-     *
-     * Asserting on the request body rather than the outcome: the import itself
-     * needs a connected supplier, which this test does not have.
-     */
     await registerAndSignIn(page);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
     let sentId: string | null = null;
     await page.route("**/products/import", async (route) => {
@@ -113,11 +128,11 @@ test.describe("Products page", () => {
       return route.abort();
     });
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
     await page
       .getByLabel(/AliExpress product ID/)
       .fill("https://www.aliexpress.com/item/1005009558589813.html");
-    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
 
     await expect(() => expect(sentId).toBe("1005009558589813")).toPass();
   });
@@ -125,21 +140,16 @@ test.describe("Products page", () => {
   test("surfaces the server's reason when no supplier is connected", async ({
     page,
   }) => {
-    /**
-     * The first failure a real user meets: they find a product ID, paste it,
-     * and have not connected AliExpress yet. The dialog must say so rather than
-     * failing silently or showing a generic message.
-     */
     await registerAndSignIn(page);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
-    await page.getByLabel("AliExpress product ID").fill("3256806389000685");
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByLabel(/AliExpress product ID/).fill("3256806389000685");
 
     const response = page.waitForResponse((r) =>
       r.url().includes("/products/import"),
     );
-    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
 
     expect((await response).status()).toBe(409);
     await expect(page.getByRole("alert")).toBeVisible();
@@ -147,18 +157,18 @@ test.describe("Products page", () => {
 
   test("the dialog can be dismissed", async ({ page }) => {
     await registerAndSignIn(page);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await expect(
-      page.getByRole("heading", { name: "Import from AliExpress" }),
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
     ).toBeHidden();
   });
 });
 
-test.describe("Products import flow", () => {
+test.describe("Drafts import flow", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
   test.beforeAll(async () => {
@@ -194,7 +204,7 @@ test.describe("Products import flow", () => {
     await expect(suppliers.getByText("Connection error")).toBeHidden();
   });
 
-  test("displays an imported product after API seeding", async ({ page, request }) => {
+  test("displays an imported draft after API seeding", async ({ page, request }) => {
     const seeded = await seedCatalogueViaApi(request);
     test.skip(
       seeded === null,
@@ -202,11 +212,14 @@ test.describe("Products import flow", () => {
     );
 
     await signInWithAccount(page, seeded.account);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await expect(page.getByTestId("product-row")).toHaveCount(1);
+    await expect(page.getByTestId("draft-row")).toHaveCount(1);
     await expect(page.getByText(seeded.product.title.slice(0, 20))).toBeVisible();
     await expect(page.getByText(seeded.product.externalId)).toBeVisible();
+
+    await page.goto("/products");
+    await expect(page.getByText("No published products yet")).toBeVisible();
   });
 
   test("imports through the dialog when AliExpress is connected", async ({
@@ -221,18 +234,18 @@ test.describe("Products import flow", () => {
     );
 
     await signInWithAccount(page, account);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await page.getByRole("button", { name: "Import product" }).first().click();
-    await page.getByLabel("AliExpress product ID").fill(FIXTURE_PRODUCT_ID);
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByLabel(/AliExpress product ID/).fill(FIXTURE_PRODUCT_ID);
 
     const response = page.waitForResponse((r) =>
       r.url().includes("/products/import"),
     );
-    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("button", { name: "Import as Draft", exact: true }).last().click();
 
     expect((await response).status()).toBe(201);
-    await expect(page.getByTestId("product-row")).toHaveCount(1);
+    await expect(page.getByTestId("draft-row")).toHaveCount(1);
     await expect(page.getByText(FIXTURE_PRODUCT_ID)).toBeVisible();
   });
 });
@@ -240,6 +253,11 @@ test.describe("Products import flow", () => {
 test.describe("Products route protection", () => {
   test("redirects an unauthenticated visitor to sign in", async ({ page }) => {
     await page.goto("/products");
+    await expect(page).toHaveURL(/\/login/);
+  });
+
+  test("redirects unauthenticated drafts visitors to sign in", async ({ page }) => {
+    await page.goto("/drafts");
     await expect(page).toHaveURL(/\/login/);
   });
 });
@@ -255,7 +273,6 @@ test.describe("Products responsiveness", () => {
       page.getByRole("heading", { name: "Products", level: 1 }),
     ).toBeVisible();
 
-    // The table scrolls inside its own container; the page body must not.
     const overflows = await page.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth + 1,
     );

@@ -2,6 +2,8 @@ import {
   BarChart3,
   Bell,
   Bot,
+  FileEdit,
+  History,
   LayoutDashboard,
   Package,
   Settings,
@@ -39,6 +41,8 @@ export interface NavItem {
   status: NavStatus;
   /** Shown in tooltips and on placeholder pages. */
   description: string;
+  /** When set, the sidebar shows a live count from workspace-counts. */
+  badgeKey?: "drafts" | "products";
 }
 
 export interface NavSection {
@@ -67,11 +71,28 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     label: "Product Management",
     items: [
       {
+        href: "/drafts",
+        label: "Drafts",
+        icon: FileEdit,
+        status: "ready",
+        description: "Imported products awaiting review and Publish to Store.",
+        badgeKey: "drafts",
+      },
+      {
         href: "/products",
         label: "Products",
         icon: Package,
         status: "ready",
-        description: "Manage your product catalogue across every channel.",
+        description:
+          "Products successfully published to at least one connected store.",
+        badgeKey: "products",
+      },
+      {
+        href: "/imports/history",
+        label: "Import History",
+        icon: History,
+        status: "ready",
+        description: "Import jobs, failures, and retries.",
       },
       {
         href: "/inventory",

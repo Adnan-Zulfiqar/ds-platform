@@ -106,6 +106,13 @@ class StoreListing(TenantScopedBase):
         ),
         Index("ix_store_listings_tenant_store", "tenant_id", "store_id"),
         Index("ix_store_listings_external_product", "tenant_id", "external_product_id"),
+        # Drafts vs Products list EXISTS predicates (Product Workspace V2).
+        Index(
+            "ix_store_listings_tenant_product_status",
+            "tenant_id",
+            "product_id",
+            "status",
+        ),
     )
 
     store_id: Mapped[uuid.UUID] = mapped_column(

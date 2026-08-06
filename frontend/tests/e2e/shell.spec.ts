@@ -69,12 +69,13 @@ test.describe("Sidebar", () => {
     await signIn(page);
 
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await nav.getByRole("link", { name: "Products", exact: true }).click();
+    await nav.getByRole("link", { name: /^Products/ }).click();
     await expect(page).toHaveURL(/\/products$/);
 
-    await expect(
-      nav.getByRole("link", { name: "Products", exact: true }),
-    ).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("link", { name: /^Products/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   test("unbuilt destinations are disabled, not links", async ({ page }) => {
@@ -126,7 +127,8 @@ test.describe("Mobile navigation", () => {
     await page.getByRole("button", { name: "Open navigation menu" }).click();
 
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Products", exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Products/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: /^Drafts/ })).toBeVisible();
   });
 
   test("drawer closes after navigating", async ({ page }) => {
@@ -310,7 +312,15 @@ test.describe("Protected routes", () => {
 
     // Keep this list short — Phase 6 ops routes are covered in phase6-ops.spec.
     // Hard navigations remount the app; refresh must succeed for each hop.
-    for (const route of ["/products", "/stores", "/orders", "/analytics", "/settings"]) {
+    for (const route of [
+      "/drafts",
+      "/products",
+      "/imports/history",
+      "/stores",
+      "/orders",
+      "/analytics",
+      "/settings",
+    ]) {
       await page.goto(route);
       await expect(page).toHaveURL(new RegExp(`${route}$`));
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

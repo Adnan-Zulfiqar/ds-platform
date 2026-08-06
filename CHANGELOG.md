@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **Product Workspace V2 Stage 0** — Drafts vs Products are publication
+  projections over the same `Product` aggregate. `GET /api/v1/drafts` lists
+  products with no synced `StoreListing`; `GET /api/v1/products` lists only
+  successfully published products; `GET /api/v1/products/workspace-counts`
+  feeds sidebar badges. Frontend routes `/drafts`, `/products`, and
+  `/imports/history`; supplier ingestion is labelled **Import as Draft**.
+  Migration `0015` indexes `(tenant_id, product_id, status)` on
+  `store_listings`. See [PRODUCT_WORKSPACE_V2_PLAN.md](docs/PRODUCT_WORKSPACE_V2_PLAN.md).
+
 ### Fixed
 
 - **A-06** — CI `frontend-e2e` job runs Playwright chromium against a live API

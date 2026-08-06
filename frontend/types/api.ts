@@ -333,6 +333,12 @@ export interface ListQuery {
   q?: string;
 }
 
+/** Sidebar badge totals for Drafts vs published Products. */
+export interface ProductWorkspaceCounts {
+  drafts: number;
+  products: number;
+}
+
 export type OrderSource = "aliexpress" | "manual";
 
 export type FulfillmentStatus =

@@ -1,6 +1,7 @@
 "use client";
 
-import { Package } from "lucide-react";
+import Link from "next/link";
+import { FileEdit, Package } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -14,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useDrafts } from "@/services/drafts";
 import { useProducts } from "@/services/products";
 import type { Product, ProductAIStatus, ProductStatus } from "@/types/api";
 
@@ -65,15 +67,27 @@ function formatPrice(product: Product): string {
   return `${symbol}${costPriceMin} – ${costPriceMax}`;
 }
 
-export function ProductTable() {
-  const { data, isPending, isError, error, refetch } = useProducts({ size: 25 });
+export type ProductTableVariant = "drafts" | "products";
 
-  // Loading, error and empty are three distinct states, deliberately not
-  // collapsed. Showing "no products" when the request failed is how a user is
-  // told their catalogue is empty when it is not.
+interface ProductTableProps {
+  /** Workspace projection — drafts never mix into the published Products list. */
+  variant?: ProductTableVariant;
+}
+
+export function ProductTable({ variant = "products" }: ProductTableProps) {
+  const draftsQuery = useDrafts({ size: 25 });
+  const productsQuery = useProducts({ size: 25 });
+  const { data, isPending, isError, error, refetch } =
+    variant === "drafts" ? draftsQuery : productsQuery;
+
   if (isPending) {
     return (
-      <div className="space-y-2" data-testid="products-loading">
+      <div
+        className="space-y-2"
+        data-testid={
+          variant === "drafts" ? "drafts-loading" : "products-loading"
+        }
+      >
         {Array.from({ length: 5 }).map((_, index) => (
           <Skeleton key={index} className="h-14 w-full" />
         ))}
@@ -84,7 +98,11 @@ export function ProductTable() {
   if (isError) {
     return (
       <ErrorState
-        title="Could not load products"
+        title={
+          variant === "drafts"
+            ? "Could not load drafts"
+            : "Could not load products"
+        }
         description={
           error instanceof Error ? error.message : "Please try again."
         }
@@ -94,15 +112,35 @@ export function ProductTable() {
   }
 
   if (data.items.length === 0) {
+    if (variant === "drafts") {
+      return (
+        <EmptyState
+          icon={FileEdit}
+          title="No drafts yet"
+          description="Import as Draft from AliExpress to review pricing, media, and variants before publishing to a store."
+          action={<ImportProductDialog />}
+        />
+      );
+    }
+
     return (
       <EmptyState
         icon={Package}
-        title="No products yet"
-        description="Import a product from AliExpress to start building your catalogue."
-        action={<ImportProductDialog />}
+        title="No published products yet"
+        description="Products appear here after a successful Publish to Store. Imported drafts live under Drafts until then."
+        action={
+          <Link
+            href="/drafts"
+            className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
+          >
+            Go to Drafts
+          </Link>
+        }
       />
     );
   }
+
+  const rowTestId = variant === "drafts" ? "draft-row" : "product-row";
 
   return (
     <div className="overflow-x-auto">
@@ -120,7 +158,7 @@ export function ProductTable() {
         </TableHeader>
         <TableBody>
           {data.items.map((product) => (
-            <TableRow key={product.id} data-testid="product-row">
+            <TableRow key={product.id} data-testid={rowTestId}>
               <TableCell className="max-w-md">
                 <span className="line-clamp-2 font-medium">
                   {product.title}
