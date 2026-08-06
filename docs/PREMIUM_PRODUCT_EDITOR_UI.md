@@ -43,9 +43,26 @@ Duplicate Draft, Archive Draft, and Delete Draft are **hidden** until APIs exist
 - Thumbnail uses product-title alt text
 - Publish disabled state exposes a reason via tooltip when blocked by readiness issues
 
+## Playwright coverage
+
+`frontend/tests/e2e/editor-header.spec.ts` covers desktop (1440), tablet (1024),
+mobile (375), dark mode, More-menu keyboard/Escape focus return, Draft Preview
+sheet, and hidden unsupported More actions.
+
+When AliExpress catalogue seeding cannot complete locally, set:
+
+- `E2E_PRODUCT_ID`
+- `E2E_EMAIL`
+- `E2E_PASSWORD`
+
+and use `E2E_BASE_URL=http://127.0.0.1:3000` to match the API host used by
+`.env.local` (localhost vs 127.0.0.1 cookie mismatch otherwise).
+
 ## Remaining limitations
 
 - Duplicate / Archive / Delete not implemented
 - Draft Preview is local-only (not Shopify storefront)
 - Full WCAG audit not claimed from smoke tests
 - Autosave still re-renders the editor shell when title state changes (header receives `title` overlay from local state)
+- Hard navigation after login can lose the in-memory access token when the refresh cookie cannot restore the session (Path scoped to `/api/v1/auth`); SPA `?next=` login avoids this
+- Sticky header uses `position: sticky`; effectiveness depends on the page scroll container (app shell may scroll an inner pane rather than `window`)

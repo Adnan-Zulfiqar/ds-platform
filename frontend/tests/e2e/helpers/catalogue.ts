@@ -142,16 +142,32 @@ export async function seedCatalogueViaApi(request: APIRequestContext): Promise<{
   return { account: registered.account, product };
 }
 
-/** Sign in through the UI using credentials from an API-seeded account. */
+/**
+ * Sign in through the UI using credentials from an API-seeded (or env) account.
+ *
+ * Prefer `nextPath` so the SPA client-navigates after login and keeps the
+ * in-memory access token. A bare `/login` → `/dashboard` → hard `goto` to a
+ * draft remounts the app and currently loses the session when the refresh
+ * cookie cannot restore it.
+ */
 export async function signInWithAccount(
   page: import("@playwright/test").Page,
   account: TestAccount,
+  nextPath: string = "/dashboard",
 ): Promise<void> {
-  await page.goto("/login");
+  const loginUrl =
+    nextPath === "/dashboard"
+      ? "/login"
+      : `/login?next=${encodeURIComponent(nextPath)}`;
+  await page.goto(loginUrl);
   await page.getByLabel("Email").fill(account.email);
   await page.getByLabel("Password", { exact: true }).fill(account.password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL(/\/dashboard/, { timeout: 20_000 });
+  const expected =
+    nextPath === "/dashboard"
+      ? /\/dashboard/
+      : new RegExp(nextPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  await page.waitForURL(expected, { timeout: 30_000 });
 }
 
 export { TEST_PASSWORD };
