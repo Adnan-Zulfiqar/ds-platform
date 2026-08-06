@@ -1,8 +1,11 @@
 """Dynamic pricing engine.
 
 Rules are resolved product > category > store > global. Within a scope level,
-higher ``priority`` wins. Currency conversion is a hook that currently returns
-the amount unchanged — FX belongs in a later phase once a rate source exists.
+higher ``priority`` wins.
+
+Currency integrity: same-currency amounts may be used directly. Differing
+currencies require a real FX quote from ``FxService``. A missing quote blocks
+pricing calculations — never invent a 1:1 cross-currency rate.
 """
 
 from __future__ import annotations
@@ -14,12 +17,16 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
+from app.core.exceptions import FxUnavailableError, ValidationError
+from app.domain.fx import FxRateStatus
+from app.domain.money import Money, normalise_currency
 from app.models.notification import NotificationKind
 from app.models.pricing import PriceChange, PricingRule, PricingScope, PricingStrategy
 from app.models.product import Product
 from app.repositories.pricing import PriceChangeRepository, PricingRuleRepository
 from app.repositories.product import ProductRepository
+from app.repositories.store import StoreRepository
+from app.repositories.tenant import TenantRepository
 from app.schemas.common import ListQueryParams
 from app.schemas.draft_pricing import (
     DraftPricingApplyMode,
@@ -35,6 +42,7 @@ from app.schemas.pricing import (
     PricingRuleUpdate,
 )
 from app.services.base import BaseService
+from app.services.fx import FxService, get_fx_service
 from app.services.notification_service import NotificationService
 
 _SCOPE_RANK = {
@@ -46,21 +54,33 @@ _SCOPE_RANK = {
 
 _MONEY_QUANT = Decimal("0.0001")
 _CENT_QUANT = Decimal("0.01")
-_FX_IDENTITY_NOTE = (
-    "Currency conversion is identity until a live FX rate feed is wired — "
-    "converted cost equals supplier cost and conversionRateTimestamp is null."
+
+_BLOCK_MESSAGE = (
+    "Pricing cannot be calculated because a valid currency conversion is not available."
 )
 
 
 def convert_currency(
     amount: Decimal, *, from_currency: str | None, to_currency: str | None
 ) -> Decimal:
-    """Currency conversion hook.
+    """Same-currency pass-through only.
 
-    Identity today: there is no rate feed wired in. Returning the input rather
-    than inventing a rate keeps sell prices honest until a real FX source lands.
+    Cross-currency conversion must go through ``FxService.convert``. Calling this
+    with differing currencies raises ``FxUnavailableError`` so callers cannot
+    accidentally invent a 1:1 rate.
     """
-    _ = from_currency, to_currency
+    if from_currency is None or to_currency is None:
+        raise FxUnavailableError(
+            _BLOCK_MESSAGE,
+            details={"from": from_currency, "to": to_currency},
+        )
+    source = normalise_currency(from_currency)
+    target = normalise_currency(to_currency)
+    if source != target:
+        raise FxUnavailableError(
+            _BLOCK_MESSAGE,
+            details={"from": source, "to": target, "hint": "use_fx_service"},
+        )
     return amount
 
 
@@ -135,12 +155,20 @@ def select_rule(
 
 
 class PricingEngine(BaseService):
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        fx: FxService | None = None,
+    ) -> None:
         super().__init__(session)
         self.rules = PricingRuleRepository(session)
         self.changes = PriceChangeRepository(session)
         self.products = ProductRepository(session)
+        self.stores = StoreRepository(session)
+        self.tenants = TenantRepository(session)
         self.notifications = NotificationService(session)
+        self.fx = fx or get_fx_service()
 
     async def create_rule(self, payload: PricingRuleCreate) -> PricingRule:
         self._validate_rule_payload(payload)
@@ -252,7 +280,14 @@ class PricingEngine(BaseService):
         )
         if rule is None:
             return None, None
-        amount = convert_currency(cost, from_currency=product.currency, to_currency=rule.currency)
+        # Catalogue rules may only price when rule currency matches product
+        # currency — cross-currency requires FxService (draft workspace path).
+        try:
+            amount = convert_currency(
+                cost, from_currency=product.currency, to_currency=rule.currency
+            )
+        except FxUnavailableError:
+            return None, rule
         return compute_sell_price(cost=amount, rule=rule), rule
 
     async def _target_products(
@@ -297,12 +332,20 @@ class PricingEngine(BaseService):
         if handling_cost < 0 or fee_percent < 0:
             raise ValidationError("Handling cost and fee percent must be non-negative.")
         product = await self.products.get_by_id_or_raise(product_id)
+        selling_currency, selling_source, store_id = await self._resolve_selling_currency(
+            product,
+            destination_store_id=(propose.destination_store_id if propose is not None else None),
+        )
         shipping = product.shipping_cost
         shipping_available = shipping is not None
         shipping_warning = (
             None
             if shipping_available
-            else "Shipping cost unavailable — do not treat missing freight as zero."
+            else (
+                "AliExpress did not return a shipping cost for this destination. "
+                "Select a shipping method or enter an estimate — missing freight "
+                "is never treated as zero."
+            )
         )
         rule_name: str | None = None
         _, rule = await self._propose(product)
@@ -310,45 +353,181 @@ class PricingEngine(BaseService):
             rule_name = rule.name
 
         rows: list[DraftVariantPricingRow] = []
+        any_blocked = False
+        fx_status: str | None = None
         for variant in product.variants:
-            proposed = (
-                self._propose_variant_sell(
-                    cost=variant.cost_price,
+            supplier_currency = variant.currency or product.currency
+            converted_cost: Decimal | None = None
+            converted_currency: str | None = None
+            conversion_required = False
+            conversion_type: str | None = None
+            conversion_rate: Decimal | None = None
+            conversion_ts: datetime | None = None
+            fx_provider: str | None = None
+            row_blocked = False
+            row_block_message: str | None = None
+
+            if variant.cost_price is not None and supplier_currency and selling_currency:
+                conversion_required = normalise_currency(supplier_currency) != normalise_currency(
+                    selling_currency
+                )
+                try:
+                    source_money = Money.of(variant.cost_price, supplier_currency)
+                    converted, evidence, _quote = await self.fx.convert(
+                        source_money, to_currency=selling_currency
+                    )
+                    converted_cost = converted.amount
+                    converted_currency = converted.currency
+                    if evidence is None:
+                        conversion_type = "direct"
+                    else:
+                        conversion_type = "fx"
+                        conversion_rate = evidence.quote.rate
+                        conversion_ts = (
+                            evidence.quote.source_timestamp or evidence.quote.retrieved_at
+                        )
+                        fx_provider = evidence.quote.provider_name
+                        fx_status = evidence.quote.status.value
+                        if evidence.quote.status is FxRateStatus.STALE:
+                            row_block_message = (
+                                f"Exchange rate {supplier_currency}→{selling_currency} "
+                                "is stale. Refresh the exchange rate before applying "
+                                "or publishing prices."
+                            )
+                            # Stale: allow draft edit preview but flag block for apply.
+                            row_blocked = True
+                            any_blocked = True
+                except (FxUnavailableError, ValidationError) as exc:
+                    conversion_type = "unavailable"
+                    row_blocked = True
+                    any_blocked = True
+                    row_block_message = (
+                        str(exc) if isinstance(exc, FxUnavailableError) else _BLOCK_MESSAGE
+                    )
+                    fx_provider = self.fx.provider_name
+                    fx_status = FxRateStatus.UNAVAILABLE.value
+            elif variant.cost_price is not None:
+                row_blocked = True
+                any_blocked = True
+                row_block_message = (
+                    "Supplier cost is missing a currency code. Refresh supplier "
+                    "data before calculating a selling price."
+                )
+                conversion_type = "unavailable"
+
+            # Propose only on a successfully converted (or direct) cost.
+            proposed: Decimal | None = None
+            if (
+                propose is not None
+                and not row_blocked
+                and converted_cost is not None
+                and conversion_type in {"direct", "fx"}
+            ):
+                # Shipping must share selling currency — unknown shipping is
+                # excluded from landed math (never invented as zero).
+                shipping_for_math = (
+                    shipping
+                    if shipping_available
+                    and supplier_currency
+                    and normalise_currency(supplier_currency)
+                    == normalise_currency(selling_currency)
+                    else None
+                )
+                proposed = self._propose_variant_sell(
+                    cost=converted_cost,
                     current=variant.sell_price,
                     request=propose,
-                    shipping_cost=shipping,
+                    shipping_cost=shipping_for_math,
                 )
-                if propose is not None
-                else None
-            )
+
             rows.append(
-                self._variant_row(
+                await self._variant_row(
                     variant_id=variant.id,
                     label=variant.label,
                     is_enabled=variant.is_enabled,
                     supplier_cost=variant.cost_price,
-                    supplier_currency=variant.currency or product.currency,
+                    supplier_currency=supplier_currency,
+                    converted_cost=converted_cost if not row_blocked else None,
+                    converted_currency=converted_currency if not row_blocked else None,
+                    conversion_required=conversion_required,
+                    conversion_type=conversion_type,
+                    conversion_rate=conversion_rate,
+                    conversion_rate_timestamp=conversion_ts,
+                    fx_provider=fx_provider,
+                    fx_status=fx_status if conversion_required else None,
                     sell_price=variant.sell_price,
                     compare_at_price=variant.compare_at_price,
-                    proposed_sell_price=proposed,
+                    proposed_sell_price=proposed if not row_blocked else None,
                     shipping_cost=shipping,
                     handling_cost=handling_cost,
                     fee_percent=fee_percent,
                     pricing_rule_source=rule_name,
+                    row_blocked=row_blocked,
+                    row_block_message=row_block_message,
+                    allow_profit=not row_blocked,
                 )
             )
+
+        fx_note = (
+            _BLOCK_MESSAGE
+            if any_blocked
+            else (
+                f"Selling currency {selling_currency} "
+                f"(source: {selling_source}). "
+                "Supplier amounts keep their source currency; calculated "
+                "columns use the selling currency only after a valid "
+                "conversion or a direct target-currency price."
+            )
+        )
         return DraftPricingWorkspaceRead(
             product_id=product.id,
-            currency=product.currency,
+            currency=selling_currency,
+            selling_currency=selling_currency,
+            selling_currency_source=selling_source,
+            destination_store_id=store_id,
             product_sell_price=product.sell_price,
             cost_price_min=product.cost_price_min,
             cost_price_max=product.cost_price_max,
             shipping_cost=shipping,
             shipping_cost_available=shipping_available,
             shipping_warning=shipping_warning,
-            fx_note=_FX_IDENTITY_NOTE,
+            fx_note=fx_note,
+            pricing_blocked=any_blocked,
+            pricing_block_code="fx_unavailable" if any_blocked else None,
+            pricing_block_message=_BLOCK_MESSAGE if any_blocked else None,
+            fx_provider=self.fx.provider_name if any_blocked else None,
+            fx_status=fx_status if any_blocked else None,
             variants=rows,
         )
+
+    async def _resolve_selling_currency(
+        self,
+        product: Product,
+        *,
+        destination_store_id: uuid.UUID | None,
+    ) -> tuple[str | None, str, uuid.UUID | None]:
+        """Store currency → tenant default → unanimous supplier currency."""
+        store_id = destination_store_id or product.store_id
+        if store_id is not None:
+            store = await self.stores.get_by_id(store_id)
+            if store is not None and store.currency:
+                return normalise_currency(store.currency), "shopify_store", store.id
+
+        tenant = await self.tenants.get_by_id(product.tenant_id)
+        if tenant is not None and getattr(tenant, "default_currency", None):
+            return (
+                normalise_currency(tenant.default_currency),
+                "workspace",
+                store_id,
+            )
+
+        variant_codes = {normalise_currency(v.currency) for v in product.variants if v.currency}
+        if len(variant_codes) == 1:
+            return next(iter(variant_codes)), "supplier_unanimous", store_id
+        if product.currency:
+            # Last resort — may still block rows when variants disagree.
+            return normalise_currency(product.currency), "product_legacy", store_id
+        return None, "unresolved", store_id
 
     async def apply_draft_variant_pricing(
         self,
@@ -356,8 +535,25 @@ class PricingEngine(BaseService):
         request: DraftPricingApplyRequest,
     ) -> DraftPricingWorkspaceRead:
         """Write merchant sell/compare-at prices on variants (supplier cost untouched)."""
+        preview = await self.draft_workspace(
+            product_id,
+            handling_cost=request.handling_cost,
+            fee_percent=request.fee_percent,
+            propose=request,
+        )
+        if preview.pricing_blocked:
+            raise FxUnavailableError(
+                preview.pricing_block_message or _BLOCK_MESSAGE,
+                details={"code": preview.pricing_block_code or "fx_unavailable"},
+            )
+
         product = await self.products.get_by_id_or_raise(product_id)
         target_ids = set(request.variant_ids) if request.variant_ids else None
+        proposed_by_id = {
+            row.variant_id: row.proposed_sell_price
+            for row in preview.variants
+            if row.proposed_sell_price is not None and not row.row_blocked
+        }
         for variant in product.variants:
             if target_ids is not None and variant.id not in target_ids:
                 continue
@@ -372,12 +568,7 @@ class PricingEngine(BaseService):
                     request.compare_at_price, cents=request.round_to_cents
                 )
                 continue
-            proposed = self._propose_variant_sell(
-                cost=variant.cost_price,
-                current=variant.sell_price,
-                request=request,
-                shipping_cost=product.shipping_cost,
-            )
+            proposed = proposed_by_id.get(variant.id)
             if proposed is None:
                 continue
             variant.sell_price = proposed
@@ -454,7 +645,7 @@ class PricingEngine(BaseService):
             return amount
         return whole - Decimal("0.01")
 
-    def _variant_row(
+    async def _variant_row(
         self,
         *,
         variant_id: uuid.UUID,
@@ -462,6 +653,14 @@ class PricingEngine(BaseService):
         is_enabled: bool,
         supplier_cost: Decimal | None,
         supplier_currency: str | None,
+        converted_cost: Decimal | None,
+        converted_currency: str | None,
+        conversion_required: bool,
+        conversion_type: str | None,
+        conversion_rate: Decimal | None,
+        conversion_rate_timestamp: datetime | None,
+        fx_provider: str | None,
+        fx_status: str | None,
         sell_price: Decimal | None,
         compare_at_price: Decimal | None,
         proposed_sell_price: Decimal | None,
@@ -469,36 +668,35 @@ class PricingEngine(BaseService):
         handling_cost: Decimal,
         fee_percent: Decimal,
         pricing_rule_source: str | None,
+        row_blocked: bool,
+        row_block_message: str | None,
+        allow_profit: bool,
     ) -> DraftVariantPricingRow:
-        converted = (
-            convert_currency(
-                supplier_cost, from_currency=supplier_currency, to_currency=supplier_currency
-            )
-            if supplier_cost is not None
-            else None
-        )
         shipping_available = shipping_cost is not None
         # Missing freight is excluded from landed-cost math (not invented as zero).
         freight_component = shipping_cost if shipping_cost is not None else Decimal("0")
         landed_extra = handling_cost + freight_component
         fee_base = proposed_sell_price if proposed_sell_price is not None else sell_price
-        fee_estimate = (
-            (fee_base * fee_percent / Decimal("100")).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
-            if fee_base is not None
-            else Decimal("0")
-        )
+        fee_estimate: Decimal | None = None
         break_even: Decimal | None = None
         profit: Decimal | None = None
         margin: Decimal | None = None
-        if converted is not None:
-            break_even = (converted + landed_extra + fee_estimate).quantize(
+        if allow_profit and converted_cost is not None:
+            fee_estimate = (
+                (fee_base * fee_percent / Decimal("100")).quantize(
+                    _MONEY_QUANT, rounding=ROUND_HALF_UP
+                )
+                if fee_base is not None
+                else Decimal("0")
+            )
+            break_even = (converted_cost + landed_extra + (fee_estimate or Decimal("0"))).quantize(
                 _MONEY_QUANT, rounding=ROUND_HALF_UP
             )
             effective = proposed_sell_price if proposed_sell_price is not None else sell_price
             if effective is not None:
-                profit = (effective - converted - landed_extra - fee_estimate).quantize(
-                    _MONEY_QUANT, rounding=ROUND_HALF_UP
-                )
+                profit = (
+                    effective - converted_cost - landed_extra - (fee_estimate or Decimal("0"))
+                ).quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
                 if effective > 0:
                     margin = (profit / effective * Decimal("100")).quantize(
                         Decimal("0.01"), rounding=ROUND_HALF_UP
@@ -509,8 +707,14 @@ class PricingEngine(BaseService):
             is_enabled=is_enabled,
             supplier_cost=supplier_cost,
             supplier_currency=supplier_currency,
-            converted_cost=converted,
-            conversion_rate_timestamp=None,
+            converted_cost=converted_cost,
+            converted_currency=converted_currency,
+            conversion_required=conversion_required,
+            conversion_type=conversion_type,
+            conversion_rate=conversion_rate,
+            conversion_rate_timestamp=conversion_rate_timestamp,
+            fx_provider=fx_provider,
+            fx_status=fx_status,
             supplier_shipping_cost=shipping_cost,
             shipping_cost_available=shipping_available,
             handling_cost=handling_cost.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
@@ -523,6 +727,8 @@ class PricingEngine(BaseService):
             break_even_price=break_even,
             pricing_rule_source=pricing_rule_source,
             manual_override=sell_price is not None,
+            row_blocked=row_blocked,
+            row_block_message=row_block_message,
         )
 
     @staticmethod

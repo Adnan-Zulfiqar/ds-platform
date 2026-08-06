@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.exceptions import FxUnavailableError
 from app.models.pricing import PricingRule, PricingScope, PricingStrategy
 from app.services.pricing_engine import (
     PricingEngine,
@@ -75,21 +76,35 @@ class TestSelectRule:
         )
         assert chosen is product_rule
 
-    def test_currency_hook_is_identity(self) -> None:
-        assert convert_currency(Decimal("9.99"), from_currency="USD", to_currency="EUR") == Decimal(
+
+class TestConvertCurrency:
+    def test_same_currency_passthrough(self) -> None:
+        assert convert_currency(Decimal("9.99"), from_currency="USD", to_currency="USD") == Decimal(
             "9.99"
         )
 
+    def test_cross_currency_identity_is_forbidden(self) -> None:
+        with pytest.raises(FxUnavailableError):
+            convert_currency(Decimal("9.99"), from_currency="USD", to_currency="EUR")
+
 
 class TestDraftVariantRow:
-    def test_profit_and_margin_use_decimal_math(self) -> None:
+    async def test_profit_and_margin_use_decimal_math(self) -> None:
         engine = PricingEngine.__new__(PricingEngine)
-        row = engine._variant_row(
+        row = await engine._variant_row(
             variant_id=uuid4(),
             label="Black",
             is_enabled=True,
             supplier_cost=Decimal("10"),
             supplier_currency="USD",
+            converted_cost=Decimal("10"),
+            converted_currency="USD",
+            conversion_required=False,
+            conversion_type="direct",
+            conversion_rate=None,
+            conversion_rate_timestamp=None,
+            fx_provider=None,
+            fx_status=None,
             sell_price=Decimal("15"),
             compare_at_price=None,
             proposed_sell_price=None,
@@ -97,8 +112,42 @@ class TestDraftVariantRow:
             handling_cost=Decimal("0"),
             fee_percent=Decimal("0"),
             pricing_rule_source=None,
+            row_blocked=False,
+            row_block_message=None,
+            allow_profit=True,
         )
         assert row.profit == Decimal("5.0000")
         assert row.margin_percent == Decimal("33.33")
         assert row.shipping_cost_available is False
         assert row.break_even_price == Decimal("10.0000")
+
+    async def test_blocked_row_hides_profit(self) -> None:
+        engine = PricingEngine.__new__(PricingEngine)
+        row = await engine._variant_row(
+            variant_id=uuid4(),
+            label="Black",
+            is_enabled=True,
+            supplier_cost=Decimal("23.74"),
+            supplier_currency="USD",
+            converted_cost=None,
+            converted_currency=None,
+            conversion_required=True,
+            conversion_type="unavailable",
+            conversion_rate=None,
+            conversion_rate_timestamp=None,
+            fx_provider="unavailable",
+            fx_status="unavailable",
+            sell_price=Decimal("35.61"),
+            compare_at_price=None,
+            proposed_sell_price=None,
+            shipping_cost=None,
+            handling_cost=Decimal("0"),
+            fee_percent=Decimal("0"),
+            pricing_rule_source=None,
+            row_blocked=True,
+            row_block_message="Pricing cannot be calculated",
+            allow_profit=False,
+        )
+        assert row.profit is None
+        assert row.break_even_price is None
+        assert row.row_blocked is True

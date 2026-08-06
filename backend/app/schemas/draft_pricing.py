@@ -1,7 +1,9 @@
-"""Draft pricing workspace schemas (Stage 5).
+"""Draft pricing workspace schemas.
 
 Authoritative profit/margin math lives on the server as Decimal strings on the
-wire — the browser displays only.
+wire — the browser displays only. Cross-currency identity conversion is
+forbidden; when FX is required and unavailable, ``pricing_blocked`` is true and
+calculated profit fields are null.
 """
 
 from __future__ import annotations
@@ -31,11 +33,17 @@ class DraftVariantPricingRow(CamelCaseModel):
     supplier_cost: Decimal | None = None
     supplier_currency: str | None = None
     converted_cost: Decimal | None = None
+    converted_currency: str | None = None
+    conversion_required: bool = False
+    conversion_type: str | None = None  # direct | fx | unavailable
+    conversion_rate: Decimal | None = None
     conversion_rate_timestamp: datetime | None = None
+    fx_provider: str | None = None
+    fx_status: str | None = None
     supplier_shipping_cost: Decimal | None = None
     shipping_cost_available: bool = False
     handling_cost: Decimal
-    fee_estimate: Decimal
+    fee_estimate: Decimal | None = None
     sell_price: Decimal | None = None
     compare_at_price: Decimal | None = None
     proposed_sell_price: Decimal | None = None
@@ -44,11 +52,17 @@ class DraftVariantPricingRow(CamelCaseModel):
     break_even_price: Decimal | None = None
     pricing_rule_source: str | None = None
     manual_override: bool = False
+    row_blocked: bool = False
+    row_block_message: str | None = None
 
 
 class DraftPricingWorkspaceRead(CamelCaseModel):
     product_id: uuid.UUID
+    #: Destination selling currency (store → tenant → consistent supplier).
     currency: str | None = None
+    selling_currency: str | None = None
+    selling_currency_source: str | None = None
+    destination_store_id: uuid.UUID | None = None
     product_sell_price: Decimal | None = None
     cost_price_min: Decimal | None = None
     cost_price_max: Decimal | None = None
@@ -56,6 +70,11 @@ class DraftPricingWorkspaceRead(CamelCaseModel):
     shipping_cost_available: bool = False
     shipping_warning: str | None = None
     fx_note: str
+    pricing_blocked: bool = False
+    pricing_block_code: str | None = None
+    pricing_block_message: str | None = None
+    fx_provider: str | None = None
+    fx_status: str | None = None
     variants: list[DraftVariantPricingRow] = Field(default_factory=list)
 
 
@@ -75,3 +94,5 @@ class DraftPricingApplyRequest(CamelCaseModel):
     handling_cost: Decimal = Field(default=Decimal("0"))
     fee_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
     include_shipping_in_cost: bool = True
+    #: Optional override; otherwise resolved from store / tenant / product.
+    destination_store_id: uuid.UUID | None = None

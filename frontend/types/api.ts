@@ -315,11 +315,17 @@ export interface DraftVariantPricingRow {
   supplierCost: string | null;
   supplierCurrency: string | null;
   convertedCost: string | null;
+  convertedCurrency: string | null;
+  conversionRequired: boolean;
+  conversionType: string | null;
+  conversionRate: string | null;
   conversionRateTimestamp: string | null;
+  fxProvider: string | null;
+  fxStatus: string | null;
   supplierShippingCost: string | null;
   shippingCostAvailable: boolean;
   handlingCost: string;
-  feeEstimate: string;
+  feeEstimate: string | null;
   sellPrice: string | null;
   compareAtPrice: string | null;
   proposedSellPrice: string | null;
@@ -328,11 +334,16 @@ export interface DraftVariantPricingRow {
   breakEvenPrice: string | null;
   pricingRuleSource: string | null;
   manualOverride: boolean;
+  rowBlocked: boolean;
+  rowBlockMessage: string | null;
 }
 
 export interface DraftPricingWorkspace {
   productId: string;
   currency: string | null;
+  sellingCurrency: string | null;
+  sellingCurrencySource: string | null;
+  destinationStoreId: string | null;
   productSellPrice: string | null;
   costPriceMin: string | null;
   costPriceMax: string | null;
@@ -340,6 +351,11 @@ export interface DraftPricingWorkspace {
   shippingCostAvailable: boolean;
   shippingWarning: string | null;
   fxNote: string;
+  pricingBlocked: boolean;
+  pricingBlockCode: string | null;
+  pricingBlockMessage: string | null;
+  fxProvider: string | null;
+  fxStatus: string | null;
   variants: DraftVariantPricingRow[];
 }
 

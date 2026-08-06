@@ -46,12 +46,23 @@ export function DraftPricingPanel({
   const [sellPrice, setSellPrice] = useState("");
   const [compareAt, setCompareAt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [showTechnical, setShowTechnical] = useState(false);
 
   const workspace = preview.data ?? pricing.data;
   const busy = preview.isPending || apply.isPending;
+  const blocked = Boolean(workspace?.pricingBlocked);
+  const sellingCurrency =
+    workspace?.sellingCurrency ?? workspace?.currency ?? null;
 
   async function run(kind: "preview" | "apply") {
     setError(null);
+    if (kind === "apply" && blocked) {
+      setError(
+        workspace?.pricingBlockMessage ??
+          "Pricing cannot be calculated because a valid currency conversion is not available.",
+      );
+      return;
+    }
     const payload = {
       mode,
       markupPercent: mode === "percentage_markup" ? markupPercent : undefined,
@@ -97,22 +108,90 @@ export function DraftPricingPanel({
         <div>
           <h2 className="text-lg font-semibold">Pricing</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Supplier cost is source data. Selling price, profit, and margin are
-            calculated on the server (Decimal). Set individual prices under
-            Variants, or apply bulk rules here.
+            Destination selling currency drives all calculated columns. Supplier
+            costs keep their source currency until a valid conversion (or a
+            direct target-currency price) is available.
           </p>
         </div>
-        <Badge variant="outline">{workspace.currency ?? product.currency ?? "—"}</Badge>
+        <div className="flex flex-col items-end gap-1">
+          <Badge variant="outline" data-testid="selling-currency-badge">
+            {sellingCurrency ?? "—"}
+          </Badge>
+          {workspace.sellingCurrencySource ? (
+            <span className="text-[11px] text-muted-foreground">
+              Source: {workspace.sellingCurrencySource}
+            </span>
+          ) : null}
+        </div>
       </div>
 
-      {!workspace.shippingCostAvailable ? (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
-          Shipping cost unavailable — freight is not treated as zero for publish
-          decisions.
+      {blocked ? (
+        <div
+          className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-3 text-sm"
+          role="alert"
+          data-testid="pricing-blocked-banner"
+        >
+          <p className="font-medium text-destructive">
+            {workspace.pricingBlockMessage ??
+              "Pricing cannot be calculated because a valid currency conversion is not available."}
+          </p>
+          <p className="text-muted-foreground">
+            Calculated profit and proposed prices are hidden until currencies
+            align or a valid exchange rate is available. Source amounts are not
+            relabelled.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" disabled>
+              Refresh exchange rate
+            </Button>
+            <Button type="button" size="sm" variant="outline" asChild>
+              <a href="/settings/integrations">Review market settings</a>
+            </Button>
+            <Button type="button" size="sm" variant="outline" asChild>
+              <a href="/stores">Select destination store</a>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowTechnical((v) => !v)}
+            >
+              {showTechnical ? "Hide" : "View"} technical details
+            </Button>
+          </div>
+          {showTechnical ? (
+            <dl className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+              <div>
+                <dt className="font-medium text-foreground">Block code</dt>
+                <dd>{workspace.pricingBlockCode ?? "fx_unavailable"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-foreground">FX provider</dt>
+                <dd>{workspace.fxProvider ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-foreground">FX status</dt>
+                <dd>{workspace.fxStatus ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="font-medium text-foreground">Product</dt>
+                <dd className="font-mono">{productId}</dd>
+              </div>
+            </dl>
+          ) : null}
         </div>
       ) : null}
 
-      <p className="text-xs text-muted-foreground">{workspace.fxNote}</p>
+      {!workspace.shippingCostAvailable ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+          {workspace.shippingWarning ??
+            "Shipping cost unavailable — freight is not treated as zero."}
+        </div>
+      ) : null}
+
+      {!blocked ? (
+        <p className="text-xs text-muted-foreground">{workspace.fxNote}</p>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-2 rounded-lg border p-3">
         <label className="space-y-1 text-xs">
@@ -185,7 +264,7 @@ export function DraftPricingPanel({
           type="button"
           variant="outline"
           size="sm"
-          disabled={busy}
+          disabled={busy || blocked}
           onClick={() => void run("preview")}
         >
           Preview
@@ -193,7 +272,7 @@ export function DraftPricingPanel({
         <Button
           type="button"
           size="sm"
-          disabled={busy}
+          disabled={busy || blocked}
           onClick={() => void run("apply")}
         >
           Apply to enabled variants
@@ -207,8 +286,9 @@ export function DraftPricingPanel({
           <TableHeader>
             <TableRow>
               <TableHead>Variant</TableHead>
-              <TableHead>Supplier cost</TableHead>
-              <TableHead>Sell</TableHead>
+              <TableHead>Supplier source</TableHead>
+              <TableHead>Localized / converted</TableHead>
+              <TableHead>Sell ({sellingCurrency ?? "—"})</TableHead>
               <TableHead>Proposed</TableHead>
               <TableHead>Profit</TableHead>
               <TableHead>Margin</TableHead>
@@ -225,26 +305,49 @@ export function DraftPricingPanel({
                       Disabled
                     </Badge>
                   ) : null}
+                  {row.rowBlocked ? (
+                    <Badge className="ml-2" variant="destructive">
+                      Blocked
+                    </Badge>
+                  ) : null}
                 </TableCell>
                 <TableCell>
                   {money(row.supplierCost, row.supplierCurrency)}
                 </TableCell>
-                <TableCell>{money(row.sellPrice, workspace.currency)}</TableCell>
                 <TableCell>
-                  {money(row.proposedSellPrice, workspace.currency)}
+                  {row.rowBlocked
+                    ? "—"
+                    : money(
+                        row.convertedCost,
+                        row.convertedCurrency ?? sellingCurrency,
+                      )}
                 </TableCell>
-                <TableCell>{money(row.profit, workspace.currency)}</TableCell>
+                <TableCell>{money(row.sellPrice, sellingCurrency)}</TableCell>
                 <TableCell>
-                  {row.marginPercent != null ? `${row.marginPercent}%` : "—"}
+                  {money(row.proposedSellPrice, sellingCurrency)}
                 </TableCell>
                 <TableCell>
-                  {money(row.breakEvenPrice, workspace.currency)}
+                  {row.rowBlocked ? "—" : money(row.profit, sellingCurrency)}
+                </TableCell>
+                <TableCell>
+                  {row.rowBlocked || row.marginPercent == null
+                    ? "—"
+                    : `${row.marginPercent}%`}
+                </TableCell>
+                <TableCell>
+                  {row.rowBlocked
+                    ? "—"
+                    : money(row.breakEvenPrice, sellingCurrency)}
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
+      <p className="sr-only">
+        Product context {product.title}. Supplier destination{" "}
+        {product.shipToCountry ?? "unknown"}.
+      </p>
     </section>
   );
 }
