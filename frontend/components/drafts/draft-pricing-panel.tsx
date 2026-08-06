@@ -42,6 +42,7 @@ export function DraftPricingPanel({
   const [mode, setMode] = useState<DraftPricingApplyMode>("percentage_markup");
   const [markupPercent, setMarkupPercent] = useState("50");
   const [markupFixed, setMarkupFixed] = useState("5");
+  const [targetMargin, setTargetMargin] = useState("40");
   const [sellPrice, setSellPrice] = useState("");
   const [compareAt, setCompareAt] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -55,9 +56,12 @@ export function DraftPricingPanel({
       mode,
       markupPercent: mode === "percentage_markup" ? markupPercent : undefined,
       markupFixed: mode === "fixed_markup" ? markupFixed : undefined,
+      targetMarginPercent: mode === "target_margin" ? targetMargin : undefined,
       sellPrice: mode === "set_sell_price" ? sellPrice : undefined,
       compareAtPrice: mode === "set_compare_at" ? compareAt : undefined,
       roundToCents: true,
+      includeShippingInCost: true,
+      psychologicalRounding: false,
     };
     try {
       if (kind === "preview") {
@@ -122,6 +126,7 @@ export function DraftPricingPanel({
           >
             <option value="percentage_markup">Percentage markup</option>
             <option value="fixed_markup">Fixed markup</option>
+            <option value="target_margin">Target margin</option>
             <option value="set_sell_price">Set selling price</option>
             <option value="set_compare_at">Set compare-at</option>
           </select>
@@ -142,6 +147,16 @@ export function DraftPricingPanel({
             <Input
               value={markupFixed}
               onChange={(e) => setMarkupFixed(e.target.value)}
+              className="h-9 w-28"
+            />
+          </label>
+        ) : null}
+        {mode === "target_margin" ? (
+          <label className="space-y-1 text-xs">
+            <span className="text-muted-foreground">Target margin %</span>
+            <Input
+              value={targetMargin}
+              onChange={(e) => setTargetMargin(e.target.value)}
               className="h-9 w-28"
             />
           </label>

@@ -316,6 +316,7 @@ class PricingEngine(BaseService):
                     cost=variant.cost_price,
                     current=variant.sell_price,
                     request=propose,
+                    shipping_cost=shipping,
                 )
                 if propose is not None
                 else None
@@ -375,6 +376,7 @@ class PricingEngine(BaseService):
                 cost=variant.cost_price,
                 current=variant.sell_price,
                 request=request,
+                shipping_cost=product.shipping_cost,
             )
             if proposed is None:
                 continue
@@ -397,6 +399,7 @@ class PricingEngine(BaseService):
         cost: Decimal | None,
         current: Decimal | None,
         request: DraftPricingApplyRequest,
+        shipping_cost: Decimal | None = None,
     ) -> Decimal | None:
         if request.mode is DraftPricingApplyMode.SET_SELL_PRICE:
             if request.sell_price is None:
@@ -406,21 +409,50 @@ class PricingEngine(BaseService):
             return self._quantize(request.sell_price, cents=request.round_to_cents)
         if cost is None:
             return None
+        landed = cost + request.handling_cost
+        if request.include_shipping_in_cost and shipping_cost is not None:
+            landed += shipping_cost
         if request.mode is DraftPricingApplyMode.PERCENTAGE_MARKUP:
             if request.markup_percent is None:
                 raise ValidationError("percentage_markup requires markup_percent.")
-            price = cost * (Decimal("1") + request.markup_percent / Decimal("100"))
+            price = landed * (Decimal("1") + request.markup_percent / Decimal("100"))
         elif request.mode is DraftPricingApplyMode.FIXED_MARKUP:
             if request.markup_fixed is None:
                 raise ValidationError("fixed_markup requires markup_fixed.")
-            price = cost + request.markup_fixed
+            price = landed + request.markup_fixed
+        elif request.mode is DraftPricingApplyMode.TARGET_MARGIN:
+            if request.target_margin_percent is None:
+                raise ValidationError("target_margin requires target_margin_percent.")
+            if request.target_margin_percent >= Decimal("100"):
+                raise ValidationError("target_margin_percent must be below 100.")
+            # sell = landed / (1 - margin%)
+            denominator = Decimal("1") - (request.target_margin_percent / Decimal("100"))
+            price = landed / denominator
         elif request.mode is DraftPricingApplyMode.SET_COMPARE_AT:
             return current
         else:
             raise ValidationError(f"Unsupported pricing mode: {request.mode}")
+        if request.min_profit is not None:
+            price = max(price, landed + request.min_profit)
+        if request.min_sell_price is not None:
+            price = max(price, request.min_sell_price)
+        if request.max_sell_price is not None:
+            price = min(price, request.max_sell_price)
+        if request.psychological_rounding:
+            price = self._psychological_round(price)
         if price < 0:
             raise ValidationError("Proposed sell price must be non-negative.")
         return self._quantize(price, cents=request.round_to_cents)
+
+    @staticmethod
+    def _psychological_round(amount: Decimal) -> Decimal:
+        """Round to .99 endings when amount >= 1."""
+        if amount < 1:
+            return amount
+        whole = amount.to_integral_value(rounding=ROUND_HALF_UP)
+        if whole < 1:
+            return amount
+        return whole - Decimal("0.01")
 
     def _variant_row(
         self,

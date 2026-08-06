@@ -19,6 +19,7 @@ from app.schemas.base import CamelCaseModel
 class DraftPricingApplyMode(StrEnum):
     PERCENTAGE_MARKUP = "percentage_markup"
     FIXED_MARKUP = "fixed_markup"
+    TARGET_MARGIN = "target_margin"
     SET_SELL_PRICE = "set_sell_price"
     SET_COMPARE_AT = "set_compare_at"
 
@@ -62,9 +63,15 @@ class DraftPricingApplyRequest(CamelCaseModel):
     mode: DraftPricingApplyMode
     markup_percent: Decimal | None = None
     markup_fixed: Decimal | None = None
+    target_margin_percent: Decimal | None = None
+    min_profit: Decimal | None = None
+    min_sell_price: Decimal | None = None
+    max_sell_price: Decimal | None = None
     sell_price: Decimal | None = None
     compare_at_price: Decimal | None = None
     variant_ids: list[uuid.UUID] | None = None
     round_to_cents: bool = True
+    psychological_rounding: bool = False
     handling_cost: Decimal = Field(default=Decimal("0"))
     fee_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    include_shipping_in_cost: bool = True
