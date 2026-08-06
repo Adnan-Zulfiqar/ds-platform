@@ -20,6 +20,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import Field, field_validator
 
@@ -126,6 +127,13 @@ class ProductRead(CamelCaseModel):
     ship_to_country: str | None = None
     shipping_cost: Decimal | None = None
     warehouse_origin: str | None = None
+    requires_shipping: bool = True
+    hs_code: str | None = None
+    country_of_origin: str | None = None
+    customs_description: str | None = None
+    handling_time_days: int | None = None
+    weight_unit: str | None = None
+    dimension_unit: str | None = None
     supplier_name: str | None = None
     rating: Decimal | None = None
     review_count: int | None = None
@@ -137,7 +145,13 @@ class ProductRead(CamelCaseModel):
     # --- SEO / marketplace (Phase 9 stage 3) ---------------------------------
     seo_title: str | None = None
     seo_description: str | None = None
+    #: Legacy; not exported to Shopify. Prefer ``search_topics``.
     meta_keywords: str | None = None
+    search_topics: list[str] = Field(default_factory=list)
+    seo_planning: dict[str, Any] = Field(default_factory=dict)
+    og_title: str | None = None
+    og_description: str | None = None
+    redirect_old_handle: bool = True
     slug: str | None = None
     vendor: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -208,8 +222,24 @@ class ProductUpdateRequest(CamelCaseModel):
     seo_title: str | None = Field(default=None, max_length=512)
     seo_description: str | None = Field(default=None, max_length=512)
     meta_keywords: str | None = None
+    search_topics: list[str] | None = None
+    seo_planning: dict[str, Any] | None = None
+    og_title: str | None = Field(default=None, max_length=512)
+    og_description: str | None = Field(default=None, max_length=1024)
+    redirect_old_handle: bool | None = None
     slug: str | None = Field(default=None, max_length=255)
     status: ProductStatus | None = None
+    requires_shipping: bool | None = None
+    hs_code: str | None = Field(default=None, max_length=32)
+    country_of_origin: str | None = Field(default=None, max_length=8)
+    customs_description: str | None = Field(default=None, max_length=255)
+    handling_time_days: int | None = Field(default=None, ge=0, le=365)
+    package_weight_kg: Decimal | None = None
+    package_length_cm: int | None = Field(default=None, ge=0)
+    package_width_cm: int | None = Field(default=None, ge=0)
+    package_height_cm: int | None = Field(default=None, ge=0)
+    weight_unit: str | None = Field(default=None, max_length=8)
+    dimension_unit: str | None = Field(default=None, max_length=8)
 
     @field_validator("title", "brand", "category_name", "vendor", "seo_title", "slug")
     @classmethod
