@@ -493,10 +493,31 @@ localised by design:
 
 ---
 
-## Product import errors (`ds.product.get`)
+## Product import destinations (`ds.product.get`)
 
-Import uses `aliexpress.ds.product.get` with `ship_to_country` (default `US`)
-and `target_currency`. An empty product envelope is **not** always "not found":
+Import uses `aliexpress.ds.product.get` with an explicit `ship_to_country`
+(ISO 3166-1 alpha-2) and `target_currency`. There is **no silent US default**.
+
+Destination resolution order (`ImportDestinationService`):
+
+1. Request `shipToCountry` from the Import as Draft dialog
+2. Selected store’s `settings.countryCode` (or `country` / `shipToCountry`)
+3. Optional platform `DEFAULT_SHIP_TO_COUNTRY` (blank by default)
+4. Tenant’s last successful import destination
+5. Otherwise `422 validation_error` — merchant must choose
+
+Each import attempt records `ship_to_country`, `currency`, and `result_category`
+on `product_imports`. A successful import also sets
+`products.import_ship_to_country` and `import_ship_to_checked_at`. Refresh/sync
+reuses that destination rather than forcing US.
+
+**One product row per destination policy:** the catalogue keeps a single
+`(tenant, source, external_id)` row. Changing destination refreshes the supplier
+snapshot; it does not create a second draft per country (see M25).
+
+### Product import errors
+
+An empty product envelope is **not** always "not found":
 
 | Upstream `rsp_code` / `rsp_msg` | DropPilot code | HTTP | Meaning |
 |---|---|---|---|
@@ -505,13 +526,20 @@ and `target_currency`. An empty product envelope is **not** always "not found":
 | Other empty / unusable result | `aliexpress_product_unavailable` | 404 | Treat as unavailable; do not invent a draft |
 
 Live observation (2026-08): product `1005010486653604` returns **482** for
-`ship_to_country=US` and a full product for `GB` (and several other EU/AU
-destinations). The Import as Draft dialog exposes ship-to so merchants can
-retry without guessing.
+`ship_to_country=US` and a full product for `GB`. The dialog keeps the pasted
+URL when destination fails so the merchant can change country and retry.
+
+Publish to Shopify compares `import_ship_to_country` with the store’s configured
+market country when both are known, and blocks on mismatch — GB availability
+does not prove US availability.
 
 Mandatory field for draft creation: supplier `product_id`. Optional fields
 (images, SKUs, description, logistics) must not block import when present as
 null/empty on an otherwise valid detail payload.
+
+Migration notes: premium-editor `0018` is preserved on develop for Alembic stamp
+compatibility; import destination columns are `0019`. Integration tests use
+isolated `POSTGRES_TEST_DB` (default `droppilot_test`).
 
 ## Known limitations
 

@@ -12,6 +12,13 @@ production release.
 
 ### Added
 
+- **AliExpress import destinations** — Import as Draft records `ship_to_country`
+  on each import job and `import_ship_to_country` / `import_ship_to_checked_at`
+  on the product (migration `0019`). Destination resolution prefers the dialog
+  selection, then store `settings.countryCode`, then optional
+  `DEFAULT_SHIP_TO_COUNTRY`, then the last successful import — never a silent
+  US default. Publish warns/blocks when the store market differs from the
+  import destination.
 - **Draft Product Editor Stage 5** — Pricing workspace (`GET/POST …/pricing`)
   with Decimal profit/margin/break-even; inventory freshness + supplier stock
   labels; shipping package/logistics columns (migration `0017`). Missing
@@ -37,6 +44,13 @@ production release.
 
 ### Fixed
 
+- **AliExpress ship-to errors** — `rsp_code 482 SHIP_TO_COUNTRY_PROHIBITED` maps
+  to `aliexpress_ship_to_prohibited` (422) with an actionable destination
+  message; `605` maps to `aliexpress_product_unavailable` (404). Empty product
+  envelopes are no longer labelled “Product not found.” Integration tests use
+  isolated `droppilot_test` so Alembic head mismatches on the shared developer
+  DB do not block the suite. Premium-editor migration `0018` is preserved on
+  develop for stamp compatibility.
 - **A-06** — CI `frontend-e2e` job runs Playwright chromium against a live API
   with `SECURITY_RATE_LIMIT_REQUESTS=1000`; `.env.example` documents the e2e
   ceiling; Playwright serves the standalone build via `npm run start:e2e`

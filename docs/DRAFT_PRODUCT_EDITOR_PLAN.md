@@ -49,6 +49,15 @@ Draft routes delegate writes to the same `ProductService` / import sync path.
   option keys as a matrix editor is not built.
 - Barcode and weight/dimensions columns not added.
 
+### Import destination (2026-08)
+
+AliExpress availability is destination-specific. Import as Draft records the
+ship-to country used (`import_ship_to_country` / checked-at). The Shipping tab
+shows **Imported for** and **Last checked**. Changing destination refreshes the
+supplier snapshot without creating a second Product row and without overwriting
+merchant-edited title/description/images/sell prices (existing `_upsert`
+rules). See `docs/ALIEXPRESS_INTEGRATION.md` and technical debt M24/M25.
+
 ### Stage 5 limitations (honest)
 
 - FX conversion is identity (no live rate feed).

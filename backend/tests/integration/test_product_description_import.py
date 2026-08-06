@@ -84,8 +84,10 @@ class TestFirstImport:
         not carry a full description body per row."""
         headers, _ = await import_a_product(client, monkeypatch)
 
-        response = await client.get("/api/v1/products", headers=headers)
+        # Imports are drafts until published — list via Drafts, not Products.
+        response = await client.get("/api/v1/drafts", headers=headers)
         assert response.status_code == 200, response.text
+        assert response.json()["items"]
         assert "description" not in response.json()["items"][0]
 
 

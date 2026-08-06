@@ -250,8 +250,11 @@ class TestImport:
         assert second.status_code == 201
         assert first.json()["id"] == second.json()["id"]
 
-        listing = (await client.get(PRODUCTS_URL, headers=headers)).json()
-        assert listing["meta"]["totalItems"] == 1
+        # Imports land in Drafts, not Products (publication projection).
+        drafts = (await client.get("/api/v1/drafts", headers=headers)).json()
+        assert drafts["meta"]["totalItems"] == 1
+        published = (await client.get(PRODUCTS_URL, headers=headers)).json()
+        assert published["meta"]["totalItems"] == 0
 
     async def test_reimport_does_not_duplicate_variants_or_images(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
@@ -299,7 +302,13 @@ class TestImport:
         assert response.status_code == 422
         body = response.json()
         assert body["code"] == "aliexpress_ship_to_prohibited"
-        assert "ship-to" in body["message"].lower() or "destination" in body["message"].lower()
+        assert "united states" in body["message"].lower()
+        assert "shipped" in body["message"].lower()
+        history = (await client.get(IMPORTS_URL, headers=headers)).json()
+        failed = [r for r in history["items"] if r["status"] == "failed"]
+        assert failed
+        assert failed[0]["shipToCountry"] == "US"
+        assert failed[0]["resultCategory"] == "aliexpress_ship_to_prohibited"
         listing = (await client.get(PRODUCTS_URL, headers=headers)).json()
         assert listing["meta"]["totalItems"] == 0
 

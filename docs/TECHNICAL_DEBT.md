@@ -475,6 +475,22 @@ remain incomplete.
 **Fix:** continue Stages 4 polish + Stages 5–8 per
 [DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md).
 
+### M24 — Store market country is not synced from Shopify
+
+Import destination priority can read `stores.settings.countryCode`, but nothing
+populates that field from Shopify Markets yet. Until then, merchants pick
+ship-to explicitly (or set `DEFAULT_SHIP_TO_COUNTRY` / store settings manually).
+Publish blocks only when both import destination and store country are known
+and differ.
+
+### M25 — One supplier snapshot per product, not per destination
+
+Architecture keeps a single `Product` row per `(tenant, source, external_id)`.
+Changing ship-to refreshes `import_ship_to_country` and logistics fields; it
+does not retain a parallel GB/US snapshot. Documented in
+`docs/ALIEXPRESS_INTEGRATION.md`. Multi-destination snapshots need an approved
+domain design before adding rows.
+
 ### M23 — Draft pricing FX and freight quotes incomplete
 
 Stage 5 Decimal workspace computes profit/margin/break-even and warns when

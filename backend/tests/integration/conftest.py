@@ -9,6 +9,11 @@ cleanly fails the test suite rather than the deploy.
 Every test runs inside a transaction that is rolled back afterwards, so tests
 cannot see each other's rows and order does not matter.
 
+**Isolated test database.** Root ``tests/conftest.py`` already sets
+``POSTGRES_DB=droppilot_test`` before Settings is constructed, so integration
+tests never use the shared developer ``droppilot`` database. This module ensures
+that database exists and applies migrations to head.
+
 The whole package skips when no database is reachable, so a developer without
 PostgreSQL still gets a green unit suite instead of a wall of connection errors.
 CI always has one, so these never silently stop running there.
@@ -23,12 +28,39 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.context import clear_context
+from app.integrations.aliexpress import service as aliexpress_service_module
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+_TEST_DB = settings.database.db
+
+
+def _ensure_test_database_exists() -> None:
+    """Create the configured test database if missing."""
+    admin_url = (
+        f"postgresql+psycopg://{settings.database.user}:"
+        f"{settings.database.password.get_secret_value()}"
+        f"@{settings.database.host}:{settings.database.port}/postgres"
+    )
+    engine = sa.create_engine(
+        admin_url,
+        isolation_level="AUTOCOMMIT",
+        connect_args={"connect_timeout": 3},
+    )
+    try:
+        with engine.connect() as connection:
+            exists = connection.execute(
+                sa.text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": _TEST_DB},
+            ).scalar()
+            if not exists:
+                connection.execute(sa.text(f'CREATE DATABASE "{_TEST_DB}"'))
+    finally:
+        engine.dispose()
 
 
 def _database_is_reachable() -> bool:
@@ -38,6 +70,7 @@ def _database_is_reachable() -> bool:
     exists, so an async probe would need a loop just to decide whether to skip.
     """
     try:
+        _ensure_test_database_exists()
         engine = sa.create_engine(settings.database.sync_dsn, connect_args={"connect_timeout": 3})
         with engine.connect() as connection:
             connection.execute(sa.text("SELECT 1"))
@@ -57,12 +90,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="session", autouse=True)
 def _apply_migrations() -> None:
-    """Bring the test database to head, from empty.
-
-    Downgrading to base first means each session starts from nothing, so a
-    migration that only works against an already-populated schema is caught
-    here rather than on a fresh environment.
-    """
+    """Bring the isolated test database to head, from empty."""
     if not DATABASE_AVAILABLE:
         return
 
@@ -73,9 +101,6 @@ def _apply_migrations() -> None:
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", settings.database.sync_dsn)
 
-    # Tolerated and deliberately silent: a database with no alembic_version
-    # table has nothing to downgrade, which is the normal state on a fresh
-    # machine or in CI. Failing here would make the common case an error.
     try:
         command.downgrade(config, "base")
     except Exception:  # noqa: S110
@@ -84,15 +109,34 @@ def _apply_migrations() -> None:
     command.upgrade(config, "head")
 
 
+@pytest.fixture(autouse=True)
+def _platform_import_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Platform AE credentials + ship-to fallback for import integration tests.
+
+    Root ``tests/conftest.py`` disables ``.env`` reads, so connect/import cannot
+    depend on a developer machine's AliExpress keys. Tests that omit
+    ``shipToCountry`` still need a resolvable destination.
+    """
+    monkeypatch.setattr(
+        aliexpress_service_module.settings.aliexpress,
+        "app_key",
+        "test-aliexpress-app-key",
+    )
+    monkeypatch.setattr(
+        aliexpress_service_module.settings.aliexpress,
+        "app_secret",
+        SecretStr("test-aliexpress-app-secret"),
+    )
+    monkeypatch.setattr(
+        aliexpress_service_module.settings,
+        "default_ship_to_country",
+        "US",
+    )
+
+
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession]:
-    """A session whose changes are rolled back at the end of the test.
-
-    The session is bound to an open connection-level transaction rather than
-    being allowed to commit. Anything the code under test commits lands inside
-    that outer transaction, and rolling it back discards the lot — including
-    writes made by request handlers, which do commit.
-    """
+    """A session whose changes are rolled back at the end of the test."""
     engine = create_async_engine(settings.database.async_dsn, poolclass=None)
     connection = await engine.connect()
     transaction = await connection.begin()
@@ -112,16 +156,7 @@ async def db_session() -> AsyncGenerator[AsyncSession]:
 
 @pytest.fixture
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
-    """An HTTP client wired to the application, sharing the test transaction.
-
-    ``get_db_session`` is overridden so handlers use the same rolled-back
-    session as the test body. Without that the API would write through its own
-    connection and leave rows behind.
-
-    ``ASGITransport`` calls the app in-process — no socket, no server, and none
-    of the overhead that made Starlette's TestClient misleading to benchmark
-    against in Phase 0.
-    """
+    """An HTTP client wired to the application, sharing the test transaction."""
     from app.api.deps import get_db_session
     from app.main import create_application
 
@@ -135,8 +170,6 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
-        # Cookies persist across calls on one client, which is what makes the
-        # refresh-token flow testable exactly as a browser performs it.
     ) as http_client:
         yield http_client
 
@@ -145,23 +178,13 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient]:
 
 @pytest.fixture(autouse=True)
 def _disable_login_throttle() -> AsyncGenerator[None]:
-    """Turn off login throttling for the HTTP flow tests.
-
-    Redis may not be running, and the throttle fails open, so leaving it on
-    would mostly be a no-op — but a test that legitimately makes several failed
-    attempts should not depend on that.
-
-    The throttle itself is covered by ``tests/unit/test_login_throttle.py``,
-    which runs it against an in-process Redis. An earlier version of this
-    docstring claimed that coverage before it existed; it exists now.
-    """
+    """Turn off login throttling for the HTTP flow tests."""
     original = settings.security.rate_limit_enabled
     settings.security.rate_limit_enabled = False
     yield
     settings.security.rate_limit_enabled = original
 
 
-# Registration payload reused across tests.
 STRONG_PASSWORD = "Correct-Horse-Battery9"
 
 
