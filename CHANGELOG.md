@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pricing currency integrity** — Prohibit 1:1 cross-currency conversion;
+  block calculated profit/proposed prices when FX is required and unavailable;
+  Pricing badge uses destination selling currency (store → workspace → supplier)
+  instead of relabelling supplier amounts. See
+  `docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
+
+### Added
+
+- **Money / FX domain** — `Money` value object, `FxService` with
+  `unavailable`/`stub` providers, `FX_*` settings. See
+  `docs/MONEY_AND_CURRENCY_ARCHITECTURE.md` and `docs/FX_RATE_PROVIDER.md`.
+
 ### Changed
 
 - **Premium draft editor header** — Three-layer sticky chrome with thumbnail,

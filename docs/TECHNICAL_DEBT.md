@@ -491,16 +491,21 @@ does not retain a parallel GB/US snapshot. Documented in
 `docs/ALIEXPRESS_INTEGRATION.md`. Multi-destination snapshots need an approved
 domain design before adding rows.
 
-### M23 — Draft pricing FX and freight quotes incomplete
+### M23 — Draft pricing FX feed and freight quotes incomplete — PARTIAL
 
-Stage 5 Decimal workspace computes profit/margin/break-even and warns when
-shipping is unavailable. FX `convert_currency` remains identity; AliExpress
-product detail usually has no freight amount, so `shipping_cost` stays null.
+**Landed:** `Money` value object; cross-currency identity conversion prohibited;
+default `FX_PROVIDER=unavailable` blocks calculated profit when currencies
+differ; Pricing tab shows selling-currency badge + blocking banner; audit in
+`docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
 
-**Impact:** Merchants see honest “unavailable” freight, but cannot yet land
-true destination quotes or converted-currency costs.
-**Trigger:** before publish readiness treats shipping as a hard block by policy.
-**Fix:** wire FX feed + freight option fetch; extend readiness policy.
+**Still open:** production FX API provider; Shopify `shop.currencyCode` refresh
+into store metadata; AliExpress GB/GBP target-price field priority; fee/tax
+profiles; freight option fetch; historical row reconciliation migration.
+
+**Impact:** Cross-currency drafts no longer invent CNY labels on USD amounts,
+but cannot yet compute converted GBP/USD sells without a configured feed.
+**Trigger:** before publish readiness treats shipping/FX as hard blocks by policy.
+**Fix:** wire production FX + freight + store currency refresh.
 
 ### M24 — Online Store publications API and shipping profile scopes
 
