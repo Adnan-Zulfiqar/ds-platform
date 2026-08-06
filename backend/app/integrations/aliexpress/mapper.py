@@ -57,14 +57,14 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
     :meth:`ProductImportService._upsert`, the same reasoning that already
     keeps ``status`` out of this function.
 
-    **Package dimensions and weight are parsed but not stored.** The contract
-    layer reads them, and nothing consumes them until shipping estimates arrive
-    in a later phase. Adding the columns now would mean four columns nothing
-    reads; the parser keeps them so that adding those columns is a migration
-    rather than another round of contract discovery.
+    Package weight/dimensions and logistics delivery hints are stored for the
+    Draft Shipping workspace. Freight quotes are still usually absent from
+    ``ds.product.get`` — ``shipping_cost`` stays null rather than inventing zero.
     """
     base = detail.base
     store = detail.ae_store_info
+    package = detail.package_info_dto
+    logistics = detail.logistics_info_dto
     low, high = detail.price_range
 
     external_id = detail.product_id
@@ -97,14 +97,26 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
         "cost_price_min": low,
         "cost_price_max": high,
         "stock_quantity": detail.total_stock,
+        "package_weight_kg": package.weight_kg if package else None,
+        "package_length_cm": package.package_length if package else None,
+        "package_width_cm": package.package_width if package else None,
+        "package_height_cm": package.package_height if package else None,
+        "delivery_time_days": logistics.delivery_time if logistics else None,
+        "ship_to_country": (
+            _truncate(logistics.ship_to_country, 8)
+            if logistics and logistics.ship_to_country
+            else None
+        ),
+        # Freight is not on the product detail contract we use today.
+        "shipping_cost": None,
+        "warehouse_origin": (
+            _truncate(store.store_country_code, 64) if store and store.store_country_code else None
+        ),
         "supplier_name": _truncate(store.store_name, 255) if store else None,
         "supplier_id": str(store.store_id) if store and store.store_id is not None else None,
         "rating": base.rating,
         "review_count": base.reviews,
         "order_count": base.orders,
-        # `package` is read for its side effect on validation only; dimensions
-        # are not yet stored because nothing consumes them until shipping
-        # estimates arrive. Kept in the signature so the omission is visible.
         "last_sync_error": None,
     }
 

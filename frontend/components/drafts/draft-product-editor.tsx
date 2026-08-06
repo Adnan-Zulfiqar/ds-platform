@@ -11,7 +11,10 @@ import {
   Store,
 } from "lucide-react";
 
+import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
 import { DraftMediaPanel } from "@/components/drafts/draft-media-panel";
+import { DraftPricingPanel } from "@/components/drafts/draft-pricing-panel";
+import { DraftShippingPanel } from "@/components/drafts/draft-shipping-panel";
 import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
 import { OptimizeProductButton } from "@/components/products/optimize-product-button";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
@@ -667,21 +670,30 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             <DraftVariantsPanel productId={productId} product={data} />
           ) : null}
 
+          {tab === "pricing" ? (
+            <DraftPricingPanel productId={productId} product={data} />
+          ) : null}
+
+          {tab === "inventory" ? (
+            <DraftInventoryPanel productId={productId} product={data} />
+          ) : null}
+
+          {tab === "shipping" ? (
+            <DraftShippingPanel productId={productId} product={data} />
+          ) : null}
+
           {tab !== "overview" &&
           tab !== "description" &&
           tab !== "seo" &&
           tab !== "publishing" &&
           tab !== "media" &&
-          tab !== "variants" ? (
+          tab !== "variants" &&
+          tab !== "pricing" &&
+          tab !== "inventory" &&
+          tab !== "shipping" ? (
             <section className="rounded-lg border border-dashed p-8 text-center">
               <h2 className="text-lg font-semibold">{TAB_LABEL[tab]}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                {tab === "pricing" &&
-                  "Decimal-safe selling price / profit workspace lands in Stage 5. Set per-variant sell prices under Variants today."}
-                {tab === "inventory" &&
-                  `Cached supplier stock total: ${data.stockQuantity.toLocaleString()}. Per-variant stock is on the Variants tab. Stage 5 adds buffers and freshness.`}
-                {tab === "shipping" &&
-                  "Supplier shipping options and delivery estimates land in Stage 5."}
                 {tab === "ai-studio" &&
                   "Use Optimize with AI in the header for now. Side-by-side proposal studio is Stage 6."}
                 {tab === "history" &&

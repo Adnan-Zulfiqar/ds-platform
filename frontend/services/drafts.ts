@@ -7,6 +7,8 @@ import {
 
 import { apiClient } from "@/lib/api-client";
 import type {
+  DraftPricingApplyPayload,
+  DraftPricingWorkspace,
   ListQuery,
   Page,
   Product,
@@ -27,6 +29,7 @@ export const draftKeys = {
   list: (query: ListQuery) => [...draftKeys.lists(), query] as const,
   details: () => [...draftKeys.all, "detail"] as const,
   detail: (id: string) => [...draftKeys.details(), id] as const,
+  pricing: (id: string) => [...draftKeys.all, "pricing", id] as const,
 };
 
 async function fetchDrafts(query: ListQuery): Promise<Page<Product>> {
@@ -190,5 +193,51 @@ export function useUpdateDraftVariant(productId: string) {
       return data;
     },
     onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
+export function useDraftPricing(
+  productId: string,
+): UseQueryResult<DraftPricingWorkspace> {
+  return useQuery({
+    queryKey: draftKeys.pricing(productId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<DraftPricingWorkspace>(
+        `/drafts/${productId}/pricing`,
+      );
+      return data;
+    },
+    enabled: Boolean(productId),
+  });
+}
+
+export function usePreviewDraftPricing(productId: string) {
+  return useMutation({
+    mutationFn: async (payload: DraftPricingApplyPayload) => {
+      const { data } = await apiClient.post<DraftPricingWorkspace>(
+        `/drafts/${productId}/pricing/preview`,
+        payload,
+      );
+      return data;
+    },
+  });
+}
+
+export function useApplyDraftPricing(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: DraftPricingApplyPayload) => {
+      const { data } = await apiClient.post<DraftPricingWorkspace>(
+        `/drafts/${productId}/pricing/apply`,
+        payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      invalidateDraftWorkspace(queryClient, productId);
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.pricing(productId),
+      });
+    },
   });
 }

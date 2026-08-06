@@ -8,7 +8,12 @@ from uuid import uuid4
 import pytest
 
 from app.models.pricing import PricingRule, PricingScope, PricingStrategy
-from app.services.pricing_engine import compute_sell_price, convert_currency, select_rule
+from app.services.pricing_engine import (
+    PricingEngine,
+    compute_sell_price,
+    convert_currency,
+    select_rule,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -74,3 +79,26 @@ class TestSelectRule:
         assert convert_currency(Decimal("9.99"), from_currency="USD", to_currency="EUR") == Decimal(
             "9.99"
         )
+
+
+class TestDraftVariantRow:
+    def test_profit_and_margin_use_decimal_math(self) -> None:
+        engine = PricingEngine.__new__(PricingEngine)
+        row = engine._variant_row(
+            variant_id=uuid4(),
+            label="Black",
+            is_enabled=True,
+            supplier_cost=Decimal("10"),
+            supplier_currency="USD",
+            sell_price=Decimal("15"),
+            compare_at_price=None,
+            proposed_sell_price=None,
+            shipping_cost=None,
+            handling_cost=Decimal("0"),
+            fee_percent=Decimal("0"),
+            pricing_rule_source=None,
+        )
+        assert row.profit == Decimal("5.0000")
+        assert row.margin_percent == Decimal("33.33")
+        assert row.shipping_cost_available is False
+        assert row.break_even_price == Decimal("10.0000")

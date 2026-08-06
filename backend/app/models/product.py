@@ -231,6 +231,20 @@ class Product(TenantScopedBase):
     # --- Inventory ----------------------------------------------------------
     stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # --- Package / shipping snapshot (Stage 5) ------------------------------
+    #
+    # Populated from AliExpress package/logistics DTOs on import/refresh.
+    # ``shipping_cost`` stays null when the supplier quote is unknown — never
+    # coerce to zero (publish readiness treats null as unavailable).
+    package_weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    package_length_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    package_width_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    package_height_cm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delivery_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ship_to_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    shipping_cost: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    warehouse_origin: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     # --- Supplier reputation ------------------------------------------------
     supplier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     supplier_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

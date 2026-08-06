@@ -116,7 +116,16 @@ class ProductRead(CamelCaseModel):
     currency: str | None = None
     cost_price_min: Decimal | None = None
     cost_price_max: Decimal | None = None
+    sell_price: Decimal | None = None
     stock_quantity: int
+    package_weight_kg: Decimal | None = None
+    package_length_cm: int | None = None
+    package_width_cm: int | None = None
+    package_height_cm: int | None = None
+    delivery_time_days: int | None = None
+    ship_to_country: str | None = None
+    shipping_cost: Decimal | None = None
+    warehouse_origin: str | None = None
     supplier_name: str | None = None
     rating: Decimal | None = None
     review_count: int | None = None
