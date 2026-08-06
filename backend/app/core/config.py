@@ -668,6 +668,31 @@ class StorageSettings(_EnvFileSettings):
     presigned_url_ttl_seconds: int = Field(default=3600, ge=1)
 
 
+class FxSettings(_EnvFileSettings):
+    """Exchange-rate provider configuration.
+
+    Default provider is ``unavailable`` so cross-currency pricing blocks rather
+    than inventing a 1:1 rate. Use ``stub`` only in automated tests.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="FX_", extra="ignore")
+
+    provider: str = Field(
+        default="unavailable",
+        description="unavailable | stub | (future: frankfurter, openexchangerates).",
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="Provider API key when required. Never commit real keys.",
+    )
+    rate_max_age_minutes: int = Field(
+        default=60,
+        ge=1,
+        description="Quotes older than this are marked stale.",
+    )
+    cache_ttl_seconds: int = Field(default=300, ge=1)
+
+
 class Settings(_EnvFileSettings):
     """Root settings object.
 
@@ -719,6 +744,7 @@ class Settings(_EnvFileSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    fx: FxSettings = Field(default_factory=FxSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
     ai: AISettings = Field(default_factory=AISettings)
