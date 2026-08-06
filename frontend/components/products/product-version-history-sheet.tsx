@@ -126,20 +126,32 @@ function VersionHistoryList({ productId }: { productId: string }) {
 export function ProductVersionHistorySheet({
   productId,
   productTitle,
+  open: openProp,
+  onOpenChange,
+  hideTrigger = false,
 }: {
   productId: string;
   productTitle: string;
+  /** Controlled open state for the editor More menu. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** When true, no permanent History button is rendered. */
+  hideTrigger?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = openProp ?? uncontrolledOpen;
+  const setOpen = onOpenChange ?? setUncontrolledOpen;
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
-        <Button size="sm" variant="ghost">
-          <History className="mr-2 h-4 w-4" aria-hidden="true" />
-          History
-        </Button>
-      </SheetTrigger>
+      {hideTrigger ? null : (
+        <SheetTrigger asChild>
+          <Button size="sm" variant="ghost">
+            <History className="mr-2 h-4 w-4" aria-hidden="true" />
+            History
+          </Button>
+        </SheetTrigger>
+      )}
 
       <SheetContent side="right" className="w-full max-w-md overflow-y-auto">
         <SheetHeader>
