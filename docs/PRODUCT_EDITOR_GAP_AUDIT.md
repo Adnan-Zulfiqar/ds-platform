@@ -11,6 +11,13 @@ documentation. No code changed while writing this document.
 
 ## 0. Stage progress
 
+**Draft Product Editor Stages 1–3 (2026-08-06, `cursor/draft-product-editor`).**
+Drafts vs Products publication split (synced `StoreListing`); Drafts list with
+Edit Draft → `/drafts/{id}`; editor shell with Overview/Description/SEO Save
+Draft via `PATCH /api/v1/drafts/{id}` (delegates to `ProductService`); Publish
+to Store panel. Media/variants/pricing/AI Studio still pending — see
+[DRAFT_PRODUCT_EDITOR_PLAN.md](DRAFT_PRODUCT_EDITOR_PLAN.md).
+
 **Stage 1 — AliExpress description import and sanitization: done (2026-08-03).**
 Closes the "Full description" / "HTML description" / "Plain-text
 description" rows in §2 below: `detail`/`mobile_detail` are now parsed

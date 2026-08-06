@@ -1,9 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { FileEdit, Package } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  Eye,
+  FileEdit,
+  MoreHorizontal,
+  Package,
+  Pencil,
+  RefreshCw,
+  Store,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -48,14 +65,6 @@ const AI_STATUS_LABEL: Record<ProductAIStatus, string> = {
   failed: "Failed",
 };
 
-/**
- * Format a supplier price for display.
- *
- * The value arrives as a string because the backend stores it as `Decimal`.
- * It is **not** parsed into a number: doing so would reintroduce the binary
- * floating-point error the backend avoided. A range collapses to one figure
- * when both ends agree, which is the common case for a single-variant product.
- */
 function formatPrice(product: Product): string {
   const { costPriceMin, costPriceMax, currency } = product;
   if (!costPriceMin) return "—";
@@ -75,6 +84,7 @@ interface ProductTableProps {
 }
 
 export function ProductTable({ variant = "products" }: ProductTableProps) {
+  const router = useRouter();
   const draftsQuery = useDrafts({ size: 25 });
   const productsQuery = useProducts({ size: 25 });
   const { data, isPending, isError, error, refetch } =
@@ -141,63 +151,151 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
   }
 
   const rowTestId = variant === "drafts" ? "draft-row" : "product-row";
+  const editorHref = (id: string) =>
+    variant === "drafts" ? `/drafts/${id}` : `/products/${id}`;
 
   return (
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-14">Image</TableHead>
             <TableHead>Product</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Supplier price</TableHead>
             <TableHead className="text-right">Stock</TableHead>
             <TableHead>Supplier</TableHead>
             <TableHead>AI status</TableHead>
-            <TableHead>Optimization</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {data.items.map((product) => (
-            <TableRow key={product.id} data-testid={rowTestId}>
-              <TableCell className="max-w-md">
-                <span className="line-clamp-2 font-medium">
-                  {product.title}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {product.externalId}
-                </span>
-              </TableCell>
-              <TableCell>
-                <Badge variant={STATUS_VARIANT[product.status]}>
-                  {product.status}
-                </Badge>
-              </TableCell>
-              <TableCell>{formatPrice(product)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {product.stockQuantity.toLocaleString()}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {product.supplierName ?? "—"}
-              </TableCell>
-              <TableCell>
-                <Badge
-                  variant={AI_STATUS_VARIANT[product.aiStatus]}
-                  data-testid="ai-status-badge"
-                >
-                  {AI_STATUS_LABEL[product.aiStatus]}
-                </Badge>
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <OptimizeProductButton productId={product.id} />
-                  <ProductVersionHistorySheet
-                    productId={product.id}
-                    productTitle={product.title}
-                  />
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
+          {data.items.map((product) => {
+            const href = editorHref(product.id);
+            return (
+              <TableRow
+                key={product.id}
+                data-testid={rowTestId}
+                className={
+                  variant === "drafts"
+                    ? "cursor-pointer hover:bg-muted/40"
+                    : undefined
+                }
+                onClick={
+                  variant === "drafts"
+                    ? () => {
+                        router.push(href);
+                      }
+                    : undefined
+                }
+              >
+                <TableCell>
+                  <Link
+                    href={href}
+                    onClick={(event) => event.stopPropagation()}
+                    className="flex h-10 w-10 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground"
+                    aria-label={`Edit ${product.title}`}
+                  >
+                    <Package className="h-4 w-4" aria-hidden="true" />
+                  </Link>
+                </TableCell>
+                <TableCell className="max-w-md">
+                  <Link
+                    href={href}
+                    onClick={(event) => event.stopPropagation()}
+                    className="line-clamp-2 font-medium text-foreground underline-offset-4 hover:underline"
+                    data-testid={
+                      variant === "drafts" ? "draft-title-link" : undefined
+                    }
+                  >
+                    {product.title}
+                  </Link>
+                  <span className="block text-xs text-muted-foreground">
+                    {product.externalId}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={STATUS_VARIANT[product.status]}>
+                    {product.status}
+                  </Badge>
+                </TableCell>
+                <TableCell>{formatPrice(product)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {product.stockQuantity.toLocaleString()}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {product.supplierName ?? "—"}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant={AI_STATUS_VARIANT[product.aiStatus]}
+                    data-testid="ai-status-badge"
+                  >
+                    {AI_STATUS_LABEL[product.aiStatus]}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-end gap-1">
+                    {variant === "drafts" ? (
+                      <>
+                        <Button variant="outline" size="sm" asChild>
+                          <Link href={href}>
+                            <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                            Edit Draft
+                          </Link>
+                        </Button>
+                        <OptimizeProductButton productId={product.id} />
+                        <ProductVersionHistorySheet
+                          productId={product.id}
+                          productTitle={product.title}
+                        />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label="More draft actions"
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem asChild>
+                              <Link href={`${href}?tab=overview`}>
+                                <Eye className="mr-2 h-4 w-4" />
+                                Preview
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                              <Link href={`${href}?tab=overview`}>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Refresh Supplier Data
+                              </Link>
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem asChild>
+                              <Link href={`${href}?tab=publishing`}>
+                                <Store className="mr-2 h-4 w-4" />
+                                Publish to Store
+                              </Link>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </>
+                    ) : (
+                      <>
+                        <OptimizeProductButton productId={product.id} />
+                        <ProductVersionHistorySheet
+                          productId={product.id}
+                          productTitle={product.title}
+                        />
+                      </>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>

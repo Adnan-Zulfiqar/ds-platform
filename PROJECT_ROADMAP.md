@@ -249,17 +249,21 @@ Full report: [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md).
 
 ---
 
-## Product Workspace V2 (in progress)
+## Product Workspace V2 / Draft Editor (in progress)
 
 Draft-to-Product lifecycle so AliExpress imports land in **Drafts** and only
 appear under **Products** after a successful channel publish (`StoreListing`
-synced). Plan: [PRODUCT_WORKSPACE_V2_PLAN.md](docs/PRODUCT_WORKSPACE_V2_PLAN.md).
+synced). Plans:
+[PRODUCT_WORKSPACE_V2_PLAN.md](docs/PRODUCT_WORKSPACE_V2_PLAN.md),
+[DRAFT_PRODUCT_EDITOR_PLAN.md](docs/DRAFT_PRODUCT_EDITOR_PLAN.md).
 
 | Stage | Scope | Status |
 |---|---|---|
-| 0 | Audit, plan, publication query split, Drafts nav/list, import history | **Done on `cursor/product-workspace-v2`** |
-| 1 | Premium Drafts grid / bulk actions | Pending |
-| 2–8 | Editor, media/variants, pricing, AI Studio, publish UX, polish | Pending |
+| 0 | Publication query split, Drafts nav/list, import history | **Done** |
+| 1 | Clickable draft rows + Edit / Publish actions | **Done on `cursor/draft-product-editor`** |
+| 2 | Draft write APIs (reuse PE `ProductService`) | **Done** |
+| 3 | Editor shell + Overview / Description / SEO / Publish panel | **Done (MVP)** |
+| 4–8 | Media/variants, pricing, AI Studio, publish polish, E2E | Pending |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.

@@ -262,11 +262,27 @@ export interface ProductDetail extends Product {
   // --- Description (Product Editor stage 1) ---
   //
   // Both already sanitized server-side — never raw supplier HTML. `description`
-  // is the merchant-editable field (no edit UI yet); `supplierDescription` is
-  // the always-current supplier snapshot, kept separate so a future edit can
-  // never be silently overwritten by the next sync.
+  // is the merchant-editable field; `supplierDescription` is the always-current
+  // supplier snapshot, kept separate so a sync cannot silently overwrite edits.
   description: string | null;
   supplierDescription: string | null;
+  supplierTitle: string | null;
+  supplierBrand: string | null;
+}
+
+/** PATCH body for merchant draft/product edits — only sent fields change. */
+export interface ProductUpdatePayload {
+  title?: string;
+  description?: string | null;
+  brand?: string | null;
+  categoryName?: string | null;
+  vendor?: string | null;
+  tags?: string[];
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  metaKeywords?: string | null;
+  slug?: string | null;
+  status?: ProductStatus;
 }
 
 /** Where a product's optimisable content came from. */

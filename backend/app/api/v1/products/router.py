@@ -59,6 +59,8 @@ def _to_detail(product: Product) -> ProductDetailRead:
         images=[ProductImageRead.model_validate(i) for i in product.images],
         description=product.description,
         supplier_description=product.supplier_description,
+        supplier_title=product.supplier_title,
+        supplier_brand=product.supplier_brand,
     )
 
 
