@@ -177,9 +177,9 @@ test.describe("Product optimization foundation (live seed)", () => {
     );
 
     await signInWithAccount(page, seeded.account);
-    await page.goto("/products");
+    await page.goto("/drafts");
 
-    await expect(page.getByTestId("product-row")).toHaveCount(1);
+    await expect(page.getByTestId("draft-row")).toHaveCount(1);
     await expect(page.getByTestId("ai-status-badge")).toHaveText("Not optimized");
 
     const optimizeResponse = page.waitForResponse(

@@ -249,6 +249,23 @@ Full report: [PHASE_8_1_COMPLETION.md](docs/PHASE_8_1_COMPLETION.md).
 
 ---
 
+## Product Workspace V2 (in progress)
+
+Draft-to-Product lifecycle so AliExpress imports land in **Drafts** and only
+appear under **Products** after a successful channel publish (`StoreListing`
+synced). Plan: [PRODUCT_WORKSPACE_V2_PLAN.md](docs/PRODUCT_WORKSPACE_V2_PLAN.md).
+
+| Stage | Scope | Status |
+|---|---|---|
+| 0 | Audit, plan, publication query split, Drafts nav/list, import history | **Done on `cursor/product-workspace-v2`** |
+| 1 | Premium Drafts grid / bulk actions | Pending |
+| 2–8 | Editor, media/variants, pricing, AI Studio, publish UX, polish | Pending |
+
+Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
+already shipped on develop and are not recreated here.
+
+---
+
 ## Later phases
 
 Not scheduled, and listed only so that architectural seams are built with them
@@ -259,6 +276,7 @@ in mind. Nothing here is committed to a phase number.
 | Additional store channels | WooCommerce / eBay / Etsy / TikTok — Shopify shipped in Phase 8 |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
 | AI optimisation (Phase 9) | Stages 1–3 done — provider, prompts, product versions; generation/editor remaining |
+| Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | Currency conversion hook is identity today |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |

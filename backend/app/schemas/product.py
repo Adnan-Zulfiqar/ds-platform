@@ -318,6 +318,13 @@ class ProductOptimizeResponse(CamelCaseModel):
     version: ProductVersionRead
 
 
+class ProductWorkspaceCounts(CamelCaseModel):
+    """Sidebar badge totals for the Drafts / Products workspace split."""
+
+    drafts: int
+    products: int
+
+
 __all__ = [
     "FeedProductRead",
     "ProductDetailRead",
@@ -329,4 +336,5 @@ __all__ = [
     "ProductRead",
     "ProductVariantRead",
     "ProductVersionRead",
+    "ProductWorkspaceCounts",
 ]

@@ -17,6 +17,8 @@ interface NavItemProps {
   collapsed?: boolean;
   /** Called after navigation, so the mobile drawer can close itself. */
   onNavigate?: () => void;
+  /** Live workspace count when `item.badgeKey` is set. */
+  badgeCount?: number;
 }
 
 /**
@@ -32,9 +34,17 @@ interface NavItemProps {
  * never interactive. `aria-disabled` communicates the state without the dead
  * stop.
  */
-export function NavItem({ item, active, collapsed, onNavigate }: NavItemProps) {
+export function NavItem({
+  item,
+  active,
+  collapsed,
+  onNavigate,
+  badgeCount,
+}: NavItemProps) {
   const Icon = item.icon;
   const unavailable = item.status === "coming-soon";
+  const showCount =
+    typeof badgeCount === "number" && Number.isFinite(badgeCount);
 
   const shared = cn(
     "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium",
@@ -76,7 +86,25 @@ export function NavItem({ item, active, collapsed, onNavigate }: NavItemProps) {
     >
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       {!collapsed && <span className="truncate">{item.label}</span>}
-      {collapsed && <span className="sr-only">{item.label}</span>}
+      {!collapsed && showCount ? (
+        <span
+          className={cn(
+            "ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums",
+            active
+              ? "bg-primary-foreground/15 text-primary-foreground"
+              : "bg-muted text-muted-foreground",
+          )}
+          data-testid={`nav-badge-${item.badgeKey}`}
+        >
+          {badgeCount}
+        </span>
+      ) : null}
+      {collapsed && (
+        <span className="sr-only">
+          {item.label}
+          {showCount ? ` (${badgeCount})` : ""}
+        </span>
+      )}
     </Link>
   );
 

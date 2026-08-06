@@ -16,7 +16,10 @@ import type {
   ProductOptimizePayload,
   ProductOptimizeResult,
   ProductVersion,
+  ProductWorkspaceCounts,
 } from "@/types/api";
+
+import { draftKeys } from "@/services/drafts";
 
 /**
  * Product data access.
@@ -37,6 +40,7 @@ export const productKeys = {
   imports: () => [...productKeys.all, "imports"] as const,
   importList: (query: ListQuery) => [...productKeys.imports(), query] as const,
   versions: (id: string) => [...productKeys.detail(id), "versions"] as const,
+  workspaceCounts: () => [...productKeys.all, "workspace-counts"] as const,
 };
 
 async function fetchProducts(query: ListQuery): Promise<Page<Product>> {
@@ -52,6 +56,21 @@ export function useProducts(
   return useQuery({
     queryKey: productKeys.list(query),
     queryFn: () => fetchProducts(query),
+  });
+}
+
+async function fetchWorkspaceCounts(): Promise<ProductWorkspaceCounts> {
+  const { data } = await apiClient.get<ProductWorkspaceCounts>(
+    "/products/workspace-counts",
+  );
+  return data;
+}
+
+/** Draft and published counts for sidebar badges. */
+export function useProductWorkspaceCounts(): UseQueryResult<ProductWorkspaceCounts> {
+  return useQuery({
+    queryKey: productKeys.workspaceCounts(),
+    queryFn: fetchWorkspaceCounts,
   });
 }
 
@@ -108,6 +127,7 @@ export function useImportProduct() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: productKeys.all });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.all });
     },
   });
 }
@@ -125,6 +145,7 @@ export function useSyncProduct() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: productKeys.all });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.all });
     },
   });
 }
