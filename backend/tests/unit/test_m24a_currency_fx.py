@@ -53,18 +53,14 @@ class TestLegacyStoreCurrencyNotAuthoritative:
         engine.stores = MagicMock()
         engine.stores.get_by_id = AsyncMock(return_value=store)
         engine.tenants = MagicMock()
-        engine.tenants.get_by_id = AsyncMock(
-            return_value=MagicMock(default_currency="GBP")
-        )
+        engine.tenants.get_by_id = AsyncMock(return_value=MagicMock(default_currency="GBP"))
         product = MagicMock()
         product.store_id = store.id
         product.tenant_id = uuid4()
         product.currency = "CNY"
         product.variants = [MagicMock(currency="CNY")]
 
-        code, source, _ = await engine._resolve_selling_currency(
-            product, destination_store_id=None
-        )
+        code, source, _ = await engine._resolve_selling_currency(product, destination_store_id=None)
         assert code is None
         assert source == "selling_currency_missing"
 
@@ -78,18 +74,14 @@ class TestLegacyStoreCurrencyNotAuthoritative:
         engine.stores = MagicMock()
         engine.stores.get_by_id = AsyncMock(return_value=store)
         engine.tenants = MagicMock()
-        engine.tenants.get_by_id = AsyncMock(
-            return_value=MagicMock(default_currency="EUR")
-        )
+        engine.tenants.get_by_id = AsyncMock(return_value=MagicMock(default_currency="EUR"))
         product = MagicMock()
         product.store_id = store.id
         product.tenant_id = uuid4()
         product.currency = "CNY"
         product.variants = [MagicMock(currency="CNY")]
 
-        code, source, _ = await engine._resolve_selling_currency(
-            product, destination_store_id=None
-        )
+        code, source, _ = await engine._resolve_selling_currency(product, destination_store_id=None)
         assert code is None
         assert source == "selling_currency_missing"
         engine.tenants.get_by_id.assert_not_called()
@@ -111,9 +103,7 @@ class TestLegacyStoreCurrencyNotAuthoritative:
         product.currency = "CNY"
         product.variants = [MagicMock(currency="CNY")]
 
-        code, source, _ = await engine._resolve_selling_currency(
-            product, destination_store_id=None
-        )
+        code, source, _ = await engine._resolve_selling_currency(product, destination_store_id=None)
         assert code is None
         assert code != "CNY"
         assert source == "selling_currency_missing"
@@ -195,9 +185,7 @@ class TestShopifyCurrencyRefresh:
 
         service.stores = MagicMock()
         service.stores.get_by_id = AsyncMock(side_effect=[store, store])
-        service.client_for_store = AsyncMock(
-            side_effect=RuntimeError("shopify down")
-        )
+        service.client_for_store = AsyncMock(side_effect=RuntimeError("shopify down"))
 
         with pytest.raises(ShopifyCurrencyRefreshError) as exc_info:
             await service.refresh_shop_currency(store.id)
@@ -352,16 +340,15 @@ class TestFxFreshnessCache:
         provider.provider_name = "stub"
         provider.get_rate = AsyncMock()
         fx = FxService(provider, cache=None)
-        converted, evidence, quote = await fx.convert(
-            Money.of("10.00", "GBP"), to_currency="GBP"
-        )
+        converted, evidence, quote = await fx.convert(Money.of("10.00", "GBP"), to_currency="GBP")
         assert evidence is None
         assert quote is None
         assert converted.amount == Decimal("10.0000")
         provider.get_rate.assert_not_called()
 
     async def test_cross_currency_missing_fx_raises(self) -> None:
-        fx = FxService(MagicMock(provider_name="unavailable", get_rate=AsyncMock(return_value=None)))
+        provider = MagicMock(provider_name="unavailable", get_rate=AsyncMock(return_value=None))
+        fx = FxService(provider)
         with pytest.raises(FxUnavailableError):
             await fx.convert(Money.of("72.50", "CNY"), to_currency="GBP")
 
