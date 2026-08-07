@@ -214,10 +214,36 @@ class Product(TenantScopedBase):
     #
     # What the supplier charges. Sell price is derived by the pricing engine and
     # audited in ``price_changes``; it is stored here so list views do not join.
+    #
+    # `currency` is the currency `cost_price_min`/`cost_price_max` are actually
+    # denominated in -- derived from the SKUs those figures were computed from
+    # (see `map_product`), NOT the supplier's native listing currency. Those
+    # two are genuinely different: a live-traced AliExpress response for a
+    # GB/GBP request returns `ae_item_base_info_dto.currency_code: "CNY"`
+    # (the seller's own currency, never localized) alongside per-SKU
+    # `currency_code: "GBP"` (the requested target, honored at SKU level
+    # only) -- see `supplier_native_currency` below and
+    # docs/ALIEXPRESS_LOCALIZED_PRICING.md for the full mapping.
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     cost_price_min: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     cost_price_max: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     sell_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+
+    #: The supplier's own listing currency (`ae_item_base_info_dto.currency_code`)
+    #: as of the last sync -- audit/informational only. AliExpress does not
+    #: localize this field regardless of the `target_currency` requested, so
+    #: it is never safe to use for pricing math; `currency` above is the field
+    #: pricing code reads. Kept distinct so "what does the supplier actually
+    #: list this in" survives even once `currency` reflects GBP/USD.
+    supplier_native_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+
+    #: The `target_currency` actually requested from AliExpress on the last
+    #: successful import/refresh (M24B) -- pairs with `import_ship_to_country`
+    #: below, which records the paired `ship_to_country`. Lets the Pricing
+    #: workspace tell "this draft's supplier price was fetched for USD" apart
+    #: from "for GBP" without re-deriving it from current store/tenant state,
+    #: which may have changed since the import ran.
+    import_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
     #: Optional sales-channel assignment. Null means the product is in the
     #: catalogue but not mapped to a store yet.

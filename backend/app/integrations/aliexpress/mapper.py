@@ -36,6 +36,26 @@ def _truncate(value: str | None, limit: int) -> str | None:
     return trimmed[:limit] if len(trimmed) > limit else trimmed
 
 
+def _skus_currency(detail: ProductDetail) -> str | None:
+    """The currency ``cost_price_min``/``cost_price_max`` are actually in.
+
+    Those two figures are ``min``/``max`` of each SKU's own ``sale_price``
+    (see ``ProductDetail.price_range``) -- so the currency that belongs next
+    to them is whatever the SKUs themselves report, not
+    ``ae_item_base_info_dto.currency_code``. A live-traced AliExpress
+    response for a GB/GBP request proved the two can genuinely differ: base
+    info stays CNY (the seller's native listing currency, never localized)
+    while every SKU reports GBP (the requested target, honored at SKU
+    level). Pairing the min/max numbers with the base currency was a real,
+    live-reproduced mislabeling bug -- see
+    docs/ALIEXPRESS_LOCALIZED_PRICING.md.
+    """
+    codes = {sku.currency_code for sku in detail.skus if sku.currency_code}
+    if len(codes) == 1:
+        return next(iter(codes))
+    return None
+
+
 def map_product(detail: ProductDetail) -> dict[str, Any]:
     """Map a product detail response to ``Product`` column values.
 
@@ -93,7 +113,13 @@ def map_product(detail: ProductDetail) -> dict[str, Any]:
         "supplier_description": sanitize_html(base.description_html),
         "category_id": str(base.category_id) if base.category_id is not None else None,
         "supplier_brand": _truncate(brand, 255),
-        "currency": base.currency_code,
+        # Paired with cost_price_min/max below -- see `_skus_currency`. Falls
+        # back to the base/native currency only when SKUs disagree or are
+        # absent, which is the same "no data to be confident about" case
+        # `PricingEngine._resolve_selling_currency` treats as unresolved
+        # rather than guessing.
+        "currency": _skus_currency(detail) or base.currency_code,
+        "supplier_native_currency": base.currency_code,
         "cost_price_min": low,
         "cost_price_max": high,
         "stock_quantity": detail.total_stock,

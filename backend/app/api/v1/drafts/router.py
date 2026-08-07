@@ -122,11 +122,18 @@ async def refresh_draft(
 
     Same path as ``POST /products/{id}/sync``: refresh *is* re-import by
     external id, so supplier twin protection stays in one place.
+
+    ``ship_to_country`` is passed explicitly, matching ``sync_product`` --
+    never re-derived from a platform-wide default, only from this product's
+    own last-successful destination. Omitting it would let a refresh's
+    destination (and therefore the ``target_currency`` it requests) drift
+    from what this specific product was actually imported for.
     """
     existing = await ProductRepository(session).get_by_id_or_raise(product_id)
     product = await ProductImportService(session).import_product(
         external_id=existing.external_id,
         requested_by_user_id=principal.user_id,
+        ship_to_country=existing.import_ship_to_country or existing.ship_to_country,
     )
     return _to_detail(product)
 
