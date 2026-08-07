@@ -38,8 +38,12 @@ class DraftVariantPricingRow(CamelCaseModel):
     conversion_type: str | None = None  # direct | fx | unavailable
     conversion_rate: Decimal | None = None
     conversion_rate_timestamp: datetime | None = None
+    fx_fetched_at: datetime | None = None
     fx_provider: str | None = None
     fx_status: str | None = None
+    fx_base_currency: str | None = None
+    fx_quote_currency: str | None = None
+    fx_is_stale: bool | None = None
     supplier_shipping_cost: Decimal | None = None
     shipping_cost_available: bool = False
     handling_cost: Decimal
@@ -58,7 +62,7 @@ class DraftVariantPricingRow(CamelCaseModel):
 
 class DraftPricingWorkspaceRead(CamelCaseModel):
     product_id: uuid.UUID
-    #: Destination selling currency (store → tenant → consistent supplier).
+    #: Destination selling currency (verified Shopify shop.currencyCode when linked).
     currency: str | None = None
     selling_currency: str | None = None
     selling_currency_source: str | None = None
@@ -75,6 +79,12 @@ class DraftPricingWorkspaceRead(CamelCaseModel):
     pricing_block_message: str | None = None
     fx_provider: str | None = None
     fx_status: str | None = None
+    fx_rate: Decimal | None = None
+    fx_base_currency: str | None = None
+    fx_quote_currency: str | None = None
+    fx_provider_timestamp: datetime | None = None
+    fx_fetched_at: datetime | None = None
+    fx_is_stale: bool | None = None
     variants: list[DraftVariantPricingRow] = Field(default_factory=list)
 
 

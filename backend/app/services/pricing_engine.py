@@ -17,12 +17,14 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import FxUnavailableError, ValidationError
+from app.core.exceptions import FxUnavailableError, SellingCurrencyMissingError, ValidationError
+from app.core.logging import get_logger
 from app.domain.fx import FxRateStatus
 from app.domain.money import Money, normalise_currency
 from app.models.notification import NotificationKind
 from app.models.pricing import PriceChange, PricingRule, PricingScope, PricingStrategy
 from app.models.product import Product
+from app.models.store import StorePlatform
 from app.repositories.pricing import PriceChangeRepository, PricingRuleRepository
 from app.repositories.product import ProductRepository
 from app.repositories.store import StoreRepository
@@ -45,6 +47,8 @@ from app.services.base import BaseService
 from app.services.fx import FxService, get_fx_service
 from app.services.notification_service import NotificationService
 
+logger = get_logger(__name__)
+
 _SCOPE_RANK = {
     PricingScope.PRODUCT: 4,
     PricingScope.CATEGORY: 3,
@@ -57,6 +61,10 @@ _CENT_QUANT = Decimal("0.01")
 
 _BLOCK_MESSAGE = (
     "Pricing cannot be calculated because a valid currency conversion is not available."
+)
+_SELLING_CURRENCY_MISSING_MESSAGE = (
+    "Shopify selling currency is not available. Refresh the store currency "
+    "before calculating prices."
 )
 
 
@@ -336,6 +344,34 @@ class PricingEngine(BaseService):
             product,
             destination_store_id=(propose.destination_store_id if propose is not None else None),
         )
+        if selling_currency is None:
+            logger.info(
+                "pricing_blocked_currency_missing",
+                product_id=str(product_id),
+                store_id=str(store_id) if store_id else None,
+                source=selling_source,
+            )
+            return DraftPricingWorkspaceRead(
+                product_id=product.id,
+                currency=None,
+                selling_currency=None,
+                selling_currency_source=selling_source,
+                destination_store_id=store_id,
+                product_sell_price=product.sell_price,
+                cost_price_min=product.cost_price_min,
+                cost_price_max=product.cost_price_max,
+                shipping_cost=product.shipping_cost,
+                shipping_cost_available=product.shipping_cost is not None,
+                shipping_warning=None,
+                fx_note=_SELLING_CURRENCY_MISSING_MESSAGE,
+                pricing_blocked=True,
+                pricing_block_code="selling_currency_missing",
+                pricing_block_message=_SELLING_CURRENCY_MISSING_MESSAGE,
+                fx_provider=None,
+                fx_status=None,
+                variants=[],
+            )
+
         shipping = product.shipping_cost
         shipping_available = shipping is not None
         shipping_warning = (
@@ -355,6 +391,13 @@ class PricingEngine(BaseService):
         rows: list[DraftVariantPricingRow] = []
         any_blocked = False
         fx_status: str | None = None
+        ws_fx_rate: Decimal | None = None
+        ws_fx_base: str | None = None
+        ws_fx_quote: str | None = None
+        ws_fx_provider: str | None = None
+        ws_fx_provider_ts: datetime | None = None
+        ws_fx_fetched_at: datetime | None = None
+        ws_fx_is_stale: bool | None = None
         for variant in product.variants:
             supplier_currency = variant.currency or product.currency
             converted_cost: Decimal | None = None
@@ -363,7 +406,11 @@ class PricingEngine(BaseService):
             conversion_type: str | None = None
             conversion_rate: Decimal | None = None
             conversion_ts: datetime | None = None
+            fx_fetched_at: datetime | None = None
             fx_provider: str | None = None
+            fx_base: str | None = None
+            fx_quote_ccy: str | None = None
+            fx_is_stale = False
             row_blocked = False
             row_block_message: str | None = None
 
@@ -374,7 +421,7 @@ class PricingEngine(BaseService):
                 try:
                     source_money = Money.of(variant.cost_price, supplier_currency)
                     converted, evidence, _quote = await self.fx.convert(
-                        source_money, to_currency=selling_currency
+                        source_money, to_currency=selling_currency, allow_stale=True
                     )
                     converted_cost = converted.amount
                     converted_currency = converted.currency
@@ -383,20 +430,20 @@ class PricingEngine(BaseService):
                     else:
                         conversion_type = "fx"
                         conversion_rate = evidence.quote.rate
-                        conversion_ts = (
-                            evidence.quote.source_timestamp or evidence.quote.retrieved_at
-                        )
+                        conversion_ts = evidence.quote.provider_timestamp
+                        fx_fetched_at = evidence.quote.fetched_at
                         fx_provider = evidence.quote.provider_name
                         fx_status = evidence.quote.status.value
-                        if evidence.quote.status is FxRateStatus.STALE:
-                            row_block_message = (
-                                f"Exchange rate {supplier_currency}→{selling_currency} "
-                                "is stale. Refresh the exchange rate before applying "
-                                "or publishing prices."
-                            )
-                            # Stale: allow draft edit preview but flag block for apply.
-                            row_blocked = True
-                            any_blocked = True
+                        fx_base = evidence.quote.base_currency
+                        fx_quote_ccy = evidence.quote.quote_currency
+                        fx_is_stale = evidence.quote.is_stale
+                        ws_fx_rate = conversion_rate
+                        ws_fx_base = fx_base
+                        ws_fx_quote = fx_quote_ccy
+                        ws_fx_provider = fx_provider
+                        ws_fx_provider_ts = conversion_ts
+                        ws_fx_fetched_at = fx_fetched_at
+                        ws_fx_is_stale = fx_is_stale
                 except (FxUnavailableError, ValidationError) as exc:
                     conversion_type = "unavailable"
                     row_blocked = True
@@ -453,8 +500,12 @@ class PricingEngine(BaseService):
                     conversion_type=conversion_type,
                     conversion_rate=conversion_rate,
                     conversion_rate_timestamp=conversion_ts,
+                    fx_fetched_at=fx_fetched_at,
                     fx_provider=fx_provider,
                     fx_status=fx_status if conversion_required else None,
+                    fx_base_currency=fx_base,
+                    fx_quote_currency=fx_quote_ccy,
+                    fx_is_stale=fx_is_stale if conversion_type == "fx" else None,
                     sell_price=variant.sell_price,
                     compare_at_price=variant.compare_at_price,
                     proposed_sell_price=proposed if not row_blocked else None,
@@ -495,8 +546,14 @@ class PricingEngine(BaseService):
             pricing_blocked=any_blocked,
             pricing_block_code="fx_unavailable" if any_blocked else None,
             pricing_block_message=_BLOCK_MESSAGE if any_blocked else None,
-            fx_provider=self.fx.provider_name if any_blocked else None,
-            fx_status=fx_status if any_blocked else None,
+            fx_provider=ws_fx_provider or (self.fx.provider_name if any_blocked else None),
+            fx_status=fx_status if any_blocked or ws_fx_rate is not None else None,
+            fx_rate=ws_fx_rate,
+            fx_base_currency=ws_fx_base,
+            fx_quote_currency=ws_fx_quote,
+            fx_provider_timestamp=ws_fx_provider_ts,
+            fx_fetched_at=ws_fx_fetched_at,
+            fx_is_stale=ws_fx_is_stale,
             variants=rows,
         )
 
@@ -506,12 +563,35 @@ class PricingEngine(BaseService):
         *,
         destination_store_id: uuid.UUID | None,
     ) -> tuple[str | None, str, uuid.UUID | None]:
-        """Store currency → tenant default → unanimous supplier currency."""
+        """Resolve destination selling currency.
+
+        Shopify: only a verified ``currency`` with ``currency_last_synced_at``
+        is authoritative. Unsynced Shopify currency must **not** fall back to
+        tenant, supplier, USD, or any default.
+
+        Non-Shopify / channel-independent: store currency or tenant default may
+        be used when explicitly configured.
+        """
         store_id = destination_store_id or product.store_id
         if store_id is not None:
             store = await self.stores.get_by_id(store_id)
-            if store is not None and store.currency:
-                return normalise_currency(store.currency), "shopify_store", store.id
+            if store is not None:
+                if store.platform is StorePlatform.SHOPIFY:
+                    if store.currency_last_synced_at is not None and store.currency:
+                        try:
+                            return (
+                                normalise_currency(store.currency),
+                                "shopify_store",
+                                store.id,
+                            )
+                        except ValidationError:
+                            return None, "selling_currency_missing", store.id
+                    return None, "selling_currency_missing", store.id
+                if store.currency:
+                    try:
+                        return normalise_currency(store.currency), "store", store.id
+                    except ValidationError:
+                        pass
 
         tenant = await self.tenants.get_by_id(product.tenant_id)
         if tenant is not None and getattr(tenant, "default_currency", None):
@@ -521,11 +601,11 @@ class PricingEngine(BaseService):
                 store_id,
             )
 
+        # Channel-independent only — never used when a Shopify store is linked.
         variant_codes = {normalise_currency(v.currency) for v in product.variants if v.currency}
         if len(variant_codes) == 1:
             return next(iter(variant_codes)), "supplier_unanimous", store_id
         if product.currency:
-            # Last resort — may still block rows when variants disagree.
             return normalise_currency(product.currency), "product_legacy", store_id
         return None, "unresolved", store_id
 
@@ -542,6 +622,11 @@ class PricingEngine(BaseService):
             propose=request,
         )
         if preview.pricing_blocked:
+            if preview.pricing_block_code == "selling_currency_missing":
+                raise SellingCurrencyMissingError(
+                    preview.pricing_block_message or _SELLING_CURRENCY_MISSING_MESSAGE,
+                    details={"code": "selling_currency_missing"},
+                )
             raise FxUnavailableError(
                 preview.pricing_block_message or _BLOCK_MESSAGE,
                 details={"code": preview.pricing_block_code or "fx_unavailable"},
@@ -659,8 +744,12 @@ class PricingEngine(BaseService):
         conversion_type: str | None,
         conversion_rate: Decimal | None,
         conversion_rate_timestamp: datetime | None,
+        fx_fetched_at: datetime | None = None,
         fx_provider: str | None,
         fx_status: str | None,
+        fx_base_currency: str | None = None,
+        fx_quote_currency: str | None = None,
+        fx_is_stale: bool | None = None,
         sell_price: Decimal | None,
         compare_at_price: Decimal | None,
         proposed_sell_price: Decimal | None,
@@ -713,8 +802,12 @@ class PricingEngine(BaseService):
             conversion_type=conversion_type,
             conversion_rate=conversion_rate,
             conversion_rate_timestamp=conversion_rate_timestamp,
+            fx_fetched_at=fx_fetched_at,
             fx_provider=fx_provider,
             fx_status=fx_status,
+            fx_base_currency=fx_base_currency,
+            fx_quote_currency=fx_quote_currency,
+            fx_is_stale=fx_is_stale,
             supplier_shipping_cost=shipping_cost,
             shipping_cost_available=shipping_available,
             handling_cost=handling_cost.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
