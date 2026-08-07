@@ -27,6 +27,17 @@ production release.
   Shopify selling currency requires a verified sync timestamp — no tenant /
   supplier / USD fallback for unsynced stores. See
   `docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
+- **Pricing currency integrity, closing the gap the above left open** —
+  `ProductVariant.sell_price` had no record of which currency it was
+  actually computed in (`variant.currency` is the *supplier's* currency, a
+  different field); a price set for a GBP store would have silently reached
+  Shopify as an unlabelled number after a switch to a USD store. Added
+  `sell_price_currency` (migration `0021`), stamped whenever pricing writes
+  a price; a mismatch — or a price predating this column — surfaces as
+  `needsRecalculation` rather than being trusted; Shopify publish now blocks
+  outright when an enabled variant's price currency doesn't match the
+  store's verified currency, never sending a mislabelled amount. See M23/M26
+  in `docs/TECHNICAL_DEBT.md`.
 
 ### Changed
 

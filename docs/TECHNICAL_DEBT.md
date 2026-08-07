@@ -32,9 +32,15 @@ A-05, A-09, and A-16 resolved, A-06 fix landed (CI job unverified), A-15
 partially (Shopify disconnect) (see below). Remaining: A-06 CI green, A-07,
 A-08, A-15 (remaining surfaces).
 
-**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~13 medium, 5 low.**
+**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~14 medium, 5 low.**
 **Product Workspace V2 Stage 0 (2026-08-06)** — Drafts/Products query split
 shipped on `cursor/product-workspace-v2`; M21 records Inventory/Pricing lag.
+**Pricing currency integrity, closing M24A's remaining gap (2026-08-07)** —
+`sell_price_currency` stamped on every variant price write (migration `0021`);
+`needsRecalculation` flags a price computed under a since-changed selling
+currency instead of silently trusting it; Shopify publish blocks outright on
+a variant/store currency mismatch; end-to-end CNY→GBP/USD integration
+coverage added (previously only unit-level, mocked). See M23/M26.
 
 ---
 
@@ -491,21 +497,70 @@ does not retain a parallel GB/US snapshot. Documented in
 `docs/ALIEXPRESS_INTEGRATION.md`. Multi-destination snapshots need an approved
 domain design before adding rows.
 
-### M23 — Draft pricing FX feed and freight quotes incomplete — PARTIAL
+### ~~M23 — Draft pricing FX feed and freight quotes incomplete~~ ✅ RESOLVED (currency); freight remains open
 
-**Landed:** `Money` value object; cross-currency identity conversion prohibited;
-default `FX_PROVIDER=unavailable` blocks calculated profit when currencies
-differ; Pricing tab shows selling-currency badge + blocking banner; audit in
-`docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
+**Landed (M24A, this pass):** `Money` value object; cross-currency identity
+conversion prohibited; `OpenExchangeRatesProvider` (production feed, USD
+triangulation for base-restricted plans, Decimal-safe JSON parsing);
+`FxService` caching/freshness/controlled-stale; Shopify selling currency
+requires a verified `shop.currencyCode` sync (`Store.currency_last_synced_at`)
+— no tenant/supplier/USD fallback for an unsynced store; Pricing tab shows
+the *selling* currency badge (never the supplier's) plus a blocking banner
+with a Refresh action; audit in `docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
 
-**Still open:** production FX API provider; Shopify `shop.currencyCode` refresh
-into store metadata; AliExpress GB/GBP target-price field priority; fee/tax
-profiles; freight option fetch; historical row reconciliation migration.
+**Landed (this pass, closing the gap M24A left open):** `ProductVariant.sell_price`
+had no record of *which* currency it was actually written in — `variant.currency`
+is the supplier's currency, a different thing — so a price computed for a
+GBP store and then published after a switch to a USD store would have sent
+a GBP number labelled USD. Added `sell_price_currency` (migration `0021`),
+stamped by `apply_draft_variant_pricing`; a mismatch (or a price predating
+this column) surfaces as `needsRecalculation` on the workspace and the row,
+never silently relabelled; `ShopifySyncService` now blocks publish outright
+when an enabled variant's `sell_price_currency` doesn't match the store's
+verified currency. Also added the end-to-end integration coverage that was
+missing — every prior test drove `Money`/`FxService`/`PricingEngine` in
+isolation with mocked repositories; nothing had proven a real imported
+AliExpress product prices correctly through the actual `GET/POST .../pricing`
+endpoints. See `docs/PRICING_CURRENCY_DEFECT_AUDIT.md` for the full trace.
 
-**Impact:** Cross-currency drafts no longer invent CNY labels on USD amounts,
-but cannot yet compute converted GBP/USD sells without a configured feed.
-**Trigger:** before publish readiness treats shipping/FX as hard blocks by policy.
-**Fix:** wire production FX + freight + store currency refresh.
+**Still open (M24B/M24C, unchanged by this pass):** freight/fee/tax profiles;
+AliExpress GB/GBP target-price field priority (import always requests
+`target_currency`, but the *response* currency is whatever AliExpress
+actually returns, not necessarily what was requested); historical-row
+reconciliation for prices computed before `sell_price_currency` existed
+(they read as `needsRecalculation`, not auto-corrected — see M26); a variant
+priced without ever using the workspace (relying on the pre-existing
+`list_price`/`product.sell_price` publish fallback) is not covered by the
+new publish-currency check, deliberately, to avoid widening this pass's scope
+into that separate fallback path.
+
+**Impact:** Cross-currency drafts convert through a real, cached FX rate
+(no invented labels, no 1:1 fallback) and cannot reach Shopify mislabelled.
+**Trigger:** before publish readiness treats shipping as a hard block by policy.
+**Fix (remaining):** wire freight/fee/tax; decide the reconciliation UX for
+pre-existing `needsRecalculation` rows at scale.
+
+### M26 — Pre-existing draft prices read as "needs recalculation," not auto-fixed
+
+Every `ProductVariant.sell_price` written before migration `0021` has
+`sell_price_currency = NULL`. `PricingEngine.draft_workspace` correctly
+reads that as "unverified" and flags `needsRecalculation` (§M23) rather than
+guessing the number was in whatever currency happens to resolve today — but
+this means any product priced before this pass will show the flag the next
+time its Pricing tab loads, even though nothing about the merchant's actual
+price changed.
+
+**Impact:** a UX/operational question, not a correctness bug — the flagged
+number is exactly what was stored, just honestly marked as unverified rather
+than silently trusted.
+**Trigger:** before this reaches real merchant data at any scale where a
+one-by-one "Apply" re-click per product is impractical.
+**Fix:** a bulk "Recalculate all flagged prices" action, or a one-time
+backfill that stamps `sell_price_currency` from each product's
+`selling_currency_source` *at the time the price was written* — which is
+not recoverable from data alone (no history of past selling-currency
+resolutions exists), so this is a product decision (re-run pricing en masse
+vs. leave it merchant-reviewed) more than a purely technical one.
 
 ### M24 — Online Store publications API and shipping profile scopes
 
