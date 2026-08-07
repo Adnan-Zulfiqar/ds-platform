@@ -32,6 +32,7 @@ export interface Store {
   storefrontUrl: string | null;
   externalStoreId: string | null;
   currency: string;
+  currencyLastSyncedAt: string | null;
   timezone: string;
   settings: Record<string, unknown>;
   inventorySyncEnabled: boolean;
@@ -43,6 +44,13 @@ export interface Store {
   healthScore: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface StoreCurrencyRefreshResult {
+  storeId: string;
+  currency: string;
+  currencyLastSyncedAt: string;
+  source: string;
 }
 
 export interface StoreCreatePayload {
@@ -96,6 +104,24 @@ export function useCreateStore() {
   return useMutation({
     mutationFn: async (payload: StoreCreatePayload) => {
       const { data } = await apiClient.post<Store>("/stores", payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: storeKeys.all });
+    },
+  });
+}
+
+export function useRefreshStoreCurrency(storeId: string | null | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!storeId) {
+        throw new Error("No destination store selected.");
+      }
+      const { data } = await apiClient.post<StoreCurrencyRefreshResult>(
+        `/stores/${storeId}/currency/refresh`,
+      );
       return data;
     },
     onSuccess: () => {

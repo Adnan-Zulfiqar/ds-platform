@@ -20,6 +20,7 @@ import {
   useDraftPricing,
   usePreviewDraftPricing,
 } from "@/services/drafts";
+import { useRefreshStoreCurrency } from "@/services/stores";
 import type { DraftPricingApplyMode, ProductDetail } from "@/types/api";
 
 interface DraftPricingPanelProps {
@@ -53,6 +54,10 @@ export function DraftPricingPanel({
   const blocked = Boolean(workspace?.pricingBlocked);
   const sellingCurrency =
     workspace?.sellingCurrency ?? workspace?.currency ?? null;
+  const destinationStoreId = workspace?.destinationStoreId ?? null;
+  const currencyMissing =
+    workspace?.pricingBlockCode === "selling_currency_missing";
+  const refreshCurrency = useRefreshStoreCurrency(destinationStoreId);
 
   async function run(kind: "preview" | "apply") {
     setError(null);
@@ -82,6 +87,20 @@ export function DraftPricingPanel({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Pricing action failed.");
+    }
+  }
+
+  async function onRefreshCurrency() {
+    setError(null);
+    try {
+      await refreshCurrency.mutateAsync();
+      await pricing.refetch();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not refresh Shopify selling currency.",
+      );
     }
   }
 
@@ -122,6 +141,9 @@ export function DraftPricingPanel({
               Source: {workspace.sellingCurrencySource}
             </span>
           ) : null}
+          {workspace.fxIsStale ? (
+            <span className="text-[11px] text-amber-700">FX rate is stale</span>
+          ) : null}
         </div>
       </div>
 
@@ -141,9 +163,24 @@ export function DraftPricingPanel({
             relabelled.
           </p>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" disabled>
-              Refresh exchange rate
-            </Button>
+            {currencyMissing && destinationStoreId ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={refreshCurrency.isPending}
+                onClick={() => void onRefreshCurrency()}
+              >
+                {refreshCurrency.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : null}
+                Refresh store currency
+              </Button>
+            ) : (
+              <Button type="button" size="sm" variant="outline" disabled>
+                Refresh exchange rate
+              </Button>
+            )}
             <Button type="button" size="sm" variant="outline" asChild>
               <a href="/settings/integrations">Review market settings</a>
             </Button>

@@ -320,8 +320,12 @@ export interface DraftVariantPricingRow {
   conversionType: string | null;
   conversionRate: string | null;
   conversionRateTimestamp: string | null;
+  fxFetchedAt: string | null;
   fxProvider: string | null;
   fxStatus: string | null;
+  fxBaseCurrency: string | null;
+  fxQuoteCurrency: string | null;
+  fxIsStale: boolean | null;
   supplierShippingCost: string | null;
   shippingCostAvailable: boolean;
   handlingCost: string;
@@ -356,6 +360,12 @@ export interface DraftPricingWorkspace {
   pricingBlockMessage: string | null;
   fxProvider: string | null;
   fxStatus: string | null;
+  fxRate: string | null;
+  fxBaseCurrency: string | null;
+  fxQuoteCurrency: string | null;
+  fxProviderTimestamp: string | null;
+  fxFetchedAt: string | null;
+  fxIsStale: boolean | null;
   variants: DraftVariantPricingRow[];
 }
 
