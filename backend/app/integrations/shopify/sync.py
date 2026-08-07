@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.service import ShopifyService
@@ -22,7 +23,7 @@ from app.models.order import (
 )
 from app.models.product import Product
 from app.models.shopify import ListingSyncStatus
-from app.models.store import Store
+from app.models.store import Store, StorePlatform
 from app.repositories.order import OrderRepository
 from app.repositories.product import ProductRepository
 from app.repositories.shopify import StoreListingRepository
@@ -82,6 +83,59 @@ class ShopifySyncService(BaseService):
             },
         )
 
+    def _assert_variant_prices_match_store_currency(
+        self, *, product: Product, store: Store
+    ) -> None:
+        """Block publish when a priced variant's currency doesn't match the store's.
+
+        Only enforced once the store's Shopify currency is itself verified
+        (``currency_last_synced_at`` set) — the same authority bar
+        ``PricingEngine._resolve_selling_currency`` already requires before
+        it will compute a price in that currency at all. An unverified store
+        currency is a separate, pre-existing gap (M17-adjacent) this check
+        does not attempt to close.
+
+        Scoped to variants that carry ``sell_price`` — the field the draft
+        pricing workspace actually writes. A variant that has never been
+        priced through the workspace (relying on the pre-existing
+        ``list_price``/``product.sell_price`` publish fallback) is unchanged
+        by this check; broadening it there is a larger, separate change.
+        """
+        if store.platform is not StorePlatform.SHOPIFY:
+            return
+        if store.currency_last_synced_at is None or not store.currency:
+            return
+        store_currency = normalise_currency(store.currency)
+        for variant in product.variants:
+            if getattr(variant, "deleted_at", None) is not None:
+                continue
+            if not getattr(variant, "is_enabled", True):
+                continue
+            if variant.sell_price is None:
+                continue
+            variant_currency = (
+                normalise_currency(variant.sell_price_currency)
+                if variant.sell_price_currency
+                else None
+            )
+            if variant_currency == store_currency:
+                continue
+            raise ValidationError(
+                (
+                    f"Variant {variant.label or variant.external_variant_id} was "
+                    f"priced in {variant_currency or 'an unrecorded currency'}, but "
+                    f"this store sells in {store_currency}. Recalculate pricing for "
+                    "this store on the Pricing tab before publishing — Shopify must "
+                    "never receive a price in the wrong currency."
+                ),
+                details={
+                    "reason": "selling_currency_mismatch",
+                    "variant_id": str(variant.id),
+                    "variant_currency": variant_currency,
+                    "store_currency": store_currency,
+                },
+            )
+
     async def _load_product(self, product_id: uuid.UUID) -> Product:
         query = (
             self.products._base_query()
@@ -111,6 +165,7 @@ class ShopifySyncService(BaseService):
         product = await self._load_product(product_id)
         store = await self.stores.get_by_id_or_raise(store_id)
         self._assert_import_destination_matches_store(product=product, store=store)
+        self._assert_variant_prices_match_store_currency(product=product, store=store)
         client, connection = await self.shopify.client_for_store(store_id)
         listing = await self.listings.get_for_product(store_id=store_id, product_id=product_id)
 
