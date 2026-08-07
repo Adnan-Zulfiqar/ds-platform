@@ -1,4 +1,4 @@
-﻿"""Premium editor ÔÇö publication URLs, SEO planning, shipping customs.
+"""Premium editor ÔÇö publication URLs, SEO planning, shipping customs.
 
 Revision ID: 0018
 Revises: 0017

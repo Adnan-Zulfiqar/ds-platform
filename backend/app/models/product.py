@@ -401,6 +401,17 @@ class ProductVariant(TenantScopedBase):
     #: Channel selling price. Distinct from ``list_price`` (supplier reference).
     sell_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     compare_at_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    #: The currency ``sell_price``/``compare_at_price`` were actually computed
+    #: in — always the *selling* currency at the moment
+    #: ``PricingEngine.apply_draft_variant_pricing`` wrote them, which is
+    #: **not** necessarily ``currency`` above (the supplier's currency).
+    #: Without this a variant re-priced for a GBP store, then published
+    #: after the merchant switches to a USD store, would silently send a GBP
+    #: number labelled USD — the exact defect class this whole feature exists
+    #: to prevent, just moved from the preview response into persisted data.
+    #: ``None`` means "never priced through the workspace" (e.g. still only
+    #: has a supplier ``list_price``), not "priced in an unknown currency".
+    sell_price_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     product: Mapped[Product] = relationship(back_populates="variants")

@@ -58,6 +58,13 @@ class DraftVariantPricingRow(CamelCaseModel):
     manual_override: bool = False
     row_blocked: bool = False
     row_block_message: str | None = None
+    #: `sell_price` was written under a *different* selling currency than the
+    #: one this workspace just resolved (a store switch, a newly-verified
+    #: Shopify sync, a workspace default change) — or under no recorded
+    #: currency at all, from before this column existed. The number is not
+    #: wrong on its own terms, but it is not trustworthy as "the price in
+    #: today's selling currency" until the merchant re-runs pricing.
+    needs_recalculation: bool = False
 
 
 class DraftPricingWorkspaceRead(CamelCaseModel):
@@ -85,6 +92,10 @@ class DraftPricingWorkspaceRead(CamelCaseModel):
     fx_provider_timestamp: datetime | None = None
     fx_fetched_at: datetime | None = None
     fx_is_stale: bool | None = None
+    #: True when any variant's `needs_recalculation` is true — a workspace-
+    #: level flag so the UI can show one banner rather than requiring the
+    #: merchant to scan every row.
+    needs_recalculation: bool = False
     variants: list[DraftVariantPricingRow] = Field(default_factory=list)
 
 

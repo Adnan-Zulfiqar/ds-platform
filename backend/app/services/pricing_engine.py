@@ -487,6 +487,18 @@ class PricingEngine(BaseService):
                     shipping_cost=shipping_for_math,
                 )
 
+            # A price exists but was never stamped with the currency it was
+            # computed in (pre-migration-0021 data), or was stamped under a
+            # selling currency that has since changed (a store switch, a
+            # newly-verified Shopify sync) — either way, the stored number is
+            # not trustworthy as "the price in today's selling currency"
+            # without a fresh run through this workspace.
+            needs_recalculation = variant.sell_price is not None and (
+                variant.sell_price_currency is None
+                or normalise_currency(variant.sell_price_currency)
+                != normalise_currency(selling_currency)
+            )
+
             rows.append(
                 await self._variant_row(
                     variant_id=variant.id,
@@ -516,6 +528,7 @@ class PricingEngine(BaseService):
                     row_blocked=row_blocked,
                     row_block_message=row_block_message,
                     allow_profit=not row_blocked,
+                    needs_recalculation=needs_recalculation,
                 )
             )
 
@@ -554,6 +567,7 @@ class PricingEngine(BaseService):
             fx_provider_timestamp=ws_fx_provider_ts,
             fx_fetched_at=ws_fx_fetched_at,
             fx_is_stale=ws_fx_is_stale,
+            needs_recalculation=any(row.needs_recalculation for row in rows),
             variants=rows,
         )
 
@@ -652,11 +666,23 @@ class PricingEngine(BaseService):
                 variant.compare_at_price = self._quantize(
                     request.compare_at_price, cents=request.round_to_cents
                 )
+                # `compare_at_price` is meaningless without knowing which
+                # currency it is in, same reasoning as `sell_price` below —
+                # and setting one without the other previously set would
+                # leave the pair inconsistent, so stamp it here too.
+                variant.sell_price_currency = preview.selling_currency
                 continue
             proposed = proposed_by_id.get(variant.id)
             if proposed is None:
                 continue
             variant.sell_price = proposed
+            # The currency this specific write is in — always the *resolved*
+            # selling currency for this call, never the supplier's `currency`.
+            # Read back later by `_variant_needs_recalculation` to detect a
+            # stale price after the selling currency itself changes (a store
+            # switch, a newly-verified Shopify sync) rather than trusting a
+            # number that happens to still be sitting in the column.
+            variant.sell_price_currency = preview.selling_currency
         enabled_sells = [
             v.sell_price for v in product.variants if v.is_enabled and v.sell_price is not None
         ]
@@ -760,6 +786,7 @@ class PricingEngine(BaseService):
         row_blocked: bool,
         row_block_message: str | None,
         allow_profit: bool,
+        needs_recalculation: bool = False,
     ) -> DraftVariantPricingRow:
         shipping_available = shipping_cost is not None
         # Missing freight is excluded from landed-cost math (not invented as zero).
@@ -822,6 +849,7 @@ class PricingEngine(BaseService):
             manual_override=sell_price is not None,
             row_blocked=row_blocked,
             row_block_message=row_block_message,
+            needs_recalculation=needs_recalculation,
         )
 
     @staticmethod

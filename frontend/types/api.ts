@@ -340,6 +340,14 @@ export interface DraftVariantPricingRow {
   manualOverride: boolean;
   rowBlocked: boolean;
   rowBlockMessage: string | null;
+  /**
+   * `sellPrice` was written under a different selling currency than the one
+   * this workspace just resolved (a store switch, a newly-verified Shopify
+   * sync) — or under no recorded currency at all. The number is not wrong
+   * on its own terms, but it is not trustworthy as "the price in today's
+   * selling currency" until pricing is re-run for this row.
+   */
+  needsRecalculation: boolean;
 }
 
 export interface DraftPricingWorkspace {
@@ -366,6 +374,8 @@ export interface DraftPricingWorkspace {
   fxProviderTimestamp: string | null;
   fxFetchedAt: string | null;
   fxIsStale: boolean | null;
+  /** True when any variant's `needsRecalculation` is true. */
+  needsRecalculation: boolean;
   variants: DraftVariantPricingRow[];
 }
 

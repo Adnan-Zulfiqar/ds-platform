@@ -74,9 +74,7 @@ async def _main(*, store_id: uuid.UUID | None, refresh: bool) -> int:
         shopify_code = await client.fetch_shop_currency_code()
         persisted = store.currency
         synced_at = store.currency_last_synced_at
-        match = (
-            shopify_code == persisted and synced_at is not None
-        )
+        match = shopify_code == persisted and synced_at is not None
         print(f"store_id={store.id}")
         print(f"shop_domain={connection.shop_domain}")
         print(f"shopify_currencyCode={shopify_code}")

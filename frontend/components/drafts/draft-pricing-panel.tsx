@@ -219,6 +219,20 @@ export function DraftPricingPanel({
         </div>
       ) : null}
 
+      {!blocked && workspace.needsRecalculation ? (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
+          role="status"
+          data-testid="needs-recalculation-banner"
+        >
+          <span className="font-medium text-amber-800">Pricing needs recalculation.</span>{" "}
+          One or more variant prices were set for a different selling currency
+          than the one resolved now — shown below, not hidden, but not
+          trustworthy as today&apos;s price until you re-run pricing for this
+          product.
+        </div>
+      ) : null}
+
       {!workspace.shippingCostAvailable ? (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
           {workspace.shippingWarning ??
@@ -345,6 +359,14 @@ export function DraftPricingPanel({
                   {row.rowBlocked ? (
                     <Badge className="ml-2" variant="destructive">
                       Blocked
+                    </Badge>
+                  ) : null}
+                  {!row.rowBlocked && row.needsRecalculation ? (
+                    <Badge
+                      className="ml-2 border-amber-500/40 bg-amber-500/10 text-amber-800"
+                      variant="outline"
+                    >
+                      Needs recalculation
                     </Badge>
                   ) : null}
                 </TableCell>
