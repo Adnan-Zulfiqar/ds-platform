@@ -2,6 +2,9 @@
 
 A rate multiplies an amount in ``base_currency`` to produce ``quote_currency``.
 Never invent a 1.0 rate when currencies differ.
+
+``provider_timestamp`` is the FX market/source time from the provider.
+``fetched_at`` is when *our* server retrieved the quote. They are not the same.
 """
 
 from __future__ import annotations
@@ -24,20 +27,30 @@ class FxRateStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class FxRateQuote:
-    """One auditable conversion rate."""
+    """One auditable conversion rate.
+
+    ``rate`` must be a ``Decimal`` produced without a binary-float intermediate.
+    """
 
     base_currency: str
     quote_currency: str
     rate: Decimal
     provider_name: str
-    retrieved_at: datetime
-    source_timestamp: datetime | None
+    fetched_at: datetime
+    provider_timestamp: datetime | None
     expires_at: datetime | None
     status: FxRateStatus
+    #: How the rate was obtained: direct | inverted | via_usd
+    derivation: str = "direct"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_currency", normalise_currency(self.base_currency))
         object.__setattr__(self, "quote_currency", normalise_currency(self.quote_currency))
+        if not isinstance(self.rate, Decimal):
+            raise ValidationError(
+                "FX rate must be Decimal (binary float is forbidden).",
+                details={"code": "fx_rate_invalid", "type": type(self.rate).__name__},
+            )
         if self.base_currency == self.quote_currency:
             raise ValidationError(
                 "FX quotes must not be identity pairs — use a direct Money amount.",
@@ -48,6 +61,10 @@ class FxRateQuote:
                 "FX rate must be a positive finite Decimal.",
                 details={"code": "fx_rate_invalid"},
             )
+
+    @property
+    def is_stale(self) -> bool:
+        return self.status is FxRateStatus.STALE
 
 
 @dataclass(frozen=True, slots=True)
