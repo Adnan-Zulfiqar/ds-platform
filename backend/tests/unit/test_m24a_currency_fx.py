@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from app.core.exceptions import FxUnavailableError, ShopifyCurrencyRefreshError
-from app.domain.fx import FxRateQuote, FxRateStatus, convert_money
+from app.domain.fx import FxRateQuote, FxRateStatus
 from app.domain.money import Money
 from app.models.store import StorePlatform
 from app.services.fx.providers import OpenExchangeRatesProvider, StubFXRateProvider
