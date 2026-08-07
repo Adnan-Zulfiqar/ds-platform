@@ -38,6 +38,24 @@ production release.
   outright when an enabled variant's price currency doesn't match the
   store's verified currency, never sending a mislabelled amount. See M23/M26
   in `docs/TECHNICAL_DEBT.md`.
+- **M24B — AliExpress `target_currency` derived from destination, not
+  hardcoded** — every refresh/sync path (`POST /products/{id}/sync`,
+  `POST /drafts/{id}/refresh`, the scheduled resync task) previously omitted
+  `currency` and silently defaulted to `"USD"` regardless of the product's
+  real destination — a GB-destined refresh asked AliExpress for USD pricing.
+  `ImportDestinationService.resolve_currency()` now derives it (explicit
+  request → verified store currency → destination's mapped market currency,
+  GB→GBP/US→USD → tenant default), mirroring the existing ship-to-country
+  resolver. Also fixed a live-reproduced mislabeling: `Product.currency` was
+  set from AliExpress's unlocalized native currency
+  (`ae_item_base_info_dto.currency_code`, always the seller's own currency
+  regardless of what was requested) while `cost_price_min`/`cost_price_max`
+  are computed from the correctly-localized SKU prices — now derived from
+  the SKUs themselves; the native currency is preserved separately as
+  `supplier_native_currency` (migration `0022`, alongside `import_currency`
+  recording what was actually requested). Live-traced against a real
+  product; shipping/tax/landed-cost remain out of scope — see
+  `docs/ALIEXPRESS_LOCALIZED_PRICING.md` and M27 in `docs/TECHNICAL_DEBT.md`.
 
 ### Changed
 

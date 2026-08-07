@@ -496,9 +496,10 @@ localised by design:
 ## Product import destinations (`ds.product.get`)
 
 Import uses `aliexpress.ds.product.get` with an explicit `ship_to_country`
-(ISO 3166-1 alpha-2) and `target_currency`. There is **no silent US default**.
+(ISO 3166-1 alpha-2), `target_currency`, and `target_language=en`. There is
+**no silent US default** — for either field.
 
-Destination resolution order (`ImportDestinationService`):
+Destination resolution order (`ImportDestinationService.resolve`):
 
 1. Request `shipToCountry` from the Import as Draft dialog
 2. Selected store’s `settings.countryCode` (or `country` / `shipToCountry`)
@@ -506,10 +507,32 @@ Destination resolution order (`ImportDestinationService`):
 4. Tenant’s last successful import destination
 5. Otherwise `422 validation_error` — merchant must choose
 
+Currency resolution order (`ImportDestinationService.resolve_currency`, M24B)
+is the same shape, deliberately:
+
+1. Request `currency`, if explicitly given
+2. Selected store’s currency — **only if verified**
+   (`Store.currency_last_synced_at` is set; an unsynced store’s currency is
+   never trusted, same authority rule as `PricingEngine._resolve_selling_currency`)
+3. The resolved destination’s mapped market currency
+   (`app.integrations.aliexpress.countries.CURRENCY_BY_COUNTRY` — `GB → GBP`,
+   `US → USD`; deliberately short, extend it in its own reviewed change when a
+   new market is approved)
+4. Tenant’s `default_currency`
+5. Otherwise `422 validation_error` — merchant must choose
+
+**Why this needed fixing.** Before M24B, every refresh/sync call path
+(`POST /products/{id}/sync`, `POST /drafts/{id}/refresh`, the scheduled resync
+task) omitted `currency` entirely, and the field had a hardcoded `"USD"`
+schema default — so a GB-destined product silently requested USD pricing on
+every refresh, regardless of its actual destination. See
+`docs/ALIEXPRESS_LOCALIZED_PRICING.md` for the full trace and live evidence.
+
 Each import attempt records `ship_to_country`, `currency`, and `result_category`
 on `product_imports`. A successful import also sets
-`products.import_ship_to_country` and `import_ship_to_checked_at`. Refresh/sync
-reuses that destination rather than forcing US.
+`products.import_ship_to_country`, `import_ship_to_checked_at`, and (M24B)
+`products.import_currency`. Refresh/sync reuses that destination and currency
+rather than re-deriving from a platform default.
 
 **One product row per destination policy:** the catalogue keeps a single
 `(tenant, source, external_id)` row. Changing destination refreshes the supplier

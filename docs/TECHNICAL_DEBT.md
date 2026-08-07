@@ -32,7 +32,7 @@ A-05, A-09, and A-16 resolved, A-06 fix landed (CI job unverified), A-15
 partially (Shopify disconnect) (see below). Remaining: A-06 CI green, A-07,
 A-08, A-15 (remaining surfaces).
 
-**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~14 medium, 5 low.**
+**Current count: 1 critical (C1, narrowed), 1 high (narrowed), ~15 medium, 5 low.**
 **Product Workspace V2 Stage 0 (2026-08-06)** — Drafts/Products query split
 shipped on `cursor/product-workspace-v2`; M21 records Inventory/Pricing lag.
 **Pricing currency integrity, closing M24A's remaining gap (2026-08-07)** —
@@ -561,6 +561,32 @@ backfill that stamps `sell_price_currency` from each product's
 not recoverable from data alone (no history of past selling-currency
 resolutions exists), so this is a product decision (re-run pricing en masse
 vs. leave it merchant-reviewed) more than a purely technical one.
+
+### M27 — AliExpress localized shipping, tax, and landed cost not built (M24B remainder)
+
+M24B closed the currency-derivation bug (see
+`docs/ALIEXPRESS_LOCALIZED_PRICING.md`) but was deliberately scoped to
+currency correctness only. A real live trace of `ds.product.get` confirmed it
+returns **no shipping cost, service list, or shipping currency at all** —
+only a delivery-time day count. Building a shipping-service picker or a
+landed-cost calculator on that would mean inventing fields that do not
+exist; a genuinely separate AliExpress API (freight/shipping quote) needs its
+own investigation first. Supplier VAT/tax display beyond the raw per-SKU
+`price_include_tax` boolean, customer-facing tax-handling settings (UK VAT
+mode, US sales-tax mode), the price-provenance UI badge
+(`ALIEXPRESS_LOCALIZED` / `FX_CONVERTED_SOURCE` / `MANUAL_OVERRIDE`), and the
+Pricing tab redesign around all of the above are equally out of scope for the
+same reason — no real API contract to build against yet.
+
+**Impact:** the Pricing workspace still shows supplier item cost only, no
+landed cost, no shipping strategy, no tax handling — that scope simply has
+not been attempted.
+**Trigger:** before a merchant needs total landed cost (item + shipping) to
+price accurately, or before UK/US tax-handling copy is needed on the Pricing
+tab.
+**Fix:** identify and integrate the real AliExpress shipping/freight-quote
+API method as its own scoped pass, then build the landed-cost/tax/provenance
+UI on top of real fields.
 
 ### M24 — Online Store publications API and shipping profile scopes
 
