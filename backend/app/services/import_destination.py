@@ -1,12 +1,27 @@
-"""Resolve the AliExpress ship-to country for an import.
+"""Resolve the AliExpress ship-to country and target currency for an import.
 
-Priority (documented in ``docs/ALIEXPRESS_INTEGRATION.md``):
+Ship-to priority (documented in ``docs/ALIEXPRESS_INTEGRATION.md``):
 
 1. Explicit request ``ship_to_country``
 2. Selected store's ``settings.countryCode`` / ``settings.country`` when present
 3. Platform ``DEFAULT_SHIP_TO_COUNTRY`` when configured
 4. Tenant's last successful import destination
 5. Otherwise require the merchant to choose — never invent ``US``
+
+Currency priority (M24B) is the same shape, deliberately: a merchant must not
+have to know AliExpress's ``target_currency`` parameter exists, and DropPilot
+must not silently ask AliExpress for USD pricing on a GB-destined import just
+because nothing overrode a hardcoded default (M24A's live-traced bug — see
+``docs/ALIEXPRESS_LOCALIZED_PRICING.md``).
+
+1. Explicit request ``currency``
+2. Selected store's *verified* currency (``Store.currency_last_synced_at`` set
+   — an unsynced store's currency is untrusted, same M24A authority rule
+   ``PricingEngine._resolve_selling_currency`` already enforces)
+3. The resolved ship-to country's mapped currency (``CURRENCY_BY_COUNTRY`` —
+   GB/US only for now)
+4. Tenant's ``default_currency``
+5. Otherwise require the merchant to choose — never invent USD
 """
 
 from __future__ import annotations
@@ -19,18 +34,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import ValidationError
-from app.integrations.aliexpress.countries import normalise_country_code
+from app.domain.money import normalise_currency
+from app.integrations.aliexpress.countries import currency_for_country, normalise_country_code
 from app.models.product import ImportStatus, ProductImport, ProductSource
+from app.models.store import StorePlatform
 from app.repositories.store import StoreRepository
+from app.repositories.tenant import TenantRepository
 from app.services.base import BaseService
 
 
 class ImportDestinationService(BaseService):
-    """Picks a ship-to country without silently defaulting every merchant to US."""
+    """Picks a ship-to country and target currency without silently defaulting."""
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
         self.stores = StoreRepository(session)
+        self.tenants = TenantRepository(session)
 
     async def resolve(
         self,
@@ -61,6 +80,58 @@ class ImportDestinationService(BaseService):
             "Select a ship-to country. AliExpress availability and price depend "
             "on destination, and this workspace has no default configured.",
             details={"field": "ship_to_country"},
+        )
+
+    async def resolve_currency(
+        self,
+        *,
+        currency: str | None,
+        ship_to_country: str,
+        store_id: uuid.UUID | None = None,
+    ) -> tuple[str, str]:
+        """Resolve the ``target_currency`` to request from AliExpress.
+
+        Returns ``(currency, source)`` — ``source`` is one of ``explicit``,
+        ``verified_store``, ``destination``, ``workspace`` — persisted on the
+        product/import record so a later "why is this GBP" question has a real
+        answer instead of a guess.
+        """
+        if currency:
+            try:
+                return normalise_currency(currency), "explicit"
+            except ValidationError:
+                pass  # Fall through rather than reject an otherwise-fine import.
+
+        if store_id is not None:
+            store = await self.stores.get_by_id(store_id)
+            if (
+                store is not None
+                and store.platform is StorePlatform.SHOPIFY
+                and store.currency_last_synced_at is not None
+                and store.currency
+            ):
+                try:
+                    return normalise_currency(store.currency), "verified_store"
+                except ValidationError:
+                    pass
+
+        from_destination = currency_for_country(ship_to_country)
+        if from_destination:
+            return from_destination, "destination"
+
+        from app.core.context import require_tenant_id
+
+        tenant = await self.tenants.get_by_id(require_tenant_id())
+        if tenant is not None and getattr(tenant, "default_currency", None):
+            try:
+                return normalise_currency(tenant.default_currency), "workspace"
+            except ValidationError:
+                pass
+
+        raise ValidationError(
+            "Select a target currency. This destination has no mapped market "
+            "currency and this workspace has no default configured.",
+            details={"field": "currency", "ship_to_country": ship_to_country},
         )
 
     async def _last_successful_ship_to(self) -> str | None:

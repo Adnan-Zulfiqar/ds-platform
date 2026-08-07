@@ -72,7 +72,7 @@ class ProductImportService(BaseService):
         external_id: str,
         requested_by_user_id: uuid.UUID | None = None,
         ship_to_country: str | None = None,
-        currency: str = "USD",
+        currency: str | None = None,
         store_id: uuid.UUID | None = None,
     ) -> Product:
         """Import or refresh a single supplier product.
@@ -86,7 +86,14 @@ class ProductImportService(BaseService):
         again, which is what a double-clicked button produces.
 
         ``ship_to_country`` is resolved via :class:`ImportDestinationService`
-        when omitted — never silently forced to ``US``.
+        when omitted — never silently forced to ``US``. ``currency`` is
+        resolved the same way (M24B): a caller that omits it — every
+        refresh/sync path does — gets the destination's mapped market currency
+        (GB -> GBP, US -> USD) or a verified store's currency, never a
+        hardcoded USD default. That default was the actual root cause of a
+        live-traced bug: a GB-destined refresh silently asked AliExpress for
+        USD pricing because nothing overrode it. See
+        ``docs/ALIEXPRESS_LOCALIZED_PRICING.md``.
         """
         external_id = (external_id or "").strip()
         if not external_id:
@@ -94,6 +101,11 @@ class ProductImportService(BaseService):
 
         destination = await self.destinations.resolve(
             ship_to_country=ship_to_country,
+            store_id=store_id,
+        )
+        target_currency, currency_source = await self.destinations.resolve_currency(
+            currency=currency,
+            ship_to_country=destination,
             store_id=store_id,
         )
 
@@ -112,12 +124,12 @@ class ProductImportService(BaseService):
             requested_by_user_id=requested_by_user_id,
             started_at=datetime.now(UTC),
             ship_to_country=destination,
-            currency=currency,
+            currency=target_currency,
         )
 
         try:
             payload = await self._fetch_product(
-                external_id, ship_to_country=destination, currency=currency
+                external_id, ship_to_country=destination, currency=target_currency
             )
             # Inspect rsp_code before treating an empty envelope as "not found".
             # Live: 482 SHIP_TO_COUNTRY_PROHIBITED returns {has_whole_sale:false}
@@ -140,6 +152,13 @@ class ProductImportService(BaseService):
         checked_at = datetime.now(UTC)
         values["import_ship_to_country"] = destination
         values["import_ship_to_checked_at"] = checked_at
+        # The currency actually requested for this import/refresh -- distinct
+        # from `currency` (map_product's SKU-derived selling currency) and
+        # from `supplier_native_currency` (the seller's own listing currency,
+        # which AliExpress never localizes regardless of what was requested).
+        # Reused by the Pricing workspace to know whether a draft's stored
+        # price is still asking for the currency the merchant actually wants.
+        values["import_currency"] = target_currency
         # Prefer the requested destination on the product snapshot so the draft
         # editor shows "Imported for: GB" even when logistics DTO omits it.
         values["ship_to_country"] = values.get("ship_to_country") or destination
@@ -173,6 +192,9 @@ class ProductImportService(BaseService):
             external_id=external_id,
             variants=len(detail.skus),
             images=len(detail.image_urls),
+            ship_to_country=destination,
+            target_currency=target_currency,
+            currency_source=currency_source,
         )
         return product
 

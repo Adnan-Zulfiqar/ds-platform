@@ -115,6 +115,9 @@ class ProductRead(CamelCaseModel):
     brand: str | None = None
     status: ProductStatus
     currency: str | None = None
+    #: The supplier's own listing currency (never localized by AliExpress) —
+    #: audit/display only. `currency` above is what pricing math reads.
+    supplier_native_currency: str | None = None
     cost_price_min: Decimal | None = None
     cost_price_max: Decimal | None = None
     sell_price: Decimal | None = None
@@ -129,6 +132,9 @@ class ProductRead(CamelCaseModel):
     warehouse_origin: str | None = None
     import_ship_to_country: str | None = None
     import_ship_to_checked_at: datetime | None = None
+    #: The target_currency actually requested on the last successful import —
+    #: pairs with import_ship_to_country above.
+    import_currency: str | None = None
     requires_shipping: bool = True
     hs_code: str | None = None
     country_of_origin: str | None = None
@@ -322,10 +328,15 @@ class ProductImportRequest(CamelCaseModel):
     #: Destination country and currency shape the prices the supplier quotes,
     #: so they are import parameters rather than display preferences.
     #:
-    #: No silent ``US`` default — when omitted the service resolves store /
-    #: workspace / last-success, or requires an explicit choice.
+    #: No silent default for either — when omitted, the service resolves
+    #: ship-to via store / workspace / last-success, and currency via a
+    #: verified store's currency or the destination's mapped market currency
+    #: (GB -> GBP, US -> USD), or requires an explicit choice. A ``"USD"``
+    #: default here previously meant every refresh/sync call (which never set
+    #: this field) silently asked AliExpress for USD pricing regardless of
+    #: the actual destination — a live-traced bug, not a hypothetical one.
     ship_to_country: str | None = Field(default=None, min_length=2, max_length=2)
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     #: Optional store whose ``settings.countryCode`` seeds destination when
     #: ``ship_to_country`` is omitted.
     store_id: uuid.UUID | None = None
