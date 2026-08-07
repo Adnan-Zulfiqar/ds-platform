@@ -50,6 +50,8 @@ class StoreRead(CamelCaseModel):
     storefront_url: str | None
     external_store_id: str | None
     currency: str
+    #: Null until Shopify GraphQL shop.currencyCode has been synced successfully.
+    currency_last_synced_at: datetime | None = None
     timezone: str
     settings: dict[str, Any]
     inventory_sync_enabled: bool
@@ -61,6 +63,15 @@ class StoreRead(CamelCaseModel):
     health_score: int
     created_at: datetime
     updated_at: datetime
+
+
+class StoreCurrencyRefreshRead(CamelCaseModel):
+    """Result of an explicit Shopify selling-currency refresh."""
+
+    store_id: uuid.UUID
+    currency: str
+    currency_last_synced_at: datetime
+    source: str = "shopify_graphql_shop_currency_code"
 
 
 class StoreStatisticsRead(CamelCaseModel):

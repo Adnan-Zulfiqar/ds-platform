@@ -550,7 +550,14 @@ class ShopifySettings(_EnvFileSettings):
         ),
         description="OAuth scopes requested at install time.",
     )
-    api_version: str = Field(default="2025-01")
+    api_version: str = Field(
+        default="2026-07",
+        description=(
+            "Shopify Admin API version for new GraphQL paths (shop currency). "
+            "Legacy REST callers still read this setting — remaining REST debt "
+            "is tracked separately."
+        ),
+    )
     callback_url: str = Field(
         default="http://localhost:8000/api/v1/integrations/shopify/callback",
     )
@@ -679,18 +686,27 @@ class FxSettings(_EnvFileSettings):
 
     provider: str = Field(
         default="unavailable",
-        description="unavailable | stub | (future: frankfurter, openexchangerates).",
+        description="unavailable | stub | openexchangerates",
     )
     api_key: SecretStr | None = Field(
         default=None,
         description="Provider API key when required. Never commit real keys.",
     )
+    base_url: str = Field(
+        default="https://openexchangerates.org/api",
+        description="Open Exchange Rates API root (no trailing slash required).",
+    )
+    timeout_seconds: int = Field(default=10, ge=1, le=120)
+    #: Freshness window — quotes younger than this (by provider_timestamp) are CURRENT.
+    cache_ttl_seconds: int = Field(default=3600, ge=1)
+    #: Redis retention and outer bound for controlled stale fallback.
+    max_staleness_seconds: int = Field(default=21600, ge=1)
+    #: Legacy freshness knob (minutes). Prefer cache_ttl_seconds.
     rate_max_age_minutes: int = Field(
         default=60,
         ge=1,
-        description="Quotes older than this are marked stale.",
+        description="Deprecated: prefer FX_CACHE_TTL_SECONDS for freshness.",
     )
-    cache_ttl_seconds: int = Field(default=300, ge=1)
 
 
 class Settings(_EnvFileSettings):

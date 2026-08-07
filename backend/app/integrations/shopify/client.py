@@ -1,12 +1,17 @@
-"""Shopify Admin REST client.
+"""Shopify Admin API client (REST + minimal GraphQL transport).
 
 The only module that talks to Shopify over the network. Credentials never reach
 logs. Transient failures retry; 4xx auth failures do not.
+
+New shop-currency authority uses Admin GraphQL (``shop.currencyCode``). Legacy
+product/order sync paths still use REST against the configured API version.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -23,6 +28,14 @@ from app.integrations.shopify.exceptions import (
 )
 
 logger = get_logger(__name__)
+
+SHOP_CURRENCY_QUERY = """
+query ShopCurrency {
+  shop {
+    currencyCode
+  }
+}
+""".strip()
 
 
 class ShopifyClient:
@@ -156,6 +169,122 @@ class ShopifyClient:
 
     async def post(self, path: str, *, json_body: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", path, json_body=json_body)
+
+    async def graphql(
+        self,
+        query: str,
+        *,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """POST Admin GraphQL. Numeric JSON values parse as Decimal, never float."""
+        body: dict[str, Any] = {"query": query}
+        if variables is not None:
+            body["variables"] = variables
+        headers = {
+            "X-Shopify-Access-Token": self._token,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        decision = await self._rate_limiter.acquire(self._tenant_id)
+        if not decision.allowed:
+            raise ShopifyRateLimitError()
+
+        url = self._url("/graphql.json")
+        attempts = self._config.max_retries + 1
+        last_error: Exception | None = None
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                self._config.request_timeout_seconds,
+                connect=self._config.connect_timeout_seconds,
+            )
+        ) as client:
+            for attempt in range(attempts):
+                try:
+                    response = await client.post(url, headers=headers, json=body)
+                except httpx.TimeoutException as exc:
+                    last_error = ShopifyTimeoutError()
+                    if attempt + 1 >= attempts:
+                        raise last_error from exc
+                    await asyncio.sleep(
+                        compute_backoff(attempt, base_seconds=1.0, max_seconds=30.0)
+                    )
+                    continue
+                except httpx.HTTPError as exc:
+                    last_error = ShopifyError(str(exc))
+                    if attempt + 1 >= attempts:
+                        raise last_error from exc
+                    await asyncio.sleep(
+                        compute_backoff(attempt, base_seconds=1.0, max_seconds=30.0)
+                    )
+                    continue
+
+                if response.status_code == 429:
+                    last_error = ShopifyRateLimitError()
+                    if attempt + 1 >= attempts:
+                        raise last_error
+                    retry_after = float(response.headers.get("Retry-After", "1"))
+                    await asyncio.sleep(
+                        max(
+                            retry_after,
+                            compute_backoff(attempt, base_seconds=1.0, max_seconds=30.0),
+                        )
+                    )
+                    continue
+
+                if response.status_code in {401, 403}:
+                    raise ShopifyAuthError()
+
+                if response.status_code >= 500:
+                    last_error = ShopifyResponseError(
+                        f"Shopify GraphQL returned HTTP {response.status_code}",
+                        upstream_code=str(response.status_code),
+                    )
+                    if attempt + 1 >= attempts:
+                        raise last_error
+                    await asyncio.sleep(
+                        compute_backoff(attempt, base_seconds=1.0, max_seconds=30.0)
+                    )
+                    continue
+
+                if response.status_code >= 400:
+                    raise ShopifyResponseError(
+                        f"Shopify GraphQL returned HTTP {response.status_code}",
+                        upstream_code=str(response.status_code),
+                        details={"body": response.text[:500]},
+                    )
+
+                payload = json.loads(response.text, parse_float=Decimal)
+                if not isinstance(payload, dict):
+                    raise ShopifyResponseError("Unexpected Shopify GraphQL response shape.")
+                errors = payload.get("errors")
+                if errors:
+                    raise ShopifyResponseError(
+                        "Shopify GraphQL returned errors.",
+                        details={"errors": errors},
+                    )
+                logger.info("shopify_graphql_ok", path="/graphql.json")
+                return payload
+
+        assert last_error is not None
+        raise last_error
+
+    async def fetch_shop_currency_code(self) -> str:
+        """Return the store's default selling currency (``shop.currencyCode``)."""
+        payload = await self.graphql(SHOP_CURRENCY_QUERY)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ShopifyResponseError("Shopify GraphQL shop currency payload missing data.")
+        shop = data.get("shop")
+        if not isinstance(shop, dict):
+            raise ShopifyResponseError("Shopify GraphQL shop currency payload missing shop.")
+        code = shop.get("currencyCode")
+        if not isinstance(code, str) or len(code.strip()) != 3:
+            raise ShopifyResponseError(
+                "Shopify GraphQL shop.currencyCode missing or invalid.",
+                details={"currencyCode": code},
+            )
+        return code.strip().upper()
 
     async def put(self, path: str, *, json_body: dict[str, Any]) -> dict[str, Any]:
         return await self.request("PUT", path, json_body=json_body)

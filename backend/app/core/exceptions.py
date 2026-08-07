@@ -75,6 +75,39 @@ class FxUnavailableError(ValidationError):
     message = "Pricing cannot be calculated because a valid currency conversion is not available."
 
 
+class SellingCurrencyMissingError(ValidationError):
+    """Connected Shopify store has no verified selling currency."""
+
+    code = "selling_currency_missing"
+    message = (
+        "Shopify selling currency is not available. Refresh the store currency "
+        "before calculating prices."
+    )
+
+
+class ShopifyCurrencyRefreshError(AppError):
+    """Shopify shop.currencyCode could not be retrieved."""
+
+    code = "shopify_currency_refresh_failed"
+    status_code = 502
+    message = "Could not refresh Shopify selling currency."
+
+
+class FxRateInvalidError(ValidationError):
+    code = "fx_rate_invalid"
+    message = "The exchange rate returned by the provider is invalid."
+
+
+class FxRateStaleError(ValidationError):
+    code = "fx_rate_stale"
+    message = "The exchange rate is too stale to use for pricing."
+
+
+class FxPairUnsupportedError(ValidationError):
+    code = "fx_pair_unsupported"
+    message = "The requested currency pair is not supported by the FX provider."
+
+
 class AuthenticationError(AppError):
     """No valid credentials were supplied."""
 
@@ -160,6 +193,12 @@ class InfrastructureError(AppError):
     code = "infrastructure_error"
     status_code = 503
     message = "A required service is temporarily unavailable."
+
+
+class FxProviderTimeoutError(InfrastructureError):
+    code = "fx_provider_timeout"
+    status_code = 504
+    message = "The FX provider timed out."
 
 
 class DatabaseError(InfrastructureError):

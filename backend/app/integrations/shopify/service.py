@@ -20,9 +20,10 @@ from app.core.encryption import (
     encrypt,
     is_encryption_configured,
 )
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ShopifyCurrencyRefreshError
 from app.core.logging import get_logger
 from app.core.redis import RedisPurpose, get_redis
+from app.domain.money import normalise_currency
 from app.integrations.shopify.auth import (
     OAuthState,
     build_authorization_url,
@@ -33,6 +34,7 @@ from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.exceptions import (
     ShopifyAuthError,
     ShopifyConfigError,
+    ShopifyError,
     ShopifyInstallTicketError,
     ShopifyNotConnectedError,
     ShopifyOAuthExchangeError,
@@ -43,7 +45,7 @@ from app.integrations.shopify.exceptions import (
 )
 from app.models.integration import IntegrationStatus
 from app.models.shopify import ShopifyConnection
-from app.models.store import StorePlatform, StoreStatus
+from app.models.store import Store, StorePlatform, StoreStatus
 from app.repositories.shopify import ShopifyConnectionRepository, ShopifyMaintenanceRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
@@ -441,7 +443,110 @@ class ShopifyService(BaseService):
             store_id=str(connection.store_id),
             tenant_id=str(tenant_id),
         )
+        # Currency sync is best-effort: OAuth success must not roll back if
+        # shop.currencyCode is temporarily unreachable.
+        try:
+            client = ShopifyClient(
+                shop_domain=shop_domain,
+                access_token=access_token,
+                tenant_id=str(tenant_id),
+            )
+            await self._apply_shop_currency(store, client=client)
+        except Exception:
+            logger.warning(
+                "shopify_currency_sync_failure",
+                shop_domain=shop_domain,
+                store_id=str(store.id),
+                tenant_id=str(tenant_id),
+                phase="oauth_complete",
+                exc_info=True,
+            )
         return connection
+
+    async def _apply_shop_currency(self, store: Store, *, client: ShopifyClient) -> str:
+        """Persist verified Shopify selling currency from GraphQL shop.currencyCode."""
+        code = await client.fetch_shop_currency_code()
+        normalised = normalise_currency(code)
+        synced_at = datetime.now(UTC)
+        await self.stores.update(
+            store,
+            currency=normalised,
+            currency_last_synced_at=synced_at,
+        )
+        await self.session.flush()
+        logger.info(
+            "shopify_currency_sync_success",
+            store_id=str(store.id),
+            tenant_id=str(store.tenant_id),
+            currency=normalised,
+            provider_timestamp=synced_at.isoformat(),
+        )
+        return normalised
+
+    async def refresh_shop_currency(self, store_id: uuid.UUID) -> Store:
+        """Explicit refresh of Shopify selling currency (GraphQL).
+
+        On failure: never clears a previously trusted currency or its
+        ``currency_last_synced_at``. Raises ``ShopifyCurrencyRefreshError``.
+        """
+        store = await self.stores.get_by_id(store_id)
+        if store is None:
+            raise NotFoundError("Store was not found.")
+        if store.platform is not StorePlatform.SHOPIFY:
+            raise ShopifyCurrencyRefreshError(
+                "Currency refresh is only supported for Shopify stores.",
+                details={"store_id": str(store_id), "platform": store.platform.value},
+            )
+        had_trusted = store.currency_last_synced_at is not None
+        previous_currency = store.currency
+        previous_synced_at = store.currency_last_synced_at
+        try:
+            client, _connection = await self.client_for_store(store_id)
+            await self._apply_shop_currency(store, client=client)
+        except ShopifyCurrencyRefreshError:
+            raise
+        except ShopifyError as exc:
+            logger.warning(
+                "shopify_currency_sync_failure",
+                store_id=str(store_id),
+                tenant_id=str(store.tenant_id),
+                had_trusted=had_trusted,
+                previous_currency=previous_currency,
+                previous_synced_at=(previous_synced_at.isoformat() if previous_synced_at else None),
+                error=str(exc),
+            )
+            raise ShopifyCurrencyRefreshError(
+                details={
+                    "store_id": str(store_id),
+                    "had_trusted_currency": had_trusted,
+                    "retained_currency": previous_currency if had_trusted else None,
+                    "retained_synced_at": (
+                        previous_synced_at.isoformat()
+                        if had_trusted and previous_synced_at is not None
+                        else None
+                    ),
+                },
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "shopify_currency_sync_failure",
+                store_id=str(store_id),
+                tenant_id=str(store.tenant_id),
+                had_trusted=had_trusted,
+                previous_currency=previous_currency,
+                exc_info=True,
+            )
+            raise ShopifyCurrencyRefreshError(
+                details={
+                    "store_id": str(store_id),
+                    "had_trusted_currency": had_trusted,
+                    "retained_currency": previous_currency if had_trusted else None,
+                },
+            ) from exc
+        refreshed = await self.stores.get_by_id(store_id)
+        if refreshed is None:
+            raise NotFoundError("Store was not found.")
+        return refreshed
 
     async def list_status(self) -> tuple[bool, list[ShopifyConnection]]:
         configured = bool(

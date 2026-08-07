@@ -8,9 +8,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path, status
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.integrations.shopify.service import ShopifyService
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.store import (
     StoreCreate,
+    StoreCurrencyRefreshRead,
     StoreRead,
     StoreStatisticsRead,
     StoreUpdate,
@@ -69,6 +71,27 @@ async def update_store(
 ) -> StoreRead:
     store = await StoreService(session).update(store_id, payload)
     return StoreRead.model_validate(store)
+
+
+@router.post(
+    "/{store_id}/currency/refresh",
+    response_model=StoreCurrencyRefreshRead,
+)
+async def refresh_store_currency(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    store_id: Annotated[uuid.UUID, Path()],
+) -> StoreCurrencyRefreshRead:
+    """Refresh Shopify selling currency via Admin GraphQL ``shop.currencyCode``."""
+    store = await ShopifyService(session).refresh_shop_currency(store_id)
+    if store.currency_last_synced_at is None:
+        # Defensive: refresh_shop_currency always sets this on success.
+        raise RuntimeError("currency_last_synced_at missing after successful refresh")
+    return StoreCurrencyRefreshRead(
+        store_id=store.id,
+        currency=store.currency,
+        currency_last_synced_at=store.currency_last_synced_at,
+    )
 
 
 @router.delete("/{store_id}", status_code=status.HTTP_204_NO_CONTENT)

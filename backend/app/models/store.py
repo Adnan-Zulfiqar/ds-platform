@@ -97,6 +97,13 @@ class Store(TenantScopedBase):
     encrypted_credentials: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    #: Set only after a successful Shopify shop.currencyCode sync. NULL means
+    #: the currency value is an unverified legacy/default and must not drive
+    #: Shopify selling-price calculations.
+    currency_last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
 
     #: Per-store automation and pricing switches. Shape is owned by services;
