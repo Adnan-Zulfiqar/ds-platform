@@ -18,12 +18,24 @@ Rules:
 
 ## Currency authority
 
-| Role | Source (priority) |
+| Role | Source |
 |---|---|
-| Supplier price currency | AliExpress field paired with the chosen amount |
-| Destination selling currency | 1) Shopify store `currency` 2) tenant `default_currency` 3) unanimous supplier currency 4) product legacy (last resort) |
+| Supplier price currency | AliExpress / product source field paired with the amount |
+| Shopify selling currency | **Only** `Store.currency` when `currency_last_synced_at` is set (from GraphQL `shop.currencyCode`). Unsynced Shopify currency is **unavailable** — no tenant / supplier / USD fallback. |
+| Non-Shopify / channel-independent | Explicit store currency or tenant `default_currency` when configured |
+
+`supplier_currency ≠ selling_currency` conceptually. Never relabel a CNY amount as GBP.
 
 The Pricing tab badge shows **selling currency**, never an unrelated supplier code.
+
+Authority pipeline for Shopify pricing:
+
+```
+supplier Money → verified Shopify selling currency → FxService → converted cost → pricing engine
+```
+
+Out of scope here: VAT, payment fees, Shopify fees, landed-cost strategy (M24C).
+
 
 ## Conversion types
 

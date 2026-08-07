@@ -10,19 +10,29 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **M24A — Shopify selling-currency authority + production FX** — GraphQL
+  `shop.currencyCode` sync (Admin API **2026-07**); migration `0020`
+  `stores.currency_last_synced_at` (nullable, never backfilled); Open Exchange
+  Rates provider; freshness vs Redis retention windows; explicit
+  `POST /stores/{id}/currency/refresh`. See `docs/FX_RATE_PROVIDER.md`,
+  `docs/SHOPIFY_API_MODERNISATION.md`. **Not** production pricing readiness
+  (M24B/M24C remain).
+
 ### Fixed
 
 - **Pricing currency integrity** — Prohibit 1:1 cross-currency conversion;
   block calculated profit/proposed prices when FX is required and unavailable;
-  Pricing badge uses destination selling currency (store → workspace → supplier)
-  instead of relabelling supplier amounts. See
+  Shopify selling currency requires a verified sync timestamp — no tenant /
+  supplier / USD fallback for unsynced stores. See
   `docs/PRICING_CURRENCY_DEFECT_AUDIT.md`.
 
-### Added
+### Changed
 
-- **Money / FX domain** — `Money` value object, `FxService` with
-  `unavailable`/`stub` providers, `FX_*` settings. See
-  `docs/MONEY_AND_CURRENCY_ARCHITECTURE.md` and `docs/FX_RATE_PROVIDER.md`.
+- **Money / FX domain** — `Money` value object, `FxService` as sole FX
+  entrypoint (`unavailable` / `stub` / `openexchangerates`), Decimal-safe JSON
+  rate parsing. See `docs/MONEY_AND_CURRENCY_ARCHITECTURE.md`.
 
 ### Changed
 

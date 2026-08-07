@@ -283,7 +283,7 @@ in mind. Nothing here is committed to a phase number.
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
 | AI optimisation (Phase 9) | Stages 1–3 done — provider, prompts, product versions; generation/editor remaining |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
-| Real FX for pricing | Currency conversion hook is identity today |
+| Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
 | Admin panel | Platform operations across tenants |
