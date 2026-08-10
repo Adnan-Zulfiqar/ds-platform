@@ -131,6 +131,85 @@ class TestLegacyStoreCurrencyNotAuthoritative:
         assert sid == store.id
 
 
+class TestImportMarketCurrencyOutranksTenantDefault:
+    """M24B/M24C — the live-reproduced bug: a store-less draft imported for
+    GB with a real localized GBP supplier price fell straight through to
+    ``tenant.default_currency`` (``server_default="USD"`` on every tenant),
+    so every store-less draft silently priced in USD regardless of what was
+    actually imported. ``product.import_currency`` must outrank it."""
+
+    async def test_import_currency_wins_over_tenant_default(self) -> None:
+        engine = PricingEngine.__new__(PricingEngine)
+        engine.stores = MagicMock()
+        engine.stores.get_by_id = AsyncMock(return_value=None)
+        engine.tenants = MagicMock()
+        engine.tenants.get_by_id = AsyncMock(return_value=MagicMock(default_currency="USD"))
+        product = MagicMock()
+        product.store_id = None
+        product.tenant_id = uuid4()
+        product.currency = "GBP"
+        product.import_currency = "GBP"
+        product.variants = [MagicMock(currency="GBP")]
+
+        code, source, _ = await engine._resolve_selling_currency(product, destination_store_id=None)
+
+        assert code == "GBP"
+        assert code != "USD"
+        assert source == "import_market"
+        # The exact regression: the tenant lookup must not even be the thing
+        # that decided the answer here.
+        engine.tenants.get_by_id.assert_not_called()
+
+    async def test_legacy_draft_with_no_import_currency_still_falls_back_to_tenant(
+        self,
+    ) -> None:
+        """No regression for pre-M24B drafts: `import_currency` is `None`,
+        so behaviour is unchanged from before this pass."""
+        engine = PricingEngine.__new__(PricingEngine)
+        engine.stores = MagicMock()
+        engine.stores.get_by_id = AsyncMock(return_value=None)
+        engine.tenants = MagicMock()
+        engine.tenants.get_by_id = AsyncMock(return_value=MagicMock(default_currency="USD"))
+        product = MagicMock()
+        product.store_id = None
+        product.tenant_id = uuid4()
+        product.currency = "GBP"
+        product.import_currency = None
+        product.variants = [MagicMock(currency="GBP")]
+
+        code, source, _ = await engine._resolve_selling_currency(product, destination_store_id=None)
+
+        assert code == "USD"
+        assert source == "workspace"
+
+    async def test_a_verified_store_still_outranks_import_currency(self) -> None:
+        """Section 4's own rule: an explicitly selected, verified store wins
+        over the draft's own import context, not the other way round."""
+        engine = PricingEngine.__new__(PricingEngine)
+        store = MagicMock()
+        store.id = uuid4()
+        store.platform = StorePlatform.SHOPIFY
+        store.currency = "USD"
+        store.currency_last_synced_at = datetime.now(UTC)
+        engine.stores = MagicMock()
+        engine.stores.get_by_id = AsyncMock(return_value=store)
+        engine.tenants = MagicMock()
+        product = MagicMock()
+        product.store_id = store.id
+        product.tenant_id = uuid4()
+        product.currency = "GBP"
+        product.import_currency = "GBP"
+        product.variants = [MagicMock(currency="GBP")]
+
+        code, source, sid = await engine._resolve_selling_currency(
+            product, destination_store_id=None
+        )
+
+        assert code == "USD"
+        assert source == "shopify_store"
+        assert sid == store.id
+
+
 class TestShopifyCurrencyRefresh:
     async def test_graphql_gbp_persists_sync_timestamp(self) -> None:
         from app.integrations.shopify.client import ShopifyClient
