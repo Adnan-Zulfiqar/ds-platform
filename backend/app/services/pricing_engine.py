@@ -585,6 +585,19 @@ class PricingEngine(BaseService):
 
         Non-Shopify / channel-independent: store currency or tenant default may
         be used when explicitly configured.
+
+        **``product.import_currency`` (M24B) outranks the tenant default.**
+        A store-less draft imported for GB with a real, localized GBP supplier
+        price previously fell straight through to ``tenant.default_currency``
+        (``server_default="USD"`` on every tenant, so every store-less draft
+        silently priced in USD regardless of what was actually imported) —
+        this is that exact live-reproduced bug, not a hypothetical one. The
+        currency actually requested from and confirmed by AliExpress for this
+        specific draft is a stronger signal than a workspace-wide fallback
+        that exists for drafts with no import context at all, so it is
+        checked first. Unset (``NULL``) for every pre-M24B draft, so nothing
+        changes for those — they fall through to the unchanged tenant
+        default / supplier-unanimous / legacy chain below, exactly as before.
         """
         store_id = destination_store_id or product.store_id
         if store_id is not None:
@@ -606,6 +619,12 @@ class PricingEngine(BaseService):
                         return normalise_currency(store.currency), "store", store.id
                     except ValidationError:
                         pass
+
+        if product.import_currency:
+            try:
+                return normalise_currency(product.import_currency), "import_market", store_id
+            except ValidationError:
+                pass
 
         tenant = await self.tenants.get_by_id(product.tenant_id)
         if tenant is not None and getattr(tenant, "default_currency", None):
