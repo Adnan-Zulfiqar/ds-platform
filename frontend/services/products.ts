@@ -132,6 +132,30 @@ export function useImportProduct() {
   });
 }
 
+/**
+ * Retry a specific failed import using its own stored parameters — the
+ * merchant never re-types the product id/URL or destination.
+ *
+ * Same cache-invalidation shape as `useImportProduct`: a retry can create or
+ * update a product and always changes import history.
+ */
+export function useRetryImport() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (importId: string) => {
+      const { data } = await apiClient.post<ProductDetail>(
+        `/products/imports/${importId}/retry`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: productKeys.all });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.all });
+    },
+  });
+}
+
 /** Refresh price, stock and variants for a product already imported. */
 export function useSyncProduct() {
   const queryClient = useQueryClient();

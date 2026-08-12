@@ -235,6 +235,118 @@ test.describe("Drafts page", () => {
       page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
     ).toBeHidden();
   });
+
+  test("warns when the entered id matches an already-imported draft", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+
+    const existingDraft = {
+      id: "44444444-4444-4444-4444-444444444444",
+      source: "aliexpress",
+      externalId: "1005010486653604",
+      title: "Anti-Snoring Mouthpiece",
+      status: "draft",
+      stockQuantity: 3,
+      tags: [],
+      aiStatus: "not_optimized",
+      createdAt: new Date().toISOString(),
+    };
+    await page.route("**/drafts*", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [existingDraft],
+          meta: {
+            page: 1,
+            size: 25,
+            totalItems: 1,
+            totalPages: 1,
+            hasNext: false,
+            hasPrevious: false,
+          },
+        }),
+      });
+    });
+
+    await page.goto("/drafts");
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page
+      .getByTestId("import-external-id")
+      .fill("https://www.aliexpress.com/item/1005010486653604.html");
+
+    const warning = page.getByTestId("import-duplicate-warning");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Already in Drafts");
+    await expect(
+      warning.getByRole("link", { name: existingDraft.title }),
+    ).toHaveAttribute("href", `/drafts/${existingDraft.id}`);
+
+    // A different id must not be flagged.
+    await page.getByTestId("import-external-id").fill("9999999999999");
+    await expect(warning).toBeHidden();
+  });
+
+  test("the import dialog is usable from the keyboard alone", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    const trigger = page.getByRole("button", { name: "Import as Draft" }).first();
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
+    ).toBeVisible();
+
+    // Focus must move into the dialog (Radix's focus trap), not stay stranded
+    // behind it — a screen-reader user tabbing past the trigger would
+    // otherwise land back in the page body with no indication a dialog opened.
+    const focusIsInsideDialog = await page.evaluate(
+      () => document.activeElement?.closest('[role="dialog"]') !== null,
+    );
+    expect(focusIsInsideDialog).toBe(true);
+
+    // The field is reachable and labelled — `getByLabel` only resolves via a
+    // real <label htmlFor>/aria association, which is what a screen reader
+    // announces on focus.
+    await page.getByLabel(/AliExpress product ID/).click();
+    await page.keyboard.type("1005009558589813");
+    await expect(page.getByTestId("import-external-id")).toHaveValue(
+      "1005009558589813",
+    );
+
+    // Escape is the standard dialog-dismiss key; it must not be swallowed,
+    // and focus must return to the trigger rather than vanishing.
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
+    ).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
+  test("produces no console errors while opening and using the import dialog", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByTestId("import-external-id").fill("1005009558589813");
+    await page.getByTestId("import-ship-to").selectOption("US");
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("Drafts import flow", () => {

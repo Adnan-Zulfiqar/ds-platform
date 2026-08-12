@@ -24,6 +24,7 @@ import {
   persistLastShipTo,
   readLastShipTo,
 } from "@/lib/countries";
+import { useDrafts } from "@/services/drafts";
 import { useImportProduct } from "@/services/products";
 import { useStores, type Store } from "@/services/stores";
 
@@ -198,6 +199,23 @@ export function ImportProductDialog() {
   const connectedStores = stores.filter((s) => s.status === "connected");
   const importProduct = useImportProduct();
 
+  // Same query the Drafts page issues (`ProductTable`'s `useDrafts({ size: 25
+  // })`), so opening this dialog from there reuses the cache instead of firing
+  // a second request. This checks only the most-recently-loaded drafts, not
+  // the full tenant catalogue — a lightweight hint, not an authoritative
+  // duplicate lookup. The server's natural-key idempotency remains the real
+  // guard against a second draft being created.
+  const draftsQuery = useDrafts({ size: 25 });
+  const duplicateDraft = useMemo(() => {
+    const identifier = extractProductId(externalId);
+    if (!identifier) return null;
+    return (
+      draftsQuery.data?.items.find(
+        (item) => item.source === "aliexpress" && item.externalId === identifier,
+      ) ?? null
+    );
+  }, [externalId, draftsQuery.data]);
+
   const recommendedCountry = useMemo(() => {
     const selected = connectedStores.find((s) => s.id === storeId);
     return (
@@ -367,6 +385,24 @@ export function ImportProductDialog() {
             onChange={(event) => setExternalId(event.target.value)}
             disabled={importProduct.isPending}
           />
+          {duplicateDraft ? (
+            <p
+              className="text-sm text-warning-foreground"
+              role="status"
+              data-testid="import-duplicate-warning"
+            >
+              Already in Drafts as{" "}
+              <Link
+                href={`/drafts/${duplicateDraft.id}`}
+                className="underline underline-offset-2"
+                onClick={() => handleOpenChange(false)}
+              >
+                {duplicateDraft.title || duplicateDraft.externalId}
+              </Link>
+              . Importing again refreshes that draft — it will not create a
+              second one.
+            </p>
+          ) : null}
         </div>
 
         {connectedStores.length > 1 ? (
