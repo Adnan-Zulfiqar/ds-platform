@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Loader2, Store } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
@@ -41,9 +41,10 @@ import {
 } from "@/services/drafts";
 import { useOptimizeProduct } from "@/services/products";
 import { useStores } from "@/services/stores";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, ApiError } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
+  ProductDetail,
   ProductUpdatePayload,
   ShopifyPublishResult,
 } from "@/types/api";
@@ -101,35 +102,65 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
+  // Optimistic-concurrency state (M2A). `savedUpdatedAt` is the version
+  // token this editor last saw confirmed by the server -- echoed back as
+  // `expectedUpdatedAt` on the next save so a stale write is rejected
+  // (409) instead of silently overwriting a newer change made elsewhere.
+  const [savedUpdatedAt, setSavedUpdatedAt] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  // When a reload is triggered from "Keep my changes", the next `data`
+  // load must refresh the version token and read-only context WITHOUT
+  // clobbering the merchant's still-unsaved title/description -- the one
+  // case where the load effect below must not reset form state.
+  const preserveEditsOnNextLoad = useRef(false);
+
   function selectTab(next: EditorTab) {
     setTab(next);
     router.replace(`/drafts/${productId}?tab=${next}`);
   }
 
-  useEffect(() => {
-    if (!data) return;
-    setTitle(data.title);
-    setBrand(data.brand ?? "");
-    setVendor(data.vendor ?? "");
-    setCategoryName(data.categoryName ?? "");
-    setTags(data.tags.join(", "));
-    setDescription(data.description ?? "");
-    setSeoTitle(data.seoTitle ?? "");
-    setSeoDescription(data.seoDescription ?? "");
-    setSlug(data.slug ?? "");
-    setSearchTopics((data.searchTopics ?? []).join(", "));
-    const planning = data.seoPlanning ?? {};
+  /** Populate every merchant-editable field from a server `ProductDetail`,
+   * and reset the dirty/save-state that goes with a fresh load.
+   *
+   * Called directly (not only from the `[data]` effect below) because
+   * React Query's structural sharing means a refetch that comes back
+   * byte-identical to what's already cached -- true whenever a rejected
+   * conflicting write never actually persisted, which is exactly the
+   * state right after a 409 -- leaves the `data` object reference
+   * unchanged. An effect keyed on that reference would then never re-fire,
+   * so "Reload latest version" would clear the conflict banner but leave
+   * the stale local edits sitting in the fields, unreset. */
+  function applyDraftToForm(detail: ProductDetail) {
+    setTitle(detail.title);
+    setBrand(detail.brand ?? "");
+    setVendor(detail.vendor ?? "");
+    setCategoryName(detail.categoryName ?? "");
+    setTags(detail.tags.join(", "));
+    setDescription(detail.description ?? "");
+    setSeoTitle(detail.seoTitle ?? "");
+    setSeoDescription(detail.seoDescription ?? "");
+    setSlug(detail.slug ?? "");
+    setSearchTopics((detail.searchTopics ?? []).join(", "));
+    const planning = detail.seoPlanning ?? {};
     setPrimaryIntent(
       String(planning.primarySearchIntent ?? planning.primary_search_intent ?? ""),
     );
-    setPrimaryTopic(
-      String(planning.primaryTopic ?? planning.primary_topic ?? ""),
-    );
-    setRedirectOldHandle(data.redirectOldHandle ?? true);
-    setOgTitle(data.ogTitle ?? "");
-    setOgDescription(data.ogDescription ?? "");
+    setPrimaryTopic(String(planning.primaryTopic ?? planning.primary_topic ?? ""));
+    setRedirectOldHandle(detail.redirectOldHandle ?? true);
+    setOgTitle(detail.ogTitle ?? "");
+    setOgDescription(detail.ogDescription ?? "");
     setDirty(false);
     setSaveState("idle");
+  }
+
+  useEffect(() => {
+    if (!data) return;
+    if (!preserveEditsOnNextLoad.current) {
+      applyDraftToForm(data);
+    }
+    preserveEditsOnNextLoad.current = false;
+    setSavedUpdatedAt(data.updatedAt);
+    setConflict(false);
   }, [data]);
 
   useEffect(() => {
@@ -148,6 +179,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
 
   async function handleSave(event?: FormEvent) {
     event?.preventDefault();
+    // Guards against two hazards at once: a double-click or a keyboard
+    // shortcut firing while a save is already in flight (no concurrent
+    // duplicate requests), and autosave silently retrying over an
+    // unresolved conflict (the merchant must explicitly choose "Reload
+    // latest" or "Keep my changes" first -- see the conflict banner below).
+    if (updateDraft.isPending || conflict) return;
+
     setFormError(null);
     setSaveState("saving");
 
@@ -175,30 +213,73 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       redirectOldHandle,
       ogTitle: ogTitle.trim() || null,
       ogDescription: ogDescription.trim() || null,
+      ...(savedUpdatedAt ? { expectedUpdatedAt: savedUpdatedAt } : {}),
     };
 
     try {
-      await updateDraft.mutateAsync(payload);
+      const saved = await updateDraft.mutateAsync(payload);
       setDirty(false);
       setSaveState("saved");
+      // The server's response is authoritative: the next save's version
+      // check is against what was *actually* persisted, not a value
+      // computed client-side.
+      setSavedUpdatedAt(saved.updatedAt);
       void queryClient.invalidateQueries({
         queryKey: draftKeys.seoScore(productId),
       });
     } catch (err) {
-      setSaveState("error");
-      setFormError(err instanceof Error ? err.message : "Save failed.");
+      if (err instanceof ApiError && err.status === 409) {
+        // A newer save landed elsewhere since this editor last loaded.
+        // Surfaced as its own state, not folded into `formError` -- the
+        // recovery here is "reload or keep your text", not "fix a field
+        // and retry", and the two must not look the same to the merchant.
+        setConflict(true);
+        setSaveState("error");
+      } else {
+        setSaveState("error");
+        setFormError(err instanceof Error ? err.message : "Save failed.");
+      }
     }
   }
 
-  // Debounced autosave for merchant text fields.
+  /** "Reload latest version" -- discard local edits, adopt the server's
+   * current values. Applies the refetched detail directly (see
+   * `applyDraftToForm`'s docstring for why this can't be left to the
+   * `[data]` effect alone). */
+  async function handleReloadLatest() {
+    preserveEditsOnNextLoad.current = false;
+    const result = await refetch();
+    if (result.data) {
+      applyDraftToForm(result.data);
+      setSavedUpdatedAt(result.data.updatedAt);
+    }
+    setConflict(false);
+  }
+
+  /** "Keep my changes" -- refresh the version token and read-only context
+   * (supplier panel, listing state) without touching the merchant's
+   * still-unsaved title/description, so a follow-up Save can succeed
+   * against the current version instead of repeating the same conflict. */
+  async function handleKeepMyChanges() {
+    preserveEditsOnNextLoad.current = true;
+    const result = await refetch();
+    // Same reasoning as `handleReloadLatest` above -- must not depend on
+    // the `data` reference having changed.
+    if (result.data) setSavedUpdatedAt(result.data.updatedAt);
+    setConflict(false);
+  }
+
+  // Debounced autosave for merchant text fields. Frozen while a conflict
+  // is unresolved (`handleSave` also guards this, but not scheduling the
+  // timer at all avoids a pointless request-then-409 every 1.8s).
   useEffect(() => {
-    if (!dirty || !data) return;
+    if (!dirty || !data || conflict) return;
     const timer = window.setTimeout(() => {
       void handleSave();
     }, 1800);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave on dirty only
-  }, [dirty, title, description, seoTitle, seoDescription, slug, tags]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave on dirty/conflict only
+  }, [dirty, conflict, title, description, seoTitle, seoDescription, slug, tags]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -330,6 +411,47 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             {optimizeProduct.error instanceof Error
               ? optimizeProduct.error.message
               : "Optimization failed."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {conflict ? (
+        <Alert
+          variant="destructive"
+          role="alert"
+          data-testid="draft-conflict-banner"
+        >
+          <AlertDescription className="space-y-3">
+            <p>
+              This draft was changed elsewhere since you opened it. Saving
+              now would risk overwriting that change, so it was not applied.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleReloadLatest}
+                data-testid="conflict-reload-latest"
+              >
+                Reload latest version
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleKeepMyChanges}
+                data-testid="conflict-keep-mine"
+              >
+                Keep my changes
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Reloading replaces the title and description below with the
+              latest saved version. Keeping your changes leaves what you
+              typed as-is and lets you save again against the current
+              version.
+            </p>
           </AlertDescription>
         </Alert>
       ) : null}

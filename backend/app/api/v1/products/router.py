@@ -294,9 +294,17 @@ async def update_product(
     PATCH semantics: only fields present in the request body change. A
     field the merchant never mentions is left exactly as it was — sending
     `{"tags": [...]}` does not touch `title`, and vice versa.
+
+    Optimistic concurrency (M2A) applies here too when the caller sends
+    `expectedUpdatedAt` — see `ProductService.update_product` — but is
+    opt-in: existing callers that omit it keep the pre-M2A last-write-wins
+    behaviour.
     """
     changes = payload.model_dump(exclude_unset=True)
-    product = await ProductService(session).update_product(product_id, changes)
+    expected_updated_at = changes.pop("expected_updated_at", None)
+    product = await ProductService(session).update_product(
+        product_id, changes, expected_updated_at=expected_updated_at
+    )
     return _to_detail(product)
 
 

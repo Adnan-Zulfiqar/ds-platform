@@ -14,12 +14,13 @@ unit of risk — import/editor/publish is the spine every later milestone
 | # | Milestone | Depends on | Status |
 |---|---|---|---|
 | M1 | AliExpress Product Import → Editable Draft | — | **Delivered** (this document's sibling: [M1_IMPORT_TO_DRAFTS.md](M1_IMPORT_TO_DRAFTS.md)) |
-| M2 | Premium Product Editor | M1 | Planned |
+| M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
+| M2B–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
 | M3 | Publish-to-Store Hardening & Multi-Store Publish | M1, existing Shopify OAuth | Planned |
 | M4 | Bulk Import & Feed-Based Sourcing | M1 | Planned |
 | M5 | Order → Fulfilment Bridge (tracking push-back) | Existing order sync | Planned |
 | M6 | Supplier Auto-Order (conditional on API access) | M5 | Planned — see blocker note |
-| M7 | Multi-Supplier Sourcing & Price Comparison | M1, M2 | Planned |
+| M7 | Multi-Supplier Sourcing & Price Comparison | M1, M2B (variant editing) | Planned |
 | M8 | Multi-Channel Publishing (beyond Shopify) | M3 | Planned |
 | M9 | Supplier Optimization & Repricing Intelligence | M7 | Planned |
 
@@ -31,10 +32,32 @@ unit of risk — import/editor/publish is the spine every later milestone
 the full report: what already existed, what was built, what was fixed, and
 what remains a documented gap.
 
-## M2 — Premium Product Editor
+## M2A — Premium Editor Foundation
 
-The full editor deliberately excluded from M1's "safe basic editable draft
-view." Scope, not yet implemented:
+**Status: Delivered.** See [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) for
+the full report.
+
+**Scope correction, discovered during M2A's own mandatory pre-implementation
+audit:** M2A was originally framed as "build the safe foundation of the
+premium editor" — title/description editing, a dedicated route, a save-state
+UI — as if none of it existed yet. It already did, built separately (and
+mostly earlier) via `cursor/draft-product-editor`, `cursor/premium-product-editor`,
+and `cursor/product-workspace-v2`, merged to `develop` before the M1
+dsers-parity branch even started. `FEATURE_MATRIX.md` §3 previously
+understated this as a "basic safe draft view" and has been corrected.
+
+What M2A actually delivered, once the real gap was identified by reading the
+existing code rather than assuming the brief's framing: **optimistic
+concurrency** (a stale save is now rejected with a 409 instead of silently
+overwriting a newer change — nothing enforced this before) and **one
+edit-gating rule** (a product already published to a channel can no longer be
+edited back through the drafts-only endpoint). Both are hardening on the
+existing `PATCH /drafts/{id}` write path, not a new editor.
+
+## M2B–E — Premium Product Editor, remaining scope
+
+Not built by M2A or by the pre-existing editor. Each remains its own future
+milestone:
 
 - Rich text description editing (currently plain sanitized text only).
 - Bulk variant editing — apply a price/SKU rule across every variant at once,
@@ -42,11 +65,18 @@ view." Scope, not yet implemented:
 - Image editing beyond reorder/caption (crop, background removal) — likely
   needs a decision on whether this is client-side or a paid image API, which
   is a real cost/build trade-off to raise before implementing.
+- AI Studio side-by-side proposal review (`docs/DRAFT_PRODUCT_EDITOR_PLAN.md`
+  Stage 6) — today's AI optimisation applies through a version-activate flow
+  only, no in-editor comparison view.
 - A documented decision on the Drafts-list "variant count" column deferred
   from M1 (`FEATURE_MATRIX.md` §2): needs a correlated-subquery change to
   `ProductRepository.list_drafts`/`list_published`, reviewed for the
   read-performance impact the list schema's docstring explicitly protects
-  against.
+  against. **Note:** M1's acceptance pass already implemented and shipped
+  this column (`ProductRepository._variant_count_column`) — this bullet was
+  carried over from the pre-M1 draft of this document and is stale; left
+  here only so a future editor of this file sees the correction rather than
+  re-scoping already-delivered work.
 
 ## M3 — Publish-to-Store Hardening & Multi-Store Publish
 
@@ -98,7 +128,7 @@ website.
 
 ## M7 — Multi-Supplier Sourcing & Price Comparison
 
-Depends on M2 (editor needs to show more than one supplier option per
+Depends on M2B (variant editing -- the editor needs to show more than one supplier option per
 product) and a data-model extension: today a `Product` has exactly one
 `(source, external_id)`. Needs its own design pass before implementation —
 flagged here as a milestone, not pre-designed.

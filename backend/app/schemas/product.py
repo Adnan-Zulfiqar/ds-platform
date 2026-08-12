@@ -167,6 +167,12 @@ class ProductRead(CamelCaseModel):
     last_synced_at: datetime | None = None
     last_sync_error: str | None = None
     created_at: datetime
+    #: The optimistic-concurrency token (M2A). Not a dedicated version
+    #: column — this is the same database-generated `updated_at` every
+    #: tenant-scoped table already has (`TimestampMixin`). A client that
+    #: wants conflict protection on its next save echoes this value back as
+    #: `expectedUpdatedAt`; see `ProductService.update_product`.
+    updated_at: datetime
 
     # --- SEO / marketplace (Phase 9 stage 3) ---------------------------------
     seo_title: str | None = None
@@ -266,6 +272,14 @@ class ProductUpdateRequest(CamelCaseModel):
     package_height_cm: int | None = Field(default=None, ge=0)
     weight_unit: str | None = Field(default=None, max_length=8)
     dimension_unit: str | None = Field(default=None, max_length=8)
+
+    #: Optimistic-concurrency guard (M2A). Optional and backward compatible:
+    #: a caller that omits it gets the pre-M2A behaviour (last write wins).
+    #: When present, it must equal the `updatedAt` the caller last read —
+    #: `ProductService.update_product` rejects the write with a 409 if the
+    #: row has moved on since, rather than silently overwriting a newer
+    #: change. See docs/dsers-parity/M2_PREMIUM_EDITOR.md.
+    expected_updated_at: datetime | None = None
 
     @field_validator("title", "brand", "category_name", "vendor", "seo_title", "slug")
     @classmethod

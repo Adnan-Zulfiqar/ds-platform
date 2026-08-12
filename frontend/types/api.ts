@@ -261,6 +261,10 @@ export interface Product {
   lastSyncedAt: string | null;
   lastSyncError: string | null;
   createdAt: string;
+  /** Optimistic-concurrency token (M2A) — the same database-generated
+   * `updated_at` every row already has, echoed back as `expectedUpdatedAt`
+   * on the next save. See `ProductUpdatePayload.expectedUpdatedAt`. */
+  updatedAt: string;
 
   // --- SEO / marketplace (Phase 9 stage 3) ---
   seoTitle: string | null;
@@ -447,6 +451,11 @@ export interface ProductUpdatePayload {
   packageHeightCm?: number | null;
   weightUnit?: string | null;
   dimensionUnit?: string | null;
+  /** Optimistic-concurrency guard (M2A) — the `updatedAt` this edit was
+   * based on. Optional and backward compatible: omit it to get the pre-M2A
+   * last-write-wins behaviour. When present, the server rejects the save
+   * with a 409 if the row has changed since, rather than overwriting it. */
+  expectedUpdatedAt?: string;
 }
 
 export interface StoreListing {

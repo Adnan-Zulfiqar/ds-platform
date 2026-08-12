@@ -14,7 +14,8 @@ the file(s) that are the evidence. Status values:
 - **Planned milestone** — scoped in [MASTER_ROADMAP.md](MASTER_ROADMAP.md),
   not started.
 
-Audit date: 2026-08-12. Branch: `feature/dsers-parity-m1-import-drafts`.
+Audit date: 2026-08-12 (M1); §3 corrected 2026-08-12 (M2A). Branch:
+`feature/dsers-parity-m2a-editor-foundation`.
 
 ---
 
@@ -44,14 +45,33 @@ Audit date: 2026-08-12. Branch: `feature/dsers-parity-m1-import-drafts`.
 
 ## 3. Premium product editor
 
+**Correction (M2A, 2026-08-12):** the row below this note previously read
+"Basic safe draft view (title, images, variants, cost, status)," which
+significantly understated what is actually built. Verified directly against
+`frontend/components/drafts/draft-product-editor.tsx` and the `editor-header/`
+component tree, a full premium editor already exists on `develop` — a
+three-layer sticky header (breadcrumb, identity, save-state, publish action,
+supplier-sync status, actions menu), and tabs for Overview, Description,
+Media, Variants, Pricing, Inventory, Shipping, SEO, with a Draft Preview
+panel and AI version history. This was built across `cursor/draft-product-editor`,
+`cursor/premium-product-editor`, and `cursor/product-workspace-v2`
+(migrations `0013`–`0022`) — separately from, and largely before, the M1
+dsers-parity work — and this matrix simply had not been re-audited against
+it. See [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) for the full account and
+what M2A actually delivered as a result (hardening, not a new editor).
+
 | Capability | Status | Evidence |
 |---|---|---|
-| Basic safe draft view (title, images, variants, cost, status) | Existing and verified | `frontend/app/(protected)/drafts/[id]/page.tsx`, `ProductDetailRead` schema |
+| Premium editor shell (sticky header, tabs, Draft Preview, save-state indicator) | Existing and verified | `frontend/components/drafts/draft-product-editor.tsx`, `editor-header/*`, `docs/PREMIUM_PRODUCT_EDITOR_UI.md` |
+| Title / plain-sanitized-description editing | Existing and verified | `PATCH /drafts/{id}` → `ProductService.update_product`, `ProductUpdateRequest` |
+| Optimistic concurrency on draft saves (reject a stale write, don't silently overwrite) | Existing and verified (added 2026-08-12, M2A) | `ProductRepository.update_if_unmodified_since` (compare-and-swap on `updated_at`), `TestOptimisticConcurrency` — see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) |
+| Published product not editable via the drafts-only endpoint | Existing and verified (added 2026-08-12, M2A) | `ProductService.update_draft` publish-state gate, `TestPublishedDraftIsNotEditableHere` |
 | Rich text/markdown description editor | Missing | Description is edited as plain sanitized text; no rich editor component |
 | Bulk variant editing (price/SKU rules across all variants at once) | Missing | `PATCH /drafts/{id}/variants/{variantId}` is single-variant only |
 | Image editing (crop/watermark-removal) | Missing | Images can be reordered and captioned only (`useReorderDraftImages`, `useUpdateDraftImage`) |
 | AI title/description optimisation | Existing and verified | `ProductOptimizationService`, `StubProvider` (Phase 9) — output is clearly-synthetic placeholder text, not a real model, documented in `docs/PHASE_9_PLAN.md` |
-| SEO fields (meta title/description, tags, handle) | Existing and verified | `ProductRead.seo_title/seo_description/search_topics/slug/tags` |
+| SEO fields (meta title/description, tags, handle) | Existing and verified | `ProductRead.seo_title/seo_description/search_topics/slug/tags` — editable via `draft-seo-panel.tsx` |
+| Pricing / inventory / shipping workspace | Existing and verified | `draft-pricing-panel.tsx`, `draft-inventory-panel.tsx`, `draft-shipping-panel.tsx`, migrations `0017`–`0022` |
 
 ## 4. Supplier / variant mapping
 
