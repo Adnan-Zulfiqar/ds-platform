@@ -24,7 +24,7 @@ import {
   persistLastShipTo,
   readLastShipTo,
 } from "@/lib/countries";
-import { useImportProduct } from "@/services/products";
+import { useDuplicateImportCheck, useImportProduct } from "@/services/products";
 import { useStores, type Store } from "@/services/stores";
 
 /** Matches the numeric id in an AliExpress listing URL. */
@@ -198,6 +198,28 @@ export function ImportProductDialog() {
   const connectedStores = stores.filter((s) => s.status === "connected");
   const importProduct = useImportProduct();
 
+  // Debounced, normalised identifier the duplicate check actually queries —
+  // not the raw keystroke-by-keystroke input. Normalising first means a
+  // pasted URL and its bare id share one cache entry (`productKeys.
+  // duplicateCheck`) instead of the two firing as unrelated queries.
+  const identifier = extractProductId(externalId);
+  const [debouncedIdentifier, setDebouncedIdentifier] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedIdentifier(identifier), 400);
+    return () => clearTimeout(timer);
+  }, [identifier]);
+
+  // The authoritative, server-side answer — a direct tenant-scoped lookup by
+  // natural key, not a scan of whatever page of Drafts happens to be cached.
+  // It finds a match regardless of how many other drafts exist or which page
+  // a client-side list would have shown; the server's natural-key idempotency
+  // is still the real guard against a second draft being created, this is
+  // only the warning.
+  const duplicateCheck = useDuplicateImportCheck(debouncedIdentifier ?? "", {
+    enabled: open && Boolean(debouncedIdentifier) && debouncedIdentifier === identifier,
+  });
+  const duplicateMatch = duplicateCheck.data?.exists ? duplicateCheck.data.product : null;
+
   const recommendedCountry = useMemo(() => {
     const selected = connectedStores.find((s) => s.id === storeId);
     return (
@@ -367,6 +389,30 @@ export function ImportProductDialog() {
             onChange={(event) => setExternalId(event.target.value)}
             disabled={importProduct.isPending}
           />
+          {duplicateMatch ? (
+            <p
+              className="text-sm text-warning-foreground"
+              role="status"
+              data-testid="import-duplicate-warning"
+            >
+              Already {duplicateMatch.isPublished ? "published" : "in Drafts"}{" "}
+              as{" "}
+              <Link
+                href={
+                  duplicateMatch.isPublished
+                    ? `/products/${duplicateMatch.id}`
+                    : `/drafts/${duplicateMatch.id}`
+                }
+                className="underline underline-offset-2"
+                onClick={() => handleOpenChange(false)}
+              >
+                {duplicateMatch.title}
+              </Link>
+              . Importing again refreshes that{" "}
+              {duplicateMatch.isPublished ? "product" : "draft"} — it will not
+              create a second one.
+            </p>
+          ) : null}
         </div>
 
         {connectedStores.length > 1 ? (

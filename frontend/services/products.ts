@@ -11,6 +11,7 @@ import type {
   Page,
   Product,
   ProductDetail,
+  ProductDuplicateCheckResponse,
   ProductImportPayload,
   ProductImportRecord,
   ProductOptimizePayload,
@@ -39,6 +40,8 @@ export const productKeys = {
   detail: (id: string) => [...productKeys.details(), id] as const,
   imports: () => [...productKeys.all, "imports"] as const,
   importList: (query: ListQuery) => [...productKeys.imports(), query] as const,
+  duplicateCheck: (externalId: string) =>
+    [...productKeys.all, "duplicate-check", externalId] as const,
   versions: (id: string) => [...productKeys.detail(id), "versions"] as const,
   workspaceCounts: () => [...productKeys.all, "workspace-counts"] as const,
 };
@@ -106,6 +109,35 @@ export function useProductImports(
   });
 }
 
+async function fetchDuplicateCheck(
+  externalId: string,
+): Promise<ProductDuplicateCheckResponse> {
+  const { data } = await apiClient.get<ProductDuplicateCheckResponse>(
+    "/products/import/check",
+    { params: { external_id: externalId } },
+  );
+  return data;
+}
+
+/**
+ * Authoritative, tenant-scoped answer to "is this supplier product already
+ * imported" — a direct server lookup, not a scan of whatever page of Drafts
+ * happens to be cached client-side. `enabled` gates the call until the caller
+ * has a non-empty, debounced value; this hook does not debounce on its own,
+ * so every distinct `externalId` it's called with fires immediately.
+ */
+export function useDuplicateImportCheck(
+  externalId: string,
+  options: { enabled?: boolean } = {},
+): UseQueryResult<ProductDuplicateCheckResponse> {
+  return useQuery({
+    queryKey: productKeys.duplicateCheck(externalId),
+    queryFn: () => fetchDuplicateCheck(externalId),
+    enabled: Boolean(externalId) && (options.enabled ?? true),
+    staleTime: 10_000,
+  });
+}
+
 /**
  * Import a product from AliExpress.
  *
@@ -122,6 +154,30 @@ export function useImportProduct() {
       const { data } = await apiClient.post<ProductDetail>(
         "/products/import",
         payload,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: productKeys.all });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.all });
+    },
+  });
+}
+
+/**
+ * Retry a specific failed import using its own stored parameters — the
+ * merchant never re-types the product id/URL or destination.
+ *
+ * Same cache-invalidation shape as `useImportProduct`: a retry can create or
+ * update a product and always changes import history.
+ */
+export function useRetryImport() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (importId: string) => {
+      const { data } = await apiClient.post<ProductDetail>(
+        `/products/imports/${importId}/retry`,
       );
       return data;
     },

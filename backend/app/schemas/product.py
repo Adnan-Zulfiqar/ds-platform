@@ -100,9 +100,17 @@ class ProductVariantUpdateRequest(CamelCaseModel):
 class ProductRead(CamelCaseModel):
     """A product in list form.
 
-    Variants and images are omitted here and returned only by the detail
-    endpoint. A page of 50 products would otherwise carry several hundred rows
-    that a list view never renders.
+    The variant *rows* (attributes, cost, stock per SKU) are omitted here and
+    returned only by the detail endpoint — a page of 50 products would
+    otherwise carry several hundred rows a list view never renders. The
+    *count* is cheap by comparison and worth carrying: it's a correlated
+    ``COUNT`` alongside the same list query
+    (``ProductRepository._variant_count_column``), not a second query per row,
+    and it answers "single item or does this have options" without opening
+    the product. Always accurate, never a placeholder — a ``Product`` row
+    only exists once its supplier variants have already been synced in the
+    same import transaction, so there is no state where the row exists but
+    its variant count does not.
     """
 
     id: uuid.UUID
@@ -110,6 +118,16 @@ class ProductRead(CamelCaseModel):
     external_id: str
     external_url: str | None = None
     title: str
+    #: Defaults to 0 only so `model_validate(product)` can succeed against a
+    #: bare ORM object that carries no such attribute — every caller that
+    #: builds a response overwrites it immediately with the real count
+    #: (`_to_read`/`_to_detail`, `products/router.py` and `drafts/router.py`).
+    #: Never trust this field's value without confirming the caller did that.
+    variant_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of supplier variants (SKUs) synced for this product.",
+    )
     category_id: str | None = None
     category_name: str | None = None
     brand: str | None = None
@@ -436,9 +454,41 @@ class ProductWorkspaceCounts(CamelCaseModel):
     products: int
 
 
+class ProductDuplicateMatch(CamelCaseModel):
+    """The existing product a duplicate-check found, minimal by design.
+
+    Deliberately not ``ProductRead`` — that carries roughly forty fields meant
+    for a catalogue row, and a duplicate warning needs three: what to call it,
+    where it's at, and which page it lives on (``is_published`` decides
+    ``/drafts/{id}`` vs ``/products/{id}`` on the frontend, since a product's
+    lifecycle lives in ``StoreListing`` state, not on this row).
+    """
+
+    id: uuid.UUID
+    title: str
+    status: ProductStatus
+    is_published: bool
+
+
+class ProductDuplicateCheckResponse(CamelCaseModel):
+    """Whether this tenant already has the supplier product being entered.
+
+    ``GET``, not folded into the ``POST /import`` response: the whole point is
+    telling the merchant *before* they submit, and a client-side scan of
+    whatever page of Drafts happens to be loaded cannot see a match outside
+    that page. This is the authoritative, server-side answer regardless of
+    pagination.
+    """
+
+    exists: bool
+    product: ProductDuplicateMatch | None = None
+
+
 __all__ = [
     "FeedProductRead",
     "ProductDetailRead",
+    "ProductDuplicateCheckResponse",
+    "ProductDuplicateMatch",
     "ProductImageCreateRequest",
     "ProductImageRead",
     "ProductImageReorderRequest",

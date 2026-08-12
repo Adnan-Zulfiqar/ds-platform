@@ -224,6 +224,10 @@ export interface Product {
   externalId: string;
   externalUrl: string | null;
   title: string;
+  /** Number of supplier variants (SKUs) synced for this product — a
+   * correlated count from the same list query, always accurate (see
+   * `ProductRepository._variant_count_column`), never a placeholder. */
+  variantCount: number;
   categoryId: string | null;
   categoryName: string | null;
   brand: string | null;
@@ -299,6 +303,23 @@ export interface ProductDetail extends Product {
   supplierDescription: string | null;
   supplierTitle: string | null;
   supplierBrand: string | null;
+}
+
+/** The existing product a duplicate-import check found — minimal by design,
+ * not a full `Product`. `isPublished` decides the frontend's link target
+ * (`/drafts/{id}` vs `/products/{id}`). */
+export interface ProductDuplicateMatch {
+  id: string;
+  title: string;
+  status: ProductStatus;
+  isPublished: boolean;
+}
+
+/** Authoritative, tenant-scoped answer to "is this supplier product already
+ * imported" — a direct server lookup, not a scan of a cached list page. */
+export interface ProductDuplicateCheckResponse {
+  exists: boolean;
+  product: ProductDuplicateMatch | null;
 }
 
 export type DraftPricingApplyMode =

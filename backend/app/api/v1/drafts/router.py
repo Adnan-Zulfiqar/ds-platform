@@ -45,8 +45,11 @@ router = APIRouter(prefix="/drafts", tags=["drafts"])
 
 
 def _to_detail(product: Product) -> ProductDetailRead:
+    base = ProductRead.model_validate(product).model_copy(
+        update={"variant_count": len(product.variants)}
+    )
     return ProductDetailRead(
-        **ProductRead.model_validate(product).model_dump(),
+        **base.model_dump(),
         variants=[ProductVariantRead.model_validate(v) for v in product.variants],
         images=[ProductImageRead.model_validate(i) for i in product.images],
         description=product.description,
@@ -54,6 +57,11 @@ def _to_detail(product: Product) -> ProductDetailRead:
         supplier_title=product.supplier_title,
         supplier_brand=product.supplier_brand,
     )
+
+
+def _to_read(product: Product, variant_count: int) -> ProductRead:
+    """List-row projection with the count from the same query, not a guess."""
+    return ProductRead.model_validate(product).model_copy(update={"variant_count": variant_count})
 
 
 @router.get(
@@ -67,9 +75,9 @@ async def list_drafts(
     _authorized: RequireViewer,
 ) -> Page[ProductRead]:
     """Return imported products that are not yet published to any channel."""
-    products, total = await ProductRepository(session).list_drafts(params)
+    rows, total = await ProductRepository(session).list_drafts(params)
     return Page[ProductRead].build(
-        items=[ProductRead.model_validate(p) for p in products],
+        items=[_to_read(product, count) for product, count in rows],
         page=params.page,
         size=params.size,
         total_items=total,

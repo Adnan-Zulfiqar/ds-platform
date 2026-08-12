@@ -80,13 +80,40 @@ class ProductRepository(TenantScopedRepository[Product]):
         exists = self._synced_listing_exists()
         return exists if publication == "published" else ~exists
 
+    def _variant_count_column(self) -> ColumnElement[int]:
+        """Correlated ``COUNT`` of a product's variants, as a scalar column.
+
+        Rides along in the same list query as its own selected column —
+        one query for a page, not one query per row. ``product_variants``
+        is indexed on ``product_id`` (``ix_variants_tenant_product`` leads
+        with ``tenant_id``, but a correlated subquery scoped to one already-
+        tenant-filtered ``Product.id`` uses it as the second key), so this
+        adds a cheap indexed lookup per returned row, not a table scan.
+        """
+        return (
+            select(func.count(ProductVariant.id))
+            .where(ProductVariant.product_id == Product.id)
+            .correlate(Product)
+            .scalar_subquery()
+        )
+
     async def list_by_publication(
         self,
         params: ListQueryParams,
         *,
         publication: Literal["draft", "published"],
-    ) -> tuple[Sequence[Product], int]:
-        """Page of drafts or published products for the workspace lists."""
+    ) -> tuple[Sequence[tuple[Product, int]], int]:
+        """Page of drafts or published products for the workspace lists.
+
+        Each row pairs a ``Product`` with its variant count — accurate always,
+        never a placeholder: a ``Product`` row only exists after a successful
+        import, and that same transaction syncs its variants
+        (``ProductImportService._upsert`` -> ``variants.sync_for_product``),
+        so a committed row's variant count is never "unknown", only
+        legitimately zero for a single-SKU listing. There is nothing here for
+        a failed import to be inaccurate about — a failure never creates a
+        ``Product`` row, so it never reaches this query at all.
+        """
         query = self._base_query().where(self._publication_predicate(publication))
         query = self._apply_search(query, params)
 
@@ -95,14 +122,19 @@ class ProductRepository(TenantScopedRepository[Product]):
 
         query = self._apply_sorting(query, params)
         query = query.offset(params.offset).limit(params.limit)
-        rows = (await self.session.execute(query)).scalars().all()
-        return rows, total
+        query = query.add_columns(self._variant_count_column().label("variant_count"))
+        rows = (await self.session.execute(query)).all()
+        return [(row[0], row[1]) for row in rows], total
 
-    async def list_drafts(self, params: ListQueryParams) -> tuple[Sequence[Product], int]:
+    async def list_drafts(
+        self, params: ListQueryParams
+    ) -> tuple[Sequence[tuple[Product, int]], int]:
         """Products with no synced channel listing — the Drafts inbox."""
         return await self.list_by_publication(params, publication="draft")
 
-    async def list_published(self, params: ListQueryParams) -> tuple[Sequence[Product], int]:
+    async def list_published(
+        self, params: ListQueryParams
+    ) -> tuple[Sequence[tuple[Product, int]], int]:
         """Products with at least one synced StoreListing — the Products page."""
         return await self.list_by_publication(params, publication="published")
 
@@ -133,6 +165,31 @@ class ProductRepository(TenantScopedRepository[Product]):
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def find_duplicate(
+        self, *, source: ProductSource, external_id: str
+    ) -> tuple[Product, bool] | None:
+        """Same lookup as ``get_by_external_id``, plus whether it's published.
+
+        Backs the authoritative duplicate-import check
+        (``GET /products/import/check``): the frontend asks this instead of
+        scanning whatever page of Drafts happens to be cached, so a match
+        outside the first page is still found. One query, not two — the
+        publication flag rides along as a correlated subquery, the same
+        ``_synced_listing_exists()`` that ``list_by_publication`` uses, so
+        this can never disagree with what Drafts vs Products actually shows.
+        """
+        query = self._base_query().where(
+            Product.source == source,
+            Product.external_id == external_id,
+        )
+        query = query.add_columns(self._synced_listing_exists().label("is_published"))
+        result = await self.session.execute(query)
+        row = result.first()
+        if row is None:
+            return None
+        product, is_published = row
+        return product, bool(is_published)
 
     async def get_by_slug(self, slug: str) -> Product | None:
         """Find a product by its merchant-set URL slug, within this tenant.

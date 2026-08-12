@@ -235,6 +235,214 @@ test.describe("Drafts page", () => {
       page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
     ).toBeHidden();
   });
+
+  test("shows an accurate variant count per draft row", async ({ page }) => {
+    await registerAndSignIn(page);
+
+    // Scoped to the API path specifically — a bare "**/drafts*" also matches
+    // the page's own document navigation to http://.../drafts, which would
+    // replace the whole page with this mocked JSON body instead of just
+    // answering the fetch call.
+    await page.route("**/api/v1/drafts*", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              id: "66666666-6666-6666-6666-666666666666",
+              source: "aliexpress",
+              externalId: "1005010486653604",
+              title: "Multi-variant Widget",
+              status: "draft",
+              stockQuantity: 10,
+              variantCount: 12,
+              tags: [],
+              aiStatus: "not_optimized",
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          meta: { page: 1, size: 25, totalItems: 1, totalPages: 1, hasNext: false, hasPrevious: false },
+        }),
+      });
+    });
+
+    await page.goto("/drafts");
+
+    await expect(page.getByRole("columnheader", { name: "Variants" })).toBeVisible();
+    await expect(page.getByTestId("variant-count")).toHaveText("12");
+  });
+
+  test("warns when the entered id matches an already-imported draft (server-authoritative)", async ({
+    page,
+  }) => {
+    // The check is a direct server lookup (GET /products/import/check), not
+    // a scan of whatever Drafts page happens to be cached — so the mock
+    // below deliberately returns an EMPTY Drafts list. If the warning were
+    // still driven by a client-side cache scan, it could never fire here;
+    // proving it does proves the lookup is authoritative, not page-bound.
+    await registerAndSignIn(page);
+
+    const existingId = "44444444-4444-4444-4444-444444444444";
+    const matchingExternalId = "1005010486653604";
+    // Scoped to the API path specifically — a bare "**/drafts*" also matches
+    // the page's own document navigation to http://.../drafts, which would
+    // replace the whole page with this mocked JSON body instead of just
+    // answering the fetch call.
+    await page.route("**/api/v1/drafts*", (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [],
+          meta: { page: 1, size: 25, totalItems: 0, totalPages: 0, hasNext: false, hasPrevious: false },
+        }),
+      });
+    });
+    await page.route("**/products/import/check*", (route) => {
+      const url = new URL(route.request().url());
+      const externalId = url.searchParams.get("external_id");
+      if (externalId !== matchingExternalId) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ exists: false, product: null }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          exists: true,
+          product: {
+            id: existingId,
+            title: "Anti-Snoring Mouthpiece",
+            status: "draft",
+            isPublished: false,
+          },
+        }),
+      });
+    });
+
+    await page.goto("/drafts");
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page
+      .getByTestId("import-external-id")
+      .fill(`https://www.aliexpress.com/item/${matchingExternalId}.html`);
+
+    const warning = page.getByTestId("import-duplicate-warning");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Already in Drafts");
+    await expect(
+      warning.getByRole("link", { name: "Anti-Snoring Mouthpiece" }),
+    ).toHaveAttribute("href", `/drafts/${existingId}`);
+
+    // A different id must not be flagged.
+    await page.getByTestId("import-external-id").fill("9999999999999");
+    await expect(warning).toBeHidden();
+  });
+
+  test("links a published duplicate to Products, not Drafts", async ({ page }) => {
+    await registerAndSignIn(page);
+
+    const existingId = "55555555-5555-5555-5555-555555555555";
+    await page.route("**/products/import/check*", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          exists: true,
+          product: {
+            id: existingId,
+            title: "Already Published Widget",
+            status: "active",
+            isPublished: true,
+          },
+        }),
+      }),
+    );
+
+    await page.goto("/drafts");
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByTestId("import-external-id").fill("1005010486653604");
+
+    const warning = page.getByTestId("import-duplicate-warning");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Already published");
+    await expect(
+      warning.getByRole("link", { name: "Already Published Widget" }),
+    ).toHaveAttribute("href", `/products/${existingId}`);
+  });
+
+  test("the import dialog is usable from the keyboard alone", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    const trigger = page.getByRole("button", { name: "Import as Draft" }).first();
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
+    ).toBeVisible();
+
+    // Focus must move into the dialog (Radix's focus trap), not stay stranded
+    // behind it — a screen-reader user tabbing past the trigger would
+    // otherwise land back in the page body with no indication a dialog opened.
+    const focusIsInsideDialog = await page.evaluate(
+      () => document.activeElement?.closest('[role="dialog"]') !== null,
+    );
+    expect(focusIsInsideDialog).toBe(true);
+
+    // The field is reachable and labelled — `getByLabel` only resolves via a
+    // real <label htmlFor>/aria association, which is what a screen reader
+    // announces on focus.
+    await page.getByLabel(/AliExpress product ID/).click();
+    await page.keyboard.type("1005009558589813");
+    await expect(page.getByTestId("import-external-id")).toHaveValue(
+      "1005009558589813",
+    );
+
+    // Escape is the standard dialog-dismiss key; it must not be swallowed,
+    // and focus must return to the trigger rather than vanishing.
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("heading", { name: "Import as Draft from AliExpress" }),
+    ).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
+  test("produces no console errors while opening and using the import dialog", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    await registerAndSignIn(page);
+    await page.goto("/drafts");
+
+    await page.getByRole("button", { name: "Import as Draft" }).first().click();
+    await page.getByTestId("import-external-id").fill("1005009558589813");
+    await page.getByTestId("import-ship-to").selectOption("US");
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    // The one expected entry: every page load speculatively calls
+    // /auth/refresh to check for an existing session, and a genuinely
+    // unauthenticated visit correctly answers 401 — the browser logs any
+    // non-2xx resource load as a console error regardless of how cleanly the
+    // app itself handles the rejected promise. Real bugs still fail this
+    // test; this filter is scoped to that one specific, expected response.
+    const unexpected = errors.filter(
+      (message) => !/401 \(Unauthorized\)/.test(message),
+    );
+    expect(unexpected).toEqual([]);
+  });
 });
 
 test.describe("Drafts import flow", () => {
