@@ -156,7 +156,12 @@ test.describe("Import History page", () => {
     await page.goto("/imports/history");
     await page.getByTestId("retry-import-button").click();
 
-    await expect(page.getByRole("alert")).toContainText(/temporarily unavailable/i);
+    // Not a bare getByRole("alert") — Next.js's App Router route-announcer
+    // (#__next-route-announcer__) always carries role="alert" too, so an
+    // unscoped query is ambiguous the moment this page has navigated at all.
+    await expect(
+      page.getByRole("alert").filter({ hasText: /temporarily unavailable/i }),
+    ).toBeVisible();
     // The retry control stays available — a failed retry must not strand the row.
     await expect(page.getByTestId("retry-import-button")).toBeEnabled();
   });

@@ -8,10 +8,12 @@ so what these tests assert about parsing is what the supplier actually sends.
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -19,8 +21,11 @@ from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.context import set_tenant_id
 from app.integrations.aliexpress import client as client_module
 from app.integrations.aliexpress import service as service_module
+from app.models.shopify import ListingSyncStatus, StoreListing
+from app.models.store import Store, StorePlatform, StoreStatus
 from tests.integration.conftest import registration_payload
 
 pytestmark = pytest.mark.integration
@@ -487,6 +492,336 @@ class TestRetryImport:
         response = await client.post(f"{IMPORTS_URL}/{uuid.uuid4()}/retry", headers=headers)
 
         assert response.status_code == 404
+
+
+def id_echoing_handler(request: httpx.Request) -> httpx.Response:
+    """Answer with a product whose id is whatever was actually requested.
+
+    ``supplier_handler`` always returns the same captured fixture regardless
+    of the id in the request — fine for most tests, useless for anything that
+    needs several *distinct* products, like proving the duplicate-check
+    endpoint doesn't depend on which page a client happens to have cached.
+    Parses ``product_id`` out of the outbound form-encoded body and patches it
+    into a copy of the real payload, so the mapped product actually gets that
+    external id.
+    """
+    if "/auth/token" in str(request.url):
+        return httpx.Response(
+            200, json={"access_token": "t", "refresh_token": "r", "expires_in": 8000}
+        )
+    body = request.content.decode()
+    if "aliexpress.ds.product.get" in body:
+        requested_id = parse_qs(body).get("product_id", [REAL_PRODUCT_ID])[0]
+        payload = copy.deepcopy(PRODUCT_PAYLOAD)
+        payload["aliexpress_ds_product_get_response"]["result"]["ae_item_base_info_dto"][
+            "product_id"
+        ] = requested_id
+        return httpx.Response(200, json=payload)
+    return httpx.Response(200, json={"error_response": {"code": "InvalidApiPath"}})
+
+
+CHECK_URL = "/api/v1/products/import/check"
+
+
+class TestVariantCount:
+    """M1 acceptance: the Drafts list needs an accurate variant count per row.
+
+    `ProductRepository._variant_count_column` rides a correlated `COUNT`
+    alongside the same list query — these tests are less about the count
+    being *correct* in isolation (that's ordinary aggregation) and more about
+    it staying correct once several products are on the same page at once,
+    which is exactly where a naive per-row query would either explode (N+1)
+    or silently mix counts up across rows.
+    """
+
+    async def test_the_drafts_list_reports_the_real_variant_count(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+        assert len(created["variants"]) == 12  # the fixture's real count
+
+        drafts = (await client.get("/api/v1/drafts", headers=headers)).json()
+        row = next(d for d in drafts["items"] if d["id"] == created["id"])
+
+        assert row["variantCount"] == 12
+
+    async def test_the_products_list_reports_the_real_variant_count(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+    ) -> None:
+        """Same query path (`list_by_publication`) backs both Drafts and
+        Products — worth its own test rather than assuming the published
+        branch behaves like the draft one just proved."""
+        body = await register(
+            client, companyName="Variant Count Co", email="variant-count@example.com"
+        )
+        tenant_id = uuid.UUID(body["identity"]["tenant"]["id"])
+        headers = auth_header(body)
+        patch_aliexpress(monkeypatch, supplier_handler)
+        await connect_aliexpress(client, headers)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        # Publish it (same no-OAuth StoreListing pattern as
+        # TestDuplicateImportCheck.test_a_published_match_is_flagged_as_published)
+        # so it shows up on GET /products, not GET /drafts.
+        set_tenant_id(tenant_id)
+        store = Store(
+            tenant_id=tenant_id,
+            name="Variant-count test store",
+            slug=f"vc-{uuid.uuid4().hex[:12]}",
+            platform=StorePlatform.SHOPIFY,
+            status=StoreStatus.CONNECTED,
+        )
+        db_session.add(store)
+        await db_session.flush()
+        db_session.add(
+            StoreListing(
+                tenant_id=tenant_id,
+                store_id=store.id,
+                product_id=uuid.UUID(created["id"]),
+                external_product_id=f"gid://shopify/Product/{uuid.uuid4().hex[:8]}",
+                external_variant_map={},
+                inventory_item_map={},
+                status=ListingSyncStatus.SYNCED,
+            )
+        )
+        await db_session.flush()
+
+        products = (await client.get(PRODUCTS_URL, headers=headers)).json()
+        row = next(p for p in products["items"] if p["id"] == created["id"])
+
+        assert row["variantCount"] == 12
+
+    async def test_variant_counts_stay_correct_with_several_products_on_one_page(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Guards against the count column mixing up rows once the list query
+        returns more than one product — a real risk for a naively-written
+        correlated subquery, not just a theoretical one."""
+        headers = await connected_tenant(client, monkeypatch)
+        patch_aliexpress(monkeypatch, id_echoing_handler)
+
+        created_ids: list[str] = []
+        for i in range(5):
+            product = (
+                await client.post(
+                    IMPORT_URL, json={"externalId": f"300000000{i:04d}"}, headers=headers
+                )
+            ).json()
+            created_ids.append(product["id"])
+            # id_echoing_handler reuses the real fixture body, so every one of
+            # these genuinely has 12 variants too — the assertion below is
+            # real, not coincidentally always the same because nothing varies.
+            assert len(product["variants"]) == 12
+
+        drafts = (await client.get("/api/v1/drafts", params={"size": 25}, headers=headers)).json()
+        rows_by_id = {d["id"]: d for d in drafts["items"]}
+        for product_id in created_ids:
+            assert rows_by_id[product_id]["variantCount"] == 12
+
+
+class TestDuplicateImportCheck:
+    """Authoritative, server-side duplicate detection (M1 acceptance).
+
+    The frontend's own cache of the Drafts page cannot see a match outside
+    whatever page happens to be loaded. This endpoint can, because it is a
+    direct tenant-scoped lookup by natural key, not a scan of a list.
+    """
+
+    async def test_duplicate_within_the_first_page_is_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        response = await client.get(
+            CHECK_URL, params={"external_id": REAL_PRODUCT_ID}, headers=headers
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["exists"] is True
+        assert body["product"]["id"] == created["id"]
+        assert body["product"]["isPublished"] is False
+
+    async def test_a_url_and_its_bare_id_resolve_to_the_same_duplicate(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same normalisation the import endpoint itself uses."""
+        headers = await connected_tenant(client, monkeypatch)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        as_url = await client.get(
+            CHECK_URL,
+            params={"external_id": f"https://www.aliexpress.com/item/{REAL_PRODUCT_ID}.html"},
+            headers=headers,
+        )
+        as_id = await client.get(
+            CHECK_URL, params={"external_id": REAL_PRODUCT_ID}, headers=headers
+        )
+
+        assert as_url.json() == as_id.json()
+        assert as_url.json()["product"]["id"] == created["id"]
+
+    async def test_no_match_answers_exists_false_not_an_error(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+
+        response = await client.get(
+            CHECK_URL, params={"external_id": "9999999999999"}, headers=headers
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"exists": False, "product": None}
+
+    async def test_an_identifier_that_cannot_be_parsed_answers_false_not_a_422(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Called on every keystroke while typing — a not-yet-valid value is
+        not a client error, it's "nothing to compare yet"."""
+        headers = await connected_tenant(client, monkeypatch)
+
+        response = await client.get(CHECK_URL, params={"external_id": "abc"}, headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["exists"] is False
+
+    async def test_duplicate_outside_the_first_25_rows_is_still_found(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Proves the check is a direct lookup, not a scan of a cached list.
+
+        Imports 26 distinct products for the tenant — one more than a single
+        Drafts page (`size=25`) could ever hold at once, so no client-side
+        cache of "the current page" could possibly contain all of them. The
+        duplicate check still finds the 26th, because it is a tenant-scoped
+        lookup by natural key against the database, not a scan of whatever a
+        client happened to load.
+
+        (Not asserting *which* specific row a page-1 fetch would omit: within
+        this test's shared-transaction fixture every row's ``created_at`` is
+        the same transaction-start instant — Postgres ``now()`` is
+        transaction-scoped, not statement-scoped — so sort order among rows
+        created in the same test is not meaningfully distinguishable here.
+        That is a property of the test fixture, not of the real per-request
+        transactions this endpoint runs under.)
+        """
+        headers = await connected_tenant(client, monkeypatch)
+        patch_aliexpress(monkeypatch, id_echoing_handler)
+
+        target_id = "1000000000001"
+        target = (
+            await client.post(IMPORT_URL, json={"externalId": target_id}, headers=headers)
+        ).json()
+        for i in range(25):
+            await client.post(IMPORT_URL, json={"externalId": f"200000000{i:04d}"}, headers=headers)
+
+        drafts = (await client.get("/api/v1/drafts", params={"size": 25}, headers=headers)).json()
+        assert drafts["meta"]["totalItems"] == 26
+
+        response = await client.get(CHECK_URL, params={"external_id": target_id}, headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["exists"] is True
+        assert response.json()["product"]["id"] == target["id"]
+
+    async def test_another_tenants_matching_product_is_not_exposed(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        acme = await connected_tenant(
+            client, monkeypatch, companyName="Acme Dup", email="dup-a@example.com"
+        )
+        await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=acme)
+
+        globex = await connected_tenant(
+            client, monkeypatch, companyName="Globex Dup", email="dup-b@example.com"
+        )
+
+        response = await client.get(
+            CHECK_URL, params={"external_id": REAL_PRODUCT_ID}, headers=globex
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"exists": False, "product": None}
+
+    async def test_a_published_match_is_flagged_as_published(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession
+    ) -> None:
+        """`isPublished` decides the frontend's link target
+        (`/drafts/{id}` vs `/products/{id}`) — worth its own test.
+
+        Attaches the `StoreListing` directly through the test session, the
+        same no-OAuth pattern `test_product_workspace.py` uses — publication
+        membership is entirely `StoreListing` state, so this does not need a
+        real Shopify connection to be a faithful test.
+        """
+        body = await register(client, companyName="Dup Publish Co", email="dup-publish@example.com")
+        tenant_id = uuid.UUID(body["identity"]["tenant"]["id"])
+        headers = auth_header(body)
+        patch_aliexpress(monkeypatch, supplier_handler)
+        await connect_aliexpress(client, headers)
+        created = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+
+        set_tenant_id(tenant_id)
+        store = Store(
+            tenant_id=tenant_id,
+            name="Duplicate-check test store",
+            slug=f"dup-check-{uuid.uuid4().hex[:12]}",
+            platform=StorePlatform.SHOPIFY,
+            status=StoreStatus.CONNECTED,
+        )
+        db_session.add(store)
+        await db_session.flush()
+        db_session.add(
+            StoreListing(
+                tenant_id=tenant_id,
+                store_id=store.id,
+                product_id=uuid.UUID(created["id"]),
+                external_product_id=f"gid://shopify/Product/{uuid.uuid4().hex[:8]}",
+                external_variant_map={},
+                inventory_item_map={},
+                status=ListingSyncStatus.SYNCED,
+            )
+        )
+        await db_session.flush()
+
+        response = await client.get(
+            CHECK_URL, params={"external_id": REAL_PRODUCT_ID}, headers=headers
+        )
+        assert response.json()["product"]["isPublished"] is True
+
+    async def test_repeated_submissions_remain_idempotent(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sequential repeats, on the shared fast fixture. Genuine concurrent
+        requests need two independent database sessions racing for real —
+        this fixture's session is not safe for that — so that case is
+        `test_product_import_concurrency.py`, which builds its own app
+        instance per request instead."""
+        headers = await connected_tenant(client, monkeypatch)
+
+        first = await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        second = await client.post(
+            IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers
+        )
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["id"] == second.json()["id"]
+
+        drafts = (await client.get("/api/v1/drafts", headers=headers)).json()
+        assert drafts["meta"]["totalItems"] == 1
 
 
 class TestProductDetail:

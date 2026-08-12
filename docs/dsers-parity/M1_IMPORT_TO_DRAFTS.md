@@ -209,16 +209,10 @@ it matters which is which:
 
 ## Known limitations
 
-- **Variant count column** on the Drafts list is not implemented. The list
-  response schema (`ProductRead`) deliberately omits variants for payload
-  size; adding a count needs a correlated-subquery change to the repository
-  query, reviewed on its own rather than folded into this fix. Documented in
-  `FEATURE_MATRIX.md`.
-- **Duplicate-import warning** checks only the currently-cached Drafts page
-  (25 most recent rows), not the full tenant catalogue. A real duplicate
-  outside that window is still caught server-side by the natural-key
-  constraint — nothing is silently broken — but the *warning* will not fire
-  for it.
+- ~~**Variant count column** on the Drafts list is not implemented.~~
+  **Resolved 2026-08-12** — see "Acceptance pass" below.
+- ~~**Duplicate-import warning** checks only the currently-cached Drafts
+  page.~~ **Resolved 2026-08-12** — see "Acceptance pass" below.
 - **Background processing.** Import still runs synchronously in the request;
   a very large or slow supplier response holds the request open rather than
   handing off to a Celery task. Pre-existing, not changed by this milestone.
@@ -245,3 +239,162 @@ it matters which is which:
   trusting it for manual testing — not as a defect in the M1 code**, whose
   correctness is established by the in-process and automated-test evidence
   above.
+
+## Acceptance pass — 2026-08-12
+
+Closed the three gaps the M1 acceptance review found: live re-verification
+against a genuinely current, isolated process; an authoritative (not
+client-cache) duplicate check; and the variant-count column.
+
+### Fresh-process live verification
+
+The prior pass's port-8000/8002 problem — long-running processes not
+reflecting current source — was worked around this time by **not reusing
+either one**. Per the acceptance instructions, neither was touched, restarted,
+or inspected beyond the original read-only check.
+
+- **Backend:** fresh `uvicorn` on `127.0.0.1:8010` (loopback only), started
+  from this session's actual working tree at commit `17c6ffb` (clean
+  worktree, confirmed before starting). Proven current, not assumed: the live
+  OpenAPI schema was fetched and the `retry` and `import/check` paths
+  confirmed present before any test ran.
+- **Frontend:** fresh `next dev` on `127.0.0.1:3010`, `NEXT_PUBLIC_API_URL`
+  pointed at `8010` via a real process environment variable (not the shared
+  `.env.local`, which was never touched). Built into its own
+  `.next-verify-8010` directory via a temporary, reverted `next.config.ts`
+  change — the shared `.next/` a pre-existing dev server already had open was
+  never written to by this process. Confirmed serving current source by
+  grepping the compiled `/login` chunk for the literal string
+  `127.0.0.1:8010`.
+- **Scenarios driven in a real browser against this pair**, two separate
+  tenants: register → import with no AliExpress connection → real `409` →
+  Import History shows the failed row **after a hard page reload** (a genuine
+  full navigation, not a client-side re-render) → Retry reaches
+  `POST /products/imports/{id}/retry` → still fails (same reason, correctly)
+  → history now shows both attempts, still zero products and zero drafts
+  (nothing ever succeeded) → Products and Drafts pages both empty, confirming
+  no Shopify product was ever created → a second tenant's Import History is
+  empty, confirming isolation → all network activity stayed on `127.0.0.1`
+  (checked directly against the captured request log — no AliExpress, no
+  Shopify, no other host) → console carried only the one expected `401` from
+  the standard unauthenticated session-refresh check, no JS exceptions.
+- **Not achieved live:** a *successful* retry (draft actually appearing). As
+  recorded above, this AliExpress account's OAuth connect is rejected by the
+  live gateway when using a synthetic code, so no live-provider success path
+  is reachable from this environment at all — a pre-existing, already-
+  documented constraint, not something this pass could change. The success
+  path is verified by automated tests only
+  (`test_retrying_a_failed_import_succeeds_with_the_original_parameters`,
+  mocked AliExpress response, clearly labelled as such) and by the new
+  `test_product_import_transaction_durability.py`/
+  `test_product_import_concurrency.py` tests, which drive the real app object
+  in-process rather than mocking at the HTTP boundary.
+- **Operational finding, unrelated to correctness:** running `npm run build`
+  for the frontend quality gate caused the two *pre-existing* frontend dev
+  servers (ports 3000 and 3001, untouched all session) to restart — both show
+  a process creation time matching the build, though both came back healthy
+  (200 OK) immediately after. The mechanism: `next build`'s default output
+  directory (`.next`) is the same one `next dev` uses, and this checkout has
+  multiple Next.js processes sharing one directory. No file was corrupted and
+  no data was lost, but this is worth knowing before running a production
+  build in a checkout with live dev servers on it — a workspace-per-process
+  copy avoids it entirely. The backend processes on 8000/8002 were confirmed
+  unaffected (identical process ids before and after this entire session).
+  `frontend/tsconfig.json` was also auto-modified by the verification
+  frontend process (Next.js normalises it on start, and briefly added a
+  reference to the temporary `.next-verify-8010` directory); reverted via
+  `git checkout` before committing — not part of the diff.
+
+### Why the client-side duplicate check was insufficient
+
+The dialog's own comment named the limit precisely: it checked
+`useDrafts({ size: 25 })`'s cache — whatever the Drafts page happened to have
+loaded — so a duplicate outside the 25 most-recently-loaded rows was
+invisible to the warning even though the server's natural-key constraint
+still prevented an actual second draft. That is a real usability gap, not a
+data-integrity one: the merchant would submit, get no warning, and only
+learn it was a duplicate from the resulting "refreshed" draft — confusing,
+not unsafe.
+
+### Server-authoritative duplicate detection
+
+`GET /api/v1/products/import/check?external_id=<id-or-url>` — new,
+additive, does not change any existing endpoint's contract.
+
+- **Normalisation is shared, not reimplemented.** The same
+  `normalise_product_id` the import endpoint's own request validator uses
+  (`ProductImportRequest._normalise_identifier`) backs this endpoint too, so
+  a pasted URL and its bare id are guaranteed to resolve identically — tested
+  directly (`test_a_url_and_its_bare_id_resolve_to_the_same_duplicate`).
+- **Direct tenant-scoped lookup**, `ProductRepository.find_duplicate`, not a
+  scan: reuses `get_by_external_id`'s existing tenant-filtered query
+  (`_base_query()`), so it structurally cannot return another tenant's row —
+  tested directly
+  (`test_another_tenants_matching_product_is_not_exposed`) — and finds a
+  match regardless of how many other products exist or which page a client
+  cache holds — tested by importing 26 distinct products and confirming the
+  26th (never on any 25-row page) is still found.
+  An unparseable or still-being-typed value answers `{"exists": false}`, not
+  a `422` — this is called on every keystroke, and "nothing to compare yet"
+  is not a client error worth surfacing as one.
+- **`isPublished` on the match** decides the frontend's link target
+  (`/drafts/{id}` vs `/products/{id}`) — a product's lifecycle lives in
+  `StoreListing` state, not on the `Product` row itself, so this reuses the
+  same `_synced_listing_exists()` correlated subquery `list_by_publication`
+  already uses, rather than inventing a second source of truth for
+  publication state.
+- **Concurrency remains a natural-key + `find_in_progress` guarantee, not
+  this endpoint's job.** The check is advisory; a genuine race between two
+  concurrent import submissions is still resolved the way it always was —
+  proved with a *real* race, not sequential idempotency, in
+  `test_product_import_concurrency.py` (two truly concurrent requests against
+  the real app object, each with its own database connection via the
+  unmodified `get_db_session`).
+- **Frontend:** the dialog debounces the normalised identifier (400ms) before
+  calling `useDuplicateImportCheck`, replacing the old `useDrafts`-cache scan
+  entirely. The warning now reads "Already in Drafts" or "Already published"
+  depending on `isPublished`, linking to the correct page either way.
+
+### Variant-count column
+
+No architectural blocker existed — the earlier "deferred" call was a scope
+decision under time pressure, not a genuine data-model limit, and the
+acceptance instructions asked to complete it now if that's the case. Evidence
+it was safe to build:
+
+- `product_variants.product_id` already carries both a plain index and a
+  composite `(tenant_id, product_id)` index
+  (`ix_variants_tenant_product`) — no migration needed.
+- `ProductRepository._variant_count_column` adds one correlated `COUNT`
+  column to the *existing* `list_by_publication` query — one query per page,
+  not one query per row. `test_variant_counts_stay_correct_with_several_
+  products_on_one_page` imports five distinct products and confirms each
+  row's count is independently correct on the same page, specifically
+  guarding against a correlated subquery silently mixing rows up once more
+  than one is returned.
+- **Always accurate, never a placeholder.** A `Product` row only exists after
+  a successful import, and that same transaction syncs its variants
+  (`ProductImportService._upsert` → `variants.sync_for_product`) before
+  committing — there is no state where the row exists but its variant count
+  is unknown, only legitimately zero for a single-SKU listing. A failed
+  import never creates a `Product` row at all, so it never reaches this query
+  to need a placeholder. `ProductRead.variant_count` still defaults to `0` at
+  the schema level purely so `model_validate()` can run against a bare ORM
+  object before the real count is applied via `model_copy(update=...)` — that
+  default is never the value a client actually receives; every construction
+  path (`_to_read` for lists, `_to_detail` for single items via
+  `len(product.variants)`) overwrites it immediately. The frontend still
+  renders `product.variantCount ?? "—"` defensively, in case of a stale
+  cached response shape — not because the backend can legitimately omit it.
+- Exposed on both `GET /drafts` and `GET /products` (same underlying query),
+  and on the single-item detail endpoints via the already-loaded `variants`
+  relationship — no new query there.
+- New "Variants" column in `ProductTable`, right-aligned to match "Stock".
+
+### Remaining M1 blockers
+
+None. Every item the acceptance review raised has a code-backed resolution
+above. The two structural constraints already on record — this AliExpress
+account cannot complete a live OAuth connection with a synthetic code, and
+the port-8000 process's ownership is unresolved — are unchanged and are
+environment/account facts, not defects in this milestone's code.

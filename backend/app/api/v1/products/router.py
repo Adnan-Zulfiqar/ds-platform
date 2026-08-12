@@ -19,12 +19,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
-from app.models.product import Product
+from app.integrations.aliexpress.catalog import normalise_product_id
+from app.models.product import Product, ProductSource
 from app.repositories.product import ProductImportRepository, ProductRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.product import (
     FeedProductRead,
     ProductDetailRead,
+    ProductDuplicateCheckResponse,
+    ProductDuplicateMatch,
     ProductImageRead,
     ProductImportRead,
     ProductImportRequest,
@@ -53,8 +56,11 @@ def _to_detail(product: Product) -> ProductDetailRead:
     (``app.core.sanitize.sanitize_html``, Product Editor stage 1) — the raw
     ``ItemBaseInfo.description_html`` never reaches this far.
     """
+    base = ProductRead.model_validate(product).model_copy(
+        update={"variant_count": len(product.variants)}
+    )
     return ProductDetailRead(
-        **ProductRead.model_validate(product).model_dump(),
+        **base.model_dump(),
         variants=[ProductVariantRead.model_validate(v) for v in product.variants],
         images=[ProductImageRead.model_validate(i) for i in product.images],
         description=product.description,
@@ -62,6 +68,11 @@ def _to_detail(product: Product) -> ProductDetailRead:
         supplier_title=product.supplier_title,
         supplier_brand=product.supplier_brand,
     )
+
+
+def _to_read(product: Product, variant_count: int) -> ProductRead:
+    """List-row projection with the count from the same query, not a guess."""
+    return ProductRead.model_validate(product).model_copy(update={"variant_count": variant_count})
 
 
 @router.get(
@@ -80,9 +91,9 @@ async def list_products(
     ``GET /drafts`` (Product Workspace V2). Filtering here — not only in the
     UI — keeps pagination and badge counts honest for every client.
     """
-    products, total = await ProductRepository(session).list_published(params)
+    rows, total = await ProductRepository(session).list_published(params)
     return Page[ProductRead].build(
-        items=[ProductRead.model_validate(p) for p in products],
+        items=[_to_read(product, count) for product, count in rows],
         page=params.page,
         size=params.size,
         total_items=total,
@@ -126,6 +137,62 @@ async def list_imports(
         page=params.page,
         size=params.size,
         total_items=total,
+    )
+
+
+@router.get(
+    "/import/check",
+    response_model=ProductDuplicateCheckResponse,
+    summary="Check whether a supplier product is already imported",
+)
+async def check_duplicate_import(
+    session: DbSession,
+    _authorized: RequireViewer,
+    external_id: Annotated[str, Query(min_length=1, max_length=2048)],
+) -> ProductDuplicateCheckResponse:
+    """Authoritative, tenant-scoped answer to "have we already got this one".
+
+    Accepts a bare id or a full listing URL — the same
+    ``normalise_product_id`` the import endpoint itself uses as a validator
+    (`ProductImportRequest`), so a URL and its bare id always resolve to the
+    same answer here and at import time; the two paths cannot silently
+    disagree.
+
+    Declared before ``/{product_id}`` was already unnecessary here — a
+    two-segment path never matches that one-segment route — but it is kept in
+    this file's early, specific-routes-first order for readability, matching
+    every route around it.
+
+    Read-only, viewer-level: this only tells the caller whether a row exists
+    and, if so, its id/title/publication state — nothing about another
+    tenant, and nothing that isn't already visible on the drafts/products
+    list this same principal can already read.
+
+    An identifier that fails to normalise (still-being-typed, decoration
+    that cannot be resolved) answers ``exists: false`` rather than a
+    validation error — this endpoint is called on every keystroke as the
+    merchant types or pastes, and "nothing to compare yet" is not a client
+    mistake worth surfacing as one.
+    """
+    identifier = normalise_product_id(external_id)
+    if identifier is None:
+        return ProductDuplicateCheckResponse(exists=False)
+
+    match = await ProductRepository(session).find_duplicate(
+        source=ProductSource.ALIEXPRESS, external_id=identifier
+    )
+    if match is None:
+        return ProductDuplicateCheckResponse(exists=False)
+
+    product, is_published = match
+    return ProductDuplicateCheckResponse(
+        exists=True,
+        product=ProductDuplicateMatch(
+            id=product.id,
+            title=product.title,
+            status=product.status,
+            is_published=is_published,
+        ),
     )
 
 

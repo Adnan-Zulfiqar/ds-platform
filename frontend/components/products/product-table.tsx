@@ -164,6 +164,7 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
             <TableHead>Status</TableHead>
             <TableHead>Supplier price</TableHead>
             <TableHead className="text-right">Stock</TableHead>
+            <TableHead className="text-right">Variants</TableHead>
             <TableHead>Supplier</TableHead>
             <TableHead>AI status</TableHead>
             <TableHead className="text-right">Actions</TableHead>
@@ -222,6 +223,16 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
                 <TableCell>{formatPrice(product)}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   {product.stockQuantity.toLocaleString()}
+                </TableCell>
+                <TableCell
+                  className="text-right tabular-nums"
+                  data-testid="variant-count"
+                >
+                  {/* Always a real number from the server (see the `Product`
+                      type's doc comment) — the `??` is defensive against a
+                      stale cached response shape, not a real "unknown" case;
+                      never fabricate a count in its place. */}
+                  {product.variantCount ?? "—"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {product.supplierName ?? "—"}
