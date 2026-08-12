@@ -129,6 +129,30 @@ async def list_imports(
     )
 
 
+@router.post(
+    "/imports/{import_id}/retry",
+    response_model=ProductDetailRead,
+    summary="Retry a failed import",
+)
+async def retry_import(
+    session: DbSession,
+    principal: RequireAdmin,
+    import_id: Annotated[uuid.UUID, Path()],
+) -> ProductDetailRead:
+    """Resubmit a specific failed import attempt without re-entering it.
+
+    DSers-parity M1 (`docs/dsers-parity/M1_IMPORT_TO_DRAFTS.md`). Declared
+    before ``/{product_id}`` for the same reason ``/imports`` is: FastAPI
+    matches routes in declaration order, and ``/{product_id}`` would
+    otherwise swallow ``/imports/<uuid>/retry`` as an attempt to parse
+    ``imports`` itself as a product id.
+    """
+    product = await ProductImportService(session).retry_import(
+        import_id, requested_by_user_id=principal.user_id
+    )
+    return _to_detail(product)
+
+
 @router.get(
     "/feeds/{feed_name}",
     response_model=list[FeedProductRead],

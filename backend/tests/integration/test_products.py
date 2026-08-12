@@ -369,6 +369,126 @@ class TestImportHistory:
         assert succeeded[0]["finishedAt"] is not None
 
 
+class TestRetryImport:
+    """DSers-parity M1 — a failed import must remain retryable without the
+    merchant re-entering the product id/URL and destination from memory."""
+
+    async def test_retrying_a_failed_import_succeeds_with_the_original_parameters(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+        patch_aliexpress(monkeypatch, ship_to_prohibited_handler)
+        failed = await client.post(
+            IMPORT_URL,
+            json={"externalId": REAL_PRODUCT_ID, "shipToCountry": "US"},
+            headers=headers,
+        )
+        assert failed.status_code == 422
+
+        history = (await client.get(IMPORTS_URL, headers=headers)).json()
+        failed_record = next(r for r in history["items"] if r["status"] == "failed")
+        assert failed_record["shipToCountry"] == "US"
+
+        # The supplier is healthy now -- the retry should succeed using the
+        # ship-to country stored on the failed attempt, not a fresh guess.
+        patch_aliexpress(monkeypatch, supplier_handler)
+        retried = await client.post(f"{IMPORTS_URL}/{failed_record['id']}/retry", headers=headers)
+
+        assert retried.status_code == 200, retried.text
+        product = retried.json()
+        assert product["externalId"] == REAL_PRODUCT_ID
+
+        listing = (await client.get(PRODUCTS_URL, headers=headers)).json()
+        drafts = (await client.get("/api/v1/drafts", headers=headers)).json()
+        assert listing["meta"]["totalItems"] == 0
+        assert any(d["id"] == product["id"] for d in drafts["items"])
+
+    async def test_retry_does_not_duplicate_an_existing_draft(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry for a product already successfully imported updates the
+        same row -- the natural-key uniqueness on `(tenant, source,
+        external_id)` that already backs every import path, unchanged here."""
+        headers = await connected_tenant(client, monkeypatch)
+        first = await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        first_product_id = first.json()["id"]
+
+        patch_aliexpress(monkeypatch, ship_to_prohibited_handler)
+        failed = await client.post(
+            IMPORT_URL,
+            json={"externalId": REAL_PRODUCT_ID, "shipToCountry": "US"},
+            headers=headers,
+        )
+        assert failed.status_code == 422
+
+        history = (await client.get(IMPORTS_URL, headers=headers)).json()
+        failed_record = next(
+            r
+            for r in history["items"]
+            if r["status"] == "failed" and r["externalId"] == REAL_PRODUCT_ID
+        )
+
+        patch_aliexpress(monkeypatch, supplier_handler)
+        retried = await client.post(f"{IMPORTS_URL}/{failed_record['id']}/retry", headers=headers)
+
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["id"] == first_product_id
+
+        drafts = (await client.get("/api/v1/drafts", headers=headers)).json()
+        assert drafts["meta"]["totalItems"] == 1
+
+    async def test_retrying_another_tenants_import_returns_404_not_403(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        acme = await connected_tenant(
+            client, monkeypatch, companyName="Acme", email="retry-a@example.com"
+        )
+        patch_aliexpress(monkeypatch, ship_to_prohibited_handler)
+        failed = await client.post(
+            IMPORT_URL,
+            json={"externalId": "1005010486653604", "shipToCountry": "US"},
+            headers=acme,
+        )
+        assert failed.status_code == 422
+        history = (await client.get(IMPORTS_URL, headers=acme)).json()
+        failed_record = next(r for r in history["items"] if r["status"] == "failed")
+
+        globex = await connected_tenant(
+            client, monkeypatch, companyName="Globex", email="retry-b@example.com"
+        )
+
+        response = await client.post(f"{IMPORTS_URL}/{failed_record['id']}/retry", headers=globex)
+
+        assert response.status_code == 404
+
+    async def test_retrying_a_successful_import_is_rejected(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+        product = (
+            await client.post(IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=headers)
+        ).json()
+        history = (await client.get(IMPORTS_URL, headers=headers)).json()
+        succeeded_record = next(r for r in history["items"] if r["status"] == "succeeded")
+        assert succeeded_record["productId"] == product["id"]
+
+        response = await client.post(
+            f"{IMPORTS_URL}/{succeeded_record['id']}/retry", headers=headers
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "validation_error"
+
+    async def test_retrying_an_unknown_import_returns_404(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers = await connected_tenant(client, monkeypatch)
+
+        response = await client.post(f"{IMPORTS_URL}/{uuid.uuid4()}/retry", headers=headers)
+
+        assert response.status_code == 404
+
+
 class TestProductDetail:
     async def test_returns_the_product_with_children(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch

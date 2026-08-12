@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
+from app.database.session import session_factory
 from app.integrations.aliexpress.catalog import (
     parse_feed_products,
     parse_product_detail,
@@ -33,6 +34,7 @@ from app.integrations.aliexpress.service import AliExpressService
 from app.models.product import (
     ImportStatus,
     Product,
+    ProductImport,
     ProductSource,
     ProductStatus,
 )
@@ -198,6 +200,46 @@ class ProductImportService(BaseService):
         )
         return product
 
+    async def retry_import(
+        self,
+        import_id: uuid.UUID,
+        *,
+        requested_by_user_id: uuid.UUID | None = None,
+    ) -> Product:
+        """Resubmit a specific failed import using its own stored parameters.
+
+        DSers-parity M1: a failed import must remain retryable without the
+        merchant re-typing the product id/URL and destination from memory —
+        this reads them back off the audit row instead. Deliberately narrow:
+        only a ``FAILED`` attempt may be retried (an in-flight one is already
+        covered by ``find_in_progress``'s duplicate-submission guard inside
+        :meth:`import_product`, and a ``SUCCEEDED`` one has a product to
+        refresh through ``POST /products/{id}/sync`` instead).
+
+        Reuses :meth:`import_product` unchanged, so retrying carries the exact
+        same idempotency guarantee every other import path already has: the
+        `(tenant_id, source, external_id)` unique constraint means a retry
+        that happens to race a still-running attempt for the same product
+        updates the one row rather than creating a second draft — see
+        ``ProductRepository`` / ``BaseRepository._translate_integrity_error``.
+        This method creates a new ``ProductImport`` audit row for the retry
+        itself, consistent with "rows are never deleted, every attempt is
+        recorded" — it does not mutate the original failed row.
+        """
+        record = await self.imports.get_by_id_or_raise(import_id)
+        if record.status is not ImportStatus.FAILED:
+            raise ValidationError(
+                "Only a failed import can be retried.",
+                details={"status": record.status.value},
+            )
+
+        return await self.import_product(
+            external_id=record.external_id,
+            requested_by_user_id=requested_by_user_id,
+            ship_to_country=record.ship_to_country,
+            currency=record.currency,
+        )
+
     #: Fields with a merchant-editable column and a `supplier_{field}` twin
     #: that always tracks the supplier (Product Editor stages 1-2: `title`/
     #: `brand` joined `description`). Every one of these is popped out of
@@ -273,6 +315,61 @@ class ProductImportService(BaseService):
             error_code=code,
             ship_to_country=getattr(record, "ship_to_country", None),
         )
+        await self._persist_failure_durably(record)
+
+    async def _persist_failure_durably(self, record: ProductImport) -> None:
+        """Commit the failure row on its own connection, outside this request's transaction.
+
+        ``import_product`` re-raises immediately after ``_fail`` sets these
+        fields, so the caller (a router handler) sees the exception and never
+        reaches a normal return. ``app.api.deps.get_db_session`` rolls back the
+        *entire* request transaction when a handler raises — correct for every
+        other write in the request, but it would silently erase the one row
+        whose whole purpose (see this module's docstring and
+        ``ProductImportRepository``) is to survive the failure: "why is this
+        product missing" is asked long after the failure, by someone who was
+        never told the failed attempt happened at all if this row never lands.
+        Verified live: a real failed import (no AliExpress connection) left
+        zero ``product_imports`` rows before this fix, despite ``_fail``
+        flushing the update — the flush was rolled back with everything else.
+
+        A short-lived session on an independent connection commits just this
+        one row, so it survives regardless of what happens to ``self.session``.
+        Deliberately narrow: this does not change commit/rollback semantics for
+        any other write, in this service or elsewhere.
+
+        Gets its own primary key rather than reusing ``record.id``. Reusing it
+        deadlocked every time: ``self.session``'s transaction is still open at
+        this point (nothing has raised yet), holding an uncommitted row with
+        that same id, and Postgres blocks a second insert of the same primary
+        key until the first transaction resolves -- which never happens,
+        because that transaction cannot resolve until *this* method returns.
+        Nothing needs the two ids to match: the failed request's error
+        response carries no ``ProductImport`` id, and every later read (Import
+        History, retry) queries by whatever id this independent commit
+        actually produced.
+
+        Best-effort, deliberately: this is a secondary write recording that
+        the *real* operation failed. Letting a problem here propagate would
+        replace a clean, specific error (409 not-connected, 422 ship-to
+        rejected, ...) with an opaque 503 -- trading a merchant-facing error
+        they can act on for one they cannot, over a write whose entire
+        purpose is auxiliary. A logged failure here is a gap in the audit
+        trail, not a reason to hide the original failure from the caller.
+        """
+        values = record.to_dict(exclude={"id", "created_at", "updated_at"})
+        durable_session = session_factory()
+        try:
+            durable_session.add(ProductImport(**values))
+            await durable_session.commit()
+        except Exception:
+            self.logger.error(
+                "product_import_failure_not_persisted_durably",
+                external_id=record.external_id,
+                exc_info=True,
+            )
+        finally:
+            await durable_session.close()
 
     # -- Discovery ----------------------------------------------------------
 
