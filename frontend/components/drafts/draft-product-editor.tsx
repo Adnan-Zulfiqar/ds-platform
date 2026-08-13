@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Loader2, Store } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
@@ -26,6 +26,14 @@ import { ProductVersionHistorySheet } from "@/components/products/product-versio
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -102,17 +110,38 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
-  // Optimistic-concurrency state (M2A). `savedUpdatedAt` is the version
-  // token this editor last saw confirmed by the server -- echoed back as
-  // `expectedUpdatedAt` on the next save so a stale write is rejected
-  // (409) instead of silently overwriting a newer change made elsewhere.
+  // Optimistic-concurrency state (M2A, hardened in the acceptance pass).
+  // `savedUpdatedAt` is the version token this editor last saw confirmed by
+  // the server -- echoed back as `expectedUpdatedAt` on the next save so a
+  // stale write is rejected (409) instead of silently overwriting a newer
+  // change made elsewhere.
   const [savedUpdatedAt, setSavedUpdatedAt] = useState<string | null>(null);
-  const [conflict, setConflict] = useState(false);
-  // When a reload is triggered from "Keep my changes", the next `data`
-  // load must refresh the version token and read-only context WITHOUT
-  // clobbering the merchant's still-unsaved title/description -- the one
-  // case where the load effect below must not reset form state.
-  const preserveEditsOnNextLoad = useRef(false);
+  // `conflictPhase` replaces the earlier boolean `conflict` flag. The
+  // acceptance pass found the previous "Keep my changes" recovery action
+  // silently refreshed the version token and left autosave free to fire
+  // immediately afterward -- a save could land moments later with no
+  // review at all, which is not meaningfully different from the original
+  // silent-overwrite bug this editor exists to prevent. The phases below
+  // replace it with two safe, explicit paths:
+  //   "detected"       -- 409 just happened; banner offers Reload or Review.
+  //   "reload-confirm" -- merchant asked to reload; confirming the discard
+  //                       before it happens (irreversible, so it is a
+  //                       distinct, explicit step, not the same click).
+  //   "reviewing"       -- merchant asked to review; both versions are shown
+  //                       side by side and a second, separate action is
+  //                       required to overwrite the server's newer value.
+  // Autosave and manual Save are frozen for every phase except "none".
+  const [conflictPhase, setConflictPhase] = useState<
+    "none" | "detected" | "reload-confirm" | "reviewing"
+  >("none");
+  const isConflicted = conflictPhase !== "none";
+  // The server's latest version, fetched when "Review my changes" opens --
+  // captured separately from `data` so it can be shown next to the
+  // merchant's still-untouched local fields without overwriting either.
+  // Never written into any editable field automatically; only read for
+  // display and as the version token for the one explicit overwrite action.
+  const [conflictServerSnapshot, setConflictServerSnapshot] =
+    useState<ProductDetail | null>(null);
 
   function selectTab(next: EditorTab) {
     setTab(next);
@@ -128,8 +157,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    * conflicting write never actually persisted, which is exactly the
    * state right after a 409 -- leaves the `data` object reference
    * unchanged. An effect keyed on that reference would then never re-fire,
-   * so "Reload latest version" would clear the conflict banner but leave
-   * the stale local edits sitting in the fields, unreset. */
+   * so a confirmed reload would clear the conflict banner but leave the
+   * stale local edits sitting in the fields, unreset. Only ever called from
+   * an explicit merchant action (confirmed reload, or the normal initial
+   * load) -- never automatically while a conflict is open, which is what
+   * keeps "Review my changes" from silently discarding local edits. */
   function applyDraftToForm(detail: ProductDetail) {
     setTitle(detail.title);
     setBrand(detail.brand ?? "");
@@ -155,12 +187,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
 
   useEffect(() => {
     if (!data) return;
-    if (!preserveEditsOnNextLoad.current) {
-      applyDraftToForm(data);
-    }
-    preserveEditsOnNextLoad.current = false;
+    applyDraftToForm(data);
     setSavedUpdatedAt(data.updatedAt);
-    setConflict(false);
+    setConflictPhase("none");
+    setConflictServerSnapshot(null);
   }, [data]);
 
   useEffect(() => {
@@ -177,19 +207,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
-  async function handleSave(event?: FormEvent) {
-    event?.preventDefault();
-    // Guards against two hazards at once: a double-click or a keyboard
-    // shortcut firing while a save is already in flight (no concurrent
-    // duplicate requests), and autosave silently retrying over an
-    // unresolved conflict (the merchant must explicitly choose "Reload
-    // latest" or "Keep my changes" first -- see the conflict banner below).
-    if (updateDraft.isPending || conflict) return;
-
-    setFormError(null);
-    setSaveState("saving");
-
-    const payload: ProductUpdatePayload = {
+  /** Every editable field, as it would be sent on save. Shared by the
+   * normal save path and "Save my version anyway" so the two can never
+   * drift -- the only thing that differs between them is which version
+   * token they assert against. */
+  function buildSavePayload(expectedUpdatedAt: string): ProductUpdatePayload {
+    return {
       title: title.trim(),
       brand: brand.trim() || null,
       vendor: vendor.trim() || null,
@@ -213,11 +236,33 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       redirectOldHandle,
       ogTitle: ogTitle.trim() || null,
       ogDescription: ogDescription.trim() || null,
-      ...(savedUpdatedAt ? { expectedUpdatedAt: savedUpdatedAt } : {}),
+      expectedUpdatedAt,
     };
+  }
+
+  async function handleSave(event?: FormEvent) {
+    event?.preventDefault();
+    // Guards against two hazards at once: a double-click or a keyboard
+    // shortcut firing while a save is already in flight (no concurrent
+    // duplicate requests), and autosave silently retrying over an
+    // unresolved conflict -- the merchant must explicitly choose "Reload
+    // latest version" or "Review my changes" first (see the conflict
+    // banner below). `handleSaveMyVersionAnyway` is the one save path that
+    // deliberately bypasses this guard, because it *is* the explicit,
+    // reviewed choice this guard exists to require first.
+    if (updateDraft.isPending || isConflicted) return;
+    // The form only renders once `data` has loaded (see the early returns
+    // below), and the `[data]` effect always sets this in the same tick --
+    // reaching here without it would mean saving against no known version
+    // at all, which the backend now rejects outright. Bail rather than
+    // send a request guaranteed to 422.
+    if (!savedUpdatedAt) return;
+
+    setFormError(null);
+    setSaveState("saving");
 
     try {
-      const saved = await updateDraft.mutateAsync(payload);
+      const saved = await updateDraft.mutateAsync(buildSavePayload(savedUpdatedAt));
       setDirty(false);
       setSaveState("saved");
       // The server's response is authoritative: the next save's version
@@ -231,9 +276,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       if (err instanceof ApiError && err.status === 409) {
         // A newer save landed elsewhere since this editor last loaded.
         // Surfaced as its own state, not folded into `formError` -- the
-        // recovery here is "reload or keep your text", not "fix a field
-        // and retry", and the two must not look the same to the merchant.
-        setConflict(true);
+        // recovery here is "reload or review", not "fix a field and
+        // retry", and the two must not look the same to the merchant.
+        setConflictPhase("detected");
         setSaveState("error");
       } else {
         setSaveState("error");
@@ -242,44 +287,105 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     }
   }
 
-  /** "Reload latest version" -- discard local edits, adopt the server's
-   * current values. Applies the refetched detail directly (see
-   * `applyDraftToForm`'s docstring for why this can't be left to the
-   * `[data]` effect alone). */
-  async function handleReloadLatest() {
-    preserveEditsOnNextLoad.current = false;
+  /** "Reload latest version", step 1 of 2 -- opens a confirmation dialog.
+   * Discarding unsaved local edits is irreversible, so it is never a
+   * single click from the conflict banner itself. */
+  function handleRequestReload() {
+    setConflictPhase("reload-confirm");
+  }
+
+  function handleCancelReloadConfirm() {
+    setConflictPhase("detected");
+  }
+
+  /** "Reload latest version", step 2 of 2 (explicit confirmation given) --
+   * discards local edits and adopts the server's current values. Applies
+   * the refetched detail directly (see `applyDraftToForm`'s docstring for
+   * why this can't be left to the `[data]` effect alone). */
+  async function handleConfirmReload() {
     const result = await refetch();
     if (result.data) {
       applyDraftToForm(result.data);
       setSavedUpdatedAt(result.data.updatedAt);
     }
-    setConflict(false);
+    setConflictServerSnapshot(null);
+    setConflictPhase("none");
   }
 
-  /** "Keep my changes" -- refresh the version token and read-only context
-   * (supplier panel, listing state) without touching the merchant's
-   * still-unsaved title/description, so a follow-up Save can succeed
-   * against the current version instead of repeating the same conflict. */
-  async function handleKeepMyChanges() {
-    preserveEditsOnNextLoad.current = true;
+  /** "Review my changes" -- fetches the latest server version and shows it
+   * next to the merchant's still-untouched local fields. Does not touch
+   * any editable field, does not change `savedUpdatedAt`, and does not
+   * save anything: reviewing is inert by itself, exactly so it can never
+   * be the thing that silently lets autosave through. */
+  async function handleOpenReview() {
     const result = await refetch();
-    // Same reasoning as `handleReloadLatest` above -- must not depend on
-    // the `data` reference having changed.
-    if (result.data) setSavedUpdatedAt(result.data.updatedAt);
-    setConflict(false);
+    if (result.data) {
+      setConflictServerSnapshot(result.data);
+      setConflictPhase("reviewing");
+    }
   }
 
-  // Debounced autosave for merchant text fields. Frozen while a conflict
-  // is unresolved (`handleSave` also guards this, but not scheduling the
-  // timer at all avoids a pointless request-then-409 every 1.8s).
+  function handleCancelReview() {
+    setConflictServerSnapshot(null);
+    setConflictPhase("detected");
+  }
+
+  /** The one explicit, deliberate action that overwrites the server's
+   * newer value with the merchant's own -- in full, exactly as typed.
+   * Never a per-field automatic merge: every field in the payload is the
+   * merchant's own current value, chosen wholesale by this one click, not
+   * assembled by combining fields from both versions.
+   *
+   * Uses the version token from the snapshot "Review my changes" fetched,
+   * not `savedUpdatedAt` (which is still the original, now-stale value).
+   * If the row moved again while the review was open, the server rejects
+   * this exactly like any other stale save, and the merchant is returned
+   * to the conflict banner rather than the save silently retrying. */
+  async function handleSaveMyVersionAnyway() {
+    if (!conflictServerSnapshot || updateDraft.isPending) return;
+
+    setFormError(null);
+    setSaveState("saving");
+
+    try {
+      const saved = await updateDraft.mutateAsync(
+        buildSavePayload(conflictServerSnapshot.updatedAt),
+      );
+      setDirty(false);
+      setSaveState("saved");
+      setSavedUpdatedAt(saved.updatedAt);
+      setConflictServerSnapshot(null);
+      setConflictPhase("none");
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.seoScore(productId),
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setConflictServerSnapshot(null);
+        setConflictPhase("detected");
+        setSaveState("error");
+      } else {
+        setSaveState("error");
+        setFormError(err instanceof Error ? err.message : "Save failed.");
+      }
+    }
+  }
+
+  // Debounced autosave for merchant text fields. Frozen for every conflict
+  // phase, not only while the top-level banner is showing -- autosave must
+  // stay off while "Review my changes" or the reload confirmation is open
+  // too, or it could save over a version the merchant hasn't finished
+  // reviewing. (`handleSave` also guards this independently, but not
+  // scheduling the timer at all avoids a pointless request-then-409 every
+  // 1.8s.)
   useEffect(() => {
-    if (!dirty || !data || conflict) return;
+    if (!dirty || !data || isConflicted) return;
     const timer = window.setTimeout(() => {
       void handleSave();
     }, 1800);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave on dirty/conflict only
-  }, [dirty, conflict, title, description, seoTitle, seoDescription, slug, tags]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave on dirty/conflictPhase only
+  }, [dirty, conflictPhase, title, description, seoTitle, seoDescription, slug, tags]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -361,6 +467,42 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.[0] ??
     null;
 
+  // Every editable field where the merchant's local value differs from the
+  // server's latest -- computed fresh on each render from the review
+  // snapshot, never cached, so it can never show a stale comparison.
+  const conflictDiffs = conflictServerSnapshot
+    ? (
+        [
+          ["title", "Title", conflictServerSnapshot.title, title.trim()],
+          ["brand", "Brand", conflictServerSnapshot.brand ?? "", brand.trim()],
+          ["vendor", "Vendor", conflictServerSnapshot.vendor ?? "", vendor.trim()],
+          [
+            "categoryName",
+            "Category",
+            conflictServerSnapshot.categoryName ?? "",
+            categoryName.trim(),
+          ],
+          ["tags", "Tags", (conflictServerSnapshot.tags ?? []).join(", "), tags.trim()],
+          [
+            "description",
+            "Description",
+            conflictServerSnapshot.description ?? "",
+            description.trim(),
+          ],
+          ["seoTitle", "SEO title", conflictServerSnapshot.seoTitle ?? "", seoTitle.trim()],
+          [
+            "seoDescription",
+            "SEO description",
+            conflictServerSnapshot.seoDescription ?? "",
+            seoDescription.trim(),
+          ],
+          ["slug", "URL slug", conflictServerSnapshot.slug ?? "", slug.trim()],
+        ] as const
+      )
+        .filter(([, , serverValue, localValue]) => serverValue !== localValue)
+        .map(([key, label, serverValue, localValue]) => ({ key, label, serverValue, localValue }))
+    : [];
+
   return (
     <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
       <ProductEditorHeader
@@ -415,7 +557,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         </Alert>
       ) : null}
 
-      {conflict ? (
+      {isConflicted ? (
         <Alert
           variant="destructive"
           role="alert"
@@ -424,14 +566,15 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           <AlertDescription className="space-y-3">
             <p>
               This draft was changed elsewhere since you opened it. Saving
-              now would risk overwriting that change, so it was not applied.
+              now would risk overwriting that change, so it was not applied,
+              and autosave is paused until you choose what to do next.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={handleReloadLatest}
+                onClick={handleRequestReload}
                 data-testid="conflict-reload-latest"
               >
                 Reload latest version
@@ -440,21 +583,148 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={handleKeepMyChanges}
-                data-testid="conflict-keep-mine"
+                onClick={() => void handleOpenReview()}
+                data-testid="conflict-review-mine"
               >
-                Keep my changes
+                Review my changes
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Reloading replaces the title and description below with the
-              latest saved version. Keeping your changes leaves what you
-              typed as-is and lets you save again against the current
-              version.
+              Reloading discards what you typed and replaces it with the
+              latest saved version. Reviewing shows both versions side by
+              side before you decide.
             </p>
           </AlertDescription>
         </Alert>
       ) : null}
+
+      <Dialog
+        open={conflictPhase === "reload-confirm"}
+        onOpenChange={(open) => {
+          if (!open) handleCancelReloadConfirm();
+        }}
+      >
+        <DialogContent data-testid="conflict-reload-confirm-dialog">
+          <DialogHeader>
+            <DialogTitle>Discard your changes and reload?</DialogTitle>
+            <DialogDescription>
+              This replaces every field below with the latest saved version.
+              Anything you typed since opening this draft will be lost and
+              cannot be recovered.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleCancelReloadConfirm}
+              data-testid="conflict-reload-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void handleConfirmReload()}
+              data-testid="conflict-reload-confirm"
+            >
+              Discard my changes and reload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={conflictPhase === "reviewing"}
+        onOpenChange={(open) => {
+          if (!open) handleCancelReview();
+        }}
+      >
+        <DialogContent
+          className="max-w-2xl"
+          data-testid="conflict-review-dialog"
+        >
+          <DialogHeader>
+            <DialogTitle>Review the conflicting changes</DialogTitle>
+            <DialogDescription>
+              {conflictDiffs.length > 0
+                ? `${conflictDiffs.length} field${conflictDiffs.length === 1 ? "" : "s"} differ between the latest saved version and what you typed. Nothing is merged automatically.`
+                : "The latest saved version and what you typed are now identical for every field shown here."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div
+            className="max-h-[50vh] space-y-4 overflow-y-auto"
+            aria-live="polite"
+          >
+            {conflictDiffs.map((row) => (
+              <div key={row.key} className="rounded-md border p-3">
+                <p className="text-sm font-semibold">{row.label}</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Latest saved version
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+                      {row.serverValue || (
+                        <span className="italic text-muted-foreground">Empty</span>
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Your unsaved version
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+                      {row.localValue || (
+                        <span className="italic text-muted-foreground">Empty</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <DialogFooter className="sm:flex-col sm:items-stretch sm:space-x-0 sm:space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Saving your version overwrites the latest saved version above
+              with exactly what you typed, field by field, with nothing
+              combined automatically.
+            </p>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancelReview}
+                data-testid="conflict-review-back"
+              >
+                Back
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleRequestReload}
+                data-testid="conflict-review-reload-instead"
+              >
+                Reload latest version instead
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={updateDraft.isPending}
+                onClick={() => void handleSaveMyVersionAnyway()}
+                data-testid="conflict-save-mine-anyway"
+              >
+                {updateDraft.isPending ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : null}
+                Save my version anyway
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {formError ? (
         <Alert variant="destructive">

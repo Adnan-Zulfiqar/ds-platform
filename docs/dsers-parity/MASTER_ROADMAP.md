@@ -14,7 +14,7 @@ unit of risk — import/editor/publish is the spine every later milestone
 | # | Milestone | Depends on | Status |
 |---|---|---|---|
 | M1 | AliExpress Product Import → Editable Draft | — | **Delivered** (this document's sibling: [M1_IMPORT_TO_DRAFTS.md](M1_IMPORT_TO_DRAFTS.md)) |
-| M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
+| M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered, acceptance-fix pass applied 2026-08-13** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
 | M2B–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
 | M3 | Publish-to-Store Hardening & Multi-Store Publish | M1, existing Shopify OAuth | Planned |
 | M4 | Bulk Import & Feed-Based Sourcing | M1 | Planned |
@@ -34,8 +34,8 @@ what remains a documented gap.
 
 ## M2A — Premium Editor Foundation
 
-**Status: Delivered.** See [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) for
-the full report.
+**Status: Delivered, acceptance-fix pass applied 2026-08-13.** See
+[M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) for the full report.
 
 **Scope correction, discovered during M2A's own mandatory pre-implementation
 audit:** M2A was originally framed as "build the safe foundation of the
@@ -54,29 +54,68 @@ edit-gating rule** (a product already published to a channel can no longer be
 edited back through the drafts-only endpoint). Both are hardening on the
 existing `PATCH /drafts/{id}` write path, not a new editor.
 
+**Acceptance-fix pass (2026-08-13):** the initial delivery's version token
+was optional on the drafts path (a request that omitted it fell back to
+unguarded last-write-wins), and its conflict-recovery UX ("Keep my changes")
+silently refreshed the token and left autosave free to overwrite a newer
+change moments later. Both closed — the token is now mandatory on the
+drafts path specifically, and conflict recovery requires an explicit second
+action (confirm-to-reload, or review-then-explicitly-overwrite) before
+anything is discarded or saved. See [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)
+for the full account.
+
 ## M2B–E — Premium Product Editor, remaining scope
 
-Not built by M2A or by the pre-existing editor. Each remains its own future
-milestone:
+**Rebaselined 2026-08-13** against a fresh capability-by-capability audit
+(`FEATURE_MATRIX.md` §3) rather than carried forward — several items below
+replace or narrow what the pre-acceptance-fix version of this document
+scoped, now that each capability's actual state (not its intended state) is
+confirmed with code and test evidence. Nothing here rebuilds SEO, variants,
+pricing, inventory, shipping, or media — all of those are already delivered
+(see §3) and stay untouched by M2B–E.
 
-- Rich text description editing (currently plain sanitized text only).
-- Bulk variant editing — apply a price/SKU rule across every variant at once,
-  rather than one `PATCH` per variant.
-- Image editing beyond reorder/caption (crop, background removal) — likely
-  needs a decision on whether this is client-side or a paid image API, which
-  is a real cost/build trade-off to raise before implementing.
-- AI Studio side-by-side proposal review (`docs/DRAFT_PRODUCT_EDITOR_PLAN.md`
-  Stage 6) — today's AI optimisation applies through a version-activate flow
-  only, no in-editor comparison view.
-- A documented decision on the Drafts-list "variant count" column deferred
-  from M1 (`FEATURE_MATRIX.md` §2): needs a correlated-subquery change to
-  `ProductRepository.list_drafts`/`list_published`, reviewed for the
-  read-performance impact the list schema's docstring explicitly protects
-  against. **Note:** M1's acceptance pass already implemented and shipped
-  this column (`ProductRepository._variant_count_column`) — this bullet was
-  carried over from the pre-M1 draft of this document and is stale; left
-  here only so a future editor of this file sees the correction rather than
-  re-scoping already-delivered work.
+- **M2B — Rich text description editing.** Description is edited as plain
+  sanitized text (a `<textarea>`); no rich editor component exists anywhere
+  in the codebase. Scope: a rich-text or Markdown editor for the existing
+  `description` field, through the existing sanitize-on-save path — the
+  sanitizer already strips executable content, so this is an editor-UI
+  addition, not a new server-side trust boundary.
+- **M2C — Bulk variant editing.** `PATCH /drafts/{id}/variants/{variantId}`
+  is single-variant only; `draft-variants-panel.tsx` has no selection or
+  apply-to-all mechanism. Scope: a bulk price/SKU rule applied across some
+  or all variants in one action, backed by a new bulk endpoint (or a
+  variant-array extension of the existing one) rather than N sequential
+  `PATCH` calls from the client.
+- **M2D — Image editing beyond reorder/caption (crop, background removal).**
+  Confirmed still not built (`draft-media-panel.tsx`'s own docstring: *"File
+  upload / crop land when S3 storage is wired"*). Needs a decision on
+  client-side vs. a paid image-processing API before implementation — a
+  real cost/build trade-off to raise, not to decide unilaterally in this
+  milestone's own scoping.
+- **M2E — Publish-readiness hardening.** New this rebaseline, found during
+  the audit rather than carried over from the original brief: the
+  Publish-readiness score/checklist (`readinessFor()`,
+  `editor-header/readiness.ts`) that gates the "Fix N issues to publish"
+  button is client-side only, with **zero automated test coverage** of its
+  own, and the backend publish path enforces only the currency-mismatch
+  guard — a direct API call bypasses every readiness check the UI shows.
+  Scope: unit tests for `readinessFor()`, Playwright coverage of the
+  Publish-button gating, and a decision on whether any readiness checks
+  (missing images, no variants) should move server-side as an actual publish
+  precondition rather than staying advisory-only.
+- **AI Studio side-by-side proposal review — deferred, not yet its own
+  numbered milestone.** The "AI Studio" tab exists and is reachable but its
+  body is a placeholder (*"Use Optimize with AI from More actions for now.
+  Side-by-side proposal studio is Stage 6"*, `draft-product-editor.tsx`).
+  The underlying AI optimization it points at (`ProductOptimizationService`
+  + version-activate flow) is already implemented and verified — this item
+  is specifically the missing in-editor comparison view, not the AI feature
+  itself. Left unnumbered pending a decision on where it sits relative to
+  M2B–E's priority order.
+- ~~A documented decision on the Drafts-list "variant count" column~~ —
+  **delivered by M1's acceptance pass**
+  (`ProductRepository._variant_count_column`); removed from this list rather
+  than re-scoping already-shipped work.
 
 ## M3 — Publish-to-Store Hardening & Multi-Store Publish
 
@@ -155,6 +194,6 @@ scoring, which is a materially different feature.
 
 Before starting any milestone after M1: re-run the audit method described in
 `FEATURE_MATRIX.md`'s closing section against the *then-current* repository —
-this roadmap is a snapshot from 2026-08-12 and prior milestones may have
-changed what's already built. Do not assume this document stays accurate
-without re-verification.
+this roadmap was last rebaselined 2026-08-13 (M2A acceptance-fix pass) and
+prior milestones may have changed what's already built since. Do not assume
+this document stays accurate without re-verification.

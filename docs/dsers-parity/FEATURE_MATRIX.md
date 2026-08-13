@@ -14,7 +14,8 @@ the file(s) that are the evidence. Status values:
 - **Planned milestone** — scoped in [MASTER_ROADMAP.md](MASTER_ROADMAP.md),
   not started.
 
-Audit date: 2026-08-12 (M1); §3 corrected 2026-08-12 (M2A). Branch:
+Audit date: 2026-08-12 (M1); §3 corrected 2026-08-12 (M2A); §3 rebaselined
+2026-08-13 (M2A acceptance-fix pass, capability-by-capability). Branch:
 `feature/dsers-parity-m2a-editor-foundation`.
 
 ---
@@ -60,18 +61,37 @@ dsers-parity work — and this matrix simply had not been re-audited against
 it. See [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) for the full account and
 what M2A actually delivered as a result (hardening, not a new editor).
 
+**Rebaseline method (2026-08-13):** each row below was re-checked against
+the running code and its test suite individually — not carried forward from
+the previous table — using this document's own status taxonomy: *Implemented
+and verified* (code exists, automated test coverage exercises it),
+*Implemented but incomplete* (works for the common case, a specific gap is
+documented), *Present but unverified* (code exists, no automated test
+exercises it directly), *Missing*, *Deferred* (explicitly scoped to a named
+future stage, not started), *Blocked* (external constraint).
+
 | Capability | Status | Evidence |
 |---|---|---|
-| Premium editor shell (sticky header, tabs, Draft Preview, save-state indicator) | Existing and verified | `frontend/components/drafts/draft-product-editor.tsx`, `editor-header/*`, `docs/PREMIUM_PRODUCT_EDITOR_UI.md` |
-| Title / plain-sanitized-description editing | Existing and verified | `PATCH /drafts/{id}` → `ProductService.update_product`, `ProductUpdateRequest` |
-| Optimistic concurrency on draft saves (reject a stale write, don't silently overwrite) | Existing and verified (added 2026-08-12, M2A) | `ProductRepository.update_if_unmodified_since` (compare-and-swap on `updated_at`), `TestOptimisticConcurrency` — see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) |
-| Published product not editable via the drafts-only endpoint | Existing and verified (added 2026-08-12, M2A) | `ProductService.update_draft` publish-state gate, `TestPublishedDraftIsNotEditableHere` |
-| Rich text/markdown description editor | Missing | Description is edited as plain sanitized text; no rich editor component |
-| Bulk variant editing (price/SKU rules across all variants at once) | Missing | `PATCH /drafts/{id}/variants/{variantId}` is single-variant only |
-| Image editing (crop/watermark-removal) | Missing | Images can be reordered and captioned only (`useReorderDraftImages`, `useUpdateDraftImage`) |
-| AI title/description optimisation | Existing and verified | `ProductOptimizationService`, `StubProvider` (Phase 9) — output is clearly-synthetic placeholder text, not a real model, documented in `docs/PHASE_9_PLAN.md` |
-| SEO fields (meta title/description, tags, handle) | Existing and verified | `ProductRead.seo_title/seo_description/search_topics/slug/tags` — editable via `draft-seo-panel.tsx` |
-| Pricing / inventory / shipping workspace | Existing and verified | `draft-pricing-panel.tsx`, `draft-inventory-panel.tsx`, `draft-shipping-panel.tsx`, migrations `0017`–`0022` |
+| Overview (title, brand, vendor, category, tags) | Implemented and verified | `draft-product-editor.tsx` Overview tab; `PATCH /drafts/{id}`; `test_draft_editor.py`, `test_product_update.py` |
+| Description editing (plain sanitized text) | Implemented and verified | Same write path; sanitizer + persistence covered in `test_draft_editor.py::test_patch_draft_persists_title_and_description` (script-tag stripping asserted inline) |
+| Rich text or Markdown description editor | Missing | No rich-text/Markdown editor component anywhere in `frontend/`; description is a plain `<textarea>` (`draft-product-editor.tsx`) sending sanitized HTML-stripped text |
+| Media preview, reordering, captions | Implemented and verified | `draft-media-panel.tsx` (reorder, featured, alt text, add-by-URL, remove); `POST/PATCH/DELETE /drafts/{id}/images`, `PATCH /drafts/{id}/images/reorder`; `test_draft_media_variants.py` |
+| Image crop / watermark | Missing | `draft-media-panel.tsx`'s own docstring: *"File upload / crop land when S3 storage is wired; URLs keep Stage 4 unblocked."* No crop/watermark UI or endpoint exists |
+| Variants (single-variant edit) | Implemented and verified | `draft-variants-panel.tsx`; `PATCH /drafts/{id}/variants/{variantId}`; covered in `test_draft_media_variants.py` and this pass's `TestNoAlternateDraftRouteBypassesTheGuard` |
+| Bulk variant editing (a price/SKU rule applied across every variant at once) | Missing | No "apply to all"/bulk-selection code in `draft-variants-panel.tsx` (checked directly, zero matches); the write path is one `PATCH` per variant |
+| Pricing and margin | Implemented and verified | `draft-pricing-panel.tsx`; `PricingEngine`; `GET/POST /drafts/{id}/pricing[/preview,/apply]`; extensive M23/M24A localized-pricing test suite (`test_pricing_*`) |
+| Inventory | Implemented and verified | `draft-inventory-panel.tsx`; `app/api/v1/inventory/router.py` (`/sync`, `/sync-runs`, `/changes`) |
+| Shipping / customs | Implemented and verified | `draft-shipping-panel.tsx`; shipping/customs fields on `Product` (migrations `0017`–`0022`), editable via the same `PATCH /drafts/{id}` path |
+| SEO (meta title/description, tags, handle, score) | Implemented and verified | `draft-seo-panel.tsx`; `ProductRead.seo_title/seo_description/search_topics/slug`; `seo_score.py` backend-computed score; `GET /drafts/{id}/seo-score` |
+| Tags | Implemented and verified | `tags` field on `ProductUpdateRequest`/`buildSavePayload`, comma-separated input on the Overview tab, split/trimmed both directions |
+| AI Studio (side-by-side AI proposal review) | Deferred | The "AI Studio" tab exists and is reachable, but its own body reads *"Use Optimize with AI from More actions for now. Side-by-side proposal studio is Stage 6"* (`draft-product-editor.tsx`) — a placeholder pointing at the existing flow below, not a built feature |
+| AI title/description optimisation (via version history, not AI Studio) | Implemented and verified | `ProductOptimizationService`, `StubProvider` (Phase 9) — output is clearly-synthetic placeholder text, not a real model, documented in `docs/PHASE_9_PLAN.md`; applies through a version-activate flow, separate from the deferred AI Studio tab above |
+| Validation (schema-level: unknown fields, blank title, malformed/missing version token) | Implemented and verified | `extra="forbid"` on the shared schema; `_reject_blank_when_provided`; this pass's mandatory-`expectedUpdatedAt` 422 — all covered in `test_draft_editor_concurrency.py` |
+| Publish readiness (score, issue checklist, "Fix N issues" gate) | Implemented but incomplete | `readinessFor()` (`editor-header/readiness.ts`) computes a score/issue list purely client-side and does disable the Publish button while issues remain — but **no automated test exercises `readinessFor()` or the readiness UI at all** (checked: zero matches for `readiness`/`readinessFor` across `tests/`), and the backend publish path (`ShopifySyncService.publish_product`) enforces only the currency-mismatch guard, not readiness — a direct API call could publish a product the UI would block |
+| Optimistic concurrency on draft saves | Implemented and verified | `update_if_unmodified_since`; **mandatory** `expectedUpdatedAt` on the drafts path as of this acceptance-fix pass (previously optional); `TestOptimisticConcurrency`, `TestExpectedUpdatedAtIsMandatory` — see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) |
+| Safe conflict resolution (two-editor race) | Implemented and verified | Reload-with-confirmation and Review-with-explicit-overwrite, replacing the prior silent-refresh "Keep my changes" — 16 Playwright scenarios, both `chromium` and `mobile-chrome`; see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md) |
+| Published product not editable via the drafts-only endpoint | Implemented and verified | `ProductService.update_draft` publish-state gate; `TestPublishedDraftIsNotEditableHere` |
+| Premium editor shell (sticky header, tabs, Draft Preview, save-state indicator) | Implemented and verified | `draft-product-editor.tsx`, `editor-header/*`, `docs/PREMIUM_PRODUCT_EDITOR_UI.md` |
 
 ## 4. Supplier / variant mapping
 

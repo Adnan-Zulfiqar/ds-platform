@@ -40,6 +40,7 @@ export function MobileEditorActionBar({
           className="min-h-11 flex-1"
           disabled={saveDisabled || saving}
           onClick={onSave}
+          data-testid="save-draft"
         >
           {saving ? (
             <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />

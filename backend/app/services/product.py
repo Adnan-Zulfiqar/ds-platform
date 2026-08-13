@@ -127,15 +127,28 @@ class ProductService(BaseService):
         *,
         expected_updated_at: datetime | None = None,
     ) -> Product:
-        """Save merchant edits from the Drafts editor (M2A).
+        """Save merchant edits from the Drafts editor (M2A / M2A acceptance).
 
-        Same write path as :meth:`update_product`, plus the one rule
-        specific to this surface: a product that has already been published
-        to a channel is edited from the Products detail view, not through
-        this drafts-only endpoint — publishing is what promotes a row out of
-        Drafts in the first place (``ProductRepository._synced_listing_exists``),
-        so editing it back through ``/drafts/{id}`` would be editing a
-        "draft" that no longer is one.
+        Same write path as :meth:`update_product`, plus two rules specific
+        to this surface:
+
+        1. **`expected_updated_at` is mandatory here** (acceptance-pass
+           hardening — it stayed optional on the shared schema, but this
+           method is the only caller that may omit it, and this method no
+           longer allows that). A draft is edited by exactly the kind of
+           multi-tab, walk-away-and-come-back workflow optimistic
+           concurrency exists for; letting a save silently skip the check
+           because a client forgot to send the field would defeat the whole
+           M2A guarantee for the one surface it was built for. Checked
+           before any database lookup, so the response does not depend on
+           whether the id exists or belongs to this tenant — a missing
+           token gets the identical 422 either way, leaking nothing.
+        2. A product that has already been published to a channel is
+           edited from the Products detail view, not through this
+           drafts-only endpoint — publishing is what promotes a row out of
+           Drafts in the first place (``ProductRepository._synced_listing_exists``),
+           so editing it back through ``/drafts/{id}`` would be editing a
+           "draft" that no longer is one.
 
         A missing or foreign ``product_id`` is deliberately **not**
         distinguished here — it falls through to ``update_product``'s own
@@ -156,7 +169,31 @@ class ProductService(BaseService):
         ``product_id``, surfaced in Import History, never as an editable
         draft. Inventing a gate for a state this data model cannot produce
         would be speculative, not defensive.
+
+        **`/products/{id}`'s own PATCH deliberately keeps the token
+        optional and does not gate on publication.** Audited (M2A
+        acceptance pass) rather than assumed: no frontend code calls it —
+        `frontend/services/products.ts` only ever `GET`s a product by id —
+        and it predates M2A as a general "edit any imported product"
+        endpoint (`ProductService`'s own module docstring: "merchant edits
+        to an already-imported product", not "already-published"), already
+        exercised by `test_product_update.py` against freshly-imported
+        (unpublished) products as its normal case. Restricting it to
+        published-only products would break that established, intentional,
+        pre-M2A behaviour to close a path that grants no privilege a caller
+        doesn't already have — reaching either endpoint requires the same
+        tenant-scoped admin authentication. Left unchanged; recorded here
+        as an audited, deliberate decision rather than an oversight.
         """
+        if expected_updated_at is None:
+            raise ValidationError(
+                "expectedUpdatedAt is required to save a draft. Reload the "
+                "draft to get its current version, then save again — this "
+                "is what lets the server tell a stale save apart from a "
+                "current one instead of silently overwriting a newer "
+                "change.",
+            )
+
         found = await self.products.get_by_id_with_publication(product_id)
         if found is not None:
             _, is_published = found

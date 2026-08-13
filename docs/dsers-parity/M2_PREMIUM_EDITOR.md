@@ -1,7 +1,207 @@
 # M2A — Premium Product Editor Foundation
 
-Status: **Delivered.** Branch: `feature/dsers-parity-m2a-editor-foundation`.
-Audit date: 2026-08-12.
+Status: **Delivered, acceptance-fix pass applied.** Branch:
+`feature/dsers-parity-m2a-editor-foundation`. Audit date: 2026-08-12.
+Acceptance-fix pass: 2026-08-13.
+
+## Acceptance-fix pass (2026-08-13)
+
+The initial M2A delivery (below) had two acceptance gaps, closed in this
+pass without touching anything else about the milestone's scope:
+
+### Gap 1 — `expectedUpdatedAt` was bypassable
+
+The original mechanism made the version token **optional**, so a draft
+editor save that omitted it fell back to unconditional last-write-wins —
+exactly the hazard optimistic concurrency exists to prevent, just reachable
+by leaving a field off the request instead of by a race.
+
+**Fix:** `ProductService.update_draft` now raises `ValidationError` (422,
+`"expectedUpdatedAt is required to save a draft..."`) before doing anything
+else — checked ahead of the tenant/existence lookup, so the response is
+identical whether the draft exists, belongs to another tenant, or doesn't
+exist at all (no existence leak via a different status code for a missing
+token). `PATCH /api/v1/drafts/{id}` is the only endpoint this is mandatory
+on; every draft-editing sub-route (`/images`, `/images/reorder`,
+`/images/{id}`, `/variants/{id}`) goes through `ProductService`'s other
+methods, none of which touch `title`/`description`/etc., so there is no
+alternate route that can smuggle a title change past the guard — regression
+tests assert this explicitly (`TestNoAlternateDraftRouteBypassesTheGuard`).
+
+**Deliberate scope decision:** `PATCH /products/{id}` (the general,
+pre-existing "edit any imported product" endpoint) still leaves
+`expectedUpdatedAt` optional. This was audited, not overlooked: zero
+frontend callers exist (`frontend/services/products.ts` only ever `GET`s
+that route), the endpoint's own docstring and its pre-existing test suite
+(`test_product_update.py`) establish this was intentional, pre-M2A design,
+and restricting it would break established, tested behaviour to close a
+"bypass" that grants no privilege escalation — the same tenant-scoped admin
+auth is required either way, and the acceptance brief's own scope was the
+draft editor path specifically.
+
+### Gap 2 — the prior conflict-resolution UX could still let autosave overwrite
+
+The original "Keep my changes" recovery action silently refreshed the
+version token and left autosave free to fire again immediately — a
+follow-up save (autosave or manual) could land moments later with no review
+of what it was overwriting, which is not meaningfully different from the
+silent-overwrite bug optimistic concurrency exists to prevent.
+
+**Fix — replaced with two explicit, safe paths, neither of which resumes
+autosave or saves anything without a second, separate merchant action:**
+
+- **Reload latest version** — now two steps, not one: clicking it opens a
+  confirmation dialog (`conflict-reload-confirm-dialog`) that states local
+  edits will be discarded; only the explicit "Discard my changes and
+  reload" button in that dialog actually replaces the form with the
+  server's current values. Cancelling leaves the local edit and the
+  conflict banner exactly as they were.
+- **Review my changes** (replaces "Keep my changes") — fetches the latest
+  server version into a *separate* `conflictServerSnapshot`, shown side by
+  side with the merchant's still-untouched local fields
+  (`conflict-review-dialog`), listing only the fields that actually differ.
+  Nothing is auto-merged and no field is auto-selected. A second, distinct
+  action — **"Save my version anyway"** — is required to overwrite the
+  server's version wholesale with the merchant's; it asserts against the
+  *reviewed* snapshot's token, so if the row moved again while the review
+  was open, the save is rejected with a fresh 409 and the merchant returns
+  to the conflict banner rather than the save silently retrying.
+- Autosave's debounce effect now checks `isConflicted` for **every** phase
+  (`detected` / `reload-confirm` / `reviewing`), not only whether the top
+  banner is showing — it stays frozen through the entire resolution flow,
+  confirmed by a dedicated regression test that keeps typing during an open
+  conflict and asserts no second `PATCH` fires.
+
+State machine: `conflictPhase: "none" | "detected" | "reload-confirm" |
+"reviewing"` replaces the earlier boolean `conflict` flag
+(`draft-product-editor.tsx`).
+
+### Testing added this pass
+
+**Backend** (`test_draft_editor_concurrency.py`, extended) — missing token
+(422), malformed token (422), the same 404 for a foreign draft regardless of
+token, a repeated save with the same stale token rejected every time (not
+just once), and the no-alternate-route-bypass suite above. Combined
+concurrency-adjacent suite: **51 passed**.
+
+**Frontend** (`draft-editor-concurrency.spec.ts`, rewritten) — 16 scenarios
+covering every required case: successful save, 409 shows Reload+Review (not
+the old Keep-mine), no autosave after 409, Reload requires confirmation and
+Cancel preserves state, confirmed Reload discards+adopts the server value,
+Review shows both versions without touching local fields, Back from Review
+returns to the banner untouched, "Save my version anyway" performs the
+explicit overwrite, a second conflict during Review returns to the banner
+(not a silent save), reaching Reload from inside Review, a double-click
+Save guard, `role=alert` announcement, the Radix dialog's accessible
+title/description, a keyboard-only resolution path, Escape closing the
+review dialog, and no console errors through the full cycle. Final verified
+result, both projects in one invocation (`--workers=1`) once the
+environment issues below were fixed: **32/32 passing** (16 `chromium` + 16
+`mobile-chrome`) — see "Environment characteristics" below for why
+`--workers=1` and the full diagnostic history, and the final acceptance
+report for the complete re-run log.
+
+### Environment characteristics found and worked around (not app defects)
+
+Diagnosed with the same discipline as any other failure — reproduced,
+re-run individually, root-caused before deciding how to respond — three
+separate issues surfaced purely from *how this test file exercises a real
+backend*, none of which are defects in the app:
+
+1. **Login throttle.** The file originally logged in fresh per test;
+   16+ real logins to one account within ~2 minutes tripped this repo's own
+   `SECURITY_LOGIN_MAX_ATTEMPTS=5`-per-300s control. Fixed by sharing one
+   authenticated session across the file (`test.describe.configure({ mode:
+   "serial" })`), which is also the more realistic test design, not a
+   workaround.
+2. **API rate limit.** A hard `page.goto()` before every test refetches the
+   draft, SEO score, listings, pricing, and version history from a cold
+   cache; 16 of those back to back cleared this backend's own per-tenant
+   `security.rate_limit_requests` (100/60s), surfaced on screen as "Rate
+   limit exceeded. Please retry later." Neither the login throttle nor the
+   rate limit was loosened for test convenience — both are legitimate
+   controls working as designed against a request pattern no real merchant
+   produces. Fixed by pacing the test file itself (a deliberate gap between
+   tests spreads the same request volume across more than one fixed 60s
+   window).
+3. **Chromium instability under sustained/parallel use.** On this
+   development machine specifically, a single browser tab surviving all 16
+   hard reloads — and, separately, two Playwright projects (`chromium`,
+   `mobile-chrome`) launching browsers in parallel — intermittently crashed
+   the renderer process outright (`browser.newPage: Test ended`), at a
+   different test each time, with the isolated app processes' PIDs
+   unaffected throughout every occurrence. Mitigated with proactive browser
+   rotation (a fresh, independently-launched Chromium instance every 5
+   tests) and reactive recovery (a crashed session is replaced with a new
+   one, not retried in place) — and, pragmatically, by running each project
+   serially rather than relying on the two-project default, which is also
+   documented as this file's supported invocation going forward.
+
+**A fourth issue, this one self-inflicted rather than found — stated plainly
+per the honesty requirement to correct one's own errors, not just the
+app's:** running `npm run build` (for the Gap 3 frontend quality gate)
+against the same `.next` directory an already-running `next dev` server
+(the isolated verification frontend) was using corrupted that server's
+static-asset serving for every route not already warm in its in-memory
+module cache — `/login` and `/register` (statically prerendered) started
+404ing on every JS chunk with an HTML body instead, silently breaking all
+client-side interactivity there, while `/drafts/{id}` (already hit
+repeatedly, and dynamically rendered) kept working, which is why this went
+unnoticed through all of Gap 1/Gap 2's own verification. Manifested during
+the Gap 3 full-suite regression pass as `auth.spec.ts` failing every test
+requiring a client-side validation message (11/19), all with the exact same
+signature. Root-caused by inspecting the browser console directly (not by
+guessing) rather than accepted as "pre-existing" — an earlier draft of this
+report incorrectly concluded exactly that before this was found, and is
+corrected here rather than silently fixed. **Fix:** stop the frontend
+process, delete `.next`, restart `next dev` clean. A related, separately
+self-inflicted issue surfaced at the same time: restarting the isolated
+*backend* (see item 2's follow-up below) without re-specifying
+`CORS_ORIGINS` dropped it back to the framework default
+(`http://localhost:3000`, `http://localhost`), which does not include
+`http://127.0.0.1:3010` — every authenticated request failed as a CORS
+preflight rejection until the restart was redone with `CORS_ORIGINS`
+explicitly set. Re-verified clean afterward: `auth.spec.ts` **19/19**.
+
+**Gap 3 addendum on item 2 (API rate limit):** for the *full* Playwright
+suite (all 12 spec files, not just this one), pacing alone was not the
+right fix — the project's own CI config (`.github/workflows/ci.yml`,
+`frontend-e2e` job) already documents and uses
+`SECURITY_RATE_LIMIT_REQUESTS=1000` specifically for full-suite e2e runs,
+rate limiting itself left **enabled**. That is not a security control being
+loosened for convenience; it is this repository's own established,
+documented tuning for exactly this scenario, applied to the isolated
+backend the same way CI already applies it. The per-file pacing this file
+adds stays in place regardless (harmless overhead under the higher limit,
+and still correct if it is ever run against the production-tuned default).
+
+**Two more self-inflicted config gaps found restarting the backend for the
+rate-limit fix, same pattern as CORS above:** `SECURITY_ENCRYPTION_KEYS`
+(credential-at-rest encryption) and `SHOPIFY_FRONTEND_RETURN_URL` /
+`ALIEXPRESS_FRONTEND_RETURN_URL` (where the backend redirects the browser
+after an OAuth-style callback) were also present on the isolated backend's
+original process from an earlier session and were not carried over on
+restart. The missing encryption key surfaced as `integrations.spec.ts`
+failing with `encryption_not_configured`; the missing return-URL setting is
+more serious — it defaults to `http://localhost:3000/settings/integrations`
+(this repository's own production-default convenience default), and one
+`shopify-oauth.spec.ts` test genuinely navigated the browser to
+`localhost:3000` — the protected, must-not-touch original process — as a
+result, before this was caught and fixed (confirmed via `curl`, not another
+navigation, that the redirect now correctly targets `127.0.0.1:3010`
+before re-running that test). Both fixed using the same CI-documented test
+values (`.github/workflows/ci.yml`, `frontend-e2e` job) rather than
+improvised ones. **Remaining, not fixed:** `ALIEXPRESS_APP_KEY` /
+`ALIEXPRESS_APP_SECRET` and `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET` — real
+third-party OAuth app credentials, explicitly documented as blank-by-default
+in `.env.example` ("Set the real values in `.env`, which is gitignored.
+Never commit them.") and, notably, **not set even by this repository's own
+CI `frontend-e2e` job** — this isolated worktree's backend has never had
+them configured. Seven of the eight failures in the full-suite run below
+trace to this one pre-existing gap (AliExpress/Shopify *connect* flows
+specifically); fabricating placeholder values for real third-party app
+credentials would misrepresent the environment's integration-readiness, so
+this was left as a documented gap rather than "fixed."
 
 ## Scope, as briefed vs. as actually needed
 
@@ -83,11 +283,15 @@ dedicated version/revision column, M2A reuses it as the version token:
   statement. If zero rows match, the row moved since the caller last saw it.
 - `ProductService.update_product` treats a zero-row result as a
   `ConflictError` (409), never as a silent no-op or a silent overwrite.
-- `expectedUpdatedAt` is **optional** on the shared schema: a caller that
-  omits it (any pre-M2A integration, or `/products/{id}` callers that
-  haven't adopted it) keeps the exact previous last-write-wins behaviour.
-  The premium draft editor always sends it, so its own save path is fully
-  protected.
+- `expectedUpdatedAt` is **optional on the shared schema**, so
+  `/products/{id}` callers that haven't adopted it keep the exact previous
+  last-write-wins behaviour — but **mandatory specifically on the draft
+  editor's own save path** as of the acceptance-fix pass (see above):
+  `ProductService.update_draft` rejects a request that omits it with a 422
+  before it can fall back to unguarded last-write-wins. The premium draft
+  editor's frontend always sends it regardless, so this closes what had
+  been a latent bypass (omit the field, get the old unguarded behaviour)
+  rather than changing its own normal save path's behaviour.
 
 **No-op protection.** Before any write is attempted,
 `changes` is diffed against the currently-stored row
@@ -113,21 +317,21 @@ anywhere; see Testing below for how the test itself required a second fix.
 server-confirmed version) and sends it on every save. On a 409:
 
 - The generic `formError` alert is **not** shown — a conflict gets its own
-  banner (`data-testid="draft-conflict-banner"`), because "reload or keep
+  banner (`data-testid="draft-conflict-banner"`), because "reload or review
   your text" is a different recovery action than "fix a field and retry."
-- **"Reload latest version"** discards local edits and adopts the server's
-  current values (reuses the existing load-effect that already resets every
-  field from a fresh fetch).
-- **"Keep my changes"** refetches the current version token and read-only
-  supplier context *without* touching the merchant's still-unsaved
-  title/description (a `preserveEditsOnNextLoad` ref gates the one load
-  effect that would otherwise overwrite them), so a follow-up save can
-  succeed against the current version instead of repeating the same
-  conflict.
-- Autosave is frozen while a conflict is showing (no repeated request-then-409
-  every 1.8s), and `handleSave` itself guards against firing a second
-  concurrent request while one is already in flight or a conflict is
-  unresolved.
+- **As of the acceptance-fix pass** (superseding the description that
+  originally followed here — see "Acceptance-fix pass" above for the full
+  account): **Reload latest version** now requires an explicit second
+  confirmation before discarding local edits, and **Review my changes**
+  (replacing "Keep my changes") shows the server's version and the
+  merchant's version side by side and requires its own explicit "Save my
+  version anyway" action before overwriting anything. Neither path silently
+  refreshes the version token and leaves autosave free to fire again — that
+  was the acceptance gap this pass closed.
+- Autosave is frozen for every phase of conflict resolution, not only while
+  the top banner is showing, and `handleSave` itself guards against firing
+  a second concurrent request while one is already in flight or a conflict
+  is unresolved.
 - Merging is never attempted automatically. Concurrency is enforced entirely
   by the guarded database statement, not by any frontend state — the
   frontend only decides what to show, never what to accept.
@@ -189,16 +393,19 @@ the `supplier_*` twins.
 ## Save contract
 
 - `PATCH /api/v1/drafts/{id}` — PATCH semantics (`exclude_unset`), admin-role
-  required, tenant-scoped, publish-state gated, optionally version-gated via
-  `expectedUpdatedAt`.
+  required, tenant-scoped, publish-state gated, and — as of the
+  acceptance-fix pass — **`expectedUpdatedAt` is mandatory**, checked before
+  any lookup.
 - Success: `200` with the full updated `ProductDetailRead`, including the
   new `updatedAt` to use as the next save's version token.
-- Conflict (stale version): `409`, standard error envelope
+- Missing or malformed `expectedUpdatedAt`: `422` (acceptance-fix pass).
+- Conflict (stale version, or a second conflict landing during "Review my
+  changes"): `409`, standard error envelope
   (`code`/`message`/`details`/`requestId`), no partial write.
 - Already published: `409`, same envelope, distinct message.
-- Cross-tenant / nonexistent: `404` (checked first, so a stale-version
-  request against a foreign draft cannot leak existence via a different
-  status than a fresh one would get).
+- Cross-tenant / nonexistent: `404` (checked first, so a stale-version or
+  missing-token request against a foreign draft cannot leak existence via a
+  different status than a fresh one would get).
 - Unknown/unapproved field: `422` (`extra="forbid"` on the shared schema —
   unchanged, pre-existing).
 - Whitespace-only title: `422` — found, during this milestone's audit, to
@@ -236,23 +443,29 @@ timestamps). Fixed by simulating the concurrent write as a direct row
 time the test harness cannot provide. Documented in both affected test
 files so a future reader does not "fix" it back to the broken form.
 
-Full backend suite: **984 passed** (968 at the verified M1-integrated
-baseline + these 16; zero regressions).
+Full backend suite (original M2A delivery): **984 passed** (968 at the
+verified M1-integrated baseline + these 16; zero regressions). **Full
+backend suite, re-run after the acceptance-fix pass: 991 passed** (see
+"Acceptance-fix pass" above for the pass's own added tests, and the final
+acceptance report for the complete regression run).
 
-**Frontend** (`frontend/tests/e2e/draft-editor-concurrency.spec.ts`, new) —
+**Frontend, original M2A delivery** (`draft-editor-concurrency.spec.ts`) —
 successful save clears unsaved state; a mocked 409 shows the dedicated
-conflict banner (not the generic error alert) with both recovery actions;
-"Reload latest version" discards local edits and adopts the server value;
-"Keep my changes" preserves the unsaved title while dismissing the
-conflict; a double-click on Save fires exactly one request; no console
-errors through the save/conflict/reload cycle. These mock only the specific
-`PATCH /drafts/{id}` response inside a real authenticated session (the same
-approach `import-history.spec.ts` established for M1's duplicate-warning
-tests) — a genuine two-editor race was additionally exercised manually
-against real, separate HTTP requests (see Live verification below), since a
-real race needs two actually-separate transactions, which this specific
-mocking approach does not need and a shared test-fixture session cannot
-provide (see the backend note above).
+conflict banner (not the generic error alert); "Reload latest version"
+discards local edits and adopts the server value; "Keep my changes"
+preserves the unsaved title while dismissing the conflict; a double-click
+on Save fires exactly one request; no console errors through the
+save/conflict/reload cycle. **Superseded by the acceptance-fix pass** — see
+"Testing added this pass" above for the current 16-scenario suite, which
+replaces "Keep my changes" coverage with Review/Reload-confirmation
+coverage matching the redesigned UX. Both the original and current suites
+mock only the specific `PATCH /drafts/{id}` response inside a real
+authenticated session (the same approach `import-history.spec.ts`
+established for M1's duplicate-warning tests) — a genuine two-editor race
+was additionally exercised manually against real, separate HTTP requests
+(see Live verification below), since a real race needs two actually-separate
+transactions, which this specific mocking approach does not need and a
+shared test-fixture session cannot provide (see the backend note above).
 
 ## Live verification
 

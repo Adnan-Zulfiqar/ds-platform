@@ -114,8 +114,10 @@ async def update_draft(
 
     Draft-specific, unlike the plain ``ProductService.update_product`` the
     general ``/products/{id}`` PATCH uses: blocks editing a product that has
-    already been published to a channel, and enforces optimistic
-    concurrency when the caller supplies ``expectedUpdatedAt``.
+    already been published to a channel, and **requires** ``expectedUpdatedAt``
+    (acceptance-pass hardening — 422 if omitted, see
+    ``ProductService.update_draft``'s docstring for why this is mandatory
+    here specifically and not on the shared schema).
     """
     changes = payload.model_dump(exclude_unset=True)
     expected_updated_at = changes.pop("expected_updated_at", None)

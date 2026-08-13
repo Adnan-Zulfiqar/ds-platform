@@ -1,15 +1,19 @@
 """M2A — optimistic concurrency and edit-gating for the draft editor.
 
-Covers the two write-path guarantees ``ProductService.update_draft`` adds on
-top of the pre-existing ``PATCH /drafts/{id}`` (`test_draft_editor.py`):
+Covers the write-path guarantees ``ProductService.update_draft`` adds on top
+of the pre-existing ``PATCH /drafts/{id}`` (`test_draft_editor.py`):
 
-1. A stale save (the row changed since the caller loaded it) is rejected
-   with a 409, never silently applied — ``ProductRepository.update_if_unmodified_since``.
+1. ``expectedUpdatedAt`` is **mandatory** for this endpoint (M2A acceptance
+   pass) -- missing entirely, 422; malformed, 422 (Pydantic's own datetime
+   parsing); present but stale, 409, and the write never lands.
 2. A product that has already been published to a channel cannot be edited
    back through this drafts-only endpoint.
 
 Also proves the M1-era supplier-snapshot separation still holds through the
-new write path, and that a no-op save neither writes nor moves ``updatedAt``.
+hardened write path, that a no-op save neither writes nor moves
+``updatedAt``, and that none of the other draft-editing routes (images,
+variants) provide a way to change title/description without going through
+the guarded path.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import set_tenant_id
 from app.core.tokens import create_access_token
-from app.models.product import Product, ProductSource, ProductStatus
+from app.models.product import Product, ProductImage, ProductSource, ProductStatus, ProductVariant
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform
 from tests.integration.test_products import auth_header, register
@@ -77,6 +81,65 @@ async def _publish(db_session: AsyncSession, product: Product) -> None:
     )
     db_session.add(listing)
     await db_session.flush()
+
+
+class TestExpectedUpdatedAtIsMandatory:
+    """M2A acceptance pass: the earlier milestone left `expectedUpdatedAt`
+    optional even for the draft editor, so a caller that forgot to send it
+    got silent last-write-wins instead of protection. Missing/malformed
+    tokens are now rejected outright."""
+
+    async def test_missing_token_is_rejected_with_422(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, product = await _seed(client, db_session)
+
+        response = await client.patch(
+            f"{DRAFTS_URL}/{product.id}", headers=headers, json={"title": "No Token Sent"}
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "validation_error"
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title != "No Token Sent", "a rejected request must never partially apply"
+
+    async def test_malformed_token_is_rejected_with_422(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Not a business-rule rejection -- Pydantic's own `datetime` field
+        parsing rejects a non-ISO-8601 string before the handler body ever
+        runs. Verified directly rather than assumed from the schema."""
+        headers, product = await _seed(client, db_session)
+
+        response = await client.patch(
+            f"{DRAFTS_URL}/{product.id}",
+            headers=headers,
+            json={"title": "No Token Sent", "expectedUpdatedAt": "not-a-real-timestamp"},
+        )
+        assert response.status_code == 422, response.text
+
+    async def test_missing_token_gives_the_same_404_for_a_foreign_draft(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """The missing-token check must not depend on whether the id exists
+        or belongs to this tenant -- otherwise the response shape itself
+        would leak which is true. Both a real, foreign draft and a random
+        id get the identical 422 for a missing token."""
+        _, product = await _seed(client, db_session)
+        other = await register(client)
+        other_headers = auth_header(other)
+
+        foreign = await client.patch(
+            f"{DRAFTS_URL}/{product.id}", headers=other_headers, json={"title": "x"}
+        )
+        random_id = await client.patch(
+            f"{DRAFTS_URL}/{uuid.uuid4()}", headers=other_headers, json={"title": "x"}
+        )
+        assert foreign.status_code == 422, foreign.text
+        assert random_id.status_code == 422, random_id.text
+        assert foreign.json()["code"] == random_id.json()["code"]
 
 
 class TestOptimisticConcurrency:
@@ -146,20 +209,39 @@ class TestOptimisticConcurrency:
             "Editor B's stale save must never have been applied"
         )
 
-    async def test_omitting_expected_updated_at_keeps_last_write_wins(
+    async def test_repeated_save_with_the_same_stale_token_is_rejected_every_time(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
-        """Backward compatibility: a caller that does not yet send a version
-        token gets the exact pre-M2A behaviour."""
+        """A client that retries blindly with the same old token (rather
+        than reloading) must be rejected every single time, not just once
+        -- the guard is a database predicate re-evaluated fresh on each
+        request, not a one-shot flag."""
         headers, product = await _seed(client, db_session)
+        stale = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
-        await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)  # editor loads, ignored
-
-        response = await client.patch(
-            f"{DRAFTS_URL}/{product.id}", headers=headers, json={"title": "No Token Sent"}
+        concurrent_write_at = product.updated_at + timedelta(seconds=5)
+        await db_session.execute(
+            update(Product)
+            .where(Product.id == product.id)
+            .values(title="Someone Else's Title", updated_at=concurrent_write_at)
         )
-        assert response.status_code == 200, response.text
-        assert response.json()["title"] == "No Token Sent"
+        await db_session.flush()
+
+        for attempt in range(3):
+            retry = await client.patch(
+                f"{DRAFTS_URL}/{product.id}",
+                headers=headers,
+                json={
+                    "title": f"Retry {attempt}",
+                    "expectedUpdatedAt": stale["updatedAt"],
+                },
+            )
+            assert retry.status_code == 409, retry.text
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title == "Someone Else's Title"
 
     async def test_repeated_saves_with_fresh_versions_do_not_corrupt_state(
         self, client: AsyncClient, db_session: AsyncSession
@@ -229,11 +311,12 @@ class TestPublishedDraftIsNotEditableHere:
     ) -> None:
         headers, product = await _seed(client, db_session)
         await _publish(db_session, product)
+        loaded = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
         response = await client.patch(
             f"{DRAFTS_URL}/{product.id}",
             headers=headers,
-            json={"title": "Should Not Land"},
+            json={"title": "Should Not Land", "expectedUpdatedAt": loaded["updatedAt"]},
         )
         assert response.status_code == 409, response.text
 
@@ -246,9 +329,12 @@ class TestPublishedDraftIsNotEditableHere:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         headers, product = await _seed(client, db_session)
+        loaded = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
         response = await client.patch(
-            f"{DRAFTS_URL}/{product.id}", headers=headers, json={"title": "Still A Draft"}
+            f"{DRAFTS_URL}/{product.id}",
+            headers=headers,
+            json={"title": "Still A Draft", "expectedUpdatedAt": loaded["updatedAt"]},
         )
         assert response.status_code == 200, response.text
 
@@ -258,11 +344,16 @@ class TestSupplierSnapshotImmutability:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         headers, product = await _seed(client, db_session)
+        loaded = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
         response = await client.patch(
             f"{DRAFTS_URL}/{product.id}",
             headers=headers,
-            json={"title": "Merchant Title", "brand": "Merchant Brand"},
+            json={
+                "title": "Merchant Title",
+                "brand": "Merchant Brand",
+                "expectedUpdatedAt": loaded["updatedAt"],
+            },
         )
         assert response.status_code == 200, response.text
 
@@ -278,11 +369,15 @@ class TestSupplierSnapshotImmutability:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         headers, product = await _seed(client, db_session)
+        loaded = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
         response = await client.patch(
             f"{DRAFTS_URL}/{product.id}",
             headers=headers,
-            json={"description": "<p>Merchant description</p>"},
+            json={
+                "description": "<p>Merchant description</p>",
+                "expectedUpdatedAt": loaded["updatedAt"],
+            },
         )
         assert response.status_code == 200, response.text
 
@@ -304,7 +399,7 @@ class TestTenantAndRoleIsolation:
         response = await client.patch(
             f"{DRAFTS_URL}/{product.id}",
             headers=other_headers,
-            json={"title": "Hijacked"},
+            json={"title": "Hijacked", "expectedUpdatedAt": "2020-01-01T00:00:00Z"},
         )
         assert response.status_code == 404, response.text
 
@@ -312,7 +407,10 @@ class TestTenantAndRoleIsolation:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         """The publish-gate lookup must not leak existence of a foreign
-        draft ahead of the ordinary tenant-scoped 404."""
+        draft ahead of the ordinary tenant-scoped 404. A stale-but-present
+        token (as opposed to the missing-token case covered separately)
+        must still resolve to 404, not 409 -- a 409 would confirm the id
+        exists under a real product."""
         _, product = await _seed(client, db_session)
         other = await register(client)
         other_headers = auth_header(other)
@@ -337,3 +435,122 @@ class TestTenantAndRoleIsolation:
             f"{DRAFTS_URL}/{product.id}", headers=viewer_headers, json={"title": "x"}
         )
         assert response.status_code == 403, response.text
+
+
+class TestNoAlternateDraftRouteBypassesTheGuard:
+    """Gap 1 acceptance requirement: prove -- not assume -- that none of the
+    other mutating `/drafts/{id}/...` routes can be used to change title or
+    description (the concurrency-guarded fields) without going through the
+    mandatory-token `PATCH /drafts/{id}` path.
+
+    Each sibling route has its own narrow request schema
+    (`ProductImageCreateRequest`, `ProductImageReorderRequest`,
+    `ProductImageUpdateRequest`, `ProductVariantUpdateRequest`), all with
+    `extra="forbid"` inherited from `CamelCaseModel` -- a smuggled `title`
+    field is rejected as an unknown field, not silently ignored, and none of
+    the underlying `ProductService` methods these routes call
+    (`add_image`/`reorder_images`/`update_image`/`remove_image`/
+    `restore_image`/`update_variant`) ever touches `Product.title` or
+    `Product.description` at all.
+    """
+
+    async def test_image_create_route_rejects_a_smuggled_title_field(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, product = await _seed(client, db_session)
+
+        response = await client.post(
+            f"{DRAFTS_URL}/{product.id}/images",
+            headers=headers,
+            json={"url": "https://cdn.example.com/x.jpg", "title": "Sneaky Title"},
+        )
+        assert response.status_code == 422, response.text
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title == "Editable draft title"
+
+    async def test_image_update_route_cannot_change_the_product_title(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, product = await _seed(client, db_session)
+        image = ProductImage(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            url="https://cdn.example.com/existing.jpg",
+            position=0,
+            is_supplier=True,
+        )
+        db_session.add(image)
+        await db_session.flush()
+
+        response = await client.patch(
+            f"{DRAFTS_URL}/{product.id}/images/{image.id}",
+            headers=headers,
+            json={"altText": "fine", "title": "Sneaky Title"},
+        )
+        assert response.status_code == 422, response.text
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title == "Editable draft title"
+
+    async def test_variant_update_route_cannot_change_the_product_title(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, product = await _seed(client, db_session)
+        variant = ProductVariant(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            external_variant_id="sku-bypass-check",
+            label="Size: M",
+            cost_price=None,
+            list_price=None,
+            currency="USD",
+            stock_quantity=0,
+            is_enabled=True,
+        )
+        db_session.add(variant)
+        await db_session.flush()
+
+        response = await client.patch(
+            f"{DRAFTS_URL}/{product.id}/variants/{variant.id}",
+            headers=headers,
+            json={"merchantSku": "OK-SKU", "title": "Sneaky Title"},
+        )
+        assert response.status_code == 422, response.text
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title == "Editable draft title"
+
+    async def test_image_reorder_route_leaves_title_untouched(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """A legitimate, well-formed request to a sibling route -- proves
+        the boundary holds for real traffic, not just malformed probes."""
+        headers, product = await _seed(client, db_session)
+        image = ProductImage(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            url="https://cdn.example.com/only.jpg",
+            position=0,
+            is_supplier=True,
+        )
+        db_session.add(image)
+        await db_session.flush()
+
+        response = await client.patch(
+            f"{DRAFTS_URL}/{product.id}/images/reorder",
+            headers=headers,
+            json={"imageIds": [str(image.id)]},
+        )
+        assert response.status_code == 200, response.text
+
+        row = (
+            await db_session.execute(select(Product).where(Product.id == product.id))
+        ).scalar_one()
+        assert row.title == "Editable draft title"
