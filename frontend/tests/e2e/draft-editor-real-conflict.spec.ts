@@ -41,6 +41,25 @@ function visibleTestId(page: Page, testId: string) {
   return page.locator(`[data-testid="${testId}"]:visible`);
 }
 
+/**
+ * Make a value unique to this run.
+ *
+ * These tests are routinely pointed at one long-lived pre-seeded draft
+ * (`E2E_PRODUCT_ID`), so a hard-coded title can already be the row's current
+ * value when a test starts — left there by an earlier run, or by the same
+ * test on another project. Two things then break, both silently and both
+ * misleadingly: the backend correctly treats an identical write as a no-op
+ * and does *not* advance `updatedAt` (so no conflict can be armed), and
+ * `fill()` with the value already present fires no change event (so the
+ * form never becomes dirty). Neither is a product defect, but both surface
+ * as one. A per-run suffix removes the whole class.
+ */
+let uniqueCounter = 0;
+function uniq(label: string): string {
+  uniqueCounter += 1;
+  return `${label}-${Date.now().toString(36)}-${uniqueCounter}`;
+}
+
 interface LoginResponse {
   tokens: { accessToken: string };
 }
@@ -422,6 +441,201 @@ test.describe("Draft editor — real server-side conflict", () => {
     expect(overflowInReview).toBe(false);
 
     await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
+  /**
+   * The consent contract: what the review dialog shows is what gets saved.
+   *
+   * These cover the defect the V2 integration pass found. Editing stays
+   * enabled during a conflict (only saving is frozen), so a merchant can
+   * type after the 409. The dialog used to render the values frozen at the
+   * 409 while the override rebuilt its payload from live form state, so the
+   * screen said one thing and the database got another. Nothing in the
+   * previous suite typed after the conflict, so nothing caught it.
+   */
+
+  test("review shows what was typed after the conflict, and saves exactly that", async () => {
+    const atConflict = uniq("LOCAL-A-at-conflict");
+    const afterConflict = uniq("LOCAL-B-typed-after-conflict");
+    const server = uniq("SERVER-V2-VALUE");
+    await arriveAtRealConflict(atConflict, server);
+
+    // The merchant keeps working while the banner is up -- legitimate, and
+    // the whole reason the 409-time snapshot must not be what gets saved.
+    await page.getByTestId("draft-title-input").fill(afterConflict);
+
+    const patchBodies: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PATCH" && request.url().includes("/drafts/")) {
+        patchBodies.push(request.postData() ?? "");
+      }
+    });
+
+    await visibleTestId(page, "conflict-review-mine").click();
+    const dialog = page.getByTestId("conflict-review-dialog");
+    await expect(dialog).toBeVisible();
+
+    // The dialog must show the *current* intent, not the rejected one.
+    await expect(dialog.getByText(afterConflict)).toBeVisible();
+    await expect(dialog.getByText(atConflict)).toHaveCount(0);
+    await expect(dialog.getByText(server)).toBeVisible();
+
+    // The difference count is computed from the same reviewed pair.
+    await expect(dialog).toContainText("1 field differs");
+
+    // Opening a comparison is not a write.
+    expect(patchBodies).toHaveLength(0);
+
+    await page.getByTestId("conflict-save-mine-anyway").click();
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+
+    // Dialog == payload == database == form baseline.
+    expect(patchBodies).toHaveLength(1);
+    expect(patchBodies[0]).toContain(afterConflict);
+    expect(patchBodies[0]).not.toContain(atConflict);
+
+    const persisted = await readDraft(page.request, writerToken, productId);
+    expect(persisted.title).toBe(afterConflict);
+    await expect(page.getByTestId("draft-title-input")).toHaveValue(afterConflict);
+    await expect(page.getByTestId("draft-save-state")).not.toHaveText(/Unsaved changes/i);
+  });
+
+  test("closing review and typing again re-captures on reopen, and saves the newest text", async () => {
+    const afterConflict = "LOCAL-B-typed-after-conflict";
+    const afterClosing = uniq("LOCAL-C-after-closing-review");
+    await arriveAtRealConflict(uniq("LOCAL-A-at-conflict"), uniq("SERVER-value-for-C-run"));
+
+    await page.getByTestId("draft-title-input").fill(afterConflict);
+    await visibleTestId(page, "conflict-review-mine").click();
+    await expect(page.getByTestId("conflict-review-dialog")).toBeVisible();
+
+    // Walk away from the comparison, then keep editing.
+    await page.getByTestId("conflict-review-back").click();
+    await expect(page.getByTestId("conflict-review-dialog")).toBeHidden();
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible();
+    await page.getByTestId("draft-title-input").fill(afterClosing);
+
+    // Reopening must re-capture, not resurrect the earlier comparison.
+    await visibleTestId(page, "conflict-review-mine").click();
+    const dialog = page.getByTestId("conflict-review-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(afterClosing)).toBeVisible();
+    await expect(dialog.getByText(afterConflict)).toHaveCount(0);
+
+    await page.getByTestId("conflict-save-mine-anyway").click();
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+
+    const persisted = await readDraft(page.request, writerToken, productId);
+    expect(persisted.title).toBe(afterClosing);
+  });
+
+  test("a form change after review opens blocks the save and demands a fresh comparison", async () => {
+    const reviewed = uniq("LOCAL-reviewed-value");
+    const sneaked = uniq("LOCAL-changed-behind-the-dialog");
+    await arriveAtRealConflict(reviewed, uniq("SERVER-value-for-guard-run"));
+
+    await visibleTestId(page, "conflict-review-mine").click();
+    const dialog = page.getByTestId("conflict-review-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(reviewed)).toBeVisible();
+
+    // Change the field *behind* the open dialog, the way an autofill or a
+    // stray script would. The dialog still shows the reviewed value.
+    await page.evaluate((value) => {
+      const el = document.querySelector<HTMLInputElement>(
+        '[data-testid="draft-title-input"]',
+      );
+      if (!el) throw new Error("title input missing");
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, sneaked);
+
+    const patchBodies: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() === "PATCH" && request.url().includes("/drafts/")) {
+        patchBodies.push(request.postData() ?? "");
+      }
+    });
+
+    await page.getByTestId("conflict-save-mine-anyway").click();
+
+    // Refused: nothing written, and the merchant is told why.
+    expect(patchBodies).toHaveLength(0);
+    await expect(page.getByTestId("conflict-review-stale")).toBeVisible();
+    await expect(page.getByTestId("conflict-save-mine-anyway")).toBeDisabled();
+    const untouched = await readDraft(page.request, writerToken, productId);
+    expect(untouched.title).not.toBe(sneaked);
+    expect(untouched.title).not.toBe(reviewed);
+
+    // Refreshing shows the new values and re-enables the override.
+    await page.getByTestId("conflict-review-refresh").click();
+    await expect(page.getByTestId("conflict-review-stale")).toHaveCount(0);
+    await expect(dialog.getByText(sneaked)).toBeVisible();
+    await expect(page.getByTestId("conflict-save-mine-anyway")).toBeEnabled();
+
+    await page.getByTestId("conflict-save-mine-anyway").click();
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+    expect(patchBodies).toHaveLength(1);
+    expect(patchBodies[0]).toContain(sneaked);
+
+    const persisted = await readDraft(page.request, writerToken, productId);
+    expect(persisted.title).toBe(sneaked);
+  });
+
+  test("a second real conflict preserves the reviewed merchant version", async () => {
+    const mine = uniq("LOCAL-survives-second-conflict");
+    await arriveAtRealConflict(mine, uniq("SERVER-first-for-second-conflict"));
+
+    await visibleTestId(page, "conflict-review-mine").click();
+    await expect(page.getByTestId("conflict-review-dialog")).toBeVisible();
+
+    // Someone else saves again while the comparison is open.
+    const secondServer = uniq("SERVER-second-for-second-conflict");
+    await otherEditorSaves(
+      page.request,
+      writerToken,
+      productId,
+      secondServer,
+    );
+
+    await page.getByTestId("conflict-save-mine-anyway").click();
+
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByTestId("draft-title-input")).toHaveValue(mine);
+
+    // The next review reflects the newer server value and still the
+    // merchant's own text.
+    await visibleTestId(page, "conflict-review-mine").click();
+    const dialog = page.getByTestId("conflict-review-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(secondServer)).toBeVisible();
+    await expect(dialog.getByText(mine)).toBeVisible();
+  });
+
+  test("reload-latest still cancels safely and confirms destructively after later typing", async () => {
+    const newest = uniq("LOCAL-newest-before-reload-decision");
+    const reloadServer = uniq("SERVER-value-reload-should-adopt");
+    await arriveAtRealConflict(uniq("LOCAL-A-at-conflict"), reloadServer);
+
+    // Type after the conflict, so Cancel must preserve the *newest* text.
+    await page.getByTestId("draft-title-input").fill(newest);
+
+    await visibleTestId(page, "conflict-reload-latest").click();
+    await expect(page.getByTestId("conflict-reload-confirm-dialog")).toBeVisible();
+    await page.getByTestId("conflict-reload-cancel").click();
+    await expect(page.getByTestId("draft-title-input")).toHaveValue(newest);
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible();
+
+    await visibleTestId(page, "conflict-reload-latest").click();
+    await page.getByTestId("conflict-reload-confirm").click();
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+    await expect(page.getByTestId("draft-title-input")).toHaveValue(reloadServer);
   });
 
   test.afterEach(() => {

@@ -1,9 +1,120 @@
 # M2A — Premium Product Editor Foundation
 
-Status: **Delivered, acceptance-fix pass applied, data-loss recovery fix
-applied.** Branch: `feature/dsers-parity-m2a-editor-foundation`. Audit date:
-2026-08-12. Acceptance-fix pass: 2026-08-13. Data-loss recovery fix:
-2026-08-14.
+Status: **Delivered; acceptance-fix, data-loss recovery and review-consent
+fixes applied.** Branch: `feature/dsers-parity-m2a-editor-foundation`.
+Audit date: 2026-08-12. Acceptance-fix pass: 2026-08-13. Data-loss recovery
+fix: 2026-08-14. Review-consent fix: 2026-08-14.
+
+## Review-consent fix (2026-08-14)
+
+The V2 integration pass blocked M2A a second time, on a different defect in
+the same screen: **the review dialog showed one version and the override
+saved another.**
+
+### What went wrong
+
+`enterConflict()` froze the merchant's values at the moment of the 409
+(`conflictLocalSnapshot`) and the dialog rendered those. But
+`handleSaveMyVersionAnyway()` rebuilt its payload from **live form state**.
+
+Editing is not disabled during a conflict — only saving is frozen, which is
+deliberate — so a merchant can legitimately keep typing after the 409. When
+they did, the two diverged. Verified live: dialog showed
+`LOCAL-A-at-conflict` under "Your unsaved version" and promised to save
+"exactly what you typed"; the database received
+`LOCAL-B-typed-after-conflict`. The "1 field differs" count was computed
+from the stale snapshot too, so even the summary could be wrong.
+
+No work was destroyed — the merchant's newest text won — but the screen
+whose only job is informed consent before overwriting someone else's save
+was describing a write that would not happen.
+
+### Why the obvious fix is wrong
+
+"Just send `conflictLocalSnapshot`" makes the dialog honest and *reintroduces
+data loss*: everything typed between the 409 and the click would be silently
+discarded. Both halves of the contradiction have to move to the same,
+later moment instead.
+
+### Conflict-time vs review-time snapshots
+
+Two distinct concepts, no longer conflated:
+
+| Snapshot | Taken when | Used for |
+|---|---|---|
+| `conflictLocalSnapshot` | the 409 lands | record of what the server *rejected*; drives the "you have edited since the conflict" note |
+| `reviewSnapshot.local` | **Review opens** | what the dialog renders **and** what the override sends |
+| `reviewSnapshot.server` | Review opens (from the conflict fetch) | the server side shown, and the token the override asserts |
+
+Consent begins when the merchant opens the comparison, so that is the moment
+frozen. `reviewSnapshot` holds both sides in **one object**, so the two can
+never come from different instants.
+
+### Dialog / payload equivalence
+
+`buildSavePayload(values, expectedUpdatedAt)` now takes an explicit
+snapshot instead of reading component state. The override passes
+`reviewSnapshot.local` and `reviewSnapshot.server.updatedAt`; the normal
+save passes `captureEditableSnapshot()`. Because the builder can see
+nothing but its argument, "what was shown" and "what was sent" cannot drift
+— the previous mismatch is now a structural impossibility rather than a
+discipline problem.
+
+`EditableSnapshot` was widened to every field the payload carries
+(`searchTopics`, `seoPlanning`, `redirectOldHandle`, `og*`), not just the
+nine the comparison displays. A payload only partly derived from the
+snapshot could drift again through a field nobody was looking at.
+
+### When the form changes after Review opens
+
+Modal-ness is not a guarantee — autofill, a background script, or a stray
+keystroke can still move a field. So the override checks rather than
+assumes: before sending, it compares the live form with
+`reviewSnapshot.local` field by field (`sameEditableValues`). If they
+differ it **refuses to save**, shows `conflict-review-stale`
+("The draft changed after this comparison was created…"), and disables the
+override until "Refresh this comparison" captures a new snapshot and shows
+the new values. Saving the newer values silently would recreate the
+consent mismatch; saving the reviewed ones silently would discard real
+work; so neither happens without the merchant seeing it.
+
+Closing Review discards `reviewSnapshot` deliberately — a comparison the
+merchant walked away from must not be able to authorise a later save.
+Reopening captures whatever they have typed since. Local values, the
+conflict, and the token are untouched throughout.
+
+A second real 409 during the override clears the review snapshot too and
+returns to the banner, so the next override needs a fresh, re-read
+comparison.
+
+### Regression coverage
+
+`draft-editor-real-conflict.spec.ts` gained five tests that type **after**
+the conflict — the state no previous test reached, which is exactly why
+18/18 passed against the broken build:
+
+- review shows the post-conflict text, not the 409-time text; difference
+  count uses it; no PATCH from opening review; payload, database and form
+  baseline all equal the displayed value;
+- close review → type C → reopen → dialog shows C → override saves C;
+- a change made behind the open dialog blocks the save, surfaces the stale
+  warning, disables the override, and is only allowed after a refresh;
+- a second genuine conflict preserves the reviewed merchant version;
+- reload cancel preserves the *newest* text, reload confirm adopts the
+  server version.
+
+Red/green evidence is in the delivery report: against `415cb1e` the first
+test fails with the dialog not containing the post-conflict value; after
+the fix, 28/28 pass across both projects.
+
+The spec also gained a `uniq()` helper. These tests are usually pointed at
+one long-lived pre-seeded draft, and a hard-coded title can already *be*
+the row's current value — in which case the backend correctly treats the
+write as a no-op and never advances `updatedAt` (no conflict can be armed),
+and `fill()` fires no change event (the form never goes dirty). Both look
+like product failures and are not. Per-run unique values remove the class;
+this is the same non-idempotency documented against
+`draft-editor-concurrency.spec.ts`, fixed here rather than merely noted.
 
 ## Data-loss recovery fix (2026-08-14)
 

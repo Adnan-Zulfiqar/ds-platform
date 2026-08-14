@@ -81,6 +81,35 @@ interface EditableSnapshot {
   seoTitle: string;
   seoDescription: string;
   slug: string;
+  // Not surfaced in the review comparison (they are secondary SEO fields),
+  // but captured all the same: a save payload must be *entirely* derivable
+  // from one snapshot, or "what the dialog showed" and "what was sent"
+  // can drift again through a field nobody was looking at.
+  searchTopics: string;
+  primaryIntent: string;
+  primaryTopic: string;
+  redirectOldHandle: boolean;
+  ogTitle: string;
+  ogDescription: string;
+}
+
+/** The two versions a merchant is being asked to choose between, frozen
+ * together at the moment Review opens.
+ *
+ * One object, not two pieces of state, so the merchant's side and the
+ * server's side can never come from different moments — the save asserts
+ * `server.updatedAt` and sends `local`, and both were shown on screen
+ * together. */
+interface ReviewSnapshot {
+  local: EditableSnapshot;
+  server: ProductDetail;
+}
+
+/** Field-by-field equality over everything a save would send. */
+function sameEditableValues(a: EditableSnapshot, b: EditableSnapshot): boolean {
+  return (Object.keys(a) as Array<keyof EditableSnapshot>).every(
+    (key) => a[key] === b[key],
+  );
 }
 
 /**
@@ -168,12 +197,28 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [conflictServerSnapshot, setConflictServerSnapshot] =
     useState<ProductDetail | null>(null);
   // The merchant's own unsaved values, frozen at the instant the 409 came
-  // back. The live form fields still hold these same values -- this is a
-  // separate, immutable record so the review comparison is guaranteed to
-  // show what was actually rejected, even if the merchant keeps typing
-  // while the banner is open.
+  // back: a record of what the server actually rejected. Deliberately *not*
+  // what the review screen shows or what an override sends -- the merchant
+  // may legitimately keep typing after the conflict (autosave is paused,
+  // editing is not), and saving this frozen copy would silently discard
+  // that later work. Diagnostic/audit only.
   const [conflictLocalSnapshot, setConflictLocalSnapshot] =
     useState<EditableSnapshot | null>(null);
+  // What the merchant is actually being asked to consent to: their values
+  // and the server's, captured together when Review opens.
+  //
+  // The integration pass found the review dialog rendering the *conflict*
+  // snapshot while the override rebuilt its payload from live form state,
+  // so a merchant who typed after the 409 was shown one value and saved
+  // another. Both sides now come from this one object, and the override
+  // refuses to run if the form has moved since it was taken -- so the
+  // dialog and the PATCH body are the same values by construction.
+  const [reviewSnapshot, setReviewSnapshot] = useState<ReviewSnapshot | null>(
+    null,
+  );
+  // Set when the form is found to have changed after Review opened. Blocks
+  // the override until the merchant sees a refreshed comparison.
+  const [reviewOutOfDate, setReviewOutOfDate] = useState(false);
   // The token the rejected save asserted against. Kept for diagnosis and to
   // make it explicit that the stale token is never silently reused.
   const [conflictStaleToken, setConflictStaleToken] = useState<string | null>(
@@ -214,6 +259,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       seoTitle,
       seoDescription,
       slug,
+      searchTopics,
+      primaryIntent,
+      primaryTopic,
+      redirectOldHandle,
+      ogTitle,
+      ogDescription,
     };
   }
 
@@ -292,35 +343,42 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
-  /** Every editable field, as it would be sent on save. Shared by the
-   * normal save path and "Save my version anyway" so the two can never
-   * drift -- the only thing that differs between them is which version
-   * token they assert against. */
-  function buildSavePayload(expectedUpdatedAt: string): ProductUpdatePayload {
+  /** Build the save payload from an explicit set of values.
+   *
+   * Takes a snapshot rather than reading the live form on purpose. The
+   * normal save passes the current values; "Save my version anyway" passes
+   * the exact values the review dialog rendered. Because there is only one
+   * builder and it has no access to anything but its argument, "what was
+   * shown" and "what was sent" cannot diverge — which is precisely how the
+   * consent mismatch happened when this read component state directly. */
+  function buildSavePayload(
+    values: EditableSnapshot,
+    expectedUpdatedAt: string,
+  ): ProductUpdatePayload {
     return {
-      title: title.trim(),
-      brand: brand.trim() || null,
-      vendor: vendor.trim() || null,
-      categoryName: categoryName.trim() || null,
-      tags: tags
+      title: values.title.trim(),
+      brand: values.brand.trim() || null,
+      vendor: values.vendor.trim() || null,
+      categoryName: values.categoryName.trim() || null,
+      tags: values.tags
         .split(",")
         .map((part) => part.trim())
         .filter(Boolean),
-      description: description,
-      seoTitle: seoTitle.trim() || null,
-      seoDescription: seoDescription.trim() || null,
-      slug: slug.trim() || null,
-      searchTopics: searchTopics
+      description: values.description,
+      seoTitle: values.seoTitle.trim() || null,
+      seoDescription: values.seoDescription.trim() || null,
+      slug: values.slug.trim() || null,
+      searchTopics: values.searchTopics
         .split(",")
         .map((part) => part.trim())
         .filter(Boolean),
       seoPlanning: {
-        primarySearchIntent: primaryIntent || null,
-        primaryTopic: primaryTopic || null,
+        primarySearchIntent: values.primaryIntent || null,
+        primaryTopic: values.primaryTopic || null,
       },
-      redirectOldHandle,
-      ogTitle: ogTitle.trim() || null,
-      ogDescription: ogDescription.trim() || null,
+      redirectOldHandle: values.redirectOldHandle,
+      ogTitle: values.ogTitle.trim() || null,
+      ogDescription: values.ogDescription.trim() || null,
       expectedUpdatedAt,
     };
   }
@@ -347,7 +405,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setSaveState("saving");
 
     try {
-      const saved = await updateDraft.mutateAsync(buildSavePayload(savedUpdatedAt));
+      const saved = await updateDraft.mutateAsync(
+        buildSavePayload(captureEditableSnapshot(), savedUpdatedAt),
+      );
       setDirty(false);
       setSaveState("saved");
       // The server's response is authoritative: the next save's version
@@ -436,26 +496,34 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setConflictServerSnapshot(null);
     setConflictLocalSnapshot(null);
     setConflictStaleToken(null);
+    setReviewSnapshot(null);
+    setReviewOutOfDate(false);
   }
 
-  /** "Review my changes" -- shows the server's version beside the
-   * merchant's, using the two snapshots captured when the 409 landed.
+  /** "Review my changes" -- freezes the pair of versions the merchant is
+   * being asked to choose between, and shows them.
    *
-   * Reviewing is inert. It does not write a field, does not clear `dirty`,
-   * does not clear the conflict, does not touch the concurrency token and
-   * does not refetch the draft query. The earlier implementation called
-   * `refetch()` here, and the resulting `data` change drove the hydration
-   * effect straight through the merchant's unsaved work -- the whole
-   * defect, in one line. The snapshot it needs was already fetched when
-   * the conflict was entered; the fetch below is only a retry for the case
-   * where that one failed. */
+   * The merchant's side is captured **now**, not when the 409 landed.
+   * Editing stays enabled during a conflict (only saving is frozen), so by
+   * the time Review is opened the merchant may legitimately have typed
+   * more, and that later text is what they mean by "my version". Showing
+   * the 409-time copy would misrepresent it; *saving* the 409-time copy
+   * would silently discard it. Both are wrong, so neither is used: consent
+   * begins here, and this is the moment that gets frozen.
+   *
+   * Reviewing remains inert. It does not write a field, clear `dirty`,
+   * clear the conflict, touch the active token, or refetch the draft
+   * query -- the server side was already fetched when the conflict was
+   * entered, and the fetch below is only a retry for when that failed. */
   async function handleOpenReview() {
-    if (!conflictServerSnapshot) {
+    let server = conflictServerSnapshot;
+    if (!server) {
       try {
         const { data: latest } = await apiClient.get<ProductDetail>(
           `/drafts/${productId}`,
         );
         setConflictServerSnapshot(latest);
+        server = latest;
       } catch (err) {
         setFormError(
           err instanceof Error
@@ -465,12 +533,21 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         return;
       }
     }
+    setReviewSnapshot({ local: captureEditableSnapshot(), server });
+    setReviewOutOfDate(false);
     setConflictPhase("reviewing");
   }
 
-  /** Close the comparison and go back to the banner. Keeps both snapshots
-   * and every local edit -- closing a comparison is not a decision. */
+  /** Close the comparison and go back to the banner.
+   *
+   * Discards the review snapshot deliberately: a comparison the merchant
+   * walked away from must not be able to authorise a later save. Reopening
+   * Review captures whatever they have typed since. Local edits, the
+   * conflict, and the token are all untouched -- closing a comparison is
+   * not a decision. */
   function handleCancelReview() {
+    setReviewSnapshot(null);
+    setReviewOutOfDate(false);
     setConflictPhase("detected");
   }
 
@@ -486,14 +563,30 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    * this exactly like any other stale save, and the merchant is returned
    * to the conflict banner rather than the save silently retrying. */
   async function handleSaveMyVersionAnyway() {
-    if (!conflictServerSnapshot || updateDraft.isPending) return;
+    // Only a live review can authorise this. Without one there is nothing
+    // the merchant has been shown, and therefore nothing they consented to.
+    if (!reviewSnapshot || updateDraft.isPending) return;
+
+    // The form can still change while the dialog is open -- a background
+    // script, an autofill, a stray keystroke on a field behind the modal.
+    // Rather than trust that it cannot, check: if the editor no longer
+    // holds what the merchant was shown, refuse and make them look again.
+    // Silently saving the newer values would reintroduce exactly the
+    // consent mismatch this guard exists to close; silently saving the
+    // reviewed ones would discard real work.
+    if (!sameEditableValues(captureEditableSnapshot(), reviewSnapshot.local)) {
+      setReviewOutOfDate(true);
+      return;
+    }
 
     setFormError(null);
     setSaveState("saving");
 
     try {
+      // Exactly the values the dialog rendered, against exactly the version
+      // it named. Both come out of the same frozen object.
       const saved = await updateDraft.mutateAsync(
-        buildSavePayload(conflictServerSnapshot.updatedAt),
+        buildSavePayload(reviewSnapshot.local, reviewSnapshot.server.updatedAt),
       );
       // The merchant's values won and are now the persisted truth. The
       // response is authoritative for the new baseline -- but note it is
@@ -513,8 +606,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         // merchant's values are still in the form and still theirs --
         // re-enter conflict resolution against the newer server version
         // rather than retrying, which would be an unbounded overwrite
-        // race against whoever else is editing.
-        await enterConflict(conflictServerSnapshot.updatedAt);
+        // race against whoever else is editing. `enterConflict` clears the
+        // review snapshot's authority by returning to "detected", so the
+        // next override needs a fresh, re-read comparison.
+        setReviewSnapshot(null);
+        setReviewOutOfDate(false);
+        await enterConflict(reviewSnapshot.server.updatedAt);
       } else {
         setSaveState("error");
         setFormError(err instanceof Error ? err.message : "Save failed.");
@@ -623,49 +720,51 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   // 409 landed -- never from the live form or the live query -- so the
   // comparison shows exactly the two versions that actually collided, and
   // cannot drift under a background refetch or continued typing.
+  const reviewedServer = reviewSnapshot?.server ?? null;
+  const reviewedLocal = reviewSnapshot?.local ?? null;
   const conflictDiffs =
-    conflictServerSnapshot && conflictLocalSnapshot
+    reviewedServer && reviewedLocal
       ? (
           [
-            ["title", "Title", conflictServerSnapshot.title, conflictLocalSnapshot.title],
-            ["brand", "Brand", conflictServerSnapshot.brand ?? "", conflictLocalSnapshot.brand],
+            ["title", "Title", reviewedServer.title, reviewedLocal.title],
+            ["brand", "Brand", reviewedServer.brand ?? "", reviewedLocal.brand],
             [
               "vendor",
               "Vendor",
-              conflictServerSnapshot.vendor ?? "",
-              conflictLocalSnapshot.vendor,
+              reviewedServer.vendor ?? "",
+              reviewedLocal.vendor,
             ],
             [
               "categoryName",
               "Category",
-              conflictServerSnapshot.categoryName ?? "",
-              conflictLocalSnapshot.categoryName,
+              reviewedServer.categoryName ?? "",
+              reviewedLocal.categoryName,
             ],
             [
               "tags",
               "Tags",
-              (conflictServerSnapshot.tags ?? []).join(", "),
-              conflictLocalSnapshot.tags,
+              (reviewedServer.tags ?? []).join(", "),
+              reviewedLocal.tags,
             ],
             [
               "description",
               "Description",
-              conflictServerSnapshot.description ?? "",
-              conflictLocalSnapshot.description,
+              reviewedServer.description ?? "",
+              reviewedLocal.description,
             ],
             [
               "seoTitle",
               "SEO title",
-              conflictServerSnapshot.seoTitle ?? "",
-              conflictLocalSnapshot.seoTitle,
+              reviewedServer.seoTitle ?? "",
+              reviewedLocal.seoTitle,
             ],
             [
               "seoDescription",
               "SEO description",
-              conflictServerSnapshot.seoDescription ?? "",
-              conflictLocalSnapshot.seoDescription,
+              reviewedServer.seoDescription ?? "",
+              reviewedLocal.seoDescription,
             ],
-            ["slug", "URL slug", conflictServerSnapshot.slug ?? "", conflictLocalSnapshot.slug],
+            ["slug", "URL slug", reviewedServer.slug ?? "", reviewedLocal.slug],
           ] as const
         )
           .filter(([, , serverValue, localValue]) => serverValue.trim() !== localValue.trim())
@@ -827,15 +926,48 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             </DialogDescription>
           </DialogHeader>
 
-          {conflictStaleToken && conflictServerSnapshot ? (
+          {conflictStaleToken && reviewedServer ? (
             <p
               className="text-xs text-muted-foreground"
               data-testid="conflict-version-provenance"
             >
               You were editing the version saved at{" "}
               {formatDateTime(conflictStaleToken)}. Someone saved a newer one
-              at {formatDateTime(conflictServerSnapshot.updatedAt)}.
+              at {formatDateTime(reviewedServer.updatedAt)}.
             </p>
+          ) : null}
+
+          {conflictLocalSnapshot &&
+          reviewedLocal &&
+          !sameEditableValues(conflictLocalSnapshot, reviewedLocal) ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="conflict-edited-since"
+            >
+              You have edited this draft since the conflict happened. The
+              comparison below uses your current text, not what the failed
+              save contained.
+            </p>
+          ) : null}
+
+          {reviewOutOfDate ? (
+            <Alert variant="destructive" data-testid="conflict-review-stale">
+              <AlertDescription className="space-y-2">
+                <p>
+                  The draft changed after this comparison was created, so it no
+                  longer shows what would be saved. Nothing has been written.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleOpenReview()}
+                  data-testid="conflict-review-refresh"
+                >
+                  Refresh this comparison
+                </Button>
+              </AlertDescription>
+            </Alert>
           ) : null}
 
           <div
@@ -874,7 +1006,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           <DialogFooter className="sm:flex-col sm:items-stretch sm:space-x-0 sm:space-y-2">
             <p className="text-xs text-muted-foreground">
               Saving your version overwrites the latest saved version above
-              with exactly what you typed, field by field, with nothing
+              with exactly the values shown here, field by field, with nothing
               combined automatically.
             </p>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -897,7 +1029,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               <Button
                 type="button"
                 variant="destructive"
-                disabled={updateDraft.isPending}
+                disabled={updateDraft.isPending || reviewOutOfDate}
                 onClick={() => void handleSaveMyVersionAnyway()}
                 data-testid="conflict-save-mine-anyway"
               >
