@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Loader2, Store } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
@@ -22,6 +22,7 @@ import {
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
 import { readinessFor } from "@/components/drafts/editor-header/readiness";
+import type { SaveState } from "@/components/drafts/editor-header/save-state-indicator";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +62,27 @@ interface DraftProductEditorProps {
   productId: string;
 }
 
+/** The merchant-editable text of the editor, as plain strings.
+ *
+ * Deliberately not a `ProductDetail`: this is the *merchant's* side of a
+ * conflict, which only ever exists as form values, and typing it as the
+ * server's shape would invite code that treats the two as interchangeable.
+ * They are not -- keeping them distinct types is what makes an accidental
+ * "apply the server's version to the form" a compile error rather than a
+ * data-loss bug.
+ */
+interface EditableSnapshot {
+  title: string;
+  brand: string;
+  vendor: string;
+  categoryName: string;
+  tags: string;
+  description: string;
+  seoTitle: string;
+  seoDescription: string;
+  slug: string;
+}
+
 /**
  * Premium draft product workspace — sticky header, inspector, autosave.
  */
@@ -97,9 +119,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [ogDescription, setOgDescription] = useState("");
   const [dirty, setDirty] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle",
-  );
+  // Uses the indicator's own `SaveState` rather than restating the union
+  // here. The two had already drifted: the indicator has rendered a
+  // "Conflict detected" state since the acceptance pass, but this local
+  // copy of the type omitted "conflict", so nothing could ever set it and
+  // a real 409 displayed the generic "Save failed" instead.
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [publishStoreId, setPublishStoreId] = useState("");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishPending, setPublishPending] = useState(false);
@@ -135,33 +160,69 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
-  // The server's latest version, fetched when "Review my changes" opens --
-  // captured separately from `data` so it can be shown next to the
+  // The server's latest version as of the moment the conflict was detected.
+  // Captured separately from `data` so it can be shown next to the
   // merchant's still-untouched local fields without overwriting either.
   // Never written into any editable field automatically; only read for
   // display and as the version token for the one explicit overwrite action.
   const [conflictServerSnapshot, setConflictServerSnapshot] =
     useState<ProductDetail | null>(null);
+  // The merchant's own unsaved values, frozen at the instant the 409 came
+  // back. The live form fields still hold these same values -- this is a
+  // separate, immutable record so the review comparison is guaranteed to
+  // show what was actually rejected, even if the merchant keeps typing
+  // while the banner is open.
+  const [conflictLocalSnapshot, setConflictLocalSnapshot] =
+    useState<EditableSnapshot | null>(null);
+  // The token the rejected save asserted against. Kept for diagnosis and to
+  // make it explicit that the stale token is never silently reused.
+  const [conflictStaleToken, setConflictStaleToken] = useState<string | null>(
+    null,
+  );
+
+  // Which draft the form has already been hydrated from.
+  //
+  // This is the load-bearing guard for the whole editor. React Query hands
+  // back a new `data` reference on every refetch that returns materially
+  // different bytes -- and `useUpdateDraft` invalidates this very query on
+  // every successful save, so refetches are routine, not exotic. Hydrating
+  // whenever that reference changes is what silently destroyed unsaved
+  // merchant work during conflict review (see M2_PREMIUM_EDITOR.md).
+  //
+  // A ref, not state: the decision has to be made synchronously inside the
+  // effect, and re-rendering on it would be pointless churn.
+  const hydratedFromRef = useRef<string | null>(null);
 
   function selectTab(next: EditorTab) {
     setTab(next);
     router.replace(`/drafts/${productId}?tab=${next}`);
   }
 
-  /** Populate every merchant-editable field from a server `ProductDetail`,
-   * and reset the dirty/save-state that goes with a fresh load.
+  /** Snapshot the merchant's current editable values.
    *
-   * Called directly (not only from the `[data]` effect below) because
-   * React Query's structural sharing means a refetch that comes back
-   * byte-identical to what's already cached -- true whenever a rejected
-   * conflicting write never actually persisted, which is exactly the
-   * state right after a 409 -- leaves the `data` object reference
-   * unchanged. An effect keyed on that reference would then never re-fire,
-   * so a confirmed reload would clear the conflict banner but leave the
-   * stale local edits sitting in the fields, unreset. Only ever called from
-   * an explicit merchant action (confirmed reload, or the normal initial
-   * load) -- never automatically while a conflict is open, which is what
-   * keeps "Review my changes" from silently discarding local edits. */
+   * Read at exactly one moment -- when a 409 comes back -- so the review
+   * screen can show what the server rejected rather than whatever happens
+   * to be in the inputs by the time the merchant opens it. */
+  function captureEditableSnapshot(): EditableSnapshot {
+    return {
+      title,
+      brand,
+      vendor,
+      categoryName,
+      tags,
+      description,
+      seoTitle,
+      seoDescription,
+      slug,
+    };
+  }
+
+  /** Overwrite every merchant-editable field with a server `ProductDetail`
+   * and reset the dirty/save state that goes with a fresh baseline.
+   *
+   * **This function destroys unsaved merchant input.** It must only ever be
+   * reached from one of the explicitly safe transitions enumerated in
+   * `hydrateFromServer` -- never from a bare `data`-changed effect. */
   function applyDraftToForm(detail: ProductDetail) {
     setTitle(detail.title);
     setBrand(detail.brand ?? "");
@@ -185,12 +246,36 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setSaveState("idle");
   }
 
+  /** Adopt a server version as the editor's new baseline: its values become
+   * the form, its `updatedAt` becomes the active concurrency token.
+   *
+   * The *only* three safe transitions, all of them explicit:
+   *   1. the first successful load of a draft (nothing to lose yet);
+   *   2. a confirmed "Reload latest version" (merchant chose to discard);
+   *   3. — reserved — any future transition must be added here deliberately,
+   *      with the same "is there unsaved work?" question answered first.
+   *
+   * Note what is *not* on that list: "React Query gave us a new object".
+   * Structural sharing is a rendering optimisation, not a safety property.
+   * It says nothing about whether the merchant has unsaved work, and
+   * relying on it to keep a refetch from clobbering the form is how the
+   * conflict-review data-loss defect happened. */
+  function hydrateFromServer(detail: ProductDetail) {
+    applyDraftToForm(detail);
+    setSavedUpdatedAt(detail.updatedAt);
+    hydratedFromRef.current = detail.id;
+  }
+
   useEffect(() => {
     if (!data) return;
-    applyDraftToForm(data);
-    setSavedUpdatedAt(data.updatedAt);
-    setConflictPhase("none");
-    setConflictServerSnapshot(null);
+    // Transition 1 only. Every later refetch of this same draft -- the
+    // post-save invalidation, a reconnect, an explicit `refetch()` for a
+    // conflict snapshot -- is deliberately inert here. Nothing but an
+    // explicit merchant action may replace what is in the form, and
+    // nothing but an explicit merchant action may resolve a conflict.
+    if (hydratedFromRef.current === data.id) return;
+    hydrateFromServer(data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first-load hydration only
   }, [data]);
 
   useEffect(() => {
@@ -278,12 +363,40 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         // Surfaced as its own state, not folded into `formError` -- the
         // recovery here is "reload or review", not "fix a field and
         // retry", and the two must not look the same to the merchant.
-        setConflictPhase("detected");
-        setSaveState("error");
+        await enterConflict(savedUpdatedAt);
       } else {
         setSaveState("error");
         setFormError(err instanceof Error ? err.message : "Save failed.");
       }
+    }
+  }
+
+  /** Enter (or re-enter) conflict resolution after a real 409.
+   *
+   * Freezes saving, preserves the merchant's side, and fetches the
+   * server's side for comparison. The fetch goes through `apiClient`
+   * directly rather than `refetch()` on purpose: it must not write to the
+   * query cache at all, so there is no path by which looking at the
+   * server's version can disturb what the merchant is editing.
+   *
+   * `dirty` is deliberately left `true` -- the merchant's work genuinely
+   * is unsaved, and the header must keep saying so. */
+  async function enterConflict(staleToken: string | null) {
+    setConflictLocalSnapshot(captureEditableSnapshot());
+    setConflictStaleToken(staleToken);
+    setSaveState("conflict");
+    setConflictPhase("detected");
+
+    try {
+      const { data: latest } = await apiClient.get<ProductDetail>(
+        `/drafts/${productId}`,
+      );
+      setConflictServerSnapshot(latest);
+    } catch {
+      // The banner and both recovery actions still work without it --
+      // "Review my changes" retries the fetch, and "Reload latest version"
+      // fetches its own copy. Nothing here is allowed to touch the form.
+      setConflictServerSnapshot(null);
     }
   }
 
@@ -303,30 +416,61 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    * the refetched detail directly (see `applyDraftToForm`'s docstring for
    * why this can't be left to the `[data]` effect alone). */
   async function handleConfirmReload() {
+    // Transition 2: the merchant has explicitly chosen to lose their work,
+    // so this is the one recovery path allowed to overwrite the form.
+    // `refetch()` here (rather than a bare `apiClient` read) is correct --
+    // we *are* adopting the server's version, so the shared cache should
+    // hold it too.
     const result = await refetch();
-    if (result.data) {
-      applyDraftToForm(result.data);
-      setSavedUpdatedAt(result.data.updatedAt);
-    }
-    setConflictServerSnapshot(null);
+    const latest = result.data ?? conflictServerSnapshot;
+    if (latest) hydrateFromServer(latest);
+    clearConflict();
+    setSaveState("idle");
+  }
+
+  /** Reset every scrap of conflict state at once, so no half-resolved
+   * combination (banner closed but snapshot retained, or vice versa) can
+   * be reached by forgetting one setter at one call site. */
+  function clearConflict() {
     setConflictPhase("none");
-  }
-
-  /** "Review my changes" -- fetches the latest server version and shows it
-   * next to the merchant's still-untouched local fields. Does not touch
-   * any editable field, does not change `savedUpdatedAt`, and does not
-   * save anything: reviewing is inert by itself, exactly so it can never
-   * be the thing that silently lets autosave through. */
-  async function handleOpenReview() {
-    const result = await refetch();
-    if (result.data) {
-      setConflictServerSnapshot(result.data);
-      setConflictPhase("reviewing");
-    }
-  }
-
-  function handleCancelReview() {
     setConflictServerSnapshot(null);
+    setConflictLocalSnapshot(null);
+    setConflictStaleToken(null);
+  }
+
+  /** "Review my changes" -- shows the server's version beside the
+   * merchant's, using the two snapshots captured when the 409 landed.
+   *
+   * Reviewing is inert. It does not write a field, does not clear `dirty`,
+   * does not clear the conflict, does not touch the concurrency token and
+   * does not refetch the draft query. The earlier implementation called
+   * `refetch()` here, and the resulting `data` change drove the hydration
+   * effect straight through the merchant's unsaved work -- the whole
+   * defect, in one line. The snapshot it needs was already fetched when
+   * the conflict was entered; the fetch below is only a retry for the case
+   * where that one failed. */
+  async function handleOpenReview() {
+    if (!conflictServerSnapshot) {
+      try {
+        const { data: latest } = await apiClient.get<ProductDetail>(
+          `/drafts/${productId}`,
+        );
+        setConflictServerSnapshot(latest);
+      } catch (err) {
+        setFormError(
+          err instanceof Error
+            ? err.message
+            : "Could not load the latest saved version.",
+        );
+        return;
+      }
+    }
+    setConflictPhase("reviewing");
+  }
+
+  /** Close the comparison and go back to the banner. Keeps both snapshots
+   * and every local edit -- closing a comparison is not a decision. */
+  function handleCancelReview() {
     setConflictPhase("detected");
   }
 
@@ -351,19 +495,26 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       const saved = await updateDraft.mutateAsync(
         buildSavePayload(conflictServerSnapshot.updatedAt),
       );
+      // The merchant's values won and are now the persisted truth. The
+      // response is authoritative for the new baseline -- but note it is
+      // only the *token* and dirty flag that move here, never the form
+      // fields: those already hold exactly what was sent.
       setDirty(false);
       setSaveState("saved");
       setSavedUpdatedAt(saved.updatedAt);
-      setConflictServerSnapshot(null);
-      setConflictPhase("none");
+      hydratedFromRef.current = saved.id;
+      clearConflict();
       void queryClient.invalidateQueries({
         queryKey: draftKeys.seoScore(productId),
       });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setConflictServerSnapshot(null);
-        setConflictPhase("detected");
-        setSaveState("error");
+        // The row moved again between the review and this override. The
+        // merchant's values are still in the form and still theirs --
+        // re-enter conflict resolution against the newer server version
+        // rather than retrying, which would be an unbounded overwrite
+        // race against whoever else is editing.
+        await enterConflict(conflictServerSnapshot.updatedAt);
       } else {
         setSaveState("error");
         setFormError(err instanceof Error ? err.message : "Save failed.");
@@ -467,41 +618,64 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.[0] ??
     null;
 
-  // Every editable field where the merchant's local value differs from the
-  // server's latest -- computed fresh on each render from the review
-  // snapshot, never cached, so it can never show a stale comparison.
-  const conflictDiffs = conflictServerSnapshot
-    ? (
-        [
-          ["title", "Title", conflictServerSnapshot.title, title.trim()],
-          ["brand", "Brand", conflictServerSnapshot.brand ?? "", brand.trim()],
-          ["vendor", "Vendor", conflictServerSnapshot.vendor ?? "", vendor.trim()],
+  // Every editable field where the merchant's rejected value differs from
+  // the server's latest. Both sides come from the snapshots frozen when the
+  // 409 landed -- never from the live form or the live query -- so the
+  // comparison shows exactly the two versions that actually collided, and
+  // cannot drift under a background refetch or continued typing.
+  const conflictDiffs =
+    conflictServerSnapshot && conflictLocalSnapshot
+      ? (
           [
-            "categoryName",
-            "Category",
-            conflictServerSnapshot.categoryName ?? "",
-            categoryName.trim(),
-          ],
-          ["tags", "Tags", (conflictServerSnapshot.tags ?? []).join(", "), tags.trim()],
-          [
-            "description",
-            "Description",
-            conflictServerSnapshot.description ?? "",
-            description.trim(),
-          ],
-          ["seoTitle", "SEO title", conflictServerSnapshot.seoTitle ?? "", seoTitle.trim()],
-          [
-            "seoDescription",
-            "SEO description",
-            conflictServerSnapshot.seoDescription ?? "",
-            seoDescription.trim(),
-          ],
-          ["slug", "URL slug", conflictServerSnapshot.slug ?? "", slug.trim()],
-        ] as const
-      )
-        .filter(([, , serverValue, localValue]) => serverValue !== localValue)
-        .map(([key, label, serverValue, localValue]) => ({ key, label, serverValue, localValue }))
-    : [];
+            ["title", "Title", conflictServerSnapshot.title, conflictLocalSnapshot.title],
+            ["brand", "Brand", conflictServerSnapshot.brand ?? "", conflictLocalSnapshot.brand],
+            [
+              "vendor",
+              "Vendor",
+              conflictServerSnapshot.vendor ?? "",
+              conflictLocalSnapshot.vendor,
+            ],
+            [
+              "categoryName",
+              "Category",
+              conflictServerSnapshot.categoryName ?? "",
+              conflictLocalSnapshot.categoryName,
+            ],
+            [
+              "tags",
+              "Tags",
+              (conflictServerSnapshot.tags ?? []).join(", "),
+              conflictLocalSnapshot.tags,
+            ],
+            [
+              "description",
+              "Description",
+              conflictServerSnapshot.description ?? "",
+              conflictLocalSnapshot.description,
+            ],
+            [
+              "seoTitle",
+              "SEO title",
+              conflictServerSnapshot.seoTitle ?? "",
+              conflictLocalSnapshot.seoTitle,
+            ],
+            [
+              "seoDescription",
+              "SEO description",
+              conflictServerSnapshot.seoDescription ?? "",
+              conflictLocalSnapshot.seoDescription,
+            ],
+            ["slug", "URL slug", conflictServerSnapshot.slug ?? "", conflictLocalSnapshot.slug],
+          ] as const
+        )
+          .filter(([, , serverValue, localValue]) => serverValue.trim() !== localValue.trim())
+          .map(([key, label, serverValue, localValue]) => ({
+            key,
+            label,
+            serverValue,
+            localValue,
+          }))
+      : [];
 
   return (
     <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
@@ -648,10 +822,21 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             <DialogTitle>Review the conflicting changes</DialogTitle>
             <DialogDescription>
               {conflictDiffs.length > 0
-                ? `${conflictDiffs.length} field${conflictDiffs.length === 1 ? "" : "s"} differ between the latest saved version and what you typed. Nothing is merged automatically.`
+                ? `${conflictDiffs.length} ${conflictDiffs.length === 1 ? "field differs" : "fields differ"} between the latest saved version and what you typed. Nothing is merged automatically.`
                 : "The latest saved version and what you typed are now identical for every field shown here."}
             </DialogDescription>
           </DialogHeader>
+
+          {conflictStaleToken && conflictServerSnapshot ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="conflict-version-provenance"
+            >
+              You were editing the version saved at{" "}
+              {formatDateTime(conflictStaleToken)}. Someone saved a newer one
+              at {formatDateTime(conflictServerSnapshot.updatedAt)}.
+            </p>
+          ) : null}
 
           <div
             className="max-h-[50vh] space-y-4 overflow-y-auto"

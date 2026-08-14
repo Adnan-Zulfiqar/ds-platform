@@ -1,8 +1,125 @@
 # M2A — Premium Product Editor Foundation
 
-Status: **Delivered, acceptance-fix pass applied.** Branch:
-`feature/dsers-parity-m2a-editor-foundation`. Audit date: 2026-08-12.
-Acceptance-fix pass: 2026-08-13.
+Status: **Delivered, acceptance-fix pass applied, data-loss recovery fix
+applied.** Branch: `feature/dsers-parity-m2a-editor-foundation`. Audit date:
+2026-08-12. Acceptance-fix pass: 2026-08-13. Data-loss recovery fix:
+2026-08-14.
+
+## Data-loss recovery fix (2026-08-14)
+
+The controlled-integration pass blocked M2A on a defect the entire test
+suite was blind to: against a **real** conflict, clicking "Review my
+changes" silently destroyed the merchant's unsaved work. This section
+records the cause, the redesign, and why the tests missed it.
+
+### What went wrong
+
+`handleOpenReview()` called `refetch()`. The refetch returned genuinely
+different data (someone really had saved a new version), so React Query
+produced a **new `data` object reference**, which fired this effect:
+
+```tsx
+useEffect(() => {
+  if (!data) return;
+  applyDraftToForm(data);      // overwrote every merchant field
+  setConflictPhase("none");    // closed the conflict
+}, [data]);
+```
+
+The merchant clicked a button labelled "Review my changes" and the editor
+replaced their changes with the server's, cleared the conflict, and
+displayed "All changes saved".
+
+### Why the tests were green
+
+The existing suite fakes its 409 by intercepting `PATCH` and fulfilling a
+synthetic conflict. **The underlying row never changes.** A refetch
+therefore returns byte-identical JSON, React Query's structural sharing
+preserves the object reference, `[data]` never re-fires, and the
+destructive branch is never executed. All 32 tests passed against the
+build that lost data.
+
+> **Structural sharing is a rendering optimisation, not a safety
+> property.** It says nothing about whether the merchant has unsaved work.
+> Any invariant that holds only because a reference happened not to change
+> is not an invariant — it is a coincidence with good uptime. Code that
+> depends on it is untested by construction, because the mock that keeps
+> the reference stable is the same mock that hides the bug.
+
+### The hydration invariant
+
+Server data may overwrite the form **only** at an explicitly enumerated
+transition, never because a query result changed:
+
+1. the first successful load of a draft (there is nothing to lose yet);
+2. a confirmed "Reload latest version" (the merchant chose to discard).
+
+Enforced by `hydratedFromRef`, a ref holding the draft id the form was
+built from. The `[data]` effect returns early for every subsequent change
+to the same draft — including the refetch `useUpdateDraft` triggers after
+*every* successful save, which was silently re-hydrating the form and
+refreshing the concurrency token before this fix. Adding a third
+transition requires answering "is there unsaved work?" first, in code, at
+that call site.
+
+### Separated state
+
+| State | Holds | Written by |
+|---|---|---|
+| `data` (React Query) | latest server draft | the cache |
+| form fields | merchant's live values | typing; the two safe transitions |
+| `savedUpdatedAt` | active concurrency token | first load, reload, save response |
+| `conflictServerSnapshot` | server's side of the collision | `enterConflict` |
+| `conflictLocalSnapshot` | merchant's side, frozen at the 409 | `enterConflict` |
+| `conflictStaleToken` | the token the server rejected | `enterConflict` |
+
+The two conflict snapshots are captured together when the 409 lands, and
+the comparison renders from **both snapshots** — never from the live form
+or the live query — so it always shows the two versions that actually
+collided. `conflictLocalSnapshot` is typed as `EditableSnapshot` (plain
+strings), deliberately *not* `ProductDetail`: keeping the merchant's side
+and the server's side structurally different types makes "apply the server
+version to the form" a compile error instead of a data-loss bug.
+
+`enterConflict` fetches the server snapshot through `apiClient` directly
+rather than `refetch()`, so inspecting the server's version cannot write to
+the query cache at all. Review no longer refetches anything.
+
+### Behaviour now
+
+- **Review** is inert: no field written, `dirty` untouched, conflict left
+  open, token unchanged, no request. Shows both versions with a provenance
+  line naming the two timestamps.
+- **Save my version anyway** sends exactly one guarded PATCH asserting the
+  *reviewed* token. Success establishes the new baseline (token + dirty
+  only — the fields already hold what was sent). A second 409 re-enters
+  conflict resolution against the newer server version; it never retries.
+- **Reload latest version** still requires explicit confirmation; Cancel
+  preserves local edits; confirming is the one path allowed to discard.
+- Save state now reports **"Conflict detected"** rather than the generic
+  "Save failed". The indicator had rendered this state since the
+  acceptance pass, but the editor kept its own copy of the `SaveState`
+  union that omitted `"conflict"`, so nothing could set it. The duplicated
+  type is gone — the editor imports the indicator's.
+
+### Real-409 regression coverage
+
+`frontend/tests/e2e/draft-editor-real-conflict.spec.ts` (new, 9 tests × 2
+projects) mocks nothing. An independent API client saves a real new version
+between the editor's load and its save, so the 409 comes from the backend's
+own compare-and-swap and the refetched draft really is materially
+different. Covers: local values preserved through the 409; review showing
+both versions with input untouched; no PATCH while reviewing; closing
+review preserving both; one-PATCH override on the reviewed token that
+actually persists; a second real change mid-review producing another 409
+with values still intact; reload cancel/confirm; a background
+`invalidateQueries` during a conflict not hydrating the form; keyboard-only
+resolution; and 375px without horizontal overflow.
+
+Red/green evidence is recorded in the delivery report: against `0a65975`
+the suite fails at the review assertion with the dialog never rendering
+(`element(s) not found`), which is the defect exactly; after the fix, 18/18
+pass across both projects.
 
 ## Acceptance-fix pass (2026-08-13)
 
@@ -403,9 +520,43 @@ the `supplier_*` twins.
   changes"): `409`, standard error envelope
   (`code`/`message`/`details`/`requestId`), no partial write.
 - Already published: `409`, same envelope, distinct message.
-- Cross-tenant / nonexistent: `404` (checked first, so a stale-version or
-  missing-token request against a foreign draft cannot leak existence via a
-  different status than a fresh one would get).
+- Cross-tenant / nonexistent: `404`.
+
+### Response matrix — validation runs first
+
+An earlier revision of this document claimed the tenant lookup ran *first*,
+so that a missing-token request against a foreign draft returned `404`. That
+was wrong, and it was corrected against the code (and verified against a
+live server) during the controlled-integration pass. The real order is
+**validation, then tenant lookup**:
+
+| Draft | `expectedUpdatedAt` | Status |
+|---|---|---|
+| Own, editable | missing | `422` |
+| Own, editable | malformed | `422` |
+| Own, editable | current | `200` |
+| Own, editable | stale | `409` |
+| Foreign tenant | missing | `422` |
+| Foreign tenant | syntactically valid | `404` |
+| Nonexistent id | missing | `422` |
+| Nonexistent id | syntactically valid | `404` |
+
+Two different code paths produce the `422`s: a *malformed* value fails
+Pydantic's own schema validation at the request boundary
+(`RequestValidationError`), before the endpoint body runs at all, while a
+*missing* value is rejected by the explicit `expected_updated_at is None`
+guard at the top of `ProductService.update_draft`. Both surface through
+`app/api/error_handlers.py` as the same `422 validation_error` envelope, so
+the distinction is invisible to clients — which is what matters here.
+
+**Why this is still non-enumerable.** Enumeration needs the response to vary
+with whether the id exists. It does not: the rows compare equal in pairs.
+Foreign and nonexistent are indistinguishable with a valid token (`404` vs
+`404`) *and* with a missing one (`422` vs `422`). An attacker holding a
+syntactically valid token learns nothing, and one omitting the token is
+rejected before any lookup happens, so the database is never consulted at
+all. Validation-first is not a weakening of the tenant boundary — it runs
+strictly *earlier* than it.
 - Unknown/unapproved field: `422` (`extra="forbid"` on the shared schema —
   unchanged, pre-existing).
 - Whitespace-only title: `422` — found, during this milestone's audit, to
@@ -492,3 +643,19 @@ Studio side-by-side proposal review. None of these were started.
    outside the drafts editor, is unscoped work for a future pass.
 3. No migration was added or needed — this was verified, not assumed,
    against the actual write path before deciding so.
+4. `draft-editor-concurrency.spec.ts` is not idempotent across Playwright
+   projects when both are pointed at one pre-seeded `E2E_PRODUCT_ID`. Its
+   `"Save my version anyway"` test both hard-codes a title *and* persists
+   it, so when chromium and mobile-chrome run in parallel against the same
+   row, the second project's `fill()` writes a value the field already
+   holds — no change event, never dirty, Save stays disabled, timeout. It
+   passes 32/32 serially, and in CI (which seeds a fresh product per run
+   and runs chromium only). Left as-is rather than papered over: it is a
+   fixture-sharing limitation of the *test*, not editor behaviour, and
+   fixing it belongs with a broader per-project seeding change.
+5. The `conflictLocalSnapshot` shown in review is frozen at the 409. The
+   fields stay editable while the banner is open, so a merchant who keeps
+   typing during a conflict will see the review comparison show what was
+   rejected while "Save my version anyway" sends what is currently on
+   screen. Both are defensible; they differ only if the merchant edits
+   *after* the conflict, and the on-screen values are what they can see.
