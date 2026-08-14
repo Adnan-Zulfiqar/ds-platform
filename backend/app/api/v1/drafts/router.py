@@ -110,9 +110,20 @@ async def update_draft(
     product_id: Annotated[uuid.UUID, Path()],
     payload: ProductUpdateRequest,
 ) -> ProductDetailRead:
-    """Apply PATCH semantics via :class:`ProductService` — same as products."""
+    """Save merchant edits via :class:`ProductService.update_draft` (M2A).
+
+    Draft-specific, unlike the plain ``ProductService.update_product`` the
+    general ``/products/{id}`` PATCH uses: blocks editing a product that has
+    already been published to a channel, and **requires** ``expectedUpdatedAt``
+    (acceptance-pass hardening — 422 if omitted, see
+    ``ProductService.update_draft``'s docstring for why this is mandatory
+    here specifically and not on the shared schema).
+    """
     changes = payload.model_dump(exclude_unset=True)
-    product = await ProductService(session).update_product(product_id, changes)
+    expected_updated_at = changes.pop("expected_updated_at", None)
+    product = await ProductService(session).update_draft(
+        product_id, changes, expected_updated_at=expected_updated_at
+    )
     return _to_detail(product)
 
 

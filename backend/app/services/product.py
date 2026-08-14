@@ -10,6 +10,7 @@ of where the product came from — the same separation
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
@@ -43,34 +44,167 @@ class ProductService(BaseService):
         self.images = ProductImageRepository(session)
         self.variants = ProductVariantRepository(session)
 
-    async def update_product(self, product_id: uuid.UUID, changes: dict[str, Any]) -> Product:
+    async def update_product(
+        self,
+        product_id: uuid.UUID,
+        changes: dict[str, Any],
+        *,
+        expected_updated_at: datetime | None = None,
+    ) -> Product:
         """Apply merchant-supplied changes to a product's editable fields.
 
         ``changes`` is expected to already be reduced to only the fields the
         caller actually sent (``model_dump(exclude_unset=True)``) — every key
         present here is written, so an absent key must mean "no change," not
         "clear it."
+
+        ``expected_updated_at`` (M2A), when supplied, turns this into a
+        compare-and-swap: the write only lands if the row's ``updated_at``
+        still equals what the caller last saw, enforced atomically by
+        :meth:`ProductRepository.update_if_unmodified_since`. This is the
+        platform's optimistic-concurrency mechanism — deliberately reusing
+        the existing, database-generated ``updated_at`` column
+        (``TimestampMixin``) instead of adding a dedicated version column,
+        since it is already atomic and already present on every tenant-scoped
+        table. See ``docs/dsers-parity/M2_PREMIUM_EDITOR.md``. Omitting it
+        preserves the exact pre-M2A behaviour (last write wins) for any
+        caller that does not yet send it.
         """
         product = await self.products.get_by_id_or_raise(product_id)
 
-        if "description" in changes:
+        # A true no-op — nothing in `changes` actually differs from the
+        # stored row — is filtered out before any write is attempted.
+        # Issuing an UPDATE anyway would still bump `updated_at` (Postgres
+        # fires `onupdate` for any UPDATE statement regardless of whether
+        # values changed), which would misrepresent "last edited" and could
+        # spuriously invalidate a concurrent editor's still-valid version
+        # token for a save that changed nothing.
+        effective_changes = {
+            field: value
+            for field, value in changes.items()
+            if getattr(product, field, object()) != value
+        }
+
+        if "description" in effective_changes:
             # Merchant-submitted text is untrusted the same way supplier text
             # is. Sanitized here, once, before storage — never at render
             # time — the same policy `ProductImportService` already applies
             # to the supplier's own description.
-            changes["description"] = sanitize_html(changes["description"])
+            effective_changes["description"] = sanitize_html(effective_changes["description"])
 
-        new_slug = changes.get("slug")
+        new_slug = effective_changes.get("slug")
         if new_slug:
             owner = await self.products.get_by_slug(new_slug)
             if owner is not None and owner.id != product_id:
                 raise ConflictError("That URL slug is already used by another product.")
 
-        for field, value in changes.items():
+        if not effective_changes:
+            return product
+
+        if expected_updated_at is not None:
+            updated = await self.products.update_if_unmodified_since(
+                product_id,
+                expected_updated_at=expected_updated_at,
+                **effective_changes,
+            )
+            if not updated:
+                raise ConflictError(
+                    "This item was changed since you loaded it. Reload to see "
+                    "the latest version before saving again.",
+                )
+            return await self._reload_product(product_id)
+
+        for field, value in effective_changes.items():
             setattr(product, field, value)
 
         await self.flush()
         return product
+
+    async def update_draft(
+        self,
+        product_id: uuid.UUID,
+        changes: dict[str, Any],
+        *,
+        expected_updated_at: datetime | None = None,
+    ) -> Product:
+        """Save merchant edits from the Drafts editor (M2A / M2A acceptance).
+
+        Same write path as :meth:`update_product`, plus two rules specific
+        to this surface:
+
+        1. **`expected_updated_at` is mandatory here** (acceptance-pass
+           hardening — it stayed optional on the shared schema, but this
+           method is the only caller that may omit it, and this method no
+           longer allows that). A draft is edited by exactly the kind of
+           multi-tab, walk-away-and-come-back workflow optimistic
+           concurrency exists for; letting a save silently skip the check
+           because a client forgot to send the field would defeat the whole
+           M2A guarantee for the one surface it was built for. Checked
+           before any database lookup, so the response does not depend on
+           whether the id exists or belongs to this tenant — a missing
+           token gets the identical 422 either way, leaking nothing.
+        2. A product that has already been published to a channel is
+           edited from the Products detail view, not through this
+           drafts-only endpoint — publishing is what promotes a row out of
+           Drafts in the first place (``ProductRepository._synced_listing_exists``),
+           so editing it back through ``/drafts/{id}`` would be editing a
+           "draft" that no longer is one.
+
+        A missing or foreign ``product_id`` is deliberately **not**
+        distinguished here — it falls through to ``update_product``'s own
+        ``get_by_id_or_raise``, which already returns the correct 404 for
+        both "does not exist" and "belongs to another tenant". Checking
+        publication first would leak "it exists but you can't see it" as a
+        different response shape than "it doesn't exist" for a foreign id.
+
+        Other candidate not-editable states from the M2A brief — an import
+        still in flight, or one that failed — were audited against
+        ``ProductImportService.import_product`` and found not to apply here:
+        a ``Product`` row is only ever created or updated by ``_upsert``
+        *after* a supplier fetch succeeds, inside the same request-scoped
+        transaction that fails and rolls back entirely on any error
+        (``get_db_session``). There is no reachable state where a persisted,
+        navigable draft row corresponds to an in-progress or failed import —
+        those exist only as ``ProductImport`` audit rows with no
+        ``product_id``, surfaced in Import History, never as an editable
+        draft. Inventing a gate for a state this data model cannot produce
+        would be speculative, not defensive.
+
+        **`/products/{id}`'s own PATCH deliberately keeps the token
+        optional and does not gate on publication.** Audited (M2A
+        acceptance pass) rather than assumed: no frontend code calls it —
+        `frontend/services/products.ts` only ever `GET`s a product by id —
+        and it predates M2A as a general "edit any imported product"
+        endpoint (`ProductService`'s own module docstring: "merchant edits
+        to an already-imported product", not "already-published"), already
+        exercised by `test_product_update.py` against freshly-imported
+        (unpublished) products as its normal case. Restricting it to
+        published-only products would break that established, intentional,
+        pre-M2A behaviour to close a path that grants no privilege a caller
+        doesn't already have — reaching either endpoint requires the same
+        tenant-scoped admin authentication. Left unchanged; recorded here
+        as an audited, deliberate decision rather than an oversight.
+        """
+        if expected_updated_at is None:
+            raise ValidationError(
+                "expectedUpdatedAt is required to save a draft. Reload the "
+                "draft to get its current version, then save again — this "
+                "is what lets the server tell a stale save apart from a "
+                "current one instead of silently overwriting a newer "
+                "change.",
+            )
+
+        found = await self.products.get_by_id_with_publication(product_id)
+        if found is not None:
+            _, is_published = found
+            if is_published:
+                raise ConflictError(
+                    "This product has already been published and is no "
+                    "longer a draft. Edit it from Products instead.",
+                )
+        return await self.update_product(
+            product_id, changes, expected_updated_at=expected_updated_at
+        )
 
     async def add_image(
         self,

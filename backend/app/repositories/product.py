@@ -191,6 +191,26 @@ class ProductRepository(TenantScopedRepository[Product]):
         product, is_published = row
         return product, bool(is_published)
 
+    async def get_by_id_with_publication(
+        self, product_id: uuid.UUID
+    ) -> tuple[Product, bool] | None:
+        """Fetch a tenant-owned product together with whether it is published.
+
+        Same shape as :meth:`find_duplicate`, reusing the identical
+        ``_synced_listing_exists()`` predicate so "is this published" can
+        never disagree between the two lookup paths. Backs the drafts
+        editor's publish-state edit gate (M2A) — a product already pushed
+        to a channel is edited from Products, not through ``/drafts/{id}``.
+        """
+        query = self._base_query().where(Product.id == product_id)
+        query = query.add_columns(self._synced_listing_exists().label("is_published"))
+        result = await self.session.execute(query)
+        row = result.first()
+        if row is None:
+            return None
+        product, is_published = row
+        return product, bool(is_published)
+
     async def get_by_slug(self, slug: str) -> Product | None:
         """Find a product by its merchant-set URL slug, within this tenant.
 

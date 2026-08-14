@@ -54,6 +54,7 @@ class TestDraftEditorApi:
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         headers, product = await _seed(client, db_session)
+        loaded = (await client.get(f"{DRAFTS_URL}/{product.id}", headers=headers)).json()
 
         response = await client.patch(
             f"{DRAFTS_URL}/{product.id}",
@@ -61,6 +62,10 @@ class TestDraftEditorApi:
             json={
                 "title": "Merchant edited title",
                 "description": "<p>Merchant <strong>HTML</strong></p><script>alert(1)</script>",
+                # M2A acceptance pass: expectedUpdatedAt is now mandatory for
+                # this endpoint -- see test_draft_editor_concurrency.py for
+                # the dedicated coverage of missing/malformed/stale tokens.
+                "expectedUpdatedAt": loaded["updatedAt"],
             },
         )
         assert response.status_code == 200, response.text

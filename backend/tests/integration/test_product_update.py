@@ -8,13 +8,14 @@ imported product, the same pattern the stage 1 description-import tests and
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
@@ -163,6 +164,20 @@ class TestValidation:
         )
         assert response.status_code == 422, response.text
 
+    async def test_a_whitespace_only_title_is_rejected(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """M2A: `str_strip_whitespace` (`AppBaseModel`) trims `"   "` to `""`
+        before `_reject_blank_when_provided` ever sees it, so this is already
+        covered by the same validator as an explicit empty string -- proven
+        here directly rather than assumed from reading the config."""
+        headers, product = await import_a_product(client, monkeypatch)
+
+        response = await client.patch(
+            f"/api/v1/products/{product['id']}", json={"title": "   "}, headers=headers
+        )
+        assert response.status_code == 422, response.text
+
     @pytest.mark.parametrize("field", ["brand", "categoryName", "vendor", "seoTitle", "slug"])
     async def test_plain_text_fields_reject_an_explicit_empty_string(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch, field: str
@@ -227,6 +242,42 @@ async def _second_product_for_same_tenant(
     db_session.add(second)
     await db_session.flush()
     return second.id
+
+
+class TestOptimisticConcurrency:
+    """Full coverage of the compare-and-swap mechanism lives in
+    `test_draft_editor_concurrency.py` against `/drafts/{id}` -- the actual
+    M2A editor surface. This proves the same shared `ProductService.update_product`
+    path stays available (and backward compatible) from `/products/{id}` too."""
+
+    async def test_a_stale_expected_updated_at_is_rejected(
+        self,
+        client: AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+        db_session: AsyncSession,
+    ) -> None:
+        """A concurrent write is simulated as a direct row update rather
+        than a second PATCH -- this test's fixtures share one transaction,
+        and Postgres's `now()` is frozen for its duration, so a second HTTP
+        call could not actually move `updatedAt` here regardless of whether
+        the compare-and-swap works. See the equivalent, more detailed
+        docstring in `test_draft_editor_concurrency.py`."""
+        headers, product = await import_a_product(client, monkeypatch)
+
+        concurrent_write_at = datetime.fromisoformat(product["updatedAt"]) + timedelta(seconds=5)
+        await db_session.execute(
+            update(Product)
+            .where(Product.id == uuid.UUID(product["id"]))
+            .values(updated_at=concurrent_write_at)
+        )
+        await db_session.flush()
+
+        stale = await client.patch(
+            f"/api/v1/products/{product['id']}",
+            json={"title": "Stale Edit", "expectedUpdatedAt": product["updatedAt"]},
+            headers=headers,
+        )
+        assert stale.status_code == 409, stale.text
 
 
 class TestSlugConflict:

@@ -17,9 +17,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import CursorResult, Select, func, or_, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,6 +371,86 @@ class TenantScopedRepository(BaseRepository[ModelType]):
         # remembering not to pass it.
         values.pop("tenant_id", None)
         return await super().update(entity, **values)
+
+    async def update_if_unmodified_since(
+        self,
+        entity_id: uuid.UUID,
+        *,
+        expected_updated_at: datetime,
+        **values: Any,
+    ) -> bool:
+        """Atomic compare-and-swap: apply ``values`` only if ``updated_at``
+        still equals ``expected_updated_at``.
+
+        The platform's minimal optimistic-concurrency mechanism (M2A — see
+        ``docs/dsers-parity/M2_PREMIUM_EDITOR.md``). Reusing the
+        database-generated ``updated_at`` every tenant-scoped table already
+        carries (``TimestampMixin``) needs no migration and stays accurate
+        for free — Postgres bumps it in the same statement that applies the
+        write. The guard lives entirely in the ``UPDATE``'s ``WHERE``
+        clause, so the compare-and-write is one atomic database operation:
+        two requests racing this call cannot both succeed, which a
+        read-then-compare-in-Python approach could not guarantee.
+
+        Returns whether the row was updated. Existence/tenant ownership is
+        deliberately **not** checked here — a caller that needs to tell
+        "does not exist" apart from "was changed by someone else" should
+        fetch the row first (e.g. ``get_by_id_or_raise``, which already
+        gives the correct 404 for a missing or foreign id) and treat a
+        ``False`` return from this method as a genuine conflict, not a
+        404.
+
+        **Limitation, stated plainly:** this cannot distinguish "another
+        editor changed this row" from "a background sync refreshed it" —
+        both bump ``updated_at`` identically. That is the intended,
+        conservative behaviour (any concurrent write invalidates a stale
+        save) rather than a gap, but it does mean a save can occasionally
+        be rejected by a routine re-sync rather than only by a true
+        editor-vs-editor conflict.
+        """
+        if not values:
+            return True
+
+        for field in values:
+            if not hasattr(self.model, field):
+                raise ValidationError(f"Unknown field {field!r} on {self.model.__name__}.")
+
+        tenant_column = getattr(self.model, "tenant_id", None)
+        if tenant_column is None:
+            raise TypeError(
+                f"{self.model.__name__} has no tenant_id column and cannot be "
+                "used with TenantScopedRepository."
+            )
+
+        conditions = [
+            self.model.id == entity_id,
+            tenant_column == require_tenant_id(),
+            self.model.updated_at == expected_updated_at,
+        ]
+        deleted_at = getattr(self.model, "deleted_at", None)
+        if deleted_at is not None:
+            conditions.append(deleted_at.is_(None))
+
+        # `updated_at` is set explicitly here rather than left for the
+        # column's `onupdate=func.now()` to fire implicitly. That default
+        # is reliable for an ORM-tracked `flush()`, but this statement is a
+        # Core-style bulk UPDATE that never goes through unit-of-work
+        # flush -- relying on the implicit path here left `updated_at`
+        # unmoved after a successful write in testing, which would have
+        # silently defeated the entire compare-and-swap (a "stale" second
+        # write would find the version unchanged and succeed). Stating it
+        # explicitly makes the version bump a guaranteed part of this exact
+        # statement, not a hoped-for side effect. Popped from `values`
+        # first so this method is always the sole authority over it, even
+        # if a caller's dict happened to carry a same-named key.
+        values.pop("updated_at", None)
+        stmt = sa_update(self.model).where(*conditions).values(updated_at=func.now(), **values)
+        result = await self.session.execute(stmt)
+        # `rowcount` exists on the cursor result returned by UPDATE and DELETE,
+        # but `execute` is typed as returning the general Result (same pattern
+        # as `RefreshTokenRepository.revoke_all_for_user`).
+        rowcount = cast("CursorResult[Any]", result).rowcount
+        return bool(rowcount and rowcount > 0)
 
 
 __all__ = ["BaseRepository", "ModelType", "TenantScopedRepository"]
