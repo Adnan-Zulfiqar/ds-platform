@@ -15,7 +15,8 @@ unit of risk — import/editor/publish is the spine every later milestone
 |---|---|---|---|
 | M1 | AliExpress Product Import → Editable Draft | — | **Delivered** (this document's sibling: [M1_IMPORT_TO_DRAFTS.md](M1_IMPORT_TO_DRAFTS.md)) |
 | M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered, acceptance-fix pass applied 2026-08-13** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
-| M2B–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
+| M2B | Premium Product Editor — rich-text description | M2A | **Delivered** |
+| M2C–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
 | M3 | Publish-to-Store Hardening & Multi-Store Publish | M1, existing Shopify OAuth | Planned |
 | M4 | Bulk Import & Feed-Based Sourcing | M1 | Planned |
 | M5 | Order → Fulfilment Bridge (tracking push-back) | Existing order sync | Planned |
@@ -74,12 +75,18 @@ confirmed with code and test evidence. Nothing here rebuilds SEO, variants,
 pricing, inventory, shipping, or media — all of those are already delivered
 (see §3) and stay untouched by M2B–E.
 
-- **M2B — Rich text description editing.** Description is edited as plain
-  sanitized text (a `<textarea>`); no rich editor component exists anywhere
-  in the codebase. Scope: a rich-text or Markdown editor for the existing
-  `description` field, through the existing sanitize-on-save path — the
-  sanitizer already strips executable content, so this is an editor-UI
-  addition, not a new server-side trust boundary.
+- **M2B — Rich text description editing. Delivered 2026-08-17**; see
+  [M2B_RICH_TEXT_DESCRIPTION.md](M2B_RICH_TEXT_DESCRIPTION.md). TipTap
+  replaced the raw-HTML `<textarea>` on the existing `description` field and
+  the existing sanitize-on-save path, with no change to the storage format.
+  The scoping above called it "an editor-UI addition, not a new server-side
+  trust boundary" — accurate about the trust boundary, but it did require
+  one backend change: sanitization now runs *before* the no-op comparison in
+  `ProductService.update_product`, because a WYSIWYG editor re-serialises
+  markup on every keystroke and the old ordering read that as a change.
+  Two data-integrity defects were found and fixed during the build, both
+  invisible to the backend suite because they lived in ProseMirror's parse
+  step; both now have regression tests.
 - **M2C — Bulk variant editing.** `PATCH /drafts/{id}/variants/{variantId}`
   is single-variant only; `draft-variants-panel.tsx` has no selection or
   apply-to-all mechanism. Scope: a bulk price/SKU rule applied across some

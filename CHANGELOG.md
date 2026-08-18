@@ -12,6 +12,15 @@ production release.
 
 ### Added
 
+- **M2B — Rich-text product description** — TipTap 3 editor
+  (`rich-text-description-editor.tsx`) replaces the raw-HTML `<textarea>` on
+  the draft editor's Description tab. **Storage format unchanged** (sanitized
+  HTML in `products.description`), so no migration and no change to the
+  Shopify publish path. `DESCRIPTION_MAX_LENGTH = 64_000` is now enforced at
+  the API boundary and shown as a live counter. No image insertion or upload
+  (that is M2D-A); existing supplier images and tables are preserved. See
+  `docs/dsers-parity/M2B_RICH_TEXT_DESCRIPTION.md`.
+
 - **M24A — Shopify selling-currency authority + production FX** — GraphQL
   `shop.currencyCode` sync (Admin API **2026-07**); migration `0020`
   `stores.currency_last_synced_at` (nullable, never backfilled); Open Exchange
@@ -21,6 +30,24 @@ production release.
   (M24B/M24C remain).
 
 ### Fixed
+
+- **Draft description saves no longer write on every autosave (M2B)** —
+  `ProductService.update_product` sanitized the description *after* the
+  no-op comparison, so a rich-text client's re-serialised markup (`<br />`
+  vs `<br>`, a stripped `class`, a rewritten `rel`) read as a change and
+  wrote an identical value, moving `updated_at` and spuriously invalidating
+  other editors' version tokens every 1.8s. Sanitization now runs first.
+- **Opening a draft no longer rewrites it (M2B)** — the rich-text editor
+  treated ProseMirror's own normalisation transactions as merchant edits,
+  marking the form dirty on load and autosaving a draft nobody had touched.
+  Edits are now recognised from actual input (DOM events and toolbar
+  commands), not from any document change.
+- **Supplier images and tables are no longer destroyed by the description
+  editor (M2B)** — the editor's initial schema had no image or table node,
+  so ProseMirror discarded them on parse and the autosave above persisted
+  the loss. The schema now covers everything the sanitizer allows; note
+  that "can exist in the document" and "can be created from the toolbar"
+  are deliberately different sets.
 
 - **Pricing currency integrity** — Prohibit 1:1 cross-currency conversion;
   block calculated profit/proposed prices when FX is required and unavailable;

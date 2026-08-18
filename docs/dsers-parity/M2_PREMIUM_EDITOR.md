@@ -742,7 +742,11 @@ is in the final delivery report.
 Unchanged scope, still missing, tracked in
 [MASTER_ROADMAP.md](MASTER_ROADMAP.md): rich-text/markdown description
 editing, bulk variant editing, image crop/watermark editing, and the AI
-Studio side-by-side proposal review. None of these were started.
+Studio side-by-side proposal review. None of these were started **at the
+time of this document**. Rich-text description editing has since been
+delivered as M2B — see
+[M2B_RICH_TEXT_DESCRIPTION.md](M2B_RICH_TEXT_DESCRIPTION.md); the rest
+remain unstarted.
 
 ## Known limitations
 
