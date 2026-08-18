@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -113,6 +114,8 @@ class PricingRule(TenantScopedBase):
     __table_args__ = (
         Index("ix_pricing_rules_tenant_scope", "tenant_id", "scope", "priority"),
         UniqueConstraint("tenant_id", "name", name="uq_pricing_rules_tenant_name"),
+        # FK target for `global_rule_versions`; see migration 0024.
+        UniqueConstraint("tenant_id", "id", name="uq_pricing_rules_tenant_id_id"),
     )
 
     name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -314,6 +317,8 @@ class ShippingRule(TenantScopedBase):
     __table_args__ = (
         Index("ix_shipping_rules_tenant_scope", "tenant_id", "scope", "priority"),
         UniqueConstraint("tenant_id", "name", name="uq_shipping_rules_tenant_name"),
+        # FK target for `global_rule_versions`; see migration 0024.
+        UniqueConstraint("tenant_id", "id", name="uq_shipping_rules_tenant_id_id"),
     )
 
     name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -404,8 +409,26 @@ class GlobalRuleVersion(TenantScopedBase):
     __table_args__ = (
         Index("ix_global_rule_versions_tenant_rule", "tenant_id", "rule_kind", "rule_id"),
         Index("ix_global_rule_versions_tenant_created", "tenant_id", "created_at"),
+        Index(
+            "ix_global_rule_versions_tenant_kind_created",
+            "tenant_id",
+            "rule_kind",
+            "created_at",
+        ),
         UniqueConstraint(
             "tenant_id", "rule_kind", "rule_id", "version", name="uq_global_rule_version"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "pricing_rule_id"],
+            ["pricing_rules.tenant_id", "pricing_rules.id"],
+            name="fk_global_rule_versions_pricing_rule",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "shipping_rule_id"],
+            ["shipping_rules.tenant_id", "shipping_rules.id"],
+            name="fk_global_rule_versions_shipping_rule",
+            ondelete="RESTRICT",
         ),
     )
 
@@ -417,10 +440,25 @@ class GlobalRuleVersion(TenantScopedBase):
         ),
         nullable=False,
     )
-    #: Deliberately not a ForeignKey. History outlives the rule it describes,
-    #: and a cascade delete would erase the audit trail at exactly the moment
-    #: someone wants to read it.
+    #: The rule this entry describes. ``rule_kind`` selects which table it
+    #: refers to, which is why it carries no foreign key of its own -- one
+    #: column cannot reference two tables. The typed columns below carry the
+    #: actual referential integrity (M3A-2, migration 0024); this stays
+    #: because every query reads it and a join through two nullable columns
+    #: would be worse to read than a denormalised key a CHECK keeps honest.
     rule_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    #: Exactly one of these is set, matching ``rule_kind``, and each carries a
+    #: **composite** foreign key on ``(tenant_id, rule_id)``. The composite is
+    #: the point: a single-column reference would let a version row in one
+    #: tenant point at a rule in another, with only application code in the
+    #: way. Rules are soft-deleted, so these never block history from
+    #: outliving a deleted rule -- the row it points at is still there.
+    pricing_rule_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    shipping_rule_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    #: Frozen copy of the rule as it stood at this version. The previous/new
+    #: value pairs describe the *delta*; this answers "what were all the
+    #: settings when this price was calculated" without replaying history.
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     #: Field names that differ between ``previous_values`` and ``new_values``.
     changed_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)

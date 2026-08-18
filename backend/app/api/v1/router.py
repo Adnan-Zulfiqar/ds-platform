@@ -23,6 +23,7 @@ from app.api.v1 import (
     auth,
     automation,
     drafts,
+    global_rules,
     integrations,
     inventory,
     notifications,
@@ -46,6 +47,7 @@ api_router.include_router(ai.router)
 api_router.include_router(stores.router)
 api_router.include_router(orders.router)
 api_router.include_router(inventory.router)
+api_router.include_router(global_rules.router)
 api_router.include_router(pricing.router)
 api_router.include_router(automation.router)
 api_router.include_router(notifications.router)
