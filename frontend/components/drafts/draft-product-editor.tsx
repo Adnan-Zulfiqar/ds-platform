@@ -22,6 +22,10 @@ import {
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
 import { readinessFor } from "@/components/drafts/editor-header/readiness";
+import {
+  DESCRIPTION_MAX_LENGTH,
+  RichTextDescriptionEditor,
+} from "@/components/drafts/rich-text-description-editor";
 import type { SaveState } from "@/components/drafts/editor-header/save-state-indicator";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -38,7 +42,6 @@ import {
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { cn, formatDateTime, formatMoney } from "@/lib/utils";
 import {
   draftKeys,
@@ -1182,30 +1185,26 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 Description
               </h2>
               <p className="text-sm text-muted-foreground">
-                Edit sanitized HTML for your listing. Supplier refresh will not
+                Write your listing description. Supplier refresh will not
                 overwrite this field once it differs from the supplier snapshot.
               </p>
               <div className="space-y-2">
-                <Label htmlFor="draft-description">Merchant description</Label>
-                <Textarea
-                  id="draft-description"
-                  className="min-h-[280px] font-mono text-sm"
+                <Label htmlFor="draft-description-editor">Merchant description</Label>
+                {/* M2B: replaced a raw-HTML textarea. The editor is WYSIWYG,
+                    but the stored format is unchanged -- sanitized HTML in
+                    the same `description` column -- so existing drafts and
+                    the Shopify publish path need no migration. The separate
+                    "HTML preview" pane that used to sit here is gone: the
+                    editor now *is* the preview, and a second rendering of
+                    the same string was only ever useful when the input
+                    showed source. */}
+                <RichTextDescriptionEditor
                   value={description}
-                  onChange={(event) => {
-                    setDescription(event.target.value);
+                  disabled={isConflicted}
+                  maxLength={DESCRIPTION_MAX_LENGTH}
+                  onChange={(html) => {
+                    setDescription(html);
                     setDirty(true);
-                  }}
-                  data-testid="draft-description-input"
-                />
-              </div>
-              <div className="rounded-lg border p-4">
-                <h3 className="mb-2 text-sm font-semibold">HTML preview</h3>
-                <div
-                  className="prose prose-sm dark:prose-invert max-w-none"
-                  data-testid="draft-description-preview"
-                  // Sanitized on the server before storage; never raw supplier HTML.
-                  dangerouslySetInnerHTML={{
-                    __html: description || "<p class='text-muted-foreground'>No description yet.</p>",
                   }}
                 />
               </div>
