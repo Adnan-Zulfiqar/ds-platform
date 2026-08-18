@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,7 @@ from app.schemas.pricing import (
 from app.services.base import BaseService
 from app.services.fx import FxService, get_fx_service
 from app.services.notification_service import NotificationService
+from app.services.rule_resolution import RuleResolution, resolve_pricing_rule
 
 logger = get_logger(__name__)
 
@@ -110,6 +111,39 @@ REVIEW_FX_UNAVAILABLE = "fx_rate_unavailable"
 REVIEW_NO_SHIPPING_MATCH = "no_shipping_method_matches"
 
 
+class CostBearing(Protocol):
+    """The three fields :func:`calculate_price` actually reads.
+
+    Structural rather than `Product` on purpose: the currency-converted path
+    must be able to price a *view* of a product's costs without mutating the
+    row, because the supplier's own figures are a snapshot and have to stay
+    in the supplier's currency.
+    """
+
+    cost_price_min: Decimal | None
+    shipping_cost: Decimal | None
+    currency: str | None
+
+
+# Not frozen: `CostBearing` describes settable attributes (a real `Product`
+# has them), and a frozen dataclass exposes read-only ones, which does not
+# satisfy the protocol. Nothing mutates this object -- it is constructed once
+# and discarded.
+@dataclass(slots=True)
+class _CostView:
+    """A product's cost fields after currency conversion.
+
+    Deliberately not a mutated ``Product``. The supplier's own cost figures
+    are a snapshot and must stay in the supplier's currency; writing
+    converted values back onto the row -- even transiently -- is how a
+    snapshot silently becomes a derived value.
+    """
+
+    cost_price_min: Decimal | None
+    shipping_cost: Decimal | None
+    currency: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class LandedCost:
     """What a product actually costs to put in a customer's hands.
@@ -144,7 +178,7 @@ class LandedCost:
 
 
 def landed_cost(
-    product: Product,
+    product: CostBearing,
     *,
     rule: PricingRule | None = None,
     shipping_cost: Decimal | None = None,
@@ -400,7 +434,7 @@ class PriceCalculation:
 
 
 def calculate_price(
-    product: Product,
+    product: CostBearing,
     *,
     rule: PricingRule | None,
     shipping_cost: Decimal | None = None,
@@ -474,28 +508,22 @@ def select_rule(
     product_id: uuid.UUID,
     store_id: uuid.UUID | None,
     category_id: str | None,
+    variant_id: uuid.UUID | None = None,
 ) -> PricingRule | None:
-    """Pick the narrowest matching rule; priority breaks ties."""
-    matching: list[PricingRule] = []
-    for rule in candidates:
-        if rule.scope is PricingScope.PRODUCT and rule.product_id == product_id:
-            matching.append(rule)
-        elif (
-            rule.scope is PricingScope.CATEGORY
-            and category_id is not None
-            and rule.category_id == category_id
-        ):
-            matching.append(rule)
-        elif (
-            rule.scope is PricingScope.STORE and store_id is not None and rule.store_id == store_id
-        ):
-            matching.append(rule)
-        elif rule.scope is PricingScope.GLOBAL:
-            matching.append(rule)
-    if not matching:
-        return None
-    matching.sort(key=lambda r: (_SCOPE_RANK[r.scope], r.priority), reverse=True)
-    return matching[0]
+    """Pick the narrowest matching rule; priority breaks ties.
+
+    Kept as a thin forwarder rather than deleted: it is the shape existing
+    callers and tests use. The precedence itself lives in
+    ``app.services.rule_resolution`` so pricing and shipping cannot drift
+    apart, and so the M3A variant scope is honoured everywhere at once.
+    """
+    return resolve_pricing_rule(
+        candidates,
+        product_id=product_id,
+        variant_id=variant_id,
+        store_id=store_id,
+        category_id=category_id,
+    ).rule
 
 
 class PricingEngine(BaseService):
@@ -608,31 +636,81 @@ class PricingEngine(BaseService):
         return changes
 
     async def _propose(self, product: Product) -> tuple[Decimal | None, PricingRule | None]:
-        cost = product.cost_price_min
-        if cost is None:
-            return None, None
+        """Backwards-compatible wrapper over :meth:`propose_calculation`."""
+        calculation = await self.propose_calculation(product)
+        return calculation.price, calculation.rule
+
+    async def propose_calculation(self, product: Product) -> PriceCalculation:
+        """The single catalogue-side entry point for "what should this cost?".
+
+        Everything the preview, the apply and the audit row need comes from
+        one object, so they cannot disagree about how a figure was reached.
+
+        The pre-M3A version of this passed ``product.cost_price_min`` -- the
+        bare item price -- into a function whose contract is a *landed* cost.
+        ``min_profit`` therefore promised profit that supplier shipping could
+        erase entirely. It now goes through :func:`calculate_price`, which
+        adds supplier shipping and known duty/fees, and which refuses to
+        invent a price when either is unknown.
+        """
+        resolution = await self.resolve_for(product)
+        rule = resolution.rule
+        if rule is None:
+            # Not an error: the product simply has no governing rule and
+            # keeps whatever price it already has.
+            return calculate_price(product, rule=None)
+
+        # Catalogue rules may only price when the rule currency matches the
+        # product currency -- cross-currency goes through FxService on the
+        # draft workspace path, where a missing rate fails closed.
+        try:
+            converted_item = (
+                None
+                if product.cost_price_min is None
+                else convert_currency(
+                    product.cost_price_min,
+                    from_currency=product.currency,
+                    to_currency=rule.currency,
+                )
+            )
+            converted_shipping = (
+                None
+                if product.shipping_cost is None
+                else convert_currency(
+                    product.shipping_cost,
+                    from_currency=product.currency,
+                    to_currency=rule.currency,
+                )
+            )
+        except FxUnavailableError:
+            return calculate_price(
+                product, rule=rule, extra_review_reasons=(REVIEW_FX_UNAVAILABLE,)
+            )
+
+        if converted_item is not None and converted_item != product.cost_price_min:
+            # A conversion happened; price on the converted figures without
+            # mutating the product, whose cost fields stay supplier-native.
+            shadow = _CostView(
+                cost_price_min=converted_item,
+                shipping_cost=converted_shipping,
+                currency=rule.currency or product.currency,
+            )
+            return calculate_price(shadow, rule=rule)
+        return calculate_price(product, rule=rule)
+
+    async def resolve_for(self, product: Product) -> RuleResolution[PricingRule]:
+        """Which pricing rule governs ``product``, and why."""
         candidates = await self.rules.find_candidates(
             product_id=product.id,
             store_id=product.store_id,
             category_id=product.category_id,
         )
-        rule = select_rule(
+        return resolve_pricing_rule(
             candidates,
             product_id=product.id,
             store_id=product.store_id,
             category_id=product.category_id,
         )
-        if rule is None:
-            return None, None
-        # Catalogue rules may only price when rule currency matches product
-        # currency — cross-currency requires FxService (draft workspace path).
-        try:
-            amount = convert_currency(
-                cost, from_currency=product.currency, to_currency=rule.currency
-            )
-        except FxUnavailableError:
-            return None, rule
-        return compute_sell_price(cost=amount, rule=rule), rule
 
     async def _target_products(
         self,
