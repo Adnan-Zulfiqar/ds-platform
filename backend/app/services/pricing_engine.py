@@ -11,8 +11,9 @@ pricing calculations — never invent a 1:1 cross-currency rate.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,14 @@ from app.core.logging import get_logger
 from app.domain.fx import FxRateStatus
 from app.domain.money import Money, normalise_currency
 from app.models.notification import NotificationKind
-from app.models.pricing import PriceChange, PricingRule, PricingScope, PricingStrategy
+from app.models.pricing import (
+    PriceChange,
+    PriceRounding,
+    PricingRule,
+    PricingScope,
+    PricingStrategy,
+    ShippingCostHandling,
+)
 from app.models.product import Product
 from app.models.store import StorePlatform
 from app.repositories.pricing import PriceChangeRepository, PricingRuleRepository
@@ -92,8 +100,193 @@ def convert_currency(
     return amount
 
 
+#: Reasons a product cannot be priced with confidence. Strings rather than an
+#: enum because they cross the API boundary into merchant-facing copy, and the
+#: frontend needs to map each to a specific "here is what to do" instruction.
+REVIEW_SUPPLIER_COST_UNKNOWN = "supplier_cost_unknown"
+REVIEW_SHIPPING_COST_UNKNOWN = "shipping_cost_unknown"
+REVIEW_SUPPLIER_CURRENCY_UNKNOWN = "supplier_currency_unknown"
+REVIEW_FX_UNAVAILABLE = "fx_rate_unavailable"
+REVIEW_NO_SHIPPING_MATCH = "no_shipping_method_matches"
+
+
+@dataclass(frozen=True, slots=True)
+class LandedCost:
+    """What a product actually costs to put in a customer's hands.
+
+    ``review_reasons`` is the load-bearing part. A product whose supplier
+    shipping quote is unknown does **not** get a zero and a confident price:
+    zero is a number, and a wrong one, on exactly the cheap heavy items where
+    shipping dominates. It gets priced on what is known, flagged, and held
+    out of automatic publishing until a human has looked.
+
+    ``amount`` is what the pricing strategy is applied to;
+    ``profit_basis`` is what profit is measured against. They differ under
+    ``ABSORB_FROM_PROFIT``, where the merchant chooses to price as if
+    shipping were free but still needs the profit figure to be honest.
+    """
+
+    amount: Decimal
+    profit_basis: Decimal
+    currency: str | None
+    item_cost: Decimal
+    shipping_cost: Decimal
+    fees: Decimal
+    handling: ShippingCostHandling
+    review_reasons: tuple[str, ...] = ()
+    #: Set when shipping is billed to the customer separately rather than
+    #: folded into the item price.
+    separate_shipping_charge: Decimal | None = None
+
+    @property
+    def needs_review(self) -> bool:
+        return bool(self.review_reasons)
+
+
+def landed_cost(
+    product: Product,
+    *,
+    rule: PricingRule | None = None,
+    shipping_cost: Decimal | None = None,
+) -> LandedCost:
+    """``item + supplier shipping + known duty/fees``, in the supplier currency.
+
+    Deliberately does no FX. Both cost components are already denominated in
+    the supplier's currency, and converting here would bury a missing rate
+    inside a cost figure; callers needing another currency go through
+    ``FxService`` explicitly, where a missing quote fails closed.
+
+    Missing inputs are recorded, never defaulted. The zero substituted below
+    exists only so the arithmetic can proceed far enough to show the merchant
+    a partial breakdown -- the accompanying review reason is what stops that
+    figure being treated as a price.
+    """
+    reasons: list[str] = []
+
+    item = product.cost_price_min
+    if item is None:
+        reasons.append(REVIEW_SUPPLIER_COST_UNKNOWN)
+        item = Decimal("0")
+
+    shipping = shipping_cost if shipping_cost is not None else product.shipping_cost
+    if shipping is None:
+        reasons.append(REVIEW_SHIPPING_COST_UNKNOWN)
+        shipping = Decimal("0")
+
+    currency = product.currency
+    if not currency:
+        reasons.append(REVIEW_SUPPLIER_CURRENCY_UNKNOWN)
+
+    handling = rule.shipping_cost_handling if rule else ShippingCostHandling.INCLUDE_IN_PRICE
+    duty_percent = (rule.duty_percent if rule else None) or Decimal("0")
+    fees_fixed = (rule.fees_fixed if rule else None) or Decimal("0")
+
+    dutiable = item + shipping
+    fees = (dutiable * duty_percent / Decimal("100")) + fees_fixed
+
+    # Profit is always measured against everything we actually pay. Only the
+    # *pricing basis* changes with handling.
+    profit_basis = dutiable + fees
+    if handling is ShippingCostHandling.INCLUDE_IN_PRICE:
+        priced_on = profit_basis
+        separate = None
+    elif handling is ShippingCostHandling.CHARGE_SEPARATELY:
+        priced_on = item + fees
+        separate = shipping
+    else:  # ABSORB_FROM_PROFIT
+        priced_on = item + fees
+        separate = None
+
+    return LandedCost(
+        amount=priced_on.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
+        profit_basis=profit_basis.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
+        currency=currency or None,
+        item_cost=item,
+        shipping_cost=shipping,
+        fees=fees.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP),
+        handling=handling,
+        review_reasons=tuple(reasons),
+        separate_shipping_charge=separate,
+    )
+
+
+def apply_rounding(price: Decimal, rounding: PriceRounding) -> Decimal:
+    """Charm-round a price to the **nearest** matching ending.
+
+    Nearest, not upward. Charm pricing exists to sit a shade *under* a round
+    number -- 20.00 is meant to become 19.99, and a rule that pushed it to
+    20.99 would be a 5% price rise wearing a charm-pricing label. Ties round
+    down, for the same reason.
+
+    Below the first charm ending the price is returned untouched. An earlier
+    draft of this returned ``whole - 1 + 0.99`` unconditionally, which for a
+    0.45 price produced **-0.01** -- a negative selling price reaching
+    storage. There is no charm ending at or below such a price, and inventing
+    one either way (negative, or rounding up to 0.99) would be worse than
+    leaving a sub-unit price alone.
+
+    Rounding down can cost a penny of margin, so :func:`compute_sell_price`
+    re-applies the floors afterwards and steps up an increment if one is
+    breached.
+    """
+    if rounding is PriceRounding.WHOLE:
+        return price.to_integral_value(rounding=ROUND_HALF_UP)
+
+    # Exhaustive by construction. An earlier version selected the ending with
+    # `.99 if rounding is NINETY_NINE else .95`, which silently charm-rounded
+    # anything that was neither -- including a transient rule whose `rounding`
+    # is still `None` because the column default only applies on INSERT. That
+    # turned an unrounded 15.00 into 14.95. Anything not explicitly a charm
+    # ending now means "do not round".
+    if rounding is PriceRounding.NINETY_NINE:
+        ending = Decimal("0.99")
+    elif rounding is PriceRounding.NINETY_FIVE:
+        ending = Decimal("0.95")
+    else:
+        return price
+
+    whole = price.to_integral_value(rounding=ROUND_FLOOR)
+    below = whole - Decimal("1") + ending
+    above = whole + ending
+    if above <= price:
+        below, above = above, whole + Decimal("1") + ending
+    if below <= Decimal("0"):
+        # No charm ending exists at or below this price. Leave it alone
+        # rather than emit a non-positive price or silently raise it.
+        return price
+    # Ties (exactly between two endings) resolve downward.
+    return below if (price - below) <= (above - price) else above
+
+
+def _next_ending_above(price: Decimal, rounding: PriceRounding) -> Decimal:
+    """The first charm ending at or above ``price``. Used to repair a floor."""
+    if rounding is PriceRounding.WHOLE:
+        return price.to_integral_value(rounding=ROUND_CEILING)
+    if rounding is PriceRounding.NINETY_NINE:
+        ending = Decimal("0.99")
+    elif rounding is PriceRounding.NINETY_FIVE:
+        ending = Decimal("0.95")
+    else:
+        return price
+    whole = price.to_integral_value(rounding=ROUND_FLOOR)
+    candidate = whole + ending
+    return candidate if candidate >= price else whole + Decimal("1") + ending
+
+
 def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
-    """Apply one rule's strategy to a cost price."""
+    """Apply one rule's strategy to a **landed** cost.
+
+    ``cost`` is the landed cost (item + supplier shipping + known fees), not
+    the bare item price -- see :func:`landed_cost`. Every guardrail below is
+    therefore measured against what the product actually costs to deliver,
+    which is the only basis on which "minimum profit" means real profit.
+
+    Order is deliberate and load-bearing: strategy, then floors, then the
+    ceiling, then rounding. Rounding last because rounding *before* the floor
+    check could leave a price under ``min_profit``; the ceiling after the
+    floors because a ``max_price`` the merchant set explicitly should win
+    over a computed minimum.
+    """
     if rule.strategy is PricingStrategy.PERCENTAGE_MARKUP:
         if rule.markup_percent is None:
             raise ValidationError("Percentage markup rules require markup_percent.")
@@ -102,17 +295,160 @@ def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
         if rule.markup_fixed is None:
             raise ValidationError("Fixed markup rules require markup_fixed.")
         price = cost + rule.markup_fixed
+    elif rule.strategy is PricingStrategy.TARGET_MARGIN:
+        if rule.margin_percent is None:
+            raise ValidationError("Target margin rules require margin_percent.")
+        # Guarded at the schema layer too, but division by zero here would be
+        # a 500 rather than a validation error, so it is checked twice.
+        if rule.margin_percent >= Decimal("100"):
+            raise ValidationError("Target margin must be below 100%.")
+        price = cost / (Decimal("1") - rule.margin_percent / Decimal("100"))
+    elif rule.strategy is PricingStrategy.HYBRID:
+        if rule.markup_percent is None and rule.markup_fixed is None:
+            raise ValidationError("Hybrid rules require markup_percent or markup_fixed.")
+        percent = rule.markup_percent or Decimal("0")
+        fixed = rule.markup_fixed or Decimal("0")
+        price = cost * (Decimal("1") + percent / Decimal("100")) + fixed
     else:
         tiered = _tiered_price(cost, rule.tiers)
         # No matching tier — fall back to cost so apply never invents a gain.
         price = cost if tiered is None else tiered
 
+    floor: Decimal | None = None
     if rule.min_profit is not None:
-        price = max(price, cost + rule.min_profit)
+        floor = cost + rule.min_profit
+    if rule.min_price is not None:
+        floor = rule.min_price if floor is None else max(floor, rule.min_price)
+    if floor is not None:
+        price = max(price, floor)
+    if rule.max_price is not None:
+        price = min(price, rule.max_price)
+
+    price = apply_rounding(price, rule.rounding)
+
+    # Rounding to the nearest charm ending can land a penny below a floor the
+    # merchant set. Step up to the next ending only when it actually does, so
+    # an unconstrained price still reads as a charm price.
+    if floor is not None and price < floor:
+        price = _next_ending_above(floor, rule.rounding)
+    # A max_price is a hard ceiling: never let a rounding repair cross it.
     if rule.max_price is not None:
         price = min(price, rule.max_price)
 
     return price.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def compute_compare_at_price(price: Decimal, rule: PricingRule) -> Decimal | None:
+    """The struck-through "was" price, or ``None`` when unconfigured.
+
+    Derived from the selling price, never from cost, and never fed back into
+    profit: it is a display value only. Kept out of :func:`compute_sell_price`
+    so no caller can mistake it for something the guardrails apply to.
+    """
+    if rule.compare_at_percent is None or rule.compare_at_percent <= Decimal("0"):
+        return None
+    inflated = price * (Decimal("1") + rule.compare_at_percent / Decimal("100"))
+    return inflated.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+@dataclass(frozen=True, slots=True)
+class PriceCalculation:
+    """One product's calculated price plus everything needed to explain it.
+
+    Every figure the merchant is shown comes from this one object, so the
+    preview, the audit row and the applied price cannot disagree about how a
+    number was reached.
+    """
+
+    landed: LandedCost
+    rule: PricingRule | None
+    price: Decimal | None
+    compare_at: Decimal | None
+    review_reasons: tuple[str, ...] = ()
+
+    @property
+    def needs_review(self) -> bool:
+        return bool(self.review_reasons)
+
+    @property
+    def profit(self) -> Decimal | None:
+        if self.price is None:
+            return None
+        return (self.price - self.landed.profit_basis).quantize(
+            _MONEY_QUANT, rounding=ROUND_HALF_UP
+        )
+
+    @property
+    def markup_percent(self) -> Decimal | None:
+        """Profit as a share of **cost**. Distinct from margin -- see below."""
+        profit = self.profit
+        if profit is None or self.landed.profit_basis <= 0:
+            return None
+        return (profit / self.landed.profit_basis * Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+    @property
+    def margin_percent(self) -> Decimal | None:
+        """Profit as a share of the **selling price**. Always < markup."""
+        profit = self.profit
+        if profit is None or self.price is None or self.price <= 0:
+            return None
+        return (profit / self.price * Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+
+
+def calculate_price(
+    product: Product,
+    *,
+    rule: PricingRule | None,
+    shipping_cost: Decimal | None = None,
+    extra_review_reasons: tuple[str, ...] = (),
+) -> PriceCalculation:
+    """Price one product under one rule, or explain why it cannot be priced.
+
+    The single entry point every M3A surface uses -- import, preview and
+    bulk apply all call this, so a merchant can never see one number in the
+    preview and a different one after confirming.
+
+    Returns a calculation with ``price=None`` whenever the inputs are not
+    trustworthy. That is the whole point: a missing supplier cost produces a
+    flagged, un-priced result rather than a confident guess.
+    """
+    landed = landed_cost(product, rule=rule, shipping_cost=shipping_cost)
+    reasons = tuple(landed.review_reasons) + tuple(extra_review_reasons)
+
+    if rule is None:
+        return PriceCalculation(
+            landed=landed, rule=None, price=None, compare_at=None, review_reasons=reasons
+        )
+    if REVIEW_SUPPLIER_COST_UNKNOWN in reasons or REVIEW_SHIPPING_COST_UNKNOWN in reasons:
+        # Do not invent a selling price from a cost we do not have.
+        return PriceCalculation(
+            landed=landed, rule=rule, price=None, compare_at=None, review_reasons=reasons
+        )
+
+    price = compute_sell_price(cost=landed.amount, rule=rule)
+
+    # A per-variant floor is applied here rather than inside
+    # `compute_sell_price` because it is measured against the *profit basis*,
+    # which differs from the pricing basis when shipping is absorbed.
+    if rule.min_profit_per_variant is not None:
+        required = landed.profit_basis + rule.min_profit_per_variant
+        if price < required:
+            price = _next_ending_above(required, rule.rounding)
+            if rule.max_price is not None:
+                price = min(price, rule.max_price)
+            price = price.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+    return PriceCalculation(
+        landed=landed,
+        rule=rule,
+        price=price,
+        compare_at=compute_compare_at_price(price, rule),
+        review_reasons=reasons,
+    )
 
 
 def _tiered_price(cost: Decimal, tiers: list[dict[str, Any]]) -> Decimal | None:
@@ -767,13 +1103,16 @@ class PricingEngine(BaseService):
 
     @staticmethod
     def _psychological_round(amount: Decimal) -> Decimal:
-        """Round to .99 endings when amount >= 1."""
-        if amount < 1:
-            return amount
-        whole = amount.to_integral_value(rounding=ROUND_HALF_UP)
-        if whole < 1:
-            return amount
-        return whole - Decimal("0.01")
+        """Round to .99 endings, delegating to the one charm-rounding rule.
+
+        M24A had its own implementation here. M3A introduced a second one for
+        global rules, and two roundings that agree today are two that can
+        disagree after the next edit -- the draft workspace and the global
+        rule would then quote different prices for the same product. This
+        forwards instead. Verified equivalent across the range M24A covered
+        (>= 1.00) before the change; below 1.00 both leave the price alone.
+        """
+        return apply_rounding(amount, PriceRounding.NINETY_NINE)
 
     async def _variant_row(
         self,
