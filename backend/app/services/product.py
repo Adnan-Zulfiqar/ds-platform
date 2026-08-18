@@ -72,6 +72,26 @@ class ProductService(BaseService):
         """
         product = await self.products.get_by_id_or_raise(product_id)
 
+        # Sanitize *before* the no-op comparison, not after (M2B).
+        #
+        # Merchant-submitted text is untrusted the same way supplier text is,
+        # and is sanitized here, once, before storage — never at render time,
+        # the same policy `ProductImportService` already applies to the
+        # supplier's own description.
+        #
+        # The ordering matters as much as the sanitizing. Comparing the *raw*
+        # submission against the stored (already-canonical) value made every
+        # semantically-identical save look like a change: a rich-text editor
+        # re-serialises `<br>` as `<br />`, reorders attributes, and drops
+        # classes the sanitizer would have stripped anyway. Each of those
+        # would have written an identical value and bumped `updated_at` —
+        # exactly the spurious version-token invalidation the no-op filter
+        # below exists to prevent, and with autosave running every 1.8s it
+        # would have fired continuously.
+        normalised: dict[str, Any] = dict(changes)
+        if "description" in normalised:
+            normalised["description"] = sanitize_html(normalised["description"])
+
         # A true no-op — nothing in `changes` actually differs from the
         # stored row — is filtered out before any write is attempted.
         # Issuing an UPDATE anyway would still bump `updated_at` (Postgres
@@ -81,16 +101,9 @@ class ProductService(BaseService):
         # token for a save that changed nothing.
         effective_changes = {
             field: value
-            for field, value in changes.items()
+            for field, value in normalised.items()
             if getattr(product, field, object()) != value
         }
-
-        if "description" in effective_changes:
-            # Merchant-submitted text is untrusted the same way supplier text
-            # is. Sanitized here, once, before storage — never at render
-            # time — the same policy `ProductImportService` already applies
-            # to the supplier's own description.
-            effective_changes["description"] = sanitize_html(effective_changes["description"])
 
         new_slug = effective_changes.get("slug")
         if new_slug:

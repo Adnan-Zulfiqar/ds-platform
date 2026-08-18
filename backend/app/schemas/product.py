@@ -35,6 +35,21 @@ from app.models.product import (
 )
 from app.schemas.base import CamelCaseModel
 
+#: Maximum characters accepted for a merchant-authored product description.
+#:
+#: Not an arbitrary number. Shopify's own product `body_html` — what
+#: `integrations/shopify/sync.py` publishes this field into — is documented
+#: at 65,535 characters, so anything longer could be accepted here and then
+#: silently truncated at publish, which is the worst of both outcomes. The
+#: limit is set a little below that ceiling to leave room for the wrapper
+#: markup a theme adds, and applies to the submitted HTML rather than its
+#: rendered text: markup is what Shopify counts.
+#:
+#: The database column is `Text` (unbounded in Postgres), so this is a
+#: product decision enforced at the API boundary, not a storage constraint —
+#: which is why raising it later needs no migration.
+DESCRIPTION_MAX_LENGTH = 64_000
+
 
 class ProductImageRead(CamelCaseModel):
     """An image, with the ordering that decides which one leads a listing."""
@@ -246,7 +261,12 @@ class ProductUpdateRequest(CamelCaseModel):
     """
 
     title: str | None = Field(default=None, min_length=1, max_length=512)
-    description: str | None = None
+    #: Rich-text HTML, capped at `DESCRIPTION_MAX_LENGTH` (M2B). Measured on
+    #: the *submitted* markup: sanitizing only ever shrinks it, so a payload
+    #: passing this check can never grow past the limit in storage, and the
+    #: merchant is told to trim before the work of parsing megabytes of HTML
+    #: is done.
+    description: str | None = Field(default=None, max_length=DESCRIPTION_MAX_LENGTH)
     brand: str | None = Field(default=None, max_length=255)
     category_name: str | None = Field(default=None, max_length=255)
     vendor: str | None = Field(default=None, max_length=255)

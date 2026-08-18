@@ -174,6 +174,73 @@ class TestDeterminism:
         assert sanitize_html(once) == once
 
 
+class TestEditorRoundTripCanonicalisation:
+    """M2B: the no-op filter in `ProductService.update_product` compares
+    `sanitize_html(submitted)` against the stored value, so it is only
+    correct if sanitizing is a *canonicalisation* — every spelling of the
+    same document must collapse to one output, and that output must be a
+    fixed point.
+
+    These assert the specific rewrites a WYSIWYG editor makes on every
+    keystroke. Each one, left un-normalised, would have made an untouched
+    description look edited on every 1.8s autosave.
+    """
+
+    @pytest.mark.parametrize(
+        ("editor_output", "canonical"),
+        [
+            ("<p>Line<br />Break</p>", "<p>Line<br>Break</p>"),
+            ("<p>Line<br/>Break</p>", "<p>Line<br>Break</p>"),
+            ('<p class="ProseMirror-trailing">Text</p>', "<p>Text</p>"),
+            ('<p dir="auto">Text</p>', "<p>Text</p>"),
+            ("<ul><li><p>One</p></li></ul>", "<ul><li><p>One</p></li></ul>"),
+        ],
+        ids=[
+            "self-closing-br",
+            "compact-br",
+            "editor-class",
+            "dir-attribute",
+            "list-item-paragraph",
+        ],
+    )
+    def test_editor_spellings_collapse_to_one_form(
+        self, editor_output: str, canonical: str
+    ) -> None:
+        assert sanitize_html(editor_output) == canonical
+
+    def test_a_tiptap_link_canonicalises_to_the_stored_form(self) -> None:
+        """TipTap re-adds `target="_blank"` from its own `HTMLAttributes` on
+        every render; the sanitizer drops it (not on the `a` allowlist) and
+        owns `rel` itself. Both directions must agree or a link would make
+        the description permanently "dirty"."""
+        stored = sanitize_html('<a href="https://example.com">shop</a>')
+        editor_reserialised = sanitize_html(
+            '<a target="_blank" rel="noopener noreferrer nofollow" '
+            'href="https://example.com">shop</a>'
+        )
+        assert stored == editor_reserialised
+        assert stored == '<a href="https://example.com" rel="noopener noreferrer nofollow">shop</a>'
+
+    @pytest.mark.parametrize(
+        "editor_output",
+        [
+            "<h2>Head</h2><h3>Sub</h3>",
+            "<blockquote><p>Quoted</p></blockquote>",
+            "<ol><li><p>One</p></li><li><p>Two</p></li></ol>",
+            "<p><strong>Bold</strong> <em>italic</em> <u>under</u> <s>struck</s></p>",
+            '<p>Text</p><img src="https://ae01.alicdn.com/kf/a.jpg" alt="Photo">',
+        ],
+        ids=["headings", "blockquote", "ordered-list", "marks", "imported-image"],
+    )
+    def test_every_shape_the_editor_can_produce_is_already_a_fixed_point(
+        self, editor_output: str
+    ) -> None:
+        """Anything the M2B toolbar can create must survive untouched. A
+        formatting control whose output the sanitizer rewrites would apply,
+        save, and then silently revert on the next reload."""
+        assert sanitize_html(editor_output) == editor_output
+
+
 class TestPlainTextExtraction:
     def test_empty_input_is_empty_string_not_none(self) -> None:
         assert html_to_plain_text(None) == ""
