@@ -113,9 +113,22 @@ class RuleApplication(TenantScopedBase):
     #: for them. Stored rather than referenced so the record still explains
     #: itself after the drafts it names are gone.
     selection: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    #: The Celery task holding this run. Set by the claim, and the only way a
+    #: redelivery can tell its own retry ("resume") from another worker's
+    #: live run ("leave it alone") -- both see status `running`.
+    claimed_by_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Set when the broker accepted the message. Still NULL on a `pending` run
+    #: means it was never queued -- "nothing will happen", not "waiting".
+    enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Cursor into the durable selection, not a derived figure. An item whose
+    #: product id no longer resolves is recorded with a NULL `product_id`, so
+    #: progress cannot be recovered by diffing recorded rows against the
+    #: selection. Committed in the same transaction as the batch it accounts
+    #: for, which is what makes a resumed run neither skip nor repeat work.
+    processed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     applied_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     review_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

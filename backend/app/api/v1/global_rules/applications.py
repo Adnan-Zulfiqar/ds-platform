@@ -15,18 +15,26 @@ import uuid
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, status
+from fastapi import APIRouter, BackgroundTasks, Path, Query, status
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
 from app.models.rule_application import ApplicationItemOutcome, ApplicationStatus
 from app.schemas.base import CamelCaseModel
 from app.services.rule_application import (
+    APPLICATION_BATCH_SIZE,
+    MAX_APPLICATION_PRODUCTS,
     MAX_PREVIEW_PAGE,
     ApplyRequest,
     ImpactPreviewService,
     ProductOutcome,
     RuleApplicationService,
 )
+
+# Sideways, not downwards: ``app.tasks`` is a peer entry point into the domain,
+# the same way this package is, and it does not import ``app.api``. The queue
+# hand-off lives there rather than here so that this handler keeps to
+# validate-delegate-return and knows nothing about brokers.
+from app.tasks.pricing import dispatch_rule_application
 
 router = APIRouter(prefix="/global-rules", tags=["global-rules"])
 
@@ -83,6 +91,13 @@ class PreviewPageRead(CamelCaseModel):
     applicable_count: int
     review_count: int
     published_count: int
+    #: Published here, on the screen that builds the selection, so a client
+    #: can page a large catalogue into several applications knowingly rather
+    #: than discovering the ceiling as a rejected submission.
+    max_application_products: int = MAX_APPLICATION_PRODUCTS
+    #: Products per worker transaction. Exposed because it is the resolution
+    #: at which progress advances and at which a cancellation takes effect.
+    application_batch_size: int = APPLICATION_BATCH_SIZE
 
 
 class ApplyRequestBody(CamelCaseModel):
@@ -114,6 +129,9 @@ class ApplicationRead(CamelCaseModel):
     status: ApplicationStatus
     idempotency_key: str
     total_count: int
+    #: How far through the selection the worker has committed. With
+    #: `totalCount` this is the progress a polling client renders.
+    processed_count: int
     applied_count: int
     skipped_count: int
     review_count: int
@@ -215,16 +233,30 @@ async def preview_draft_impact(
     summary="Apply the active rules to selected drafts",
 )
 async def apply_to_drafts(
-    session: DbSession, payload: ApplyRequestBody, principal: RequireAdmin
+    session: DbSession,
+    payload: ApplyRequestBody,
+    principal: RequireAdmin,
+    background: BackgroundTasks,
 ) -> ApplicationRead:
-    """Explicit confirmation only.
+    """Explicit confirmation only. Accepts the work; does not perform it.
 
     There is no path from saving a rule to this endpoint; a settings save
     changes no product. Re-sending the same idempotency key returns the
     original run rather than repricing twice; sending it with a different
     payload is refused as a conflict.
+
+    Returns `202` with a `pending` application. Repricing a catalogue is not
+    request-shaped work -- it is handed to the existing Celery queue and
+    polled through `GET /global-rules/applications/{id}`. At most
+    `maxApplicationProducts` drafts (published in the preview response) may be
+    submitted in one application; more is refused with that number named,
+    never silently truncated.
+
+    The queue hand-off is a background task rather than an inline call because
+    it must happen *after* this request's transaction commits: a worker that
+    picked up the message first would look for a row that is not visible yet.
     """
-    application = await RuleApplicationService(session).start(
+    application = await RuleApplicationService(session).create(
         ApplyRequest(
             product_ids=tuple(payload.product_ids),
             idempotency_key=payload.idempotency_key,
@@ -233,6 +265,8 @@ async def apply_to_drafts(
         ),
         actor_id=principal.user_id,
     )
+    if application.status is ApplicationStatus.PENDING and application.enqueued_at is None:
+        background.add_task(dispatch_rule_application, application.id, application.tenant_id)
     return ApplicationRead.model_validate(application, from_attributes=True)
 
 
@@ -253,14 +287,22 @@ async def get_application(
 @router.post(
     "/applications/{application_id}/cancel",
     response_model=ApplicationRead,
-    summary="Cancel an application that has not written anything",
+    summary="Cancel an application that has not finished",
 )
 async def cancel_application(
     session: DbSession,
     application_id: Annotated[uuid.UUID, Path()],
     _principal: RequireAdmin,
 ) -> ApplicationRead:
-    """Refused once prices have landed: the writes are real, and pretending
-    they can be taken back would misrepresent the catalogue."""
+    """Stops a run that is `pending` or `running`; idempotent.
+
+    A `pending` run is stopped outright -- the worker's claim will refuse the
+    message when it arrives, so a task already in flight cannot revive it. A
+    `running` run stops cooperatively at its next batch boundary, and drafts
+    repriced by batches that already committed keep those prices; they are
+    real writes, recorded item by item, and quietly reverting them would be a
+    second unreviewed reprice. A run that has already finished is refused,
+    because reporting it as cancelled would misrepresent the catalogue.
+    """
     application = await RuleApplicationService(session).cancel(application_id)
     return ApplicationRead.model_validate(application, from_attributes=True)

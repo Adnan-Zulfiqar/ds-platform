@@ -396,6 +396,7 @@ class GlobalRuleService(BaseService):
     ) -> RuleResolution[PricingRule]:
         candidates = await self.pricing.find_candidates(
             product_id=product_id or uuid.uuid4(),
+            variant_id=variant_id,
             store_id=store_id,
             category_id=category_id,
         )

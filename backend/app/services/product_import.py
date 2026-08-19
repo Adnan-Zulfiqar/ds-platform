@@ -48,6 +48,7 @@ from app.repositories.product import (
 )
 from app.services.base import BaseService
 from app.services.import_destination import ImportDestinationService
+from app.services.pricing_engine import REVIEW_CALCULATION_FAILED
 
 #: AliExpress method names. Named constants because a typo in a method string
 #: returns `InvalidApiPath` — an error that says nothing about which call site
@@ -248,11 +249,36 @@ class ProductImportService(BaseService):
             .all()
         )
 
-        outcome = await pricing.calculate_for(
-            product,
-            variants=list(variants),
-            destination_country=product.ship_to_country,
-        )
+        try:
+            outcome = await pricing.calculate_for(
+                product,
+                variants=list(variants),
+                destination_country=product.ship_to_country,
+            )
+        except Exception as exc:
+            # Pricing is derived from a snapshot that has already been written
+            # successfully. Letting a rule failure escape here would roll back
+            # the whole import transaction and lose that snapshot -- the
+            # merchant would see no draft at all, and no explanation, because
+            # of a rule. The draft is kept and flagged instead.
+            #
+            # `_price` already converts the expected failures (an unusable
+            # strategy, an FX mismatch) into review reasons, so reaching this
+            # is unexpected; it is caught anyway because "the import survives a
+            # pricing bug" is the guarantee, not "we listed every bug".
+            product.needs_review = True
+            product.pricing_review_reasons = [REVIEW_CALCULATION_FAILED]
+            product.applied_pricing_rule_id = rule.id
+            product.applied_pricing_rule_version = rule.version
+            product.pricing_calculated_at = datetime.now(UTC)
+            self.logger.warning(
+                "import_pricing_failed",
+                product_id=str(product.id),
+                rule_id=str(rule.id),
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
 
         # Stamp the evidence first: it is written whether or not a price was
         # produced, so "why is this draft unpriced" is always answerable.

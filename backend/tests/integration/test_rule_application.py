@@ -22,6 +22,7 @@ from app.models.product import Product, ProductSource, ProductStatus, ProductVar
 from app.models.rule_application import RuleApplication, RuleApplicationItem
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform
+from tests.integration.rule_application_harness import EnqueueRecorder, bind_queue, run_task
 from tests.integration.test_products import auth_header, register
 
 pytestmark = pytest.mark.integration
@@ -29,6 +30,41 @@ pytestmark = pytest.mark.integration
 BASE = "/api/v1/global-rules"
 IMPACT = f"{BASE}/drafts/impact"
 APPLY = f"{BASE}/drafts/apply"
+
+
+@pytest.fixture(autouse=True)
+def queue(monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession) -> EnqueueRecorder:
+    """Every apply in this module goes through the recording broker.
+
+    Autouse because the endpoint now schedules a real enqueue after its
+    transaction commits, and a test that forgot this would try to reach
+    RabbitMQ.
+    """
+    return bind_queue(monkeypatch, db_session)
+
+
+async def apply_and_run(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str],
+    tenant_id: uuid.UUID,
+    **payload: object,
+) -> dict:
+    """Confirm an application and let the worker finish it.
+
+    The endpoint accepts and returns `pending`; the results these tests are
+    about only exist once the task has run. Driving the real task here is
+    deliberate -- calling the service directly would leave the production
+    entry point untested.
+    """
+    response = await client.post(APPLY, json=payload, headers=headers)
+    assert response.status_code == 202, response.text
+    application_id = response.json()["id"]
+    await run_task(monkeypatch, application_id=application_id, tenant_id=tenant_id)
+    final = await client.get(f"{BASE}/applications/{application_id}", headers=headers)
+    assert final.status_code == 200, final.text
+    result: dict = final.json()
+    return result
 
 
 async def seed_tenant(client: AsyncClient) -> tuple[dict[str, str], uuid.UUID]:
@@ -287,19 +323,20 @@ class TestImpactPreview:
 
 class TestConfirmedApplication:
     async def test_a_confirmed_application_writes_the_price(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
 
-        response = await client.post(
-            APPLY,
-            json={"productIds": [str(product.id)], "idempotencyKey": "run-1"},
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(product.id)],
+            idempotencyKey="run-1",
         )
-        assert response.status_code == 202, response.text
-        body = response.json()
         assert body["appliedCount"] == 1
         assert body["status"] == "completed"
 
@@ -325,7 +362,7 @@ class TestConfirmedApplication:
         ).scalar_one() == 0
 
     async def test_reusing_an_idempotency_key_returns_the_same_run(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
@@ -337,11 +374,13 @@ class TestConfirmedApplication:
         assert first.status_code == 202 and second.status_code == 202
         assert first.json()["id"] == second.json()["id"]
 
+        await run_task(monkeypatch, application_id=first.json()["id"], tenant_id=tenant_id)
+
         # And the retry did not write a second set of result rows.
         items = (
             await db_session.execute(select(func.count()).select_from(RuleApplicationItem))
         ).scalar_one()
-        assert items == first.json()["appliedCount"]
+        assert items == 1
 
     async def test_the_same_key_with_a_different_payload_is_a_conflict(
         self, client: AsyncClient, db_session: AsyncSession
@@ -365,7 +404,7 @@ class TestConfirmedApplication:
         assert clash.status_code == 409, clash.text
 
     async def test_a_published_product_is_skipped_with_a_reason(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
@@ -373,32 +412,36 @@ class TestConfirmedApplication:
         await publish(db_session, product)
         before = product.sell_price
 
-        response = await client.post(
-            APPLY,
-            json={"productIds": [str(product.id)], "idempotencyKey": "published-run"},
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(product.id)],
+            idempotencyKey="published-run",
         )
-        assert response.status_code == 202, response.text
-        outcomes = {item["outcome"] for item in response.json()["items"]}
+        outcomes = {item["outcome"] for item in body["items"]}
         assert outcomes == {"published"}
 
         await db_session.refresh(product)
         assert product.sell_price == before
 
     async def test_a_partial_failure_does_not_roll_back_the_successes(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         good = await seed_draft(db_session, tenant_id, sell_price="30.00")
         bad = await seed_draft(db_session, tenant_id, cost=None)
 
-        response = await client.post(
-            APPLY,
-            json={"productIds": [str(good.id), str(bad.id)], "idempotencyKey": "partial"},
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(good.id), str(bad.id)],
+            idempotencyKey="partial",
         )
-        body = response.json()
         assert body["status"] == "partial"
         assert body["appliedCount"] == 1
         assert body["reviewCount"] == 1
@@ -410,7 +453,7 @@ class TestConfirmedApplication:
         assert "supplier_cost_unknown" in bad.pricing_review_reasons
 
     async def test_a_changed_rule_version_marks_items_stale(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         rule = await create_rule(client, headers)
@@ -429,58 +472,59 @@ class TestConfirmedApplication:
             headers=headers,
         )
 
-        response = await client.post(
-            APPLY,
-            json={
-                "productIds": [str(product.id)],
-                "idempotencyKey": "stale-run",
-                "expectedRuleId": rule["id"],
-                "expectedRuleVersion": 1,
-            },
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(product.id)],
+            idempotencyKey="stale-run",
+            expectedRuleId=rule["id"],
+            expectedRuleVersion=1,
         )
-        assert response.status_code == 202
-        assert {i["outcome"] for i in response.json()["items"]} == {"stale"}
+        assert {i["outcome"] for i in body["items"]} == {"stale"}
 
         await db_session.refresh(product)
         assert product.sell_price == Decimal("30.0000")
 
     async def test_an_already_correct_price_is_skipped(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="21.00")
 
-        response = await client.post(
-            APPLY,
-            json={"productIds": [str(product.id)], "idempotencyKey": "noop"},
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(product.id)],
+            idempotencyKey="noop",
         )
-        assert {i["outcome"] for i in response.json()["items"]} == {"skipped"}
+        assert {i["outcome"] for i in body["items"]} == {"skipped"}
 
     async def test_a_foreign_product_id_is_recorded_not_raised(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """One bad id must not roll back every draft that priced correctly."""
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         good = await seed_draft(db_session, tenant_id, sell_price="30.00")
 
-        response = await client.post(
-            APPLY,
-            json={
-                "productIds": [str(good.id), str(uuid.uuid4())],
-                "idempotencyKey": "mixed",
-            },
-            headers=headers,
+        body = await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(good.id), str(uuid.uuid4())],
+            idempotencyKey="mixed",
         )
-        body = response.json()
         assert body["appliedCount"] == 1
         assert body["failedCount"] == 1
 
     async def test_supplier_snapshots_are_untouched(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
@@ -489,10 +533,13 @@ class TestConfirmedApplication:
         product.supplier_description = "<p>Supplier copy</p>"
         await db_session.flush()
 
-        await client.post(
-            APPLY,
-            json={"productIds": [str(product.id)], "idempotencyKey": "snapshot"},
-            headers=headers,
+        await apply_and_run(
+            client,
+            monkeypatch,
+            headers,
+            tenant_id,
+            productIds=[str(product.id)],
+            idempotencyKey="snapshot",
         )
         await db_session.refresh(product)
         assert product.supplier_title == "Supplier original"
@@ -546,7 +593,7 @@ class TestApplicationAccessAndLifecycle:
         assert response.status_code == 404
 
     async def test_a_completed_application_cannot_be_cancelled(
-        self, client: AsyncClient, db_session: AsyncSession
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The writes already landed; pretending they can be taken back would
         misrepresent the catalogue."""
@@ -558,6 +605,8 @@ class TestApplicationAccessAndLifecycle:
             json={"productIds": [str(product.id)], "idempotencyKey": "done"},
             headers=headers,
         )
+        await run_task(monkeypatch, application_id=created.json()["id"], tenant_id=tenant_id)
+
         response = await client.post(
             f"{BASE}/applications/{created.json()['id']}/cancel", headers=headers
         )

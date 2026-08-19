@@ -142,4 +142,38 @@ class GlobalRuleVersionRepository(TenantScopedRepository[GlobalRuleVersion]):
         return require_tenant_id()
 
 
-__all__ = ["GlobalRuleVersionRepository", "ShippingRuleRepository"]
+class RuleApplicationTenantLookup:
+    """Resolves which tenant owns an application id, before context exists.
+
+    Deliberately unscoped, and deliberately **not** a repository: it takes no
+    base class, exposes exactly one question, and returns a tenant id and
+    nothing else. It cannot be used to read a row, so it is not a bypass that
+    autocomplete can drag onto a request path.
+
+    It exists because a Celery worker has no request to inherit a tenant
+    from. The alternative -- taking the tenant from the task payload -- would
+    mean a forged, replayed or simply stale message could run one tenant's
+    rules across another tenant's catalogue, which is the worst failure this
+    platform has. Reading the tenant from the durable row instead makes the
+    payload unable to influence scope at all: a message naming the wrong
+    tenant changes nothing, because the tenant was never taken from it.
+
+    Everything the worker does afterwards runs under the tenant this returns,
+    through the ordinary scoped repositories.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def tenant_for(self, application_id: uuid.UUID) -> uuid.UUID | None:
+        from app.models.rule_application import RuleApplication
+
+        query = select(RuleApplication.tenant_id).where(RuleApplication.id == application_id)
+        return (await self.session.execute(query)).scalars().first()
+
+
+__all__ = [
+    "GlobalRuleVersionRepository",
+    "RuleApplicationTenantLookup",
+    "ShippingRuleRepository",
+]

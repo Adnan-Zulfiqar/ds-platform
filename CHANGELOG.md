@@ -12,6 +12,20 @@ production release.
 
 ### Added
 
+- **M3A — Global pricing and shipping rules** (backend only; UI is M3A-4) —
+  one calculation shared by import, a read-only impact preview and a confirmed
+  bulk application. Scope precedence
+  `variant > product > category > store > global`, versioned rules with an
+  append-only history, and a fail-closed engine that returns a
+  machine-readable reason instead of a price whenever a supplier figure is
+  missing. Confirmed applications run on the **existing Celery queue**: the
+  API returns `202` with a `pending` run, the worker claims it atomically,
+  processes bounded batches that resume correctly after a retry, and records
+  one result row per item including the ones nothing happened to. The broker
+  payload is a single application id, and the tenant is read from the row
+  rather than the message. Migrations `0023`-`0026`, all additive. See
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md`.
+
 - **M2B — Rich-text product description** — TipTap 3 editor
   (`rich-text-description-editor.tsx`) replaces the raw-HTML `<textarea>` on
   the draft editor's Description tab. **Storage format unchanged** (sanitized
@@ -30,6 +44,25 @@ production release.
   (M24B/M24C remain).
 
 ### Fixed
+
+- **Variant-scoped pricing rules never applied anywhere (M3A)** —
+  `PricingRuleRepository.find_candidates` had no `variant_id` clause, unlike
+  its shipping twin, so a variant-scoped rule was never in the candidate set
+  the resolver chose from. The resolver ranked variant highest and simply
+  never saw one, which is why unit tests of the precedence logic passed
+  throughout. The narrowest scope in the model was silently dead at import, in
+  preview and in bulk apply.
+- **A misconfigured pricing rule could fail an entire import (M3A)** —
+  `compute_sell_price` raises when a strategy is missing the field it needs,
+  and `_apply_global_rules` did not catch it, so the exception rolled back the
+  transaction that had just written the supplier snapshot and the merchant got
+  no draft at all. Pricing failures now flag the draft
+  (`pricing_calculation_failed`) and let the import complete.
+- **A rule denominated in another currency priced silently (M3A)** — the M3A
+  path did no currency check, so a GBP rule's `min_price`, `max_price`,
+  `markup_fixed`, `min_profit` and `fees_fixed` were applied to a USD cost as
+  though the numbers were comparable. It now fails closed with
+  `fx_rate_unavailable`.
 
 - **Draft description saves no longer write on every autosave (M2B)** —
   `ProductService.update_product` sanitized the description *after* the

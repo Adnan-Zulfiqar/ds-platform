@@ -109,6 +109,12 @@ REVIEW_SHIPPING_COST_UNKNOWN = "shipping_cost_unknown"
 REVIEW_SUPPLIER_CURRENCY_UNKNOWN = "supplier_currency_unknown"
 REVIEW_FX_UNAVAILABLE = "fx_rate_unavailable"
 REVIEW_NO_SHIPPING_MATCH = "no_shipping_method_matches"
+#: The rule itself could not be evaluated -- a strategy missing the field it
+#: needs, most often from a row written before that field was required. The
+#: draft is kept and flagged rather than the import being failed: a product
+#: that exists and is visibly unpriced is worth more to a merchant than an
+#: import that refuses to complete over a misconfigured rule.
+REVIEW_CALCULATION_FAILED = "pricing_calculation_failed"
 
 
 class CostBearing(Protocol):

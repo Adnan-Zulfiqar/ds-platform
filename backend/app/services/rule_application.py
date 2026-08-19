@@ -16,12 +16,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import (
+    ConflictError,
+    FxUnavailableError,
+    NotFoundError,
+    ValidationError,
+)
 from app.models.pricing import PricingRule
 from app.models.product import Product, ProductVariant
 from app.models.rule_application import (
@@ -34,13 +40,87 @@ from app.models.shopify import ListingSyncStatus, StoreListing
 from app.repositories.product import ProductRepository
 from app.services.base import BaseService
 from app.services.global_rules import GlobalRuleService
-from app.services.pricing_engine import PriceCalculation, calculate_price
+from app.services.pricing_engine import (
+    REVIEW_CALCULATION_FAILED,
+    REVIEW_FX_UNAVAILABLE,
+    CostBearing,
+    PriceCalculation,
+    calculate_price,
+    convert_currency,
+    landed_cost,
+)
 from app.services.rule_resolution import RuleResolution
 from app.services.shipping_rules import ShippingQuote, ShippingSelection, select_shipping
 
 #: Ceiling on one preview page. A settings screen must never try to load a
 #: 10,000-product catalogue into memory to answer "what would this do".
 MAX_PREVIEW_PAGE = 200
+
+#: Ceiling on one confirmed application. Published in the preview response so
+#: the screen knows what it may submit, and refused with this number named
+#: rather than silently truncated -- a merchant who selected 6,000 drafts and
+#: got 5,000 repriced with no warning would have no way to find the other
+#: thousand.
+MAX_APPLICATION_PRODUCTS = 5_000
+
+#: Products per worker transaction. Bounds both how much a single commit can
+#: lose to a crash and how many ORM objects a session holds at once; a
+#: 5,000-product run is 100 short transactions, not one enormous one.
+APPLICATION_BATCH_SIZE = 50
+
+
+def _price(
+    view: CostBearing,
+    *,
+    rule: PricingRule | None,
+    shipping_cost: Decimal | None = None,
+    extra: tuple[str, ...] = (),
+) -> PriceCalculation:
+    """``calculate_price`` with the two guards every M3A surface needs.
+
+    **Currency.** A rule that declares a currency may only price a cost in
+    that same currency. A rule with none declares no denomination and prices
+    in the product's, which is the ordinary single-currency case and is left
+    exactly as it was. The check goes through ``convert_currency`` rather
+    than comparing strings here, so there is still one place that decides
+    what a currency pair means -- and that function refuses to invent a 1:1
+    rate, which is the whole point. ``markup_percent`` would survive a
+    mismatch unscathed, but ``min_price``, ``max_price``, ``markup_fixed``,
+    ``min_profit`` and ``fees_fixed`` are money, and applying a GBP floor to
+    a USD cost is a silent mispricing rather than a visible failure.
+
+    **Evaluation.** A rule whose strategy is missing the field it needs
+    raises out of ``compute_sell_price``. Left uncaught, that failed an
+    entire import over one misconfigured rule. It becomes a review reason
+    instead: no price, a flagged draft, and an import that still completes.
+    """
+    if rule is not None and rule.currency is not None:
+        try:
+            convert_currency(Decimal("0"), from_currency=view.currency, to_currency=rule.currency)
+        except FxUnavailableError:
+            return calculate_price(
+                view,
+                rule=rule,
+                shipping_cost=shipping_cost,
+                extra_review_reasons=(*extra, REVIEW_FX_UNAVAILABLE),
+            )
+
+    try:
+        return calculate_price(
+            view, rule=rule, shipping_cost=shipping_cost, extra_review_reasons=extra
+        )
+    except (ValidationError, ArithmeticError):
+        # The landed cost is still computed under the rule -- its duty and
+        # fees are readable even when its strategy is not -- so the merchant
+        # sees the real cost breakdown next to "this rule could not price it".
+        landed = landed_cost(view, rule=rule, shipping_cost=shipping_cost)
+        return PriceCalculation(
+            landed=landed,
+            rule=rule,
+            price=None,
+            compare_at=None,
+            review_reasons=(*landed.review_reasons, *extra, REVIEW_CALCULATION_FAILED),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,11 +245,11 @@ class DraftPricingService(BaseService):
             if selection.cost is not None:
                 shipping_cost = selection.cost
 
-        calculation = calculate_price(
+        calculation = _price(
             product,
             rule=pricing.rule,
             shipping_cost=shipping_cost,
-            extra_review_reasons=tuple(extra),
+            extra=tuple(extra),
         )
 
         variant_outcomes: list[VariantOutcome] = []
@@ -192,10 +272,10 @@ class DraftPricingService(BaseService):
                     variant_id=variant.id,
                     label=variant.label,
                     current_price=variant.sell_price,
-                    calculation=calculate_price(
+                    calculation=_price(
                         view,
                         rule=variant_resolution.rule,
-                        extra_review_reasons=tuple(extra),
+                        extra=tuple(extra),
                     ),
                     resolution=variant_resolution,
                 )
@@ -362,8 +442,31 @@ class ApplyRequest:
         return hashlib.sha256(payload.encode()).hexdigest()
 
 
+class ClaimResult(StrEnum):
+    """Why a worker did or did not take ownership of a run."""
+
+    #: Won the `pending -> running` transition. Nobody else can now.
+    CLAIMED = "claimed"
+    #: Already `running` under *this* task id -- a redelivery or retry of the
+    #: message that claimed it. Resuming is correct; restarting is not.
+    RESUMED = "resumed"
+    #: Already `running` under a different task. Left alone.
+    ALREADY_RUNNING = "already_running"
+    #: Cancelled, or already finished. A delayed message must not revive it.
+    NOT_CLAIMABLE = "not_claimable"
+    #: No such application. A message can outlive its row.
+    UNKNOWN = "unknown"
+
+
 class RuleApplicationService(BaseService):
-    """Runs a confirmed application and records exactly what it did."""
+    """Runs a confirmed application and records exactly what it did.
+
+    Split deliberately into *create* (in the request) and *claim / batch /
+    finalise* (in a worker), because those happen in different processes and
+    at different times. Everything a worker needs is read back from the row:
+    the selection, the rule version the merchant confirmed against, and how
+    far a previous attempt got.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -383,19 +486,25 @@ class RuleApplicationService(BaseService):
             raise NotFoundError("Application not found.")
         return found
 
-    async def start(self, request: ApplyRequest, *, actor_id: uuid.UUID | None) -> RuleApplication:
-        """Create and run an application, or return the existing one.
+    # ------------------------------------------------------------- request
+    async def create(self, request: ApplyRequest, *, actor_id: uuid.UUID | None) -> RuleApplication:
+        """Record a confirmed application as `pending`. Writes no prices.
 
-        Runs synchronously inside the request transaction for the selection
-        sizes this endpoint accepts. The service boundary is deliberately the
-        unit a background worker would call, so moving execution onto the
-        existing Celery queue later changes the caller, not this logic -- and
-        does not introduce a second queue.
+        Returns without running anything: execution belongs to a worker, so
+        the merchant's request does not hold a connection open for the length
+        of a catalogue-wide reprice. Re-sending the same idempotency key
+        returns the original run rather than starting a second one; sending it
+        with a different payload is refused as a conflict.
         """
         if not request.idempotency_key.strip():
             raise ValidationError("An idempotency key is required.")
         if not request.product_ids:
             raise ValidationError("Select at least one draft to apply rules to.")
+        if len(request.product_ids) > MAX_APPLICATION_PRODUCTS:
+            raise ValidationError(
+                f"Select at most {MAX_APPLICATION_PRODUCTS} drafts in one application; "
+                f"{len(request.product_ids)} were submitted."
+            )
 
         fingerprint = request.fingerprint()
         existing = await self._find_by_key(request.idempotency_key)
@@ -407,19 +516,25 @@ class RuleApplicationService(BaseService):
             # A genuine retry: hand back the original run untouched.
             return existing
 
+        # Duplicates in the selection are collapsed here rather than at the
+        # cursor. The run walks the stored list by index, so a repeated id
+        # would otherwise be processed twice and collide on
+        # `uq_rule_application_items_target`.
+        product_ids = list(dict.fromkeys(request.product_ids))
+
         application = RuleApplication(
             tenant_id=self._tenant_id(),
             idempotency_key=request.idempotency_key.strip(),
             request_fingerprint=fingerprint,
-            status=ApplicationStatus.RUNNING,
+            status=ApplicationStatus.PENDING,
             pricing_rule_id=request.expected_rule_id,
             pricing_rule_version=request.expected_rule_version,
             requested_by_user_id=actor_id,
             selection={
-                "productIds": [str(p) for p in request.product_ids],
+                "productIds": [str(p) for p in product_ids],
                 "variantIds": [str(v) for v in request.variant_ids],
             },
-            started_at=datetime.now(UTC),
+            total_count=len(product_ids),
         )
         self.session.add(application)
         try:
@@ -433,34 +548,241 @@ class RuleApplicationService(BaseService):
                 return concurrent
             raise ConflictError("That application could not be started.") from exc
 
-        await self._run(application, request)
+        # Load the (empty) results collection explicitly. `selectin` eager
+        # loading applies when an application is *queried*, not to one just
+        # built in this session, so serialising the response would otherwise
+        # trigger a lazy load -- implicit IO, which raises `MissingGreenlet`
+        # in async SQLAlchemy rather than awaiting.
+        await self.session.refresh(application, attribute_names=["items"])
         return application
 
-    async def cancel(self, application_id: uuid.UUID) -> RuleApplication:
-        """Cancel a run that has not started writing.
+    async def mark_enqueued(self, application_id: uuid.UUID) -> None:
+        """Record that the broker accepted the message."""
+        application = await self.get(application_id)
+        application.enqueued_at = datetime.now(UTC)
+        await self.flush()
 
-        A completed or partial run is not cancellable: the writes already
-        landed, and pretending otherwise would misrepresent the catalogue.
+    async def mark_enqueue_failed(self, application_id: uuid.UUID, reason: str) -> None:
+        """The broker refused the message; say so instead of waiting forever.
+
+        The row is already committed by the time this can happen, so it cannot
+        be rolled back. Leaving it `pending` would be indistinguishable from
+        "queued, worker busy" -- a merchant would watch a run that nothing was
+        ever going to pick up. `failed` with the reason is the honest state,
+        and no price was touched.
         """
         application = await self.get(application_id)
-        if application.status not in (ApplicationStatus.PENDING, ApplicationStatus.RUNNING):
-            raise ConflictError(
-                f"An application that is {application.status.value} cannot be cancelled."
+        if application.status is not ApplicationStatus.PENDING:
+            return
+        application.status = ApplicationStatus.FAILED
+        application.failure_reason = f"Could not be queued for processing: {reason}"[:500]
+        application.finished_at = datetime.now(UTC)
+        await self.flush()
+
+    # -------------------------------------------------------------- worker
+    async def claim(self, application_id: uuid.UUID, *, task_id: str | None) -> ClaimResult:
+        """Take ownership of a run, atomically.
+
+        The `pending -> running` transition *is* the lock: it is a single
+        conditional UPDATE, so of two workers handed the same message exactly
+        one sees a row change. The loser does no work, which is what makes
+        at-least-once delivery safe here.
+        """
+        now = datetime.now(UTC)
+        claimed = await self.session.execute(
+            update(RuleApplication)
+            .where(RuleApplication.id == application_id)
+            .where(RuleApplication.tenant_id == self._tenant_id())
+            .where(RuleApplication.status == ApplicationStatus.PENDING)
+            .values(
+                status=ApplicationStatus.RUNNING,
+                claimed_by_task_id=task_id,
+                started_at=now,
             )
-        if application.applied_count:
-            raise ConflictError(
-                "This application has already written prices and cannot be cancelled."
+            .returning(RuleApplication.id)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.scalars().first() is not None:
+            return ClaimResult.CLAIMED
+
+        current = (
+            (
+                await self.session.execute(
+                    select(RuleApplication)
+                    .where(RuleApplication.tenant_id == self._tenant_id())
+                    .where(RuleApplication.id == application_id)
+                )
             )
-        application.status = ApplicationStatus.CANCELLED
+            .scalars()
+            .first()
+        )
+        if current is None:
+            return ClaimResult.UNKNOWN
+        if current.status is not ApplicationStatus.RUNNING:
+            # Cancelled or already finished. A message delayed behind a
+            # cancellation must not revive the run.
+            return ClaimResult.NOT_CLAIMABLE
+        if task_id is not None and current.claimed_by_task_id == task_id:
+            # This task's own redelivery. Resuming from the durable cursor is
+            # correct; starting over would reprice what already landed.
+            return ClaimResult.RESUMED
+        return ClaimResult.ALREADY_RUNNING
+
+    async def run_next_batch(self, application_id: uuid.UUID) -> bool:
+        """Process one bounded batch. Returns whether more work remains.
+
+        One transaction per batch, so a crash loses at most one batch and the
+        cursor never claims work that was rolled back with it.
+        """
+        application = await self.get(application_id)
+        if application.status is ApplicationStatus.CANCELLED:
+            # Cooperative stop: the merchant cancelled between batches.
+            return False
+
+        request = self._request_from(application)
+        cursor = application.processed_count
+        batch = request.product_ids[cursor : cursor + APPLICATION_BATCH_SIZE]
+        if not batch:
+            return False
+
+        await self._process(application, request, batch)
+        application.processed_count = cursor + len(batch)
+        await self.flush()
+        await self._refresh_counts(application)
+        await self.flush()
+        return application.processed_count < len(request.product_ids)
+
+    async def finalize(self, application_id: uuid.UUID) -> RuleApplication:
+        """Close a run and publish its final counts."""
+        application = await self.get(application_id)
+        await self._refresh_counts(application)
+        if application.status is not ApplicationStatus.CANCELLED:
+            application.finished_at = datetime.now(UTC)
+            application.status = (
+                ApplicationStatus.COMPLETED
+                if application.failed_count == 0 and application.review_count == 0
+                else ApplicationStatus.PARTIAL
+            )
+        await self.flush()
+        await self.session.refresh(application, attribute_names=["items"])
+        return application
+
+    async def fail(self, application_id: uuid.UUID, reason: str) -> RuleApplication:
+        """Record that the run could not be completed.
+
+        Counts are recomputed rather than zeroed: batches that committed
+        before the failure really did reprice those drafts, and hiding them
+        would send the merchant looking for changes the catalogue already has.
+        """
+        application = await self.get(application_id)
+        await self._refresh_counts(application)
+        application.status = ApplicationStatus.FAILED
+        application.failure_reason = reason[:500]
         application.finished_at = datetime.now(UTC)
         await self.flush()
         return application
 
-    # ------------------------------------------------------------- internals
-    async def _run(self, application: RuleApplication, request: ApplyRequest) -> None:
-        counts = {"applied": 0, "skipped": 0, "review": 0, "failed": 0}
+    async def cancel(self, application_id: uuid.UUID) -> RuleApplication:
+        """Cancel a run, under an explicit safe policy.
 
-        for product_id in request.product_ids:
+        * ``pending`` -- immediate and total. Nothing was written, and the
+          claim will refuse the message when it arrives, so a task already in
+          flight cannot revive it.
+        * ``running`` -- **cooperative**. The run is marked cancelled and the
+          worker stops at its next batch boundary. Batches that already
+          committed keep their prices: they are real writes, recorded item by
+          item, and silently reverting them would be a second unreviewed
+          reprice. There is deliberately no hard task termination here --
+          killing a worker mid-transaction is precisely the failure this
+          design exists to avoid.
+        * finished (``completed`` / ``partial`` / ``failed``) -- refused.
+          Reporting a finished run as cancelled would misrepresent what the
+          catalogue actually contains.
+
+        Idempotent: cancelling an already-cancelled run returns it unchanged.
+        """
+        application = await self.get(application_id)
+        if application.status is ApplicationStatus.CANCELLED:
+            return application
+        if application.status not in (ApplicationStatus.PENDING, ApplicationStatus.RUNNING):
+            raise ConflictError(
+                f"An application that is {application.status.value} cannot be cancelled."
+            )
+        was_running = application.status is ApplicationStatus.RUNNING
+        application.status = ApplicationStatus.CANCELLED
+        application.finished_at = datetime.now(UTC)
+        if was_running:
+            application.failure_reason = (
+                "Cancelled while running. Drafts already repriced in committed "
+                "batches were kept; see the item results."
+            )
+        await self._refresh_counts(application)
+        await self.flush()
+        return application
+
+    # ------------------------------------------------------------- internals
+    def _request_from(self, application: RuleApplication) -> ApplyRequest:
+        """Rebuild the confirmed request from the durable row.
+
+        The worker never receives the selection in its payload -- only an id.
+        This is where "what was confirmed" comes back, which is why
+        ``selection`` is stored rather than referenced.
+        """
+        selection = application.selection or {}
+        return ApplyRequest(
+            product_ids=tuple(uuid.UUID(p) for p in selection.get("productIds", [])),
+            idempotency_key=application.idempotency_key,
+            expected_rule_id=application.pricing_rule_id,
+            expected_rule_version=application.pricing_rule_version,
+            variant_ids=tuple(uuid.UUID(v) for v in selection.get("variantIds", [])),
+        )
+
+    async def _refresh_counts(self, application: RuleApplication) -> None:
+        """Recompute the counts from the recorded items.
+
+        Derived rather than incremented, because a run spans transactions and
+        may resume: an in-memory tally would restart at zero on the second
+        attempt and under-report everything the first one did.
+        """
+        await self.flush()
+        item = RuleApplicationItem
+
+        async def count(predicate: ColumnElement[bool]) -> int:
+            query = (
+                select(func.count())
+                .select_from(item)
+                .where(item.application_id == application.id)
+                .where(predicate)
+            )
+            return int((await self.session.execute(query)).scalar_one())
+
+        # Product-level rows only for applied/skipped: a variant row is part
+        # of its product's outcome, not a second product.
+        application.applied_count = await count(
+            (item.outcome == ApplicationItemOutcome.APPLIED) & item.variant_id.is_(None)
+        )
+        application.skipped_count = await count(
+            item.outcome.in_(
+                (
+                    ApplicationItemOutcome.SKIPPED,
+                    ApplicationItemOutcome.PUBLISHED,
+                    ApplicationItemOutcome.STALE,
+                )
+            )
+            & item.variant_id.is_(None)
+        )
+        # Review counts variants too -- a held variant is a thing the merchant
+        # has to look at, whether or not its product priced.
+        application.review_count = await count(item.outcome == ApplicationItemOutcome.NEEDS_REVIEW)
+        application.failed_count = await count(item.outcome == ApplicationItemOutcome.FAILED)
+
+    async def _process(
+        self,
+        application: RuleApplication,
+        request: ApplyRequest,
+        product_ids: tuple[uuid.UUID, ...],
+    ) -> None:
+        for product_id in product_ids:
             product = (
                 (
                     await self.session.execute(
@@ -488,7 +810,6 @@ class RuleApplicationService(BaseService):
                     ApplicationItemOutcome.FAILED,
                     message=f"Draft {product_id} was not found in this workspace.",
                 )
-                counts["failed"] += 1
                 continue
 
             variants = (
@@ -513,7 +834,6 @@ class RuleApplicationService(BaseService):
                     ApplicationItemOutcome.PUBLISHED,
                     message="Published products are never repriced by this workflow.",
                 )
-                counts["skipped"] += 1
                 continue
 
             if (
@@ -531,7 +851,6 @@ class RuleApplicationService(BaseService):
                     ApplicationItemOutcome.STALE,
                     message="The governing rule changed after this preview was taken.",
                 )
-                counts["skipped"] += 1
                 continue
 
             if not outcome.can_apply:
@@ -544,7 +863,6 @@ class RuleApplicationService(BaseService):
                     message="Held for review; the inputs were not complete enough to price.",
                 )
                 self.pricing.stamp(outcome)
-                counts["review"] += 1
                 continue
 
             previous = product.sell_price
@@ -559,7 +877,6 @@ class RuleApplicationService(BaseService):
                     new=proposed,
                     message="Already at the proposed price.",
                 )
-                counts["skipped"] += 1
                 continue
 
             product.sell_price = proposed
@@ -573,7 +890,6 @@ class RuleApplicationService(BaseService):
                         reasons=list(variant_outcome.review_reasons),
                         message="Variant held for review.",
                     )
-                    counts["review"] += 1
                     continue
                 variant = next(v for v in variants if v.id == variant_outcome.variant_id)
                 variant.sell_price = variant_outcome.calculation.price
@@ -599,28 +915,6 @@ class RuleApplicationService(BaseService):
                 landed=outcome.calculation.landed.amount,
                 version=outcome.resolution.version,
             )
-            counts["applied"] += 1
-
-        application.total_count = len(request.product_ids)
-        application.applied_count = counts["applied"]
-        application.skipped_count = counts["skipped"]
-        application.review_count = counts["review"]
-        application.failed_count = counts["failed"]
-        application.finished_at = datetime.now(UTC)
-        application.status = (
-            ApplicationStatus.COMPLETED
-            if counts["failed"] == 0 and counts["review"] == 0
-            else ApplicationStatus.PARTIAL
-        )
-        await self.flush()
-
-        # Load the results explicitly before returning. `selectin` eager
-        # loading applies when an application is *queried*, not to one just
-        # built in this session, so the collection is stale; touching it
-        # afterwards would trigger a lazy load, which is implicit IO and
-        # raises `MissingGreenlet` in async SQLAlchemy. Same reasoning as
-        # `ProductImportService.import_product`.
-        await self.session.refresh(application, attribute_names=["items"])
 
     def _record(
         self,
@@ -667,8 +961,11 @@ class RuleApplicationService(BaseService):
 
 
 __all__ = [
+    "APPLICATION_BATCH_SIZE",
+    "MAX_APPLICATION_PRODUCTS",
     "MAX_PREVIEW_PAGE",
     "ApplyRequest",
+    "ClaimResult",
     "DraftPricingService",
     "ImpactPreviewService",
     "PreviewPage",
