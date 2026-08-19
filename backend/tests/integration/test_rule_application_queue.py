@@ -40,7 +40,7 @@ from app.tasks import pricing as pricing_tasks
 from tests.integration.rule_application_harness import (
     EnqueueRecorder,
     bind_queue,
-    run_dispatch,
+    publish_application,
     run_task,
 )
 from tests.integration.test_rule_application import (
@@ -119,6 +119,35 @@ class TestAcceptance:
         await db_session.refresh(product)
         assert product.sell_price == Decimal("30.0000")
 
+    async def test_nothing_is_published_before_the_transaction_commits(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        queue: EnqueueRecorder,
+    ) -> None:
+        """The ordering the whole design rests on, asserted rather than assumed.
+
+        This was wrong once: the publish ran inside the request, the worker
+        looked up a row that had not been written, and the resulting error
+        rolled back the application the caller had just been handed a `202`
+        for. The hook now fires on commit, and the harness -- whose session
+        override deliberately never commits -- makes that visible.
+        """
+        headers, tenant_id = await seed_tenant(client)
+        await create_rule(client, headers)
+        product = await seed_draft(db_session, tenant_id, sell_price="30.00")
+
+        body = await confirm(
+            client, headers, productIds=[str(product.id)], idempotencyKey="ordering"
+        )
+
+        assert queue.calls == [], "published before the row was durable"
+
+        # What `get_db_session` does at the end of a real request.
+        await db_session.commit()
+
+        assert queue.application_ids == [body["id"]]
+
     async def test_the_enqueued_payload_carries_only_the_application_id(
         self,
         client: AsyncClient,
@@ -133,6 +162,7 @@ class TestAcceptance:
         body = await confirm(
             client, headers, productIds=[str(product.id)], idempotencyKey="payload"
         )
+        await db_session.commit()
 
         assert queue.application_ids == [body["id"]]
         published = queue.calls[0]
@@ -154,9 +184,16 @@ class TestAcceptance:
         assert response.status_code == 422
         assert queue.calls == []
 
-    async def test_a_repeat_of_the_same_key_is_not_enqueued_twice(
+    async def test_a_repeat_of_the_same_key_reuses_the_same_application(
         self, client: AsyncClient, db_session: AsyncSession, queue: EnqueueRecorder
     ) -> None:
+        """The guarantee is one *run*, not one message.
+
+        A retry does publish again, deliberately: if the first publish never
+        reached the broker, that is exactly what repairs it. Duplicate delivery
+        is already a no-op -- the claim settles it -- so the cost is one wasted
+        message and the benefit is a run that is not left waiting forever.
+        """
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
@@ -164,9 +201,10 @@ class TestAcceptance:
 
         first = await client.post(APPLY, json=payload, headers=headers)
         second = await client.post(APPLY, json=payload, headers=headers)
+        await db_session.commit()
 
         assert first.json()["id"] == second.json()["id"]
-        assert len(queue.calls) == 1
+        assert set(queue.application_ids) == {first.json()["id"]}
 
     async def test_the_same_key_with_a_different_payload_is_a_conflict(
         self, client: AsyncClient, db_session: AsyncSession, queue: EnqueueRecorder
@@ -186,6 +224,7 @@ class TestAcceptance:
             json={"productIds": [str(second_product.id)], "idempotencyKey": "shared"},
             headers=headers,
         )
+        await db_session.commit()
 
         assert clash.status_code == 409, clash.text
         assert len(queue.calls) == 1
@@ -563,14 +602,19 @@ class TestRetryAndFailure:
         assert record.applied_count == 2
         assert await item_count(db_session, body["id"]) == 2
 
-    async def test_a_broker_failure_leaves_an_explicit_state(
+    async def test_a_broker_failure_still_records_the_application(
         self,
         client: AsyncClient,
         db_session: AsyncSession,
         queue: EnqueueRecorder,
     ) -> None:
-        """`pending` forever is indistinguishable from "queued behind a busy
-        worker"; the merchant has to be able to tell nothing will happen."""
+        """The request must not lose the run because the broker was down.
+
+        The row commits either way; the message is what is missing, and the
+        reconciler republishes it. Failing the request would roll back an
+        application the merchant was told had been accepted -- which is exactly
+        the bug this replaced.
+        """
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
@@ -581,16 +625,15 @@ class TestRetryAndFailure:
         )
 
         record = await row(db_session, body["id"])
-        assert record.status is ApplicationStatus.FAILED
-        assert record.failure_reason is not None
-        assert "Could not be queued" in record.failure_reason
-        assert record.enqueued_at is None
+        assert record.status is ApplicationStatus.PENDING
         await db_session.refresh(product)
         assert product.sell_price == Decimal("30.0000"), "no price was touched"
 
-    async def test_a_successful_hand_off_records_when_it_was_queued(
+    async def test_an_accepted_application_is_durable_and_pending(
         self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
+        """A `202` means the row exists. It previously meant a row that the
+        request then rolled back, because the publish ran before the commit."""
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
@@ -601,7 +644,7 @@ class TestRetryAndFailure:
 
         record = await row(db_session, body["id"])
         assert record.status is ApplicationStatus.PENDING
-        assert record.enqueued_at is not None
+        assert record.total_count == 1
 
 
 class TestCancellation:
@@ -710,15 +753,17 @@ class TestCancellation:
         assert second.json()["status"] == "cancelled"
 
     async def test_a_failed_application_cannot_be_cancelled(
-        self, client: AsyncClient, db_session: AsyncSession, queue: EnqueueRecorder
+        self, client: AsyncClient, db_session: AsyncSession
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
-        queue.fail_with = ConnectionRefusedError("broker down")
         body = await confirm(
             client, headers, productIds=[str(product.id)], idempotencyKey="failed-cancel"
         )
+        record = await row(db_session, body["id"])
+        record.status = ApplicationStatus.FAILED
+        await db_session.flush()
 
         response = await client.post(f"{BASE}/applications/{body['id']}/cancel", headers=headers)
 
@@ -895,10 +940,10 @@ class TestBatchScalability:
 
 
 class TestDispatchHandOff:
-    async def test_the_hand_off_marks_the_run_enqueued(
+    async def test_the_hand_off_publishes_the_application(
         self, client: AsyncClient, db_session: AsyncSession, queue: EnqueueRecorder
     ) -> None:
-        """Exercised directly, as the API schedules it after its commit."""
+        """Exercised directly, as the API's commit hook calls it."""
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
@@ -911,17 +956,19 @@ class TestDispatchHandOff:
         await db_session.flush()
         queue.calls.clear()
 
-        queued = await run_dispatch(application.id, tenant_id)
+        queued = publish_application(application.id)
 
         assert queued is True
         assert queue.application_ids == [str(application.id)]
         record = await row(db_session, str(application.id))
-        assert record.enqueued_at is not None
         assert record.status is ApplicationStatus.PENDING
 
-    async def test_the_hand_off_reports_a_broker_failure(
+    async def test_a_broker_failure_leaves_the_run_for_the_reconciler(
         self, client: AsyncClient, db_session: AsyncSession, queue: EnqueueRecorder
     ) -> None:
+        """The row is committed and the message is not. That gap is closed by
+        the reconciler, which republishes pending runs -- not by failing the
+        request, which cannot un-commit anything anyway."""
         headers, tenant_id = await seed_tenant(client)
         await create_rule(client, headers)
         product = await seed_draft(db_session, tenant_id, sell_price="30.00")
@@ -934,11 +981,14 @@ class TestDispatchHandOff:
         await db_session.flush()
         queue.fail_with = ConnectionRefusedError("broker down")
 
-        queued = await run_dispatch(application.id, tenant_id)
+        queued = publish_application(application.id)
 
         assert queued is False
         record = await row(db_session, str(application.id))
-        assert record.status is ApplicationStatus.FAILED
+        # Still pending and still recoverable -- nothing was lost, and the
+        # sweep will publish it.
+        assert record.status is ApplicationStatus.PENDING
+        assert record.enqueued_at is None
 
 
 class TestQueuedAccessControl:

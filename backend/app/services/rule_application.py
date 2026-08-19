@@ -14,11 +14,12 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +68,17 @@ MAX_APPLICATION_PRODUCTS = 5_000
 #: lose to a crash and how many ORM objects a session holds at once; a
 #: 5,000-product run is 100 short transactions, not one enormous one.
 APPLICATION_BATCH_SIZE = 50
+
+#: How long a `running` application may go without a heartbeat before it is
+#: considered abandoned. Generously above the batch soft time limit: the cost
+#: of waiting too long is a delayed retry, while the cost of reclaiming too
+#: early is two workers on one run, and only the second is dangerous.
+STALE_AFTER = timedelta(minutes=15)
+
+#: Times a run may be reclaimed before it is parked as failed. A run that dies
+#: the same way on every attempt is a defect to look at, not work to retry
+#: forever -- and an unbounded loop would hide it.
+MAX_RECOVERIES = 3
 
 
 def _price(
@@ -328,6 +340,87 @@ class _VariantCostView:
 
 
 @dataclass(frozen=True, slots=True)
+class DraftSelectionFilter:
+    """What a merchant is looking at, and therefore what "select all" means.
+
+    One object shared by the preview and by selection, so the set shown and
+    the set applied are produced by the same predicate. Two separate query
+    builders would eventually disagree, and the merchant would confirm a
+    number that did not match what ran.
+
+    ``safe_only`` excludes published drafts, those already flagged for review,
+    and those missing any of the three supplier figures the calculation refuses
+    to invent -- item cost, freight and currency.
+
+    Those three columns are checked directly rather than trusting
+    ``needs_review``, which is only set once something has actually priced the
+    draft: a product imported before any rule existed carries no flag, and
+    filtering on the flag alone told merchants "5 ready" for a selection that
+    included one nothing could price. Checking the inputs costs one more
+    predicate and makes the count mean what it says.
+
+    It is still a filter over recorded state rather than a promise -- a rule
+    denominated in another currency, or a shipping rule with no matching quote,
+    can still hold a draft back when the run reaches it. Those are recorded as
+    `needs_review` in the results rather than written, which is the same
+    fail-closed behaviour every other surface has.
+    """
+
+    search: str | None = None
+    needs_review_only: bool = False
+    safe_only: bool = False
+    product_ids: tuple[uuid.UUID, ...] = ()
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "search": self.search,
+            "needsReviewOnly": self.needs_review_only,
+            "safeOnly": self.safe_only,
+            "productIds": [str(p) for p in self.product_ids],
+        }
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any] | None) -> DraftSelectionFilter:
+        data = payload or {}
+        return cls(
+            search=data.get("search"),
+            needs_review_only=bool(data.get("needsReviewOnly")),
+            safe_only=bool(data.get("safeOnly")),
+            product_ids=tuple(uuid.UUID(p) for p in data.get("productIds", [])),
+        )
+
+
+def draft_query(tenant_id: uuid.UUID, selection: DraftSelectionFilter) -> Select[tuple[Product]]:
+    """The one predicate behind both the preview and "select all matching"."""
+    query = (
+        select(Product).where(Product.tenant_id == tenant_id).where(Product.deleted_at.is_(None))
+    )
+    if selection.product_ids:
+        query = query.where(Product.id.in_(selection.product_ids))
+    if selection.search:
+        query = query.where(Product.title.ilike(f"%{selection.search.strip()}%"))
+    if selection.needs_review_only:
+        query = query.where(Product.needs_review.is_(True))
+    if selection.safe_only:
+        # Published drafts are excluded in the database rather than filtered
+        # out afterwards, so "select all matching" can never hand the worker a
+        # live listing to reprice in the first place.
+        published = (
+            select(StoreListing.product_id)
+            .where(StoreListing.product_id == Product.id)
+            .where(StoreListing.status == ListingSyncStatus.SYNCED)
+        )
+        query = (
+            query.where(~published.exists())
+            .where(Product.needs_review.is_(False))
+            .where(Product.cost_price_min.is_not(None))
+            .where(Product.shipping_cost.is_not(None))
+            .where(Product.currency.is_not(None))
+        )
+    return query
+
+
+@dataclass(frozen=True, slots=True)
 class PreviewPage:
     """One page of impact preview, plus the counts the screen needs."""
 
@@ -352,27 +445,15 @@ class ImpactPreviewService(BaseService):
 
     async def preview(
         self,
+        selection: DraftSelectionFilter | None = None,
         *,
-        product_ids: list[uuid.UUID] | None = None,
-        search: str | None = None,
-        needs_review_only: bool = False,
         page: int = 1,
         size: int = 25,
     ) -> PreviewPage:
         size = max(1, min(size, MAX_PREVIEW_PAGE))
         page = max(1, page)
 
-        base = (
-            select(Product)
-            .where(Product.tenant_id == self._tenant_id())
-            .where(Product.deleted_at.is_(None))
-        )
-        if product_ids:
-            base = base.where(Product.id.in_(product_ids))
-        if search:
-            base = base.where(Product.title.ilike(f"%{search.strip()}%"))
-        if needs_review_only:
-            base = base.where(Product.needs_review.is_(True))
+        base = draft_query(self._tenant_id(), selection or DraftSelectionFilter())
 
         total = (
             await self.session.execute(select(func.count()).select_from(base.subquery()))
@@ -407,6 +488,18 @@ class ImpactPreviewService(BaseService):
 
         return PreviewPage(items=tuple(outcomes), total=total, page=page, size=size)
 
+    async def count_matching(self, selection: DraftSelectionFilter) -> int:
+        """How many drafts a filter matches, without loading any of them.
+
+        What "select all matching" would cover, counted in the database. The
+        alternative -- inferring it from the page the merchant can see -- would
+        understate every selection beyond the first page.
+        """
+        query = select(func.count()).select_from(
+            draft_query(self._tenant_id(), selection).subquery()
+        )
+        return int((await self.session.execute(query)).scalar_one())
+
     def _tenant_id(self) -> uuid.UUID:
         from app.core.context import require_tenant_id
 
@@ -417,11 +510,15 @@ class ImpactPreviewService(BaseService):
 class ApplyRequest:
     """A confirmed application. The fingerprint is derived from this."""
 
-    product_ids: tuple[uuid.UUID, ...]
-    idempotency_key: str
+    product_ids: tuple[uuid.UUID, ...] = ()
+    idempotency_key: str = ""
     expected_rule_id: uuid.UUID | None = None
     expected_rule_version: int | None = None
     variant_ids: tuple[uuid.UUID, ...] = ()
+    #: Set instead of `product_ids` when the merchant confirmed "everything
+    #: matching what I am looking at". Resolved to concrete ids server-side at
+    #: creation -- see `RuleApplicationService.create`.
+    selection_filter: DraftSelectionFilter | None = None
 
     def fingerprint(self) -> str:
         """Stable hash of what was confirmed.
@@ -436,6 +533,7 @@ class ApplyRequest:
                 "variants": sorted(str(v) for v in self.variant_ids),
                 "rule": str(self.expected_rule_id) if self.expected_rule_id else None,
                 "version": self.expected_rule_version,
+                "filter": self.selection_filter.to_json() if self.selection_filter else None,
             },
             sort_keys=True,
         )
@@ -498,7 +596,7 @@ class RuleApplicationService(BaseService):
         """
         if not request.idempotency_key.strip():
             raise ValidationError("An idempotency key is required.")
-        if not request.product_ids:
+        if not request.product_ids and request.selection_filter is None:
             raise ValidationError("Select at least one draft to apply rules to.")
         if len(request.product_ids) > MAX_APPLICATION_PRODUCTS:
             raise ValidationError(
@@ -516,11 +614,18 @@ class RuleApplicationService(BaseService):
             # A genuine retry: hand back the original run untouched.
             return existing
 
-        # Duplicates in the selection are collapsed here rather than at the
-        # cursor. The run walks the stored list by index, so a repeated id
-        # would otherwise be processed twice and collide on
-        # `uq_rule_application_items_target`.
-        product_ids = list(dict.fromkeys(request.product_ids))
+        if request.selection_filter is not None:
+            product_ids = await self._resolve_filter(request.selection_filter)
+            if not product_ids:
+                raise ValidationError(
+                    "Nothing matches that selection, so there is nothing to apply."
+                )
+        else:
+            # Duplicates in the selection are collapsed here rather than at the
+            # cursor. The run walks the stored list by index, so a repeated id
+            # would otherwise be processed twice and collide on
+            # `uq_rule_application_items_target`.
+            product_ids = list(dict.fromkeys(request.product_ids))
 
         application = RuleApplication(
             tenant_id=self._tenant_id(),
@@ -534,6 +639,9 @@ class RuleApplicationService(BaseService):
                 "productIds": [str(p) for p in product_ids],
                 "variantIds": [str(v) for v in request.variant_ids],
             },
+            selection_filter=(
+                request.selection_filter.to_json() if request.selection_filter is not None else None
+            ),
             total_count=len(product_ids),
         )
         self.session.add(application)
@@ -557,26 +665,15 @@ class RuleApplicationService(BaseService):
         return application
 
     async def mark_enqueued(self, application_id: uuid.UUID) -> None:
-        """Record that the broker accepted the message."""
-        application = await self.get(application_id)
-        application.enqueued_at = datetime.now(UTC)
-        await self.flush()
+        """Record that the broker accepted the message.
 
-    async def mark_enqueue_failed(self, application_id: uuid.UUID, reason: str) -> None:
-        """The broker refused the message; say so instead of waiting forever.
-
-        The row is already committed by the time this can happen, so it cannot
-        be rolled back. Leaving it `pending` would be indistinguishable from
-        "queued, worker busy" -- a merchant would watch a run that nothing was
-        ever going to pick up. `failed` with the reason is the honest state,
-        and no price was touched.
+        Written by the reconciler when it republishes a run the broker never
+        took, so `enqueued_at` answers "did this one need rescuing". The
+        ordinary path publishes from an ``after_commit`` hook, which is
+        synchronous and cannot write back.
         """
         application = await self.get(application_id)
-        if application.status is not ApplicationStatus.PENDING:
-            return
-        application.status = ApplicationStatus.FAILED
-        application.failure_reason = f"Could not be queued for processing: {reason}"[:500]
-        application.finished_at = datetime.now(UTC)
+        application.enqueued_at = datetime.now(UTC)
         await self.flush()
 
     # -------------------------------------------------------------- worker
@@ -598,6 +695,7 @@ class RuleApplicationService(BaseService):
                 status=ApplicationStatus.RUNNING,
                 claimed_by_task_id=task_id,
                 started_at=now,
+                heartbeat_at=now,
             )
             .returning(RuleApplication.id)
             .execution_options(synchronize_session=False)
@@ -647,6 +745,11 @@ class RuleApplicationService(BaseService):
 
         await self._process(application, request, batch)
         application.processed_count = cursor + len(batch)
+        # Stamped in the same transaction as the batch it accounts for. A
+        # heartbeat written outside would keep ticking for a worker that had
+        # stopped committing anything, which is exactly the state it exists to
+        # detect.
+        application.heartbeat_at = datetime.now(UTC)
         await self.flush()
         await self._refresh_counts(application)
         await self.flush()
@@ -721,6 +824,78 @@ class RuleApplicationService(BaseService):
         return application
 
     # ------------------------------------------------------------- internals
+    async def _resolve_filter(self, selection: DraftSelectionFilter) -> list[uuid.UUID]:
+        """Turn "everything matching" into a concrete, ordered id list.
+
+        Resolved **now**, at confirmation, not later in the worker. The
+        merchant confirmed a count they were shown; resolving at run time
+        would quietly sweep in drafts imported in the meantime, and the
+        durable record would no longer describe what was agreed to.
+
+        Ids only -- no product rows are loaded. The browser never enumerates
+        the set either: it sends the filter, and this is what expands it.
+        """
+        query = (
+            draft_query(self._tenant_id(), selection)
+            .with_only_columns(Product.id)
+            .order_by(Product.created_at.desc())
+            .limit(MAX_APPLICATION_PRODUCTS)
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def reclaim_stale(self, application_id: uuid.UUID, *, task_id: str | None) -> bool:
+        """Take over a run whose worker stopped reporting.
+
+        Conditional on the heartbeat still being stale *at the moment of the
+        write*, so a worker that resumed a second before this ran keeps its
+        run: the UPDATE simply matches no row. That is the whole guarantee
+        against two workers on one application, and it is the database's to
+        make, not a read-then-write in application code.
+
+        Only `running` rows are eligible, so a cancelled or finished run can
+        never be revived. Resuming is safe because the durable cursor and the
+        per-item uniqueness constraint already make a re-entered run neither
+        skip nor repeat work -- the same properties a Celery retry relies on.
+        """
+        cutoff = datetime.now(UTC) - STALE_AFTER
+        now = datetime.now(UTC)
+        claimed = await self.session.execute(
+            update(RuleApplication)
+            .where(RuleApplication.id == application_id)
+            .where(RuleApplication.tenant_id == self._tenant_id())
+            .where(RuleApplication.status == ApplicationStatus.RUNNING)
+            .where(RuleApplication.heartbeat_at < cutoff)
+            .where(RuleApplication.recovery_count < MAX_RECOVERIES)
+            .values(
+                claimed_by_task_id=task_id,
+                heartbeat_at=now,
+                recovery_count=RuleApplication.recovery_count + 1,
+            )
+            .returning(RuleApplication.id)
+            .execution_options(synchronize_session=False)
+        )
+        return claimed.scalars().first() is not None
+
+    async def abandon_stale(self, application_id: uuid.UUID) -> bool:
+        """Park a run that has been reclaimed too many times.
+
+        Recorded as `failed` with the reason rather than retried forever: a
+        run that dies identically on every attempt is a defect to look at, and
+        an endless loop would hide it. Committed batches keep their results.
+        """
+        application = await self.get(application_id)
+        if application.status is not ApplicationStatus.RUNNING:
+            return False
+        await self._refresh_counts(application)
+        application.status = ApplicationStatus.FAILED
+        application.failure_reason = (
+            f"Abandoned after {application.recovery_count} recovery attempts. "
+            "Drafts already repriced in committed batches were kept."
+        )
+        application.finished_at = datetime.now(UTC)
+        await self.flush()
+        return True
+
     def _request_from(self, application: RuleApplication) -> ApplyRequest:
         """Rebuild the confirmed request from the durable row.
 
@@ -735,6 +910,11 @@ class RuleApplicationService(BaseService):
             expected_rule_id=application.pricing_rule_id,
             expected_rule_version=application.pricing_rule_version,
             variant_ids=tuple(uuid.UUID(v) for v in selection.get("variantIds", [])),
+            selection_filter=(
+                DraftSelectionFilter.from_json(application.selection_filter)
+                if application.selection_filter is not None
+                else None
+            ),
         )
 
     async def _refresh_counts(self, application: RuleApplication) -> None:
@@ -964,12 +1144,16 @@ __all__ = [
     "APPLICATION_BATCH_SIZE",
     "MAX_APPLICATION_PRODUCTS",
     "MAX_PREVIEW_PAGE",
+    "MAX_RECOVERIES",
+    "STALE_AFTER",
     "ApplyRequest",
     "ClaimResult",
     "DraftPricingService",
+    "DraftSelectionFilter",
     "ImpactPreviewService",
     "PreviewPage",
     "ProductOutcome",
     "RuleApplicationService",
     "VariantOutcome",
+    "draft_query",
 ]

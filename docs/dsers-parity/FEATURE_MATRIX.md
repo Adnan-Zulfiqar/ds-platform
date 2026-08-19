@@ -59,12 +59,15 @@ Added 2026-08-19 (M3A-4A). Evidence is the M3A branch; see
 | Rules applied automatically at import | Existing and verified | `ProductImportService._apply_global_rules`, `backend/tests/integration/test_import_rule_application.py` (32 tests) |
 | Fail-closed pricing (no invented cost, currency or freight) | Existing and verified | `REVIEW_*` reasons; `TestFailClosedAtImport` |
 | Published products never repriced automatically | Existing and verified | `DraftPricingService.is_published` reads `StoreListing`, not `Product.status`; `test_rule_application_queue.py` |
-| Read-only impact preview over existing drafts | Existing and verified (API only) | `GET /global-rules/drafts/impact`; **no UI until M3A-4B** |
-| Confirmed bulk application on the Celery queue | Existing and verified (API only) | `pricing.apply_rules_to_drafts`, `test_rule_application_queue.py` (42 tests); **no UI until M3A-4B** |
+| Read-only impact preview over existing drafts | Existing and verified | `GET /global-rules/drafts/impact`; `frontend/components/global-rules/impact-panel.tsx`; `global-rules-impact.spec.ts` |
+| Confirmed bulk application on the Celery queue | Existing and verified | `pricing.apply_rules_to_drafts`; confirmation, progress polling and results in `impact-panel.tsx`/`application-progress.tsx`; verified live against a real out-of-process worker |
 | Rule management UI (create/edit/activate/history/preview) | Existing and verified | `frontend/app/(protected)/settings/global-rules/`, `frontend/components/global-rules/`, `frontend/tests/e2e/global-rules.spec.ts` |
 | Live rule calculator in the UI | Existing and verified | `live-preview-panel.tsx` over `POST /global-rules/preview`; every figure server-computed |
-| Draft impact & bulk-apply UI | Missing | M3A-4B. The API and worker exist; nothing in the interface reaches them |
-| Product/variant/category picker for rule scoping | Missing | No lookup endpoint on the rules API; identifiers are validated text entry, stated on screen |
+| Draft impact & bulk-apply UI | Existing and verified | Selection, filter snapshot, confirmation, async progress, results, cancellation |
+| Crash recovery for abandoned applications | Existing and verified | `heartbeat_at` + `pricing.reconcile_applications`; `test_rule_application_recovery.py` |
+| Per-endpoint rate limiting on preview and apply | Existing and verified | `app/core/rate_limit.py` shared with the middleware; `TestPreviewThrottling` |
+| Historical constraint preflight | Existing and verified | `scripts/verify_rule_version_integrity.py`; reports clean on a fresh install |
+| Product/variant/category picker for rule scoping | Existing and verified | `GET /global-rules/targets/{kind}` (labels and ids only); `target-combobox.tsx`, keyboard-operable; raw entry kept as an explicit advanced fallback |
 | Supplier freight quotes | Blocked by external API/permission | `aliexpress.ds.product.get` returns none; `mapper.map_product` sets `shipping_cost: None` rather than inventing zero — products needing supplier shipping are marked Needs review |
 | Cross-currency rules (FX on the M3A path) | Existing but incomplete | A rule denominated in another currency fails closed with `fx_rate_unavailable` rather than converting |
 

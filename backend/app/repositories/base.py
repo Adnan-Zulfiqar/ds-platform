@@ -293,21 +293,31 @@ class BaseRepository(Generic[ModelType]):
         message = str(getattr(exc, "orig", exc))
         lowered = message.lower()
 
+        # The driver's text goes to the log, never to the caller. `details`
+        # is serialised into the error envelope, so putting it there returned
+        # index names, column names and the offending values to any client
+        # that could provoke a duplicate -- a description of the schema handed
+        # out on request. The correlation id in the response is what ties a
+        # report back to this log line.
+        if any(marker in lowered for marker in ("unique", "duplicate key", "foreign key")) or (
+            "check constraint" in lowered
+        ):
+            logger.warning(
+                "repository_integrity_error",
+                model=self.model.__name__,
+                constraint=message[:200],
+            )
+
         if "unique" in lowered or "duplicate key" in lowered:
-            return ConflictError(
-                f"A {self.model.__name__} with these values already exists.",
-                details={"constraint": message[:200]},
-            )
+            # Deliberately not the model class name: `GlobalRuleVersion` means
+            # nothing to a merchant and names an internal type. Callers that
+            # can say something more useful override this -- see
+            # `GlobalRuleService._translate_integrity`.
+            return ConflictError("Another record with these values already exists.")
         if "foreign key" in lowered:
-            return ValidationError(
-                "The request references a resource that does not exist.",
-                details={"constraint": message[:200]},
-            )
+            return ValidationError("The request references a resource that does not exist.")
         if "check constraint" in lowered:
-            return ValidationError(
-                "The request violates a data integrity rule.",
-                details={"constraint": message[:200]},
-            )
+            return ValidationError("The request violates a data integrity rule.")
 
         logger.exception("repository_integrity_error", model=self.model.__name__)
         return DatabaseError()

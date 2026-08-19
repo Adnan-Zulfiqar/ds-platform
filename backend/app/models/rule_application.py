@@ -113,11 +113,24 @@ class RuleApplication(TenantScopedBase):
     #: for them. Stored rather than referenced so the record still explains
     #: itself after the drafts it names are gone.
     selection: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    #: The filter confirmed instead of a list, when the merchant chose
+    #: "everything matching". The worker receives only an id, so this is what
+    #: it resolves the target set from -- and what still explains the run after
+    #: the catalogue has moved on. Null when explicit ids were submitted.
+    selection_filter: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     #: The Celery task holding this run. Set by the claim, and the only way a
     #: redelivery can tell its own retry ("resume") from another worker's
     #: live run ("leave it alone") -- both see status `running`.
     claimed_by_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Stamped at every batch boundary while a worker holds this run. It is
+    #: what makes "stuck" measurable: a `running` row whose heartbeat has gone
+    #: quiet was abandoned, whereas one still ticking is simply slow, and
+    #: nothing else in the row distinguishes the two.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Times this run has been reclaimed after a worker died. Bounded, so a run
+    #: that fails identically forever is parked rather than resumed in a loop.
+    recovery_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: Set when the broker accepted the message. Still NULL on a `pending` run
     #: means it was never queued -- "nothing will happen", not "waiting".
     enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

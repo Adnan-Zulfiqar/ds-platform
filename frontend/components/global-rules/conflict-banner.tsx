@@ -10,11 +10,14 @@ import { Button } from "@/components/ui/button";
  * A conflict is a state to resolve, not a message to dismiss. Two things are
  * true at once — the merchant has unsaved edits, and the server has a newer
  * version — and only the merchant can decide which matters. So there is no
- * automatic resolution, no silent retry, and no "saved" badge: the banner
- * stays until an explicit choice is made.
+ * automatic resolution, no silent retry, and no "saved" badge.
  *
- * Reloading is destructive to local edits, which is why it says so, and why
- * the alternative is offered next to it rather than buried.
+ * **"Keep my changes" means exactly that: keep editing, here, locally.** It
+ * does not refresh the concurrency token, does not save, and does not
+ * overwrite the newer version — a button that quietly re-armed the token would
+ * turn "I want to look at my work" into "discard someone else's". Saving is
+ * still refused until the newer version is loaded, and the copy says so rather
+ * than implying otherwise.
  */
 export function ConflictBanner({
   message,
@@ -42,9 +45,11 @@ export function ConflictBanner({
           <p className="text-sm font-medium">This rule changed while you were editing</p>
           <p className="text-sm text-muted-foreground">{message}</p>
           <p className="text-sm text-muted-foreground">
-            Nothing has been saved. Reload to take the newer version and lose
-            your edits, or keep editing and save again to overwrite it
-            deliberately.
+            Nothing has been saved. <strong>Reload</strong> takes the newer
+            version and discards your edits. <strong>Keep my changes</strong>
+            leaves them on screen so you can copy them out — but saving stays
+            blocked until you reload, because the version you started from no
+            longer exists.
           </p>
         </div>
       </div>
@@ -67,6 +72,7 @@ export function ConflictBanner({
           variant="outline"
           className="min-h-10"
           onClick={onKeepEditing}
+          data-testid="keep-my-changes"
         >
           Keep my changes
         </Button>

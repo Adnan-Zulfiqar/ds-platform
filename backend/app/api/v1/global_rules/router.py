@@ -17,7 +17,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.api.deps import DbSession, RequireAdmin, RequireViewer, endpoint_rate_limit
 from app.models.pricing import GlobalRuleKind, PriceRounding
 from app.schemas.common import ListQueryParams, Page, PageMeta, list_query_params
 from app.schemas.global_rules import (
@@ -35,6 +35,11 @@ from app.schemas.global_rules import (
 )
 from app.services.global_rules import GlobalRuleService, PreviewInputs
 from app.services.pricing_engine import compute_sell_price_before_rounding
+
+# A tighter quota than the broad middleware allowance, through the same
+# limiter. The calculator fires on a 400ms debounce, so continuous typing for
+# a minute stays well inside this -- it is a ceiling on abuse, not on use.
+_preview_limit = endpoint_rate_limit("global-rules-preview", limit=120, window_seconds=60)
 
 router = APIRouter(prefix="/global-rules", tags=["global-rules"])
 
@@ -274,7 +279,10 @@ async def resolve_effective_rule(
 
 @router.post("/preview", response_model=PreviewResponse, summary="Calculate a live preview")
 async def preview(
-    session: DbSession, payload: PreviewRequest, _authorized: RequireViewer
+    session: DbSession,
+    payload: PreviewRequest,
+    _authorized: RequireViewer,
+    _throttle: None = Depends(_preview_limit),
 ) -> PreviewResponse:
     """Read-only. Prices a transient product that is never added to the
     session, so no product, rule or history row can be written by this call.

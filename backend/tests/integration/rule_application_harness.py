@@ -124,9 +124,10 @@ async def run_task(
             set_tenant_id(tenant_id)
 
 
-async def run_dispatch(application_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
-    """Run the post-commit hand-off the API schedules as a background task."""
-    try:
-        return await pricing_tasks.dispatch_rule_application(application_id, tenant_id)
-    finally:
-        set_tenant_id(tenant_id)
+def publish_application(application_id: uuid.UUID) -> bool:
+    """Run the publish the API attaches to its ``after_commit`` hook.
+
+    Synchronous, exactly as the hook calls it -- that is the whole point of
+    the shape: a SQLAlchemy commit event cannot await anything.
+    """
+    return pricing_tasks.publish_rule_application(application_id)

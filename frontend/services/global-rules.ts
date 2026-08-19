@@ -454,6 +454,264 @@ export function useResolveRule(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Target lookup, draft impact, and applications
+// ---------------------------------------------------------------------------
+
+export type TargetKind = "product" | "variant" | "category" | "store";
+
+export interface RuleTarget {
+  id: string;
+  label: string;
+  sublabel: string | null;
+}
+
+/**
+ * Search selectable rule targets by name.
+ *
+ * `enabled` is what keeps a closed combobox silent: without it every scope
+ * picker on the page would fetch on mount, four times over, for a list nobody
+ * has opened.
+ */
+export function useRuleTargets(
+  kind: TargetKind,
+  search: string,
+  options: { enabled?: boolean; productId?: string | null } = {},
+): UseQueryResult<Page<RuleTarget>> {
+  const { enabled = true, productId = null } = options;
+  return useQuery({
+    queryKey: [...globalRuleKeys.all, "targets", kind, search, productId] as const,
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<RuleTarget>>(`${BASE}/targets/${kind}`, {
+        params: { search: search || undefined, size: 20, productId: productId || undefined },
+      });
+      return data;
+    },
+    enabled,
+    // A label for a given id does not change between keystrokes.
+    staleTime: 30_000,
+  });
+}
+
+export interface ImpactVariant {
+  variantId: string;
+  label: string | null;
+  currentPrice: string | null;
+  proposedPrice: string | null;
+  landedCost: string;
+  profit: string | null;
+  markupPercent: string | null;
+  marginPercent: string | null;
+  needsReview: boolean;
+  reviewReasons: string[];
+}
+
+export interface ImpactItem {
+  productId: string;
+  title: string;
+  currency: string | null;
+  currentPrice: string | null;
+  itemCost: string;
+  supplierShippingCost: string;
+  fees: string;
+  landedCost: string;
+  proposedPrice: string | null;
+  compareAtPrice: string | null;
+  profit: string | null;
+  markupPercent: string | null;
+  marginPercent: string | null;
+  pricingRuleId: string | null;
+  pricingRuleVersion: number | null;
+  pricingRuleScope: RuleScope | null;
+  ruleReason: string;
+  shippingRuleId: string | null;
+  shippingRuleVersion: number | null;
+  shippingExplanation: string | null;
+  published: boolean;
+  canApply: boolean;
+  needsReview: boolean;
+  reviewReasons: string[];
+  variants: ImpactVariant[];
+}
+
+export interface ImpactPage {
+  items: ImpactItem[];
+  total: number;
+  page: number;
+  size: number;
+  applicableCount: number;
+  reviewCount: number;
+  publishedCount: number;
+  /** What "select all matching" would cover, counted server-side. */
+  selectableTotal: number;
+  /** Uncapped match count, so a truncated selection can be said out loud. */
+  matchingTotal: number;
+  maxApplicationProducts: number;
+  applicationBatchSize: number;
+}
+
+export interface ImpactQuery {
+  page?: number;
+  size?: number;
+  search?: string;
+  needsReviewOnly?: boolean;
+  safeOnly?: boolean;
+}
+
+export function useDraftImpact(query: ImpactQuery): UseQueryResult<ImpactPage> {
+  return useQuery({
+    queryKey: [...globalRuleKeys.all, "impact", query] as const,
+    queryFn: async () => {
+      const { data } = await apiClient.get<ImpactPage>(`${BASE}/drafts/impact`, {
+        params: {
+          page: query.page ?? 1,
+          size: query.size ?? 25,
+          search: query.search || undefined,
+          needsReviewOnly: query.needsReviewOnly || undefined,
+          safeOnly: query.safeOnly || undefined,
+        },
+      });
+      return data;
+    },
+  });
+}
+
+export type ApplicationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled";
+
+export type ApplicationOutcome =
+  | "applied"
+  | "skipped"
+  | "needs_review"
+  | "stale"
+  | "published"
+  | "failed";
+
+export const TERMINAL_STATUSES: readonly ApplicationStatus[] = [
+  "completed",
+  "partial",
+  "failed",
+  "cancelled",
+];
+
+export interface ApplicationItem {
+  productId: string | null;
+  variantId: string | null;
+  outcome: ApplicationOutcome;
+  previousPrice: string | null;
+  newPrice: string | null;
+  landedCost: string | null;
+  appliedRuleVersion: number | null;
+  reviewReasons: string[];
+  message: string | null;
+}
+
+export interface Application {
+  id: string;
+  status: ApplicationStatus;
+  idempotencyKey: string;
+  heartbeatAt: string | null;
+  recoveryCount: number;
+  finishedAt: string | null;
+  totalCount: number;
+  processedCount: number;
+  appliedCount: number;
+  skippedCount: number;
+  reviewCount: number;
+  failedCount: number;
+  failureReason: string | null;
+  items: ApplicationItem[];
+}
+
+export interface ApplyPayload {
+  idempotencyKey: string;
+  productIds?: string[];
+  selectionFilter?: {
+    search?: string | null;
+    needsReviewOnly?: boolean;
+    safeOnly?: boolean;
+  };
+  expectedRuleId?: string | null;
+  expectedRuleVersion?: number | null;
+}
+
+export function useApplyToDrafts(): UseMutationResult<Application, Error, ApplyPayload> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: ApplyPayload) => {
+      const { data } = await apiClient.post<Application>(`${BASE}/drafts/apply`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      // The impact figures are stale the moment prices start moving.
+      void queryClient.invalidateQueries({
+        queryKey: [...globalRuleKeys.all, "impact"],
+      });
+    },
+  });
+}
+
+/**
+ * Poll one application until it reaches a terminal state.
+ *
+ * The interval backs off as a run gets longer, and stops entirely once the
+ * status can no longer change — a fixed-interval poll that never stops is how
+ * a status screen left open overnight becomes a denial-of-service on your own
+ * API.
+ */
+export function useApplication(
+  applicationId: string | null,
+  options: { poll?: boolean } = {},
+): UseQueryResult<Application> {
+  const { poll = true } = options;
+  return useQuery({
+    queryKey: [...globalRuleKeys.all, "application", applicationId ?? ""] as const,
+    queryFn: async () => {
+      const { data } = await apiClient.get<Application>(
+        `${BASE}/applications/${applicationId}`,
+      );
+      return data;
+    },
+    enabled: Boolean(applicationId),
+    refetchInterval: (query) => {
+      if (!poll) return false;
+      const current = query.state.data as Application | undefined;
+      if (current && TERMINAL_STATUSES.includes(current.status)) return false;
+      // 1s while it is young, easing to 5s. A batch takes seconds, so a
+      // faster poll buys nothing but load.
+      const elapsed = Date.now() - (query.state.dataUpdatedAt || Date.now());
+      return elapsed > 30_000 ? 5_000 : 1_500;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useCancelApplication(
+  applicationId: string,
+): UseMutationResult<Application, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<Application>(
+        `${BASE}/applications/${applicationId}/cancel`,
+        {},
+      );
+      return data;
+    },
+    onSuccess: (application) => {
+      queryClient.setQueryData(
+        [...globalRuleKeys.all, "application", applicationId],
+        application,
+      );
+    },
+  });
+}
+
 /**
  * The live calculator.
  *

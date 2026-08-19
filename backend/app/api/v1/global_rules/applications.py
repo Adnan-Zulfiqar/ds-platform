@@ -12,12 +12,15 @@ a published id submitted to the application endpoint is recorded with a
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
+from pydantic import Field
+from sqlalchemy import event
 
-from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.api.deps import DbSession, RequireAdmin, RequireViewer, endpoint_rate_limit
 from app.models.rule_application import ApplicationItemOutcome, ApplicationStatus
 from app.schemas.base import CamelCaseModel
 from app.services.rule_application import (
@@ -25,6 +28,7 @@ from app.services.rule_application import (
     MAX_APPLICATION_PRODUCTS,
     MAX_PREVIEW_PAGE,
     ApplyRequest,
+    DraftSelectionFilter,
     ImpactPreviewService,
     ProductOutcome,
     RuleApplicationService,
@@ -34,9 +38,35 @@ from app.services.rule_application import (
 # the same way this package is, and it does not import ``app.api``. The queue
 # hand-off lives there rather than here so that this handler keeps to
 # validate-delegate-return and knows nothing about brokers.
-from app.tasks.pricing import dispatch_rule_application
+from app.tasks.pricing import publish_rule_application
+
+# Tighter quotas than the broad middleware allowance, through the same
+# limiter. Both endpoints price a catalogue page per call, and the apply
+# endpoint additionally starts background work; the global quota is sized for
+# ordinary browsing and is far too generous for either.
+#
+# The preview number is deliberately roomy: the calculator debounces at 400ms,
+# so a merchant typing continuously for a minute produces well under this. It
+# is a ceiling on abuse, not on use.
+_preview_limit = endpoint_rate_limit("global-rules-preview", limit=120, window_seconds=60)
+_impact_limit = endpoint_rate_limit("global-rules-impact", limit=120, window_seconds=60)
+_apply_limit = endpoint_rate_limit("global-rules-apply", limit=20, window_seconds=60)
 
 router = APIRouter(prefix="/global-rules", tags=["global-rules"])
+
+
+def _publish_after_commit(session: DbSession, application_id: uuid.UUID) -> None:
+    """Publish once this request's transaction is durable, and not before.
+
+    ``once=True`` so a session reused across requests cannot publish the same
+    application again, and the listener is attached to the *sync* session
+    because that is where SQLAlchemy emits the event.
+    """
+
+    def on_commit(_session: object) -> None:
+        publish_rule_application(application_id)
+
+    event.listen(session.sync_session, "after_commit", on_commit, once=True)
 
 
 class PreviewVariantRead(CamelCaseModel):
@@ -91,17 +121,36 @@ class PreviewPageRead(CamelCaseModel):
     applicable_count: int
     review_count: int
     published_count: int
-    #: Published here, on the screen that builds the selection, so a client
-    #: can page a large catalogue into several applications knowingly rather
-    #: than discovering the ceiling as a rejected submission.
+    #: How many drafts "select all matching" would cover, capped at the
+    #: application ceiling. Counted server-side: the browser holds one page.
+    selectable_total: int = 0
+    #: The uncapped match count, so the screen can say when a selection was
+    #: truncated instead of silently applying to fewer than the merchant sees.
+    matching_total: int = 0
     max_application_products: int = MAX_APPLICATION_PRODUCTS
     #: Products per worker transaction. Exposed because it is the resolution
     #: at which progress advances and at which a cancellation takes effect.
     application_batch_size: int = APPLICATION_BATCH_SIZE
 
 
+class SelectionFilterBody(CamelCaseModel):
+    """“Everything matching what I am looking at”, sent instead of a list.
+
+    The browser never enumerates 5,000 identifiers to select them: it sends
+    the filter it is displaying and the server expands it once, at
+    confirmation, into the durable snapshot the worker walks.
+    """
+
+    search: str | None = None
+    needs_review_only: bool = False
+    #: Excludes published drafts and those already flagged for review.
+    safe_only: bool = True
+
+
 class ApplyRequestBody(CamelCaseModel):
-    product_ids: list[uuid.UUID]
+    product_ids: list[uuid.UUID] = Field(default_factory=list)
+    #: Supplied instead of `productIds` for a select-all-matching confirmation.
+    selection_filter: SelectionFilterBody | None = None
     idempotency_key: str
     #: The rule version the merchant saw in the preview. Revalidated before
     #: any write; a rule edited in between invalidates those items rather
@@ -128,6 +177,11 @@ class ApplicationRead(CamelCaseModel):
     id: uuid.UUID
     status: ApplicationStatus
     idempotency_key: str
+    #: Set once a worker has picked the run up, and refreshed at every batch
+    #: boundary. A `running` row whose heartbeat has gone quiet was abandoned.
+    heartbeat_at: datetime | None = None
+    recovery_count: int = 0
+    finished_at: datetime | None = None
     total_count: int
     #: How far through the selection the worker has committed. With
     #: `totalCount` this is the progress a polling client renders.
@@ -199,7 +253,9 @@ async def preview_draft_impact(
     size: Annotated[int, Query(ge=1, le=MAX_PREVIEW_PAGE)] = 25,
     search: Annotated[str | None, Query(max_length=200)] = None,
     needs_review_only: Annotated[bool, Query(alias="needsReviewOnly")] = False,
+    safe_only: Annotated[bool, Query(alias="safeOnly")] = False,
     product_ids: Annotated[list[uuid.UUID] | None, Query(alias="productIds")] = None,
+    _throttle: None = Depends(_impact_limit),
 ) -> PreviewPageRead:
     """Read-only, paginated, and open to viewers.
 
@@ -207,14 +263,25 @@ async def preview_draft_impact(
     the page is sliced in the database rather than in memory so a large
     catalogue cannot be loaded to answer one page.
     """
-    result = await ImpactPreviewService(session).preview(
-        product_ids=product_ids,
+    service = ImpactPreviewService(session)
+    selection = DraftSelectionFilter(
         search=search,
         needs_review_only=needs_review_only,
-        page=page,
-        size=size,
+        safe_only=safe_only,
+        product_ids=tuple(product_ids or ()),
     )
+    result = await service.preview(selection, page=page, size=size)
     items = [_to_item(outcome) for outcome in result.items]
+    # What "select all matching" would actually cover, counted in the database
+    # rather than inferred from the page in front of the merchant.
+    selectable = await service.count_matching(
+        DraftSelectionFilter(
+            search=search,
+            needs_review_only=needs_review_only,
+            safe_only=True,
+            product_ids=tuple(product_ids or ()),
+        )
+    )
     return PreviewPageRead(
         items=items,
         total=result.total,
@@ -223,6 +290,8 @@ async def preview_draft_impact(
         applicable_count=sum(1 for i in items if i.can_apply),
         review_count=sum(1 for i in items if i.needs_review),
         published_count=sum(1 for i in items if i.published),
+        selectable_total=min(selectable, MAX_APPLICATION_PRODUCTS),
+        matching_total=selectable,
     )
 
 
@@ -236,7 +305,7 @@ async def apply_to_drafts(
     session: DbSession,
     payload: ApplyRequestBody,
     principal: RequireAdmin,
-    background: BackgroundTasks,
+    _throttle: None = Depends(_apply_limit),
 ) -> ApplicationRead:
     """Explicit confirmation only. Accepts the work; does not perform it.
 
@@ -252,9 +321,14 @@ async def apply_to_drafts(
     submitted in one application; more is refused with that number named,
     never silently truncated.
 
-    The queue hand-off is a background task rather than an inline call because
-    it must happen *after* this request's transaction commits: a worker that
-    picked up the message first would look for a row that is not visible yet.
+    The message is published from an ``after_commit`` hook, which is the only
+    moment that means "the row is durable". A background task looked like the
+    right place for it and was not: Starlette runs those inside the response
+    call, still within the session's scope, so the worker looked up a row that
+    had not been written and the whole request rolled back. If the publish
+    itself fails, ``pricing.reconcile_applications`` republishes the run --
+    the row and the message cannot be written atomically, so the gap is
+    reconciled rather than wished away.
     """
     application = await RuleApplicationService(session).create(
         ApplyRequest(
@@ -262,11 +336,20 @@ async def apply_to_drafts(
             idempotency_key=payload.idempotency_key,
             expected_rule_id=payload.expected_rule_id,
             expected_rule_version=payload.expected_rule_version,
+            selection_filter=(
+                DraftSelectionFilter(
+                    search=payload.selection_filter.search,
+                    needs_review_only=payload.selection_filter.needs_review_only,
+                    safe_only=payload.selection_filter.safe_only,
+                )
+                if payload.selection_filter is not None
+                else None
+            ),
         ),
         actor_id=principal.user_id,
     )
-    if application.status is ApplicationStatus.PENDING and application.enqueued_at is None:
-        background.add_task(dispatch_rule_application, application.id, application.tenant_id)
+    if application.status is ApplicationStatus.PENDING:
+        _publish_after_commit(session, application.id)
     return ApplicationRead.model_validate(application, from_attributes=True)
 
 

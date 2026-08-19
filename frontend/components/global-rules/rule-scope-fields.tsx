@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { Input } from "@/components/ui/input";
 import {
   Callout,
@@ -9,10 +11,12 @@ import {
   Select,
   scopeIdentifierLabel,
 } from "@/components/global-rules/rule-primitives";
+import { TargetCombobox } from "@/components/global-rules/target-combobox";
 import {
   SCOPE_IDENTIFIER,
   type RuleScope,
   type ScopeIdentifiers,
+  type TargetKind,
 } from "@/services/global-rules";
 
 /**
@@ -23,13 +27,14 @@ import {
  * The backend enforces the same rule — a global rule must set none, every
  * other scope must set its own — so this mirrors it rather than replacing it.
  *
- * **Identifiers are entered, not searched.** There is no product, variant or
- * category lookup endpoint in this API, and building a second product search
- * against `/products` to feed a settings form would be a parallel system with
- * its own pagination, permissions and tenant-scoping to get right. Ids are
- * validated for shape here and for existence by the backend, and the
- * limitation is stated on screen rather than papered over. Store ids are the
- * one exception: `/stores` already lists them, so that becomes a real picker.
+ * **Targets are chosen by name.** Each scope gets a searchable combobox over
+ * `/global-rules/targets/{kind}`, which returns labels and ids and nothing
+ * else. The merchant picks a product; the form stores its identifier.
+ *
+ * Raw identifier entry survives as an explicitly-labelled advanced fallback,
+ * for the cases the search cannot serve -- an id copied from a support ticket,
+ * or a record the picker cannot reach. It is collapsed by default, because
+ * offering a UUID box beside a search box invites people to use the wrong one.
  */
 
 const UUID_RE =
@@ -81,6 +86,13 @@ interface StoreOption {
   name: string;
 }
 
+const SCOPE_TARGET_KIND: Partial<Record<RuleScope, TargetKind>> = {
+  store: "store",
+  category: "category",
+  product: "product",
+  variant: "variant",
+};
+
 export function RuleScopeFields({
   value,
   onChange,
@@ -96,6 +108,17 @@ export function RuleScopeFields({
 }) {
   const key = SCOPE_IDENTIFIER[value.scope];
   const identifierLabel = scopeIdentifierLabel(value.scope);
+  const targetKind = SCOPE_TARGET_KIND[value.scope];
+  const [advanced, setAdvanced] = useState(false);
+  // Held so an edit form shows the name of what is already selected. A store
+  // can be named from the list already loaded; the other kinds show their
+  // label once picked, and an id with no known label still appears in the
+  // advanced box, so nothing is ever invisible.
+  const [chosenLabel, setChosenLabel] = useState<string | null>(null);
+  const storeLabel =
+    key === "storeId" && value.storeId
+      ? (stores.find((store) => store.id === value.storeId)?.name ?? null)
+      : null;
 
   return (
     <div className="space-y-4">
@@ -137,56 +160,65 @@ export function RuleScopeFields({
         </Field>
       </div>
 
-      {key === "storeId" && (
-        <Field label="Store" required error={error} data-testid="scope-store">
-          {(props) => (
-            <Select
-              {...props}
-              value={value.storeId ?? ""}
-              onChange={(storeId) => onChange({ ...value, storeId: storeId || null })}
-              options={[
-                { value: "", label: "Select a store…" },
-                ...stores.map((store) => ({ value: store.id, label: store.name })),
-              ]}
-            />
-          )}
-        </Field>
-      )}
+      {key && targetKind && identifierLabel && (
+        <>
+          <Field
+            label={identifierLabel.replace(" ID", "")}
+            required
+            error={error}
+            description="Start typing to search. The name is shown; the identifier is what gets saved."
+          >
+            {(props) => (
+              <TargetCombobox
+                {...props}
+                kind={targetKind}
+                value={value[key] ?? null}
+                label={storeLabel ?? chosenLabel}
+                productId={value.scope === "variant" ? value.productId : null}
+                onChange={(target) => {
+                  setChosenLabel(target?.label ?? null);
+                  onChange({ ...value, [key]: target?.id ?? null });
+                }}
+              />
+            )}
+          </Field>
 
-      {key && key !== "storeId" && identifierLabel && (
-        <Field
-          label={identifierLabel}
-          required
-          error={error}
-          description={
-            key === "categoryId"
-              ? "The supplier's category identifier, as recorded on imported products."
-              : "Paste the identifier from the product's URL. There is no lookup here yet — see the note below."
-          }
-        >
-          {(props) => (
-            <Input
-              {...props}
-              value={value[key] ?? ""}
-              disabled={disabled}
-              placeholder={key === "categoryId" ? "380230" : "00000000-0000-0000-0000-000000000000"}
-              onChange={(event) =>
-                onChange({ ...value, [key]: event.target.value || null })
-              }
-            />
-          )}
-        </Field>
-      )}
-
-      {key && key !== "storeId" && (
-        <Callout title="Identifiers are entered, not searched">
-          <p>
-            This release has no product, variant or category picker: the rules
-            API offers no lookup, and building a second product search to feed
-            this form would duplicate one that already exists elsewhere. Paste
-            the identifier — it is checked when you save.
-          </p>
-        </Callout>
+          <div>
+            <button
+              type="button"
+              aria-expanded={advanced}
+              onClick={() => setAdvanced((current) => !current)}
+              className="min-h-10 rounded text-xs font-medium text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              {advanced ? "Hide identifier entry" : "Enter an identifier instead"}
+            </button>
+            {advanced && (
+              <div className="mt-2">
+                <Field
+                  label={`${identifierLabel} (advanced)`}
+                  description="For an identifier copied from elsewhere. The search above is the normal way to do this."
+                >
+                  {(props) => (
+                    <Input
+                      {...props}
+                      value={value[key] ?? ""}
+                      disabled={disabled}
+                      placeholder={
+                        key === "categoryId"
+                          ? "380230"
+                          : "00000000-0000-0000-0000-000000000000"
+                      }
+                      onChange={(event) => {
+                        setChosenLabel(null);
+                        onChange({ ...value, [key]: event.target.value || null });
+                      }}
+                    />
+                  )}
+                </Field>
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {value.scope === "global" && (

@@ -19,7 +19,7 @@ The resolution chain:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -27,13 +27,15 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.context import AuthenticatedUser, set_principal
+from app.core.context import AuthenticatedUser, get_tenant_id, set_principal
 from app.core.exceptions import (
     AuthenticationError,
     NotFoundError,
     PermissionDeniedError,
+    RateLimitExceededError,
 )
 from app.core.logging import get_logger
+from app.core.rate_limit import limiter
 from app.core.redis import CacheClient
 from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
@@ -364,6 +366,62 @@ def get_tenant_repository(session: DbSession) -> TenantRepository:
 TenantRepo = Annotated[TenantRepository, Depends(get_tenant_repository)]
 
 
+def endpoint_rate_limit(
+    name: str, *, limit: int, window_seconds: int
+) -> Callable[[Request], Awaitable[None]]:
+    """A tighter, named quota for one expensive endpoint.
+
+    The broad middleware quota is sized for ordinary browsing, which is far too
+    generous for endpoints that price a catalogue or start background work. This
+    adds a second, narrower counter on top of it — through the *same* limiter, so
+    there is still one implementation of the window, the circuit breaker and the
+    fail-open policy.
+
+    Counted per tenant, falling back to client IP for traffic that has none.
+    Tenant-first matters here: quotas are per customer, and one tenant hammering
+    the preview must not consume another's allowance simply because they share a
+    NAT or a load balancer.
+
+    Fails open with Redis, exactly as the middleware does. A cache outage
+    degrading to "no quota" is the deliberate trade; a cache outage that took
+    down pricing would be worse.
+    """
+
+    async def dependency(request: Request) -> None:
+        if not settings.security.rate_limit_enabled:
+            return
+
+        tenant_id = get_tenant_id()
+        if tenant_id is not None:
+            identity = f"tenant:{tenant_id}"
+        else:
+            forwarded = request.headers.get("x-forwarded-for")
+            identity = (
+                forwarded.split(",")[0].strip()
+                if forwarded
+                else (request.client.host if request.client else "unknown")
+            )
+            identity = f"ip:{identity}"
+
+        decision = await limiter.consume(
+            f"ratelimit:{name}:{identity}", limit=limit, window=window_seconds
+        )
+        if not decision.allowed:
+            logger.warning(
+                "endpoint_rate_limit_exceeded",
+                endpoint=name,
+                identity=identity,
+                limit=limit,
+            )
+            raise RateLimitExceededError(
+                "You are making changes faster than they can be calculated. "
+                "Please wait a moment and try again.",
+                retry_after_seconds=decision.retry_after,
+            )
+
+    return dependency
+
+
 __all__ = [
     "BearerCredentials",
     "Cache",
@@ -380,6 +438,7 @@ __all__ = [
     "RoleRepo",
     "TenantRepo",
     "UserRepo",
+    "endpoint_rate_limit",
     "get_cache",
     "get_current_principal",
     "get_current_tenant",

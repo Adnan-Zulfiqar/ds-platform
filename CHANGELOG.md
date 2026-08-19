@@ -12,6 +12,33 @@ production release.
 
 ### Added
 
+- **M3A-4B — Draft impact, bulk application UI, and final M3A hardening** —
+  **Settings → Global Rules → Preview and Impact**: what the active rules would
+  do to existing drafts, with search, filters, per-product and per-variant
+  figures, and a confirmation stating selected / ready / held / published /
+  expected changes before anything is written. Missing figures read
+  "Unavailable", never zero. Selection never enumerates the catalogue: "select
+  all matching" sends the *filter*, and the server expands it once into a
+  durable snapshot capped at 5000. `202` returns a `pending` run; the screen
+  polls to a terminal state and stops, and the application id and open section
+  live in the URL so a refresh resumes the same run rather than starting
+  another. Results are per item, filterable by outcome, and a partial run shows
+  its successes. Published products are marked, unselectable, excluded from
+  select-all and refused by the service.
+
+  Rules are now scoped **by name**: `GET /global-rules/targets/{kind}` returns
+  labels and ids for products, variants, categories and stores, behind a
+  keyboard-operable combobox, with raw identifier entry kept as an explicit
+  advanced fallback.
+
+  Hardening: a heartbeat plus `pricing.reconcile_applications` recovers runs
+  abandoned by a crashed worker without ever stealing a healthy one; concurrent
+  rule-version writes return `409` with a merchant-facing message; preview,
+  impact and apply carry named per-tenant quotas through the *same* limiter as
+  the global middleware; and `scripts/verify_rule_version_integrity.py` reports
+  on the deferred typed-reference constraint without touching data. Migration
+  `0027`, additive. **M3A is complete.**
+
 - **M3A-4A — Global Rules management UI** — **Settings → Global Rules**
   (`/settings/global-rules`): pricing rules, shipping rules, application
   behaviour, a live calculator and append-only rule history, on one route.
@@ -61,6 +88,29 @@ production release.
   (M24B/M24C remain).
 
 ### Fixed
+
+- **A `202` could be returned for an application that was then rolled back
+  (M3A)** — the queue hand-off ran as a FastAPI background task, on the
+  assumption that yield-dependency teardown (and therefore the commit) happened
+  first. It does not: Starlette awaits background tasks inside the response
+  call, still within the session's scope. The worker looked up a row its own
+  request had not written, the `NotFoundError` escaped after the response had
+  started, and the whole transaction rolled back. The message is now published
+  from an `after_commit` hook, and `reconcile_applications` republishes any
+  `pending` run the broker never accepted. Found by running a real worker.
+- **Every Celery task shared one database engine across `asyncio.run` loops
+  (M3A)** — the engine is a module-level singleton whose pooled connections
+  belong to the loop that opened them, so the *second* task in a worker failed
+  with `'NoneType' object has no attribute 'send'`. Fixed for the pricing tasks
+  by disposing the engine before the loop closes; **the same latent bug remains
+  in the other task modules** and is recorded in
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md` §7.
+- **Database constraint text was returned to API clients (all repositories)** —
+  `TenantScopedRepository._translate_integrity_error` put the raw driver
+  message into `details`, which is serialised into the error envelope, so any
+  client able to provoke a duplicate received index names, column names and the
+  offending values. The text now goes to the log, and the response carries the
+  correlation id that ties the two together.
 
 - **Rule history was an unbounded result set (M3A)** —
   `GET /global-rules/{kind}/{id}/history` returned every version of a rule as a

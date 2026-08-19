@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { ApplicationBehaviourPanel } from "@/components/global-rules/application-behaviour-panel";
+import { ImpactPanel } from "@/components/global-rules/impact-panel";
 import { LivePreviewPanel } from "@/components/global-rules/live-preview-panel";
 import { PricingRulesPanel } from "@/components/global-rules/pricing-rules-panel";
 import { RuleHistoryPanel } from "@/components/global-rules/rule-history-panel";
@@ -29,11 +30,10 @@ import { useStores } from "@/services/stores";
  * what they changed — and separate routes would mean re-fetching the same
  * rule list on each hop.
  *
- * Deliberately *not* here: the draft impact and application screen. That is
- * M3A-4B. Bulk repricing is a different kind of action from configuring a
- * rule, with its own confirmation and its own consequences, and shipping it
- * beside the settings form would blur exactly the boundary that keeps a
- * settings save from repricing a catalogue.
+ * Preview and Impact sits alongside them but behind its own confirmation:
+ * bulk repricing is a different kind of action from configuring a rule, and
+ * the boundary that keeps a settings save from repricing a catalogue is the
+ * explicit confirm step, not the tab it lives under.
  */
 
 const SECTIONS = [
@@ -41,6 +41,7 @@ const SECTIONS = [
   { id: "shipping", label: "Shipping Rules" },
   { id: "behaviour", label: "Application Behaviour" },
   { id: "preview", label: "Live Preview" },
+  { id: "impact", label: "Preview and Impact" },
   { id: "history", label: "Rule History" },
 ] as const;
 
@@ -123,8 +124,35 @@ function SectionTabs({
   );
 }
 
+function isSectionId(value: string | null): value is SectionId {
+  return SECTIONS.some((section) => section.id === value);
+}
+
 export function GlobalRulesWorkspace() {
-  const [active, setActive] = useState<SectionId>("pricing");
+  const [active, setActiveState] = useState<SectionId>("pricing");
+
+  // The open section lives in the URL, so a reload comes back to the same
+  // place and a link points at it. It also matters for correctness rather
+  // than convenience: a run being watched is tracked by `?application=`, and
+  // landing back on the first tab after a refresh would hide it entirely --
+  // which is exactly what a merchant would read as "my application vanished".
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const section = params.get("section");
+    if (isSectionId(section)) {
+      setActiveState(section);
+    } else if (params.get("application")) {
+      setActiveState("impact");
+    }
+  }, []);
+
+  const setActive = useCallback((next: SectionId) => {
+    setActiveState(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set("section", next);
+    if (next !== "impact") url.searchParams.delete("application");
+    window.history.replaceState({}, "", url);
+  }, []);
   const [historyKind, setHistoryKind] = useState<RuleKind>("pricing");
   const [historyRuleId, setHistoryRuleId] = useState<string>("");
 
@@ -194,6 +222,10 @@ export function GlobalRulesWorkspace() {
             rules={pricingRules}
             stores={storeList.map((store) => ({ id: store.id, name: store.name }))}
           />
+        )}
+
+        {active === "impact" && (
+          <ImpactPanel canManage={canManage} rules={pricingRules} />
         )}
 
         {active === "history" && (

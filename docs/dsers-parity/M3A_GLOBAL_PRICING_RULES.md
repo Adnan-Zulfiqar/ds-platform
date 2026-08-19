@@ -4,11 +4,12 @@ Rules are configured once and applied in three places: at import, in a
 read-only preview, and in a confirmed bulk application that runs on the Celery
 queue.
 
-Delivered in five sessions: M3A-1 (calculation core), M3A-2 (versioning and
+Delivered in six sessions: M3A-1 (calculation core), M3A-2 (versioning and
 management API), M3A-3 (import, preview, apply), the M3A-3 acceptance fix
-(direct import tests, real background execution), and **M3A-4A** (the rule
-management UI). The draft impact and bulk-application screen is M3A-4B and is
-**not** delivered — see §10.
+(direct import tests, real background execution), **M3A-4A** (rule management
+UI) and **M3A-4B** (draft impact, bulk application, and final hardening).
+
+M3A is complete.
 
 ---
 
@@ -268,6 +269,95 @@ M3A-4A needed two things the API did not yet offer, both additive:
 
 ---
 
+## 6b. Draft impact and bulk application (M3A-4B)
+
+**Settings → Global Rules → Preview and Impact.** What the active rules would
+do to existing drafts, and the confirmed run that makes it real.
+
+### Selection never materialises the catalogue
+
+A page holds 25 rows. "Select all matching" sends the *filter*, not a list of
+identifiers; the server expands it once, at confirmation, into a durable
+snapshot capped at `MAX_APPLICATION_PRODUCTS`. Resolving at confirmation rather
+than in the worker is deliberate: the merchant confirmed a count they were
+shown, and resolving later would sweep in drafts imported in between.
+
+One predicate (`draft_query`) backs both the preview and the selection, so the
+set shown and the set applied cannot drift.
+
+`safeOnly` excludes published drafts, drafts already flagged, and drafts
+missing item cost, freight or currency — the three figures the engine refuses
+to invent. It checks those columns directly rather than trusting
+`needs_review`, which is only set once something has priced the draft: live
+verification showed a selection reporting "5 ready" that included one nothing
+could price.
+
+### Confirmation, progress and results
+
+The confirmation dialog states selected / ready / held / published / expected
+changes, the governing rule and version, and that draft writes are real while
+Shopify and published products are untouched. Cancelling issues no request at
+all. One idempotency key is generated when the dialog opens, so a double-click,
+a refresh or a network retry all reach the same run.
+
+`202` returns a `pending` application. The screen polls until a terminal state
+and then stops; the application id lives in the URL — with the open section —
+so a browser refresh resumes the same run instead of losing or duplicating it.
+Results are listed per item, filterable by outcome, and a partial run shows its
+successes rather than hiding them behind the failures.
+
+### Published products
+
+Marked, unselectable, excluded from select-all, and refused by the service even
+when their id is posted directly. No request is made to any sales channel, and
+a database assertion proves the row is unchanged.
+
+---
+
+## 6c. Operations
+
+### Recovering a stuck application
+
+A worker killed mid-run leaves its application `running` forever. The worker
+stamps `heartbeat_at` at every batch boundary, and
+`pricing.reconcile_applications` (Celery beat, every five minutes):
+
+* reclaims `running` runs whose heartbeat is older than `STALE_AFTER`
+  (15 minutes) with a **conditional UPDATE against the heartbeat**, so a worker
+  that is merely slow keeps its run — the write simply matches no row;
+* republishes `pending` runs the broker never accepted, after a two-minute
+  grace period;
+* parks a run as `failed` once `recovery_count` reaches `MAX_RECOVERIES` (3),
+  because a run that dies identically every time is a defect to look at rather
+  than work to retry forever.
+
+Cancelled and finished runs are never touched. Resuming is safe: the durable
+cursor and `uq_rule_application_items_target` already prevent a re-entered run
+from repricing anything twice. There is no hard task termination anywhere.
+
+**Manual check:** `SELECT id, status, heartbeat_at, recovery_count FROM
+rule_applications WHERE status = 'running' ORDER BY heartbeat_at;`
+
+### The historical typed-reference constraint
+
+`python -m scripts.verify_rule_version_integrity` reports whether
+`ck_global_rule_versions_one_typed_reference` is validated and whether any row
+contradicts it. Read-only, never run by the application, and it prints per-tenant
+counts and version ids only — no rule names or notes, because operators of
+different tenants read the same output. Exit `0` clean (what a fresh install
+reports), `1` unmatched rows, `2` validated needed. The remediation is in the
+module docstring.
+
+### Rate limits
+
+The live preview, the impact preview and the apply endpoint carry named quotas
+(120/120/20 per minute per tenant) through the *same* `FixedWindowLimiter` the
+global middleware uses — counted per tenant, fail-open on a Redis outage, and
+returning the standard error envelope with `Retry-After`. There is one limiter
+implementation, not two.
+
+---
+
 ## 7. Known limitations
 
 1. **AliExpress supplies no freight quotes.** `ds.product.get` carries none,
@@ -283,30 +373,37 @@ M3A-4A needed two things the API did not yet offer, both additive:
 2. **No published-product impact preview endpoint.** Optional in the brief.
    Published drafts already appear in the draft preview marked `published`
    with `canApply: false`.
-3. **No draft impact or bulk-application UI.** That is M3A-4B. The API and
-   worker for it are delivered and tested (M3A-3); nothing in the interface
-   reaches them, so existing drafts can only be repriced by calling the API
-   directly. M3A-4A deliberately stops at rule management: bulk repricing is a
-   different kind of action from configuring a rule, and shipping it beside the
-   settings form would blur the boundary that keeps a settings save from
-   repricing a catalogue.
-4. **No product, variant or category picker.** The rules API offers no lookup
-   endpoint, and building a second product search to feed a settings form would
-   duplicate one that already exists with its own pagination, permissions and
-   tenant scoping to keep correct. Identifiers are pasted, validated for shape
-   in the form and for existence by the API, and the limitation is stated on
-   screen. Store scope is a real picker, because `/stores` already lists them.
-5. **No `preferred_carrier` shipping strategy.** "Prefer this carrier" is the
+3. **No `preferred_carrier` shipping strategy.** "Prefer this carrier" is the
    `preferredCarriers` list, which filters the quotes every strategy chooses
    from, so it composes with all four rather than being a mutually exclusive
    fifth. A strategy the backend cannot persist would save and then behave as
    something else.
-6. **No FX conversion on the M3A path.** A cross-currency rule fails closed
+4. **No FX conversion on the M3A path.** A cross-currency rule fails closed
    rather than converting. `PricingEngine.propose_calculation` (the draft
    workspace) has its own conversion; unifying the two is not M3A work.
-7. **Filter-based selection is not offered.** A confirmed application names
-   concrete product ids, which is what makes the selection snapshot
-   meaningful after the drafts change. The preview is the filtering surface.
+5. **Products cannot be created through the API**, only imported. The
+   Playwright impact tests therefore seed drafts from the test process rather
+   than through an endpoint — adding production API surface that exists only
+   for tests would be surface an attacker gets too.
+6. **The verification worker ran on a SQLAlchemy broker, not RabbitMQ.** This
+   machine has no RabbitMQ and its Redis (3.0.504) predates the `HELLO` command
+   kombu needs. The message flow, the claim, batching, resume and cancellation
+   were all exercised through a real out-of-process worker and a real broker;
+   the specific transport was not RabbitMQ.
+7. **`safeOnly` predicts, it does not promise.** It excludes what the recorded
+   columns can rule out. A rule denominated in another currency, or a shipping
+   rule with no matching quote, can still hold a draft back when the run
+   reaches it — recorded as `needs_review` in the results rather than written.
+8. **Every Celery task in this repository shares one database engine across
+   `asyncio.run` calls.** `_run` in `app/tasks/pricing.py` now disposes the
+   engine before its loop closes, because without it the *second* task in a
+   worker picks a pooled connection belonging to a dead loop and fails with
+   `'NoneType' object has no attribute 'send'` — found by running a real worker
+   against a real broker, where the first message succeeded and every one after
+   it retried. **The same latent bug affects `app/tasks/products.py`,
+   `orders.py`, `inventory.py` and the rest**, which were not touched here.
+   They need the same fix; it is out of M3A's scope and is recorded as
+   outstanding work rather than quietly left unmentioned.
 
 ---
 
@@ -318,18 +415,20 @@ M3A-4A needed two things the API did not yet offer, both additive:
 | `0024` | Composite FKs `(tenant_id, rule_id)`; `NOT VALID` typed-reference CHECK; partial unique indexes for one active global rule per kind. |
 | `0025` | Pricing-outcome columns on `products`; `rule_applications` / `rule_application_items`; re-runs 0024's backfill and validates its constraint only if no row contradicts it. |
 | `0026` | `claimed_by_task_id`, `processed_count`, `enqueued_at` on `rule_applications`. |
+| `0027` | `heartbeat_at`, `recovery_count`, `selection_filter`, and a partial index for the reconciler sweep. |
 
-All additive. `0023`–`0025` are not modified.
+All additive. Earlier migrations are never modified.
 
 ---
 
 ## 9. Verification
 
-254 M3A-focused tests; full backend suite 1286 passing. `ruff check`,
-`ruff format --check` and strict `mypy` clean. Single head `0026`; fresh
-upgrade from empty and a `0026 → 0025 → 0026` round-trip both exit 0.
+See the M3A-4B report for the final figures. In summary: the full backend
+suite passes with `ruff`, `ruff format --check` and strict `mypy` clean at a
+single head `0027`, with a fresh upgrade and a `0027 → 0026 → 0027` round-trip
+both exiting 0; the frontend lints, typechecks and builds; and the Playwright
+suites for M3A-4A and M3A-4B pass, including the apply path against a **real
+out-of-process Celery worker consuming from a real broker**.
 
-The queue tests drive the **registered task** through `Task.apply` on a
-worker thread, not the service beneath it. No broker is contacted.
-
-**No frontend or Playwright gates were run** — M3A is backend-only.
+The queue tests drive the **registered task** through `Task.apply`, not the
+service beneath it.

@@ -225,7 +225,10 @@ test.describe("Pricing rules", () => {
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel("Rule name").fill(entry.name);
       await dialog.getByLabel("Scope").selectOption("category");
-      await dialog.getByLabel("Category ID").fill(`cat-${index}`);
+      // Categories are picked by name now; this reaches the identifier box
+      // deliberately, because the subject here is the strategy fields.
+      await dialog.getByRole("button", { name: "Enter an identifier instead" }).click();
+      await dialog.getByLabel("Category ID (advanced)").fill(`cat-${index}`);
       await dialog.getByLabel("Pricing strategy").selectOption(entry.strategy);
       await dialog.getByLabel(entry.field).fill(entry.value);
       await dialog.getByRole("button", { name: "Create rule" }).click();
@@ -273,18 +276,18 @@ test.describe("Pricing rules", () => {
     await page.getByTestId("new-pricing-rule").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel("Scope")).toHaveValue("global");
-    await expect(dialog.getByLabel("Product ID")).toBeHidden();
-    await expect(dialog.getByLabel("Category ID")).toBeHidden();
+    await expect(dialog.getByTestId("target-combobox-product")).toHaveCount(0);
+    await expect(dialog.getByTestId("target-combobox-category")).toHaveCount(0);
 
     await dialog.getByLabel("Scope").selectOption("category");
-    await expect(dialog.getByLabel("Category ID")).toBeVisible();
+    await expect(dialog.getByTestId("target-combobox-category")).toBeVisible();
 
     await dialog.getByLabel("Scope").selectOption("product");
-    await expect(dialog.getByLabel("Product ID")).toBeVisible();
-    await expect(dialog.getByLabel("Category ID")).toBeHidden();
+    await expect(dialog.getByTestId("target-combobox-product")).toBeVisible();
+    await expect(dialog.getByTestId("target-combobox-category")).toHaveCount(0);
   });
 
-  test("a scoped rule needs its identifier", async ({ page }) => {
+  test("a scoped rule needs a target chosen", async ({ page }) => {
     await openRules(page);
     await page.getByTestId("new-pricing-rule").click();
     const dialog = page.getByRole("dialog");
@@ -294,13 +297,16 @@ test.describe("Pricing rules", () => {
     await expect(dialog.getByText(/needs its Category ID/)).toBeVisible();
   });
 
+  // The advanced fallback still validates: pasting something that is not an
+  // identifier is refused rather than saved and silently matching nothing.
   test("a product-scoped rule rejects a non-identifier", async ({ page }) => {
     await openRules(page);
     await page.getByTestId("new-pricing-rule").click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Rule name").fill("Product rule");
     await dialog.getByLabel("Scope").selectOption("product");
-    await dialog.getByLabel("Product ID").fill("not-a-uuid");
+    await dialog.getByRole("button", { name: "Enter an identifier instead" }).click();
+    await dialog.getByLabel("Product ID (advanced)").fill("not-a-uuid");
     await dialog.getByRole("button", { name: "Create rule" }).click();
     await expect(dialog.getByText(/must be a valid identifier/)).toBeVisible();
   });

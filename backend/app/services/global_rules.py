@@ -357,21 +357,38 @@ class GlobalRuleService(BaseService):
         )
 
         latest = await self.versions.latest_version_number(rule_kind=kind, rule_id=rule.id)
-        return await self.versions.create(
-            rule_kind=kind,
-            rule_id=rule.id,
-            pricing_rule_id=rule.id if kind is GlobalRuleKind.PRICING else None,
-            shipping_rule_id=rule.id if kind is GlobalRuleKind.SHIPPING else None,
-            version=latest + 1,
-            changed_fields=changed,
-            previous_values=previous,
-            new_values=new_values,
-            snapshot=new_values,
-            changed_by_user_id=actor_id,
-            note=note,
-            is_active=bool(rule.is_active),
-            products_affected=0,
-        )
+        # `latest_version_number` only picks the candidate; the unique
+        # constraint on (tenant, kind, rule, version) is what actually settles
+        # two writers who both read the same number. Uncaught, that collision
+        # surfaced as a 500 naming a database index -- which tells a merchant
+        # nothing and leaks the schema. It is the same "someone else changed
+        # this while you were working" the concurrency token reports, so it
+        # gets the same answer.
+        try:
+            return await self.versions.create(
+                rule_kind=kind,
+                rule_id=rule.id,
+                pricing_rule_id=rule.id if kind is GlobalRuleKind.PRICING else None,
+                shipping_rule_id=rule.id if kind is GlobalRuleKind.SHIPPING else None,
+                version=latest + 1,
+                changed_fields=changed,
+                previous_values=previous,
+                new_values=new_values,
+                snapshot=new_values,
+                changed_by_user_id=actor_id,
+                note=note,
+                is_active=bool(rule.is_active),
+                products_affected=0,
+            )
+        except IntegrityError as exc:
+            raise self._translate_integrity(exc, kind=kind) from exc
+        except ConflictError as exc:
+            # The repository already turned the constraint into a conflict, but
+            # with the generic wording it uses for any duplicate. A version
+            # collision has a specific, actionable explanation, so it gets one.
+            raise ConflictError(
+                "This rule was changed by someone else at the same moment. Reload it and try again."
+            ) from exc
 
     @staticmethod
     def _translate_integrity(exc: IntegrityError, *, kind: GlobalRuleKind) -> Exception:
@@ -390,6 +407,13 @@ class GlobalRuleService(BaseService):
             )
         if "tenant_name" in message:
             return ConflictError("A rule with that name already exists.")
+        if "rule_version" in message or "global_rule_versions" in message:
+            # Two writers assigned the same version number. Nothing was
+            # written -- the whole transaction, rule change included, rolls
+            # back -- so retrying is genuinely safe and is what to advise.
+            return ConflictError(
+                "This rule was changed by someone else at the same moment. Reload it and try again."
+            )
         return ValidationError("That rule could not be saved.")
 
     # ------------------------------------------------------------ resolution
