@@ -198,8 +198,10 @@ class TestVersionHistory:
 
         history = await client.get(f"{BASE}/pricing/{created['id']}/history", headers=headers)
         assert history.status_code == 200, history.text
-        versions = [entry["version"] for entry in history.json()]
+        body = history.json()
+        versions = [entry["version"] for entry in body["items"]]
         assert versions == [3, 2, 1]
+        assert body["meta"]["totalItems"] == 3
 
     async def test_a_version_records_who_what_and_the_previous_value(
         self, client: AsyncClient
@@ -221,7 +223,7 @@ class TestVersionHistory:
         history = (
             await client.get(f"{BASE}/pricing/{created['id']}/history", headers=headers)
         ).json()
-        latest = history[0]
+        latest = history["items"][0]
         assert "markup_percent" in latest["changedFields"]
         assert Decimal(latest["previousValues"]["markup_percent"]) == Decimal("50")
         assert Decimal(latest["newValues"]["markup_percent"]) == Decimal("80")
@@ -289,7 +291,56 @@ class TestVersionHistory:
         )
         history = await client.get(f"{BASE}/pricing/{created['id']}/history", headers=headers)
         assert history.status_code == 200
-        assert len(history.json()) >= 2
+        assert len(history.json()["items"]) >= 2
+
+    async def test_history_is_paginated(self, client: AsyncClient) -> None:
+        """Append-only history grows without bound; it is the one list in this
+        API that previously returned everything."""
+        headers = await admin(client)
+        created = await create_pricing(client, headers)
+        current = created
+        for percent in ("60", "70", "80"):
+            response = await client.patch(
+                f"{PRICING}/{current['id']}",
+                json={
+                    "name": current["name"],
+                    "scope": "global",
+                    "strategy": "percentage_markup",
+                    "markupPercent": percent,
+                    "expectedUpdatedAt": current["updatedAt"],
+                },
+                headers=headers,
+            )
+            current = response.json()
+
+        first = (
+            await client.get(
+                f"{BASE}/pricing/{created['id']}/history",
+                params={"page": 1, "size": 2},
+                headers=headers,
+            )
+        ).json()
+        second = (
+            await client.get(
+                f"{BASE}/pricing/{created['id']}/history",
+                params={"page": 2, "size": 2},
+                headers=headers,
+            )
+        ).json()
+
+        assert [e["version"] for e in first["items"]] == [4, 3]
+        assert [e["version"] for e in second["items"]] == [2, 1]
+        assert first["meta"]["totalItems"] == 4
+        assert first["meta"]["hasNext"] is True
+        assert second["meta"]["hasNext"] is False
+
+    async def test_history_refuses_an_unbounded_page_size(self, client: AsyncClient) -> None:
+        headers = await admin(client)
+        created = await create_pricing(client, headers)
+        response = await client.get(
+            f"{BASE}/pricing/{created['id']}/history", params={"size": 5000}, headers=headers
+        )
+        assert response.status_code == 422
 
     async def test_history_holds_no_credentials(
         self, client: AsyncClient, db_session: AsyncSession
@@ -466,7 +517,8 @@ class TestTenantIsolation:
         intruder = await admin(client)
         response = await client.get(f"{BASE}/pricing/{created['id']}/history", headers=intruder)
         assert response.status_code == 200
-        assert response.json() == []
+        assert response.json()["items"] == []
+        assert response.json()["meta"]["totalItems"] == 0
 
     async def test_a_rule_list_never_leaks_across_tenants(self, client: AsyncClient) -> None:
         owner = await admin(client)

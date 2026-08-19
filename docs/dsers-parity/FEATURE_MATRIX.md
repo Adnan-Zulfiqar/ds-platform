@@ -44,6 +44,30 @@ Audit date: 2026-08-12 (M1); §3 corrected 2026-08-12 (M2A); §3 rebaselined
 | Variant count on the Drafts list | Existing and verified (added 2026-08-12) | Correlated `COUNT` alongside the existing list query, `ProductRepository._variant_count_column` — see [M1_IMPORT_TO_DRAFTS.md](M1_IMPORT_TO_DRAFTS.md) §"Variant-count column"; `TestVariantCount` (3 tests) |
 | Import provenance / supplier snapshot preserved separately from merchant edits | Existing and verified | `Product.supplier_title`/`supplier_brand`/`supplier_description` vs. merchant-editable `title`/`brand`/`description`; `_SYNCED_FIELDS` divergence protection in `product_import.py` |
 
+## 2a. Global pricing & shipping rules (M3A)
+
+Added 2026-08-19 (M3A-4A). Evidence is the M3A branch; see
+[M3A_GLOBAL_PRICING_RULES.md](M3A_GLOBAL_PRICING_RULES.md).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Landed-cost pricing engine (item + supplier shipping + duty/fees) | Existing and verified | `backend/app/services/pricing_engine.py::landed_cost`, `backend/tests/unit/test_pricing_calculation.py` |
+| Four strategies: fixed profit, markup %, target gross margin, hybrid | Existing and verified | `compute_sell_price`, same test module |
+| Scope precedence `variant > product > category > store > global` | Existing and verified | `backend/app/services/rule_resolution.py`, `backend/tests/unit/test_rule_resolution.py`, `test_import_rule_application.py::TestScopeHierarchyAtImport` |
+| Versioned rules with append-only history | Existing and verified | `GlobalRuleVersion`, `backend/tests/integration/test_global_rules_api.py` |
+| Optimistic concurrency on rule edits (409 on stale save) | Existing and verified | `expectedUpdatedAt` mandatory on update/activation; `test_global_rules_api.py`, `frontend/tests/e2e/global-rules.spec.ts` |
+| Rules applied automatically at import | Existing and verified | `ProductImportService._apply_global_rules`, `backend/tests/integration/test_import_rule_application.py` (32 tests) |
+| Fail-closed pricing (no invented cost, currency or freight) | Existing and verified | `REVIEW_*` reasons; `TestFailClosedAtImport` |
+| Published products never repriced automatically | Existing and verified | `DraftPricingService.is_published` reads `StoreListing`, not `Product.status`; `test_rule_application_queue.py` |
+| Read-only impact preview over existing drafts | Existing and verified (API only) | `GET /global-rules/drafts/impact`; **no UI until M3A-4B** |
+| Confirmed bulk application on the Celery queue | Existing and verified (API only) | `pricing.apply_rules_to_drafts`, `test_rule_application_queue.py` (42 tests); **no UI until M3A-4B** |
+| Rule management UI (create/edit/activate/history/preview) | Existing and verified | `frontend/app/(protected)/settings/global-rules/`, `frontend/components/global-rules/`, `frontend/tests/e2e/global-rules.spec.ts` |
+| Live rule calculator in the UI | Existing and verified | `live-preview-panel.tsx` over `POST /global-rules/preview`; every figure server-computed |
+| Draft impact & bulk-apply UI | Missing | M3A-4B. The API and worker exist; nothing in the interface reaches them |
+| Product/variant/category picker for rule scoping | Missing | No lookup endpoint on the rules API; identifiers are validated text entry, stated on screen |
+| Supplier freight quotes | Blocked by external API/permission | `aliexpress.ds.product.get` returns none; `mapper.map_product` sets `shipping_cost: None` rather than inventing zero — products needing supplier shipping are marked Needs review |
+| Cross-currency rules (FX on the M3A path) | Existing but incomplete | A rule denominated in another currency fails closed with `fx_rate_unavailable` rather than converting |
+
 ## 3. Premium product editor
 
 **Correction (M2A, 2026-08-12):** the row below this note previously read

@@ -1,12 +1,14 @@
 # M3A — Global pricing and shipping rules
 
-Backend milestone. Rules are configured once and applied in three places: at
-import, in a read-only preview, and in a confirmed bulk application that runs
-on the Celery queue. No frontend — that is M3A-4.
+Rules are configured once and applied in three places: at import, in a
+read-only preview, and in a confirmed bulk application that runs on the Celery
+queue.
 
-Delivered in four sessions: M3A-1 (calculation core), M3A-2 (versioning and
-management API), M3A-3 (import, preview, apply), and the M3A-3 acceptance fix
-(direct import tests, real background execution).
+Delivered in five sessions: M3A-1 (calculation core), M3A-2 (versioning and
+management API), M3A-3 (import, preview, apply), the M3A-3 acceptance fix
+(direct import tests, real background execution), and **M3A-4A** (the rule
+management UI). The draft impact and bulk-application screen is M3A-4B and is
+**not** delivered — see §10.
 
 ---
 
@@ -199,6 +201,73 @@ the stored list by index.
 
 ---
 
+## 6a. Management UI (M3A-4A)
+
+**Settings → Global Rules** (`/settings/global-rules`), linked from the
+Settings index. Five areas on one route, because they are read together — edit
+a rule, preview what it does, check what changed:
+
+| Area | What it does |
+|---|---|
+| Pricing Rules | List, create, edit, activate/deactivate, open history. Fields appear only when the selected strategy uses them. |
+| Shipping Rules | The same, plus carrier lists and no-match behaviour. |
+| Application Behaviour | What happens automatically, and the `appliesToNewImports` switch per rule. |
+| Live Preview | A read-only calculator over `POST /global-rules/preview`. |
+| Rule History | Paginated, append-only, with a change-detail disclosure. |
+
+### The backend stays the pricing authority
+
+Not one figure on this screen is computed in TypeScript. Landed cost, price
+before rounding, final price, profit, markup and margin all come from the
+preview endpoint. A second implementation in the client would eventually
+disagree with the one that actually prices products, and the merchant would be
+shown one number and charged another.
+
+The one piece of arithmetic in the UI is the fixed worked example — "£10
+landed cost — 50% markup = £15 · 50% gross margin = £20" — which is static
+text on a stated cost, not a live calculation. It exists because merchants
+routinely enter one meaning the other, and the difference is expensive.
+
+The preview debounces, and a response is discarded unless its request is still
+the newest: overlapping requests do not come back in order, and a slow early
+one landing last would repaint the panel with figures for input the merchant
+has already changed.
+
+### Permissions
+
+Owners and admins manage rules; everyone else reads, previews and reads
+history. Mutation controls are **absent** for a viewer rather than disabled —
+a disabled control that keyboard focus lands on and does nothing is worse than
+one that was never there. This is presentation only: the API rejects a
+viewer's write regardless, and the backend permission tests are what prove it.
+
+### Concurrency
+
+Every update and activation carries `expectedUpdatedAt`, the token the server
+last returned, echoed back verbatim. A 409 raises a banner offering **Reload
+latest version** or **Keep my changes**; nothing resolves silently, nothing
+autosaves, and "saved" is only shown after the server said so. Closing a dirty
+form asks first, and a browser reload is guarded by `beforeunload`.
+
+The principles are M2A's, reimplemented rather than imported: M2A's machinery
+is built around an autosaving document with per-tab dirty tracking, and a
+settings form is a different shape.
+
+### Two supporting backend changes
+
+M3A-4A needed two things the API did not yet offer, both additive:
+
+* `POST /global-rules/preview` now returns **`priceBeforeRounding`**, so a
+  rule that computes 20.00 and sells at 19.99 reads as the rounding mode the
+  merchant chose rather than an arithmetic error. Exported from the engine
+  (`compute_sell_price_before_rounding`) rather than recomputed in the client.
+* `GET /global-rules/{kind}/{id}/history` is now **paginated** and returns the
+  standard `Page` envelope like every other list endpoint. History is
+  append-only, so a long-lived rule's trail grows without bound; this was the
+  one list in the API that could not be capped.
+
+---
+
 ## 7. Known limitations
 
 1. **AliExpress supplies no freight quotes.** `ds.product.get` carries none,
@@ -214,11 +283,28 @@ the stored list by index.
 2. **No published-product impact preview endpoint.** Optional in the brief.
    Published drafts already appear in the draft preview marked `published`
    with `canApply: false`.
-3. **No frontend.** M3A-4.
-4. **No FX conversion on the M3A path.** A cross-currency rule fails closed
+3. **No draft impact or bulk-application UI.** That is M3A-4B. The API and
+   worker for it are delivered and tested (M3A-3); nothing in the interface
+   reaches them, so existing drafts can only be repriced by calling the API
+   directly. M3A-4A deliberately stops at rule management: bulk repricing is a
+   different kind of action from configuring a rule, and shipping it beside the
+   settings form would blur the boundary that keeps a settings save from
+   repricing a catalogue.
+4. **No product, variant or category picker.** The rules API offers no lookup
+   endpoint, and building a second product search to feed a settings form would
+   duplicate one that already exists with its own pagination, permissions and
+   tenant scoping to keep correct. Identifiers are pasted, validated for shape
+   in the form and for existence by the API, and the limitation is stated on
+   screen. Store scope is a real picker, because `/stores` already lists them.
+5. **No `preferred_carrier` shipping strategy.** "Prefer this carrier" is the
+   `preferredCarriers` list, which filters the quotes every strategy chooses
+   from, so it composes with all four rather than being a mutually exclusive
+   fifth. A strategy the backend cannot persist would save and then behave as
+   something else.
+6. **No FX conversion on the M3A path.** A cross-currency rule fails closed
    rather than converting. `PricingEngine.propose_calculation` (the draft
    workspace) has its own conversion; unifying the two is not M3A work.
-5. **Filter-based selection is not offered.** A confirmed application names
+7. **Filter-based selection is not offered.** A confirmed application names
    concrete product ids, which is what makes the selection snapshot
    meaningful after the drafts change. The preview is the filtering surface.
 

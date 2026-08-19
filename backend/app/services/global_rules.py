@@ -149,16 +149,23 @@ class GlobalRuleService(BaseService):
         return await self.shipping.get_by_id_or_raise(rule_id)
 
     async def history(
-        self, *, rule_kind: GlobalRuleKind, rule_id: uuid.UUID
-    ) -> list[GlobalRuleVersion]:
-        """History for one rule.
+        self,
+        *,
+        rule_kind: GlobalRuleKind,
+        rule_id: uuid.UUID,
+        page: int = 1,
+        size: int = 25,
+    ) -> tuple[list[GlobalRuleVersion], int]:
+        """One page of history for one rule, newest first, plus the total.
 
         Reads history directly rather than loading the rule first, so a
         deactivated -- or soft-deleted -- rule still answers. That is the
         whole point of keeping the trail: "what happened to the rule that is
         no longer here" is exactly when someone looks.
         """
-        return await self.versions.history_for(rule_kind=rule_kind, rule_id=rule_id)
+        return await self.versions.history_for(
+            rule_kind=rule_kind, rule_id=rule_id, page=page, size=size
+        )
 
     # ----------------------------------------------------------------- write
     async def create_pricing_rule(

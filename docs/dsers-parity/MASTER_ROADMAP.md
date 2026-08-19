@@ -17,6 +17,7 @@ unit of risk — import/editor/publish is the spine every later milestone
 | M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered, acceptance-fix pass applied 2026-08-13** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
 | M2B | Premium Product Editor — rich-text description | M2A | **Delivered** |
 | M2C–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
+| M3A | Global Pricing & Shipping Rules | M1, M2A | **Delivered through M3A-4A** (see [M3A_GLOBAL_PRICING_RULES.md](M3A_GLOBAL_PRICING_RULES.md)); M3A-4B outstanding |
 | M3 | Publish-to-Store Hardening & Multi-Store Publish | M1, existing Shopify OAuth | Planned |
 | M4 | Bulk Import & Feed-Based Sourcing | M1 | Planned |
 | M5 | Order → Fulfilment Bridge (tracking push-back) | Existing order sync | Planned |
@@ -26,6 +27,32 @@ unit of risk — import/editor/publish is the spine every later milestone
 | M9 | Supplier Optimization & Repricing Intelligence | M7 | Planned |
 
 ---
+
+## M3A — Global Pricing & Shipping Rules
+
+**Status: delivered through M3A-4A.** Full report:
+[M3A_GLOBAL_PRICING_RULES.md](M3A_GLOBAL_PRICING_RULES.md).
+
+| Sub-milestone | Scope | Status |
+|---|---|---|
+| M3A-1 | Calculation core: landed cost, four strategies, rounding, scope precedence, shipping selection | Delivered |
+| M3A-2 | Versioned rules, append-only history, management API | Delivered |
+| M3A-3 | Import integration, read-only impact preview, confirmed bulk application | Delivered |
+| M3A-3 acceptance fix | Direct import-path tests; real Celery execution with atomic claim, resumable batches and a stated cancellation policy | Delivered |
+| M3A-4A | Settings → Global Rules management UI | Delivered |
+| **M3A-4B** | **Draft impact & bulk-application UI** | **Not started** |
+
+**M3A-4B is the remaining scope.** Its API and worker exist and are tested;
+what is missing is the interface that reaches them. Until it ships, existing
+drafts are repriced only by calling the API directly — rules otherwise apply
+at import.
+
+Three defects were found by writing M3A-3's direct import tests, all in code
+that had passed its own unit tests: variant-scoped pricing rules never reached
+the resolver, a misconfigured rule could roll back an entire import, and a rule
+denominated in another currency priced silently against a mismatched cost. The
+lesson recorded there is worth repeating — a resolver tested in isolation
+proves nothing about the candidate set it is given.
 
 ## M1 — AliExpress Product Import → Editable Draft
 

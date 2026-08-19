@@ -12,6 +12,23 @@ production release.
 
 ### Added
 
+- **M3A-4A — Global Rules management UI** — **Settings → Global Rules**
+  (`/settings/global-rules`): pricing rules, shipping rules, application
+  behaviour, a live calculator and append-only rule history, on one route.
+  Strategy fields appear only when the selected strategy uses them; scope
+  controls show only the identifier that scope needs; markup versus gross
+  margin is explained with a worked example. **Every live figure comes from
+  `POST /global-rules/preview`** — no pricing formula is duplicated in
+  TypeScript. Updates and activations carry `expectedUpdatedAt`, and a 409
+  raises a banner offering *Reload latest version* or *Keep my changes*; there
+  is no autosave and no mutation on page load. Owners and admins manage;
+  everyone else reads, previews and reads history, with mutation controls
+  absent rather than disabled. Two supporting API additions: the preview now
+  returns `priceBeforeRounding`, and rule history is paginated in the standard
+  `Page` envelope. The draft impact and bulk-application screen is **M3A-4B**
+  and is not included. See
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md`.
+
 - **M3A — Global pricing and shipping rules** (backend only; UI is M3A-4) —
   one calculation shared by import, a read-only impact preview and a confirmed
   bulk application. Scope precedence
@@ -44,6 +61,12 @@ production release.
   (M24B/M24C remain).
 
 ### Fixed
+
+- **Rule history was an unbounded result set (M3A)** —
+  `GET /global-rules/{kind}/{id}/history` returned every version of a rule as a
+  bare array. History is append-only, so a long-lived rule's trail grows
+  without limit; it is now paginated and returns the same `Page` envelope as
+  every other list endpoint in the API.
 
 - **Variant-scoped pricing rules never applied anywhere (M3A)** —
   `PricingRuleRepository.find_candidates` had no `variant_id` clause, unlike

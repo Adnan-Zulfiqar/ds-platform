@@ -313,6 +313,18 @@ def _next_ending_above(price: Decimal, rounding: PriceRounding) -> Decimal:
     return candidate if candidate >= price else whole + Decimal("1") + ending
 
 
+def compute_sell_price_before_rounding(*, cost: Decimal, rule: PricingRule) -> Decimal:
+    """The strategy price with floors and ceiling applied, but not rounded.
+
+    Split out so a merchant can be shown what the rule produced *before* charm
+    rounding moved it. Without that, a rule that computes 20.00 and displays
+    19.99 looks like an arithmetic error rather than the rounding mode they
+    chose. It is exported rather than recomputed in the client because the
+    frontend must never carry a second copy of this formula.
+    """
+    return _strategy_price(cost=cost, rule=rule)[0].quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
 def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
     """Apply one rule's strategy to a **landed** cost.
 
@@ -326,6 +338,29 @@ def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
     check could leave a price under ``min_profit``; the ceiling after the
     floors because a ``max_price`` the merchant set explicitly should win
     over a computed minimum.
+    """
+    price, floor = _strategy_price(cost=cost, rule=rule)
+
+    price = apply_rounding(price, rule.rounding)
+
+    # Rounding to the nearest charm ending can land a penny below a floor the
+    # merchant set. Step up to the next ending only when it actually does, so
+    # an unconstrained price still reads as a charm price.
+    if floor is not None and price < floor:
+        price = _next_ending_above(floor, rule.rounding)
+    # A max_price is a hard ceiling: never let a rounding repair cross it.
+    if rule.max_price is not None:
+        price = min(price, rule.max_price)
+
+    return price.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def _strategy_price(*, cost: Decimal, rule: PricingRule) -> tuple[Decimal, Decimal | None]:
+    """Strategy, then floors, then ceiling. Returns the price and the floor.
+
+    The floor comes back with the price because the caller needs it again
+    after rounding -- charm rounding is downward, so it can cross a floor the
+    merchant set and has to be repaired against the same number.
     """
     if rule.strategy is PricingStrategy.PERCENTAGE_MARKUP:
         if rule.markup_percent is None:
@@ -364,18 +399,10 @@ def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
     if rule.max_price is not None:
         price = min(price, rule.max_price)
 
-    price = apply_rounding(price, rule.rounding)
-
-    # Rounding to the nearest charm ending can land a penny below a floor the
-    # merchant set. Step up to the next ending only when it actually does, so
-    # an unconstrained price still reads as a charm price.
-    if floor is not None and price < floor:
-        price = _next_ending_above(floor, rule.rounding)
-    # A max_price is a hard ceiling: never let a rounding repair cross it.
-    if rule.max_price is not None:
-        price = min(price, rule.max_price)
-
-    return price.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+    # Deliberately unquantized: `apply_rounding` compares against whole units
+    # and charm endings, and quantizing first would change what it sees.
+    # Callers quantize once, after their own last adjustment.
+    return price, floor
 
 
 def compute_compare_at_price(price: Decimal, rule: PricingRule) -> Decimal | None:

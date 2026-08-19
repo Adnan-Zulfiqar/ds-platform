@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.pricing import GlobalRuleKind, GlobalRuleVersion, PricingScope, ShippingRule
@@ -95,16 +95,35 @@ class GlobalRuleVersionRepository(TenantScopedRepository[GlobalRuleVersion]):
         super().__init__(session, GlobalRuleVersion)
 
     async def history_for(
-        self, *, rule_kind: GlobalRuleKind, rule_id: uuid.UUID
-    ) -> list[GlobalRuleVersion]:
-        """Every version of one rule, newest first."""
-        query = (
+        self,
+        *,
+        rule_kind: GlobalRuleKind,
+        rule_id: uuid.UUID,
+        page: int = 1,
+        size: int = 25,
+    ) -> tuple[list[GlobalRuleVersion], int]:
+        """One page of a rule's versions, newest first, plus the total.
+
+        Paginated in the database. History is append-only and a long-lived
+        rule accumulates a version per edit, so returning all of them was an
+        unbounded result set on a screen that only ever shows the recent ones.
+        """
+        base = (
             self._base_query()
             .where(GlobalRuleVersion.rule_kind == rule_kind)
             .where(GlobalRuleVersion.rule_id == rule_id)
-            .order_by(GlobalRuleVersion.version.desc())
         )
-        return list((await self.session.execute(query)).scalars().all())
+        total = (
+            await self.session.execute(select(func.count()).select_from(base.subquery()))
+        ).scalar_one()
+        rows = (
+            await self.session.execute(
+                base.order_by(GlobalRuleVersion.version.desc())
+                .offset((page - 1) * size)
+                .limit(size)
+            )
+        ).scalars()
+        return list(rows), int(total)
 
     async def latest_version_number(self, *, rule_kind: GlobalRuleKind, rule_id: uuid.UUID) -> int:
         """Highest version recorded, or 0 when there is no history yet.

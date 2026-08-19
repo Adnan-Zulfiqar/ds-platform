@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
 from app.models.pricing import GlobalRuleKind, PriceRounding
-from app.schemas.common import ListQueryParams, Page, list_query_params
+from app.schemas.common import ListQueryParams, Page, PageMeta, list_query_params
 from app.schemas.global_rules import (
     PreviewRequest,
     PreviewResponse,
@@ -34,6 +34,7 @@ from app.schemas.global_rules import (
     ShippingRuleUpdateRequest,
 )
 from app.services.global_rules import GlobalRuleService, PreviewInputs
+from app.services.pricing_engine import compute_sell_price_before_rounding
 
 router = APIRouter(prefix="/global-rules", tags=["global-rules"])
 
@@ -219,7 +220,7 @@ async def set_shipping_activation(
 # ---------------------------------------------------------------- shared
 @router.get(
     "/{rule_kind}/{rule_id}/history",
-    response_model=list[RuleVersionRead],
+    response_model=Page[RuleVersionRead],
     summary="Read a rule's version history",
 )
 async def rule_history(
@@ -227,11 +228,23 @@ async def rule_history(
     rule_kind: Annotated[GlobalRuleKind, Path()],
     rule_id: RuleId,
     _authorized: RequireViewer,
-) -> list[RuleVersionRead]:
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> Page[RuleVersionRead]:
     """Answers for deactivated and soft-deleted rules too -- "what happened
-    to the rule that is no longer here" is exactly when history is read."""
-    versions = await GlobalRuleService(session).history(rule_kind=rule_kind, rule_id=rule_id)
-    return [RuleVersionRead.model_validate(v, from_attributes=True) for v in versions]
+    to the rule that is no longer here" is exactly when history is read.
+
+    Paginated, and in the standard envelope like every other list endpoint.
+    History is append-only, so a long-lived rule's trail grows without bound;
+    returning all of it was the one list in this API that could not be capped.
+    """
+    versions, total = await GlobalRuleService(session).history(
+        rule_kind=rule_kind, rule_id=rule_id, page=page, size=size
+    )
+    return Page(
+        items=[RuleVersionRead.model_validate(v, from_attributes=True) for v in versions],
+        meta=PageMeta.build(page=page, size=size, total_items=total),
+    )
 
 
 @router.get(
@@ -290,6 +303,11 @@ async def preview(
         landed_cost=landed.amount,
         profit_basis=landed.profit_basis,
         separate_shipping_charge=landed.separate_shipping_charge,
+        price_before_rounding=(
+            None
+            if rule is None or result.calculation.price is None
+            else compute_sell_price_before_rounding(cost=landed.amount, rule=rule)
+        ),
         proposed_price=result.calculation.price,
         compare_at_price=result.calculation.compare_at,
         profit=result.calculation.profit,

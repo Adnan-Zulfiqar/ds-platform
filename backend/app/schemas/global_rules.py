@@ -329,6 +329,10 @@ class PreviewResponse(CamelCaseModel):
     landed_cost: Decimal
     profit_basis: Decimal
     separate_shipping_charge: Decimal | None
+    #: What the strategy produced before the rounding mode moved it. Shown so
+    #: a rule that computes 20.00 and sells at 19.99 reads as the charm
+    #: rounding the merchant chose rather than an arithmetic error.
+    price_before_rounding: Decimal | None
     proposed_price: Decimal | None
     compare_at_price: Decimal | None
     profit: Decimal | None
