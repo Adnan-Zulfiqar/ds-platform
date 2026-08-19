@@ -67,6 +67,18 @@ from app.models.product import (
 )
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role, RoleName, UserRole
+from app.models.rule_application import (
+    ApplicationItemOutcome as ApplicationItemOutcome,
+)
+from app.models.rule_application import (
+    ApplicationStatus as ApplicationStatus,
+)
+from app.models.rule_application import (
+    RuleApplication as RuleApplication,
+)
+from app.models.rule_application import (
+    RuleApplicationItem as RuleApplicationItem,
+)
 from app.models.shopify import ListingSyncStatus, ShopifyConnection, StoreListing
 from app.models.store import Store, StorePlatform, StoreStatus
 from app.models.tenant import Tenant, TenantStatus

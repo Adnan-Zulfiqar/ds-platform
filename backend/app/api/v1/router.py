@@ -48,6 +48,9 @@ api_router.include_router(stores.router)
 api_router.include_router(orders.router)
 api_router.include_router(inventory.router)
 api_router.include_router(global_rules.router)
+# Preview/apply share the `/global-rules` prefix; a second module keeps
+# rule CRUD and the bulk workflow separately reviewable.
+api_router.include_router(global_rules.applications_router)
 api_router.include_router(pricing.router)
 api_router.include_router(automation.router)
 api_router.include_router(notifications.router)

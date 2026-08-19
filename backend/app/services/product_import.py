@@ -19,6 +19,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
@@ -37,6 +38,7 @@ from app.models.product import (
     ProductImport,
     ProductSource,
     ProductStatus,
+    ProductVariant,
 )
 from app.repositories.product import (
     ProductImageRepository,
@@ -172,6 +174,16 @@ class ProductImportService(BaseService):
         await self.variants.sync_for_product(product.id, map_variants(detail))
         await self.images.sync_for_product(product.id, map_images(detail))
 
+        # --- M3A: price the new draft from the tenant's global rules -------
+        #
+        # After the supplier snapshot is written, never before: the snapshot
+        # is what the calculation reads, and pricing is strictly derived from
+        # it. A pricing failure is recorded on the product and does not fail
+        # the import -- a draft that exists and is flagged is more useful to a
+        # merchant than no draft at all, and it is held out of publishing
+        # either way.
+        await self._apply_global_rules(product)
+
         record.status = ImportStatus.SUCCEEDED
         record.product_id = product.id
         record.result_category = "success"
@@ -199,6 +211,71 @@ class ProductImportService(BaseService):
             currency_source=currency_source,
         )
         return product
+
+    async def _apply_global_rules(self, product: Product) -> None:
+        """Price a newly imported draft, if a rule opts into new imports.
+
+        Silent by design when nothing is configured: a tenant with no pricing
+        rule, or one whose rule has ``applies_to_new_imports`` off, gets
+        exactly the pre-M3A import behaviour and no review flags.
+
+        Never publishes and never raises. The calculation refuses to invent a
+        price from unknown supplier cost or shipping, and that refusal is
+        recorded on the product as `needs_review` plus the specific reasons --
+        which is the evidence the merchant acts on.
+        """
+        from app.services.rule_application import DraftPricingService
+
+        pricing = DraftPricingService(self.session)
+        resolution = await pricing.rules.resolve_pricing(
+            product_id=product.id,
+            store_id=product.store_id,
+            category_id=product.category_id,
+        )
+        rule = resolution.rule
+        if rule is None or not rule.applies_to_new_imports:
+            return
+
+        variants = (
+            (
+                await self.session.execute(
+                    select(ProductVariant)
+                    .where(ProductVariant.product_id == product.id)
+                    .where(ProductVariant.deleted_at.is_(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        outcome = await pricing.calculate_for(
+            product,
+            variants=list(variants),
+            destination_country=product.ship_to_country,
+        )
+
+        # Stamp the evidence first: it is written whether or not a price was
+        # produced, so "why is this draft unpriced" is always answerable.
+        pricing.stamp(outcome)
+
+        if outcome.can_apply:
+            product.sell_price = outcome.proposed_price
+            for variant_outcome in outcome.variants:
+                if not variant_outcome.can_apply:
+                    continue
+                variant = next(v for v in variants if v.id == variant_outcome.variant_id)
+                variant.sell_price = variant_outcome.calculation.price
+                variant.compare_at_price = variant_outcome.calculation.compare_at
+
+        self.logger.info(
+            "import_pricing_applied",
+            product_id=str(product.id),
+            rule_id=str(rule.id),
+            rule_version=rule.version,
+            priced=outcome.can_apply,
+            needs_review=outcome.needs_review,
+            review_reasons=list(product.pricing_review_reasons),
+        )
 
     async def retry_import(
         self,
