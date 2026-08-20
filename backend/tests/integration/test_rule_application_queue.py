@@ -32,7 +32,9 @@ from app.services import rule_application as service_module
 from app.services.rule_application import (
     APPLICATION_BATCH_SIZE,
     MAX_APPLICATION_PRODUCTS,
+    ApplicationLease,
     ApplyRequest,
+    BatchOutcome,
     ClaimResult,
     RuleApplicationService,
 )
@@ -406,8 +408,12 @@ class TestClaimAndDelivery:
         first = await service.claim(uuid.UUID(body["id"]), task_id="task-a")
         second = await service.claim(uuid.UUID(body["id"]), task_id="task-b")
 
-        assert first is ClaimResult.CLAIMED
-        assert second is ClaimResult.ALREADY_RUNNING
+        assert first.result is ClaimResult.CLAIMED
+        assert second.result is ClaimResult.ALREADY_RUNNING
+        # Only the winner gets a lease, and the lease is what any later write
+        # is checked against.
+        assert first.lease is not None
+        assert second.lease is None
 
     async def test_the_same_task_id_resumes_rather_than_restarts(
         self, client: AsyncClient, db_session: AsyncSession
@@ -419,10 +425,17 @@ class TestClaimAndDelivery:
 
         set_tenant_id(tenant_id)
         service = RuleApplicationService(db_session)
-        assert await service.claim(uuid.UUID(body["id"]), task_id="task-a") is ClaimResult.CLAIMED
+        first = await service.claim(uuid.UUID(body["id"]), task_id="task-a")
+        assert first.result is ClaimResult.CLAIMED
         again = await service.claim(uuid.UUID(body["id"]), task_id="task-a")
 
-        assert again is ClaimResult.RESUMED
+        assert again.result is ClaimResult.RESUMED
+        assert again.lease is not None
+        # The redelivery is re-leased rather than handed the old token, so a
+        # process still limping along under the first attempt is fenced out by
+        # the act of resuming.
+        assert first.lease is not None
+        assert again.lease.token != first.lease.token
 
     async def test_a_duplicate_delivery_executes_once(
         self,
@@ -500,11 +513,16 @@ class TestRetryAndFailure:
         calls = {"n": 0}
         real_batch = RuleApplicationService.run_next_batch
 
-        async def flaky(self: RuleApplicationService, application_id: uuid.UUID) -> bool:
+        async def flaky(
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
             calls["n"] += 1
             if calls["n"] == 2:
                 raise RuntimeError("broker hiccup")
-            return await real_batch(self, application_id)
+            return await real_batch(self, application_id, lease=lease)
 
         monkeypatch.setattr(RuleApplicationService, "run_next_batch", flaky)
         with pytest.raises(Exception, match="broker hiccup"):
@@ -578,11 +596,16 @@ class TestRetryAndFailure:
         calls = {"n": 0}
         real_batch = RuleApplicationService.run_next_batch
 
-        async def flaky(self: RuleApplicationService, application_id: uuid.UUID) -> bool:
+        async def flaky(
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
             calls["n"] += 1
             if calls["n"] >= 2:
                 raise RuntimeError("still broken")
-            return await real_batch(self, application_id)
+            return await real_batch(self, application_id, lease=lease)
 
         monkeypatch.setattr(RuleApplicationService, "run_next_batch", flaky)
 
@@ -712,9 +735,12 @@ class TestCancellation:
         cancelled = {"done": False}
 
         async def cancel_after_first(
-            self: RuleApplicationService, application_id: uuid.UUID
-        ) -> bool:
-            more = await real_batch(self, application_id)
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
+            more = await real_batch(self, application_id, lease=lease)
             if not cancelled["done"]:
                 cancelled["done"] = True
                 await client.post(f"{BASE}/applications/{body['id']}/cancel", headers=headers)
@@ -854,8 +880,13 @@ class TestBatchScalability:
         seen: list[tuple[int, int]] = []
         real_batch = RuleApplicationService.run_next_batch
 
-        async def observing(self: RuleApplicationService, application_id: uuid.UUID) -> bool:
-            more = await real_batch(self, application_id)
+        async def observing(
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
+            more = await real_batch(self, application_id, lease=lease)
             record = await self.get(application_id)
             seen.append((record.processed_count, record.applied_count))
             return more

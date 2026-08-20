@@ -320,23 +320,104 @@ a database assertion proves the row is unchanged.
 
 A worker killed mid-run leaves its application `running` forever. The worker
 stamps `heartbeat_at` at every batch boundary, and
-`pricing.reconcile_applications` (Celery beat, every five minutes):
+`pricing.reconcile_applications` (Celery beat, every five minutes) is what
+notices.
 
-* reclaims `running` runs whose heartbeat is older than `STALE_AFTER`
-  (15 minutes) with a **conditional UPDATE against the heartbeat**, so a worker
-  that is merely slow keeps its run — the write simply matches no row;
-* republishes `pending` runs the broker never accepted, after a two-minute
-  grace period;
-* parks a run as `failed` once `recovery_count` reaches `MAX_RECOVERIES` (3),
-  because a run that dies identically every time is a defect to look at rather
-  than work to retry forever.
+**Correction to what this section previously claimed.** The recovery described
+here at commit `c43b6c2` did not work, and the documentation said it did. The
+reconciler cleared `claimed_by_task_id` but left the row `running`, so the
+message it then published reached a worker that saw a `running` row owned by
+somebody else, reported `already_running` and processed nothing. Every recovery
+attempt logged `requeued` and rescued nothing. Reproduced against `c43b6c2`
+before the fix; the sequence below is what replaced it.
 
-Cancelled and finished runs are never touched. Resuming is safe: the durable
-cursor and `uq_rule_application_items_target` already prevent a re-entered run
-from repricing anything twice. There is no hard task termination anywhere.
+#### The state machine
 
-**Manual check:** `SELECT id, status, heartbeat_at, recovery_count FROM
-rule_applications WHERE status = 'running' ORDER BY heartbeat_at;`
+```
+running (owner A, heartbeat gone quiet)
+  → pending, unowned            conditional UPDATE, committed
+  → message published            after that commit, never before
+  → running (owner B, new lease) ordinary pending→running claim
+  → resumes from processed_count
+```
+
+Going back through `pending` is the whole point: `pending → running` is the
+only transition that mints a lease against a **real** Celery task id, and the
+reconciler has no such id to appoint an owner with. Nothing fabricates one, and
+no test-only task id is special-cased.
+
+The reclaim is a single conditional UPDATE pinned to the exact state the sweep
+observed — status, heartbeat, lease token and recovery count. A worker that
+committed a batch in between has moved its heartbeat, so the write matches no
+row and it keeps its run; a second reconciler racing the first finds the values
+already changed and takes nothing. `recovery_count` therefore increments
+exactly once per recovery.
+
+If the publish fails, the run rests `pending` with `enqueued_at` NULL — exactly
+the state the pending sweep repairs, so a broker outage delays recovery instead
+of losing it. Duplicate beat executions are bounded: an extra message finds the
+run already claimed and does nothing.
+
+A run is parked as `failed` once `recovery_count` reaches `MAX_RECOVERIES` (3),
+because a run that dies identically every time is a defect to look at rather
+than work to retry forever. Committed batches keep their results and the reason
+says so.
+
+#### Per-batch ownership: how a stale worker is fenced out
+
+Claiming once and then looping is not enough, and at `c43b6c2` it was all there
+was: a worker whose run had been reclaimed carried on writing prices, result
+rows, progress and heartbeats into a run that belonged to someone else, and
+could then mark that run `failed` from its own error handler. Also reproduced
+before the fix.
+
+`lease_token` (migration 0028) is the fence. It is minted fresh on every grant
+of ownership — first claim, recovery, and the re-lease a redelivery performs —
+so it is unique per *attempt*. `claimed_by_task_id` cannot serve this purpose:
+a retry carries the same task id as the attempt it replaces, so two processes
+can present it at once.
+
+Every batch begins by locking the row with `SELECT … FOR UPDATE` and checking,
+in the same transaction that will perform the product and audit writes:
+
+* status is `running` (or `cancelled`, which the owner closes out);
+* `lease_token` is still this worker's.
+
+Because the lock is held for the whole batch, a reclaim arriving mid-batch
+blocks until the batch commits and then finds a heartbeat that has moved. In
+the other order, the check reads a token that is no longer ours and returns
+before a single write is issued. The read uses `populate_existing` so it sees
+the row rather than a session's remembered copy — a fence that reads its own
+cache is not a fence.
+
+`finalize`, `fail` and the heartbeat write are owner-conditional through the
+same lock. A worker that lost its run reports `superseded`; it writes no price,
+no `PriceChange`, no result row, no progress, no heartbeat and no status — and
+in particular does not mark the new owner's healthy run `failed`.
+
+The per-item unique constraint is **not** the safety mechanism. Product writes
+happen before it, so by the time it fired the catalogue would already have been
+changed twice. It remains a backstop against duplicate result rows, nothing
+more.
+
+There is still no hard task termination anywhere.
+
+#### NULL heartbeats
+
+`heartbeat_at` arrived in 0027, so a run abandoned by a worker that died before
+that upgrade carries NULL — and `heartbeat_at < cutoff` is NULL, never true.
+Those rows were invisible to the sweep and would have sat `running` forever.
+Two things fix it, deliberately both:
+
+* migration 0028 backfills `heartbeat_at` for existing `running` rows from
+  `COALESCE(started_at, updated_at, created_at)`;
+* the sweep's predicate treats a NULL heartbeat as stale only once
+  `COALESCE(started_at, created_at)` is itself older than `STALE_AFTER`, so a
+  run that has only just started is never mistaken for an abandoned one.
+
+**Manual check:** `SELECT id, status, heartbeat_at, recovery_count, lease_token
+FROM rule_applications WHERE status = 'running' ORDER BY heartbeat_at NULLS
+FIRST;`
 
 ### The historical typed-reference constraint
 
@@ -351,10 +432,27 @@ module docstring.
 ### Rate limits
 
 The live preview, the impact preview and the apply endpoint carry named quotas
-(120/120/20 per minute per tenant) through the *same* `FixedWindowLimiter` the
-global middleware uses — counted per tenant, fail-open on a Redis outage, and
-returning the standard error envelope with `Retry-After`. There is one limiter
-implementation, not two.
+(120/120/20 per minute) through the *same* `FixedWindowLimiter` the global
+middleware uses. There is one limiter implementation, not two, and the broad
+middleware quota still applies underneath: a request passes through both.
+
+The key is `ratelimit:{name}:tenant:{tenant_id}:user:{user_id}`. It was
+`ratelimit:{name}:tenant:{tenant_id}` at `c43b6c2`, which meant any one seat
+could spend the whole workspace's allowance and lock out every colleague — a
+limiter added to blunt abuse, turned into a way for one member to deny service
+to the rest. Both halves of the key are needed: user ids are only unique within
+a tenant here, so the tenant half is what keeps two workspaces apart.
+
+The identity comes from the verified token claims, and the dependency *asks
+FastAPI for the principal*, so authentication and tenant resolution are
+guaranteed to have happened before the counter is touched — by construction
+rather than by parameter order. No header, query parameter or context value a
+caller controls can choose a bucket; an unauthenticated request has no
+principal and is counted by address. The identifiers appear in server logs as
+structured fields and never in a response payload.
+
+Fail-open on a Redis outage is unchanged, and tested: the documented trade is
+that a cache outage degrades to "no quota" rather than taking pricing down.
 
 ---
 
@@ -385,16 +483,22 @@ implementation, not two.
    Playwright impact tests therefore seed drafts from the test process rather
    than through an endpoint — adding production API surface that exists only
    for tests would be surface an attacker gets too.
-6. **The verification worker ran on a SQLAlchemy broker, not RabbitMQ.** This
-   machine has no RabbitMQ and its Redis (3.0.504) predates the `HELLO` command
-   kombu needs. The message flow, the claim, batching, resume and cancellation
-   were all exercised through a real out-of-process worker and a real broker;
-   the specific transport was not RabbitMQ.
+6. **RabbitMQ remains unverified.** The M3A-4B verification worker ran on a
+   SQLAlchemy broker: this machine has no RabbitMQ, and its Redis (3.0.504)
+   predates the `HELLO` command kombu needs. The message flow, the claim,
+   batching, resume and cancellation were exercised through a real
+   out-of-process worker and a real broker — but **not** the transport
+   production is configured for, and nothing since has changed that. Treat
+   "works on RabbitMQ" as untested until somebody runs it there.
 7. **`safeOnly` predicts, it does not promise.** It excludes what the recorded
    columns can rule out. A rule denominated in another currency, or a shipping
    rule with no matching quote, can still hold a draft back when the run
    reaches it — recorded as `needs_review` in the results rather than written.
-8. **Every Celery task in this repository shares one database engine across
+8. **The recovery and fencing figures below predate the acceptance fix.**
+   Section 6c has been corrected; §9's figures come from the M3A-4B report and
+   the acceptance-fix report supersedes them for anything touching recovery,
+   ownership or endpoint quotas.
+9. **Every Celery task in this repository shares one database engine across
    `asyncio.run` calls.** `_run` in `app/tasks/pricing.py` now disposes the
    engine before its loop closes, because without it the *second* task in a
    worker picks a pooled connection belonging to a dead loop and fails with
@@ -416,8 +520,11 @@ implementation, not two.
 | `0025` | Pricing-outcome columns on `products`; `rule_applications` / `rule_application_items`; re-runs 0024's backfill and validates its constraint only if no row contradicts it. |
 | `0026` | `claimed_by_task_id`, `processed_count`, `enqueued_at` on `rule_applications`. |
 | `0027` | `heartbeat_at`, `recovery_count`, `selection_filter`, and a partial index for the reconciler sweep. |
+| `0028` | `lease_token` — the per-attempt ownership fence — and a backfill of `heartbeat_at` for `running` rows left NULL by 0027. |
 
-All additive. Earlier migrations are never modified.
+All additive. Earlier migrations are never modified. 0028's backfill is
+deliberately not reversed by its `downgrade()`: it only ever filled NULLs on
+`running` rows, and restoring them would put back the defect it exists to fix.
 
 ---
 

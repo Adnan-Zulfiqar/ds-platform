@@ -140,6 +140,20 @@ async def create_rule(client: AsyncClient, headers: dict[str, str], **overrides:
     return response.json()
 
 
+async def _application_count(db_session: AsyncSession) -> int:
+    return int(
+        (await db_session.execute(select(func.count()).select_from(RuleApplication))).scalar_one()
+    )
+
+
+async def _item_count(db_session: AsyncSession) -> int:
+    return int(
+        (
+            await db_session.execute(select(func.count()).select_from(RuleApplicationItem))
+        ).scalar_one()
+    )
+
+
 class TestImpactPreview:
     async def test_preview_reports_every_figure(
         self, client: AsyncClient, db_session: AsyncSession
@@ -402,6 +416,114 @@ class TestConfirmedApplication:
             headers=headers,
         )
         assert clash.status_code == 409, clash.text
+
+    async def test_the_same_key_with_the_same_filter_returns_the_original_run(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """A filter-based confirmation retries like any other.
+
+        The selection was expanded to concrete ids the first time; the retry
+        must hand back that same run rather than expand the filter again over
+        a catalogue that may have moved since.
+        """
+        headers, tenant_id = await seed_tenant(client)
+        await create_rule(client, headers)
+        for index in range(3):
+            await seed_draft(db_session, tenant_id, sell_price="30.00", title=f"Widget {index}")
+        payload = {
+            "selectionFilter": {"search": "Widget", "safeOnly": True},
+            "idempotencyKey": "filtered",
+        }
+
+        first = await client.post(APPLY, json=payload, headers=headers)
+        assert first.status_code == 202, first.text
+        second = await client.post(APPLY, json=payload, headers=headers)
+        assert second.status_code == 202, second.text
+
+        assert first.json()["id"] == second.json()["id"]
+        assert first.json()["totalCount"] == 3
+        assert await _application_count(db_session) == 1
+        assert await _item_count(db_session) == 0, "nothing ran; nothing was recorded"
+
+    @pytest.mark.parametrize(
+        ("changed", "why"),
+        [
+            ({"search": "Gadget", "safeOnly": True}, "a different search"),
+            ({"search": "Widget", "safeOnly": False}, "a different safety filter"),
+            ({"search": "Widget", "safeOnly": True, "needsReviewOnly": True}, "a review filter"),
+        ],
+    )
+    async def test_the_same_key_with_a_materially_different_filter_is_a_conflict(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        changed: dict[str, object],
+        why: str,
+    ) -> None:
+        """Every field of the filter is material, so every field is fingerprinted.
+
+        A filter that selects a different set is different work. Answering it
+        with the first run's result would report on drafts the caller never
+        asked about -- and the fingerprint is what makes that a refusal rather
+        than a silent substitution.
+        """
+        headers, tenant_id = await seed_tenant(client)
+        await create_rule(client, headers)
+        for index in range(3):
+            await seed_draft(db_session, tenant_id, sell_price="30.00", title=f"Widget {index}")
+        await seed_draft(db_session, tenant_id, sell_price="30.00", title="Gadget one")
+
+        first = await client.post(
+            APPLY,
+            json={
+                "selectionFilter": {"search": "Widget", "safeOnly": True},
+                "idempotencyKey": "filter-drift",
+            },
+            headers=headers,
+        )
+        assert first.status_code == 202, first.text
+
+        clash = await client.post(
+            APPLY,
+            json={"selectionFilter": changed, "idempotencyKey": "filter-drift"},
+            headers=headers,
+        )
+
+        assert clash.status_code == 409, f"{why}: {clash.text}"
+        assert await _application_count(db_session) == 1, why
+        assert await _item_count(db_session) == 0, why
+
+    async def test_a_filter_and_an_id_list_are_not_the_same_request(
+        self, client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Even when they happen to select the same drafts today.
+
+        What is recorded is what was confirmed, and "everything matching" is a
+        different thing to have confirmed than a fixed list -- it is what the
+        record has to say afterwards.
+        """
+        headers, tenant_id = await seed_tenant(client)
+        await create_rule(client, headers)
+        product = await seed_draft(db_session, tenant_id, sell_price="30.00", title="Widget one")
+
+        first = await client.post(
+            APPLY,
+            json={
+                "selectionFilter": {"search": "Widget", "safeOnly": True},
+                "idempotencyKey": "shape-change",
+            },
+            headers=headers,
+        )
+        assert first.status_code == 202, first.text
+
+        clash = await client.post(
+            APPLY,
+            json={"productIds": [str(product.id)], "idempotencyKey": "shape-change"},
+            headers=headers,
+        )
+
+        assert clash.status_code == 409, clash.text
+        assert await _application_count(db_session) == 1
 
     async def test_a_published_product_is_skipped_with_a_reason(
         self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch

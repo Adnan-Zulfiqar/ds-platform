@@ -19,7 +19,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import ColumnElement, Select, func, select, update
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,6 +79,31 @@ STALE_AFTER = timedelta(minutes=15)
 #: the same way on every attempt is a defect to look at, not work to retry
 #: forever -- and an unbounded loop would hide it.
 MAX_RECOVERIES = 3
+
+
+def stale_running_predicate(*, now: datetime | None = None) -> ColumnElement[bool]:
+    """ "This `running` row has stopped reporting." One definition, two callers.
+
+    The reconciler's sweep and the reclaim's conditional UPDATE must agree
+    exactly, or the sweep selects rows the write then refuses -- a silent
+    no-op loop that looks like a working recovery path.
+
+    **The NULL branch is not defensive padding.** ``heartbeat_at`` arrived in
+    migration 0027, so a run abandoned before that upgrade carries NULL, and
+    ``heartbeat_at < cutoff`` is NULL -- never true. Those rows would sit
+    `running` forever with nothing able to see them. 0028 backfills the ones
+    that exist; this covers any that appear another way, and it ages them from
+    ``started_at``/``created_at`` so a row that is *legitimately* mid-claim for
+    a moment is not mistaken for an abandoned one.
+    """
+    cutoff = (now or datetime.now(UTC)) - STALE_AFTER
+    return or_(
+        RuleApplication.heartbeat_at < cutoff,
+        and_(
+            RuleApplication.heartbeat_at.is_(None),
+            func.coalesce(RuleApplication.started_at, RuleApplication.created_at) < cutoff,
+        ),
+    )
 
 
 def _price(
@@ -546,7 +571,9 @@ class ClaimResult(StrEnum):
     #: Won the `pending -> running` transition. Nobody else can now.
     CLAIMED = "claimed"
     #: Already `running` under *this* task id -- a redelivery or retry of the
-    #: message that claimed it. Resuming is correct; restarting is not.
+    #: message that claimed it. Resuming is correct; restarting is not. The
+    #: run is re-leased under a *new* token, so any earlier process still
+    #: holding the old one is fenced out by the same act.
     RESUMED = "resumed"
     #: Already `running` under a different task. Left alone.
     ALREADY_RUNNING = "already_running"
@@ -554,6 +581,71 @@ class ClaimResult(StrEnum):
     NOT_CLAIMABLE = "not_claimable"
     #: No such application. A message can outlive its row.
     UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationLease:
+    """One worker's proof that it, and not another, owns a run.
+
+    Carried from the claim into every subsequent operation and checked against
+    the row under a lock. Passing it explicitly rather than storing it on the
+    service is deliberate: a worker builds a new service per transaction, so
+    anything held on the instance would be lost exactly where the guarantee is
+    needed.
+    """
+
+    application_id: uuid.UUID
+    #: Identity of the Celery delivery, for the audit trail and for telling a
+    #: redelivery of *this* message from another worker's run.
+    task_id: str | None
+    #: The fence itself. Unique per attempt; see `RuleApplication.lease_token`.
+    token: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimOutcome:
+    """What the claim decided, and the lease it issued if it granted one."""
+
+    result: ClaimResult
+    lease: ApplicationLease | None = None
+
+    @property
+    def owns(self) -> bool:
+        return self.lease is not None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseObservation:
+    """The exact state a sweep saw, so the write can be conditional on it.
+
+    A reconciler reads in one transaction and writes in another. Between the
+    two the worker it is about to declare dead may have committed a batch, or
+    a second reconciler may have already acted. Pinning the write to the values
+    that justified it turns "probably still stale" into a fact the database
+    checks.
+    """
+
+    application_id: uuid.UUID
+    tenant_id: uuid.UUID
+    heartbeat_at: datetime | None
+    lease_token: uuid.UUID | None
+    recovery_count: int
+
+
+class BatchOutcome(StrEnum):
+    """Why a worker's batch attempt stopped where it did."""
+
+    #: Batch committed; more of the selection remains.
+    MORE = "more"
+    #: Batch committed; the selection is exhausted.
+    DONE = "done"
+    #: The merchant cancelled. This worker still owns the run and should
+    #: finalise it, keeping the results of every batch that did commit.
+    CANCELLED = "cancelled"
+    #: **Ownership is gone.** Reclaimed, finished or taken over by another
+    #: worker. Nothing was read into a write and nothing was written; the
+    #: caller must stop without touching the row.
+    LOST = "lost"
 
 
 class RuleApplicationService(BaseService):
@@ -677,15 +769,24 @@ class RuleApplicationService(BaseService):
         await self.flush()
 
     # -------------------------------------------------------------- worker
-    async def claim(self, application_id: uuid.UUID, *, task_id: str | None) -> ClaimResult:
-        """Take ownership of a run, atomically.
+    async def claim(self, application_id: uuid.UUID, *, task_id: str | None) -> ClaimOutcome:
+        """Take ownership of a run, atomically, and receive a lease.
 
         The `pending -> running` transition *is* the lock: it is a single
         conditional UPDATE, so of two workers handed the same message exactly
         one sees a row change. The loser does no work, which is what makes
         at-least-once delivery safe here.
+
+        The lease token issued alongside is what makes ownership provable
+        *later*. Status and task id are not enough on their own: a retry
+        carries the same task id as the attempt it replaces, so a check
+        against the id would admit both the retry and whatever process is
+        still limping along under the original. Every grant of ownership --
+        first claim, re-claim after recovery, and the re-lease below -- mints
+        a new token, so exactly one process can ever be the current owner.
         """
         now = datetime.now(UTC)
+        token = uuid.uuid4()
         claimed = await self.session.execute(
             update(RuleApplication)
             .where(RuleApplication.id == application_id)
@@ -694,6 +795,7 @@ class RuleApplicationService(BaseService):
             .values(
                 status=ApplicationStatus.RUNNING,
                 claimed_by_task_id=task_id,
+                lease_token=token,
                 started_at=now,
                 heartbeat_at=now,
             )
@@ -701,7 +803,7 @@ class RuleApplicationService(BaseService):
             .execution_options(synchronize_session=False)
         )
         if claimed.scalars().first() is not None:
-            return ClaimResult.CLAIMED
+            return ClaimOutcome(ClaimResult.CLAIMED, self._lease(application_id, task_id, token))
 
         current = (
             (
@@ -709,39 +811,116 @@ class RuleApplicationService(BaseService):
                     select(RuleApplication)
                     .where(RuleApplication.tenant_id == self._tenant_id())
                     .where(RuleApplication.id == application_id)
+                    # Same reason as `_lock_owned`: this decides ownership, so
+                    # it must see the row rather than a remembered copy of it.
+                    .execution_options(populate_existing=True)
                 )
             )
             .scalars()
             .first()
         )
         if current is None:
-            return ClaimResult.UNKNOWN
+            return ClaimOutcome(ClaimResult.UNKNOWN)
         if current.status is not ApplicationStatus.RUNNING:
             # Cancelled or already finished. A message delayed behind a
             # cancellation must not revive the run.
-            return ClaimResult.NOT_CLAIMABLE
-        if task_id is not None and current.claimed_by_task_id == task_id:
-            # This task's own redelivery. Resuming from the durable cursor is
-            # correct; starting over would reprice what already landed.
-            return ClaimResult.RESUMED
-        return ClaimResult.ALREADY_RUNNING
+            return ClaimOutcome(ClaimResult.NOT_CLAIMABLE)
+        if task_id is None or current.claimed_by_task_id != task_id:
+            return ClaimOutcome(ClaimResult.ALREADY_RUNNING)
 
-    async def run_next_batch(self, application_id: uuid.UUID) -> bool:
-        """Process one bounded batch. Returns whether more work remains.
+        # This task's own redelivery. Resuming from the durable cursor is
+        # correct; starting over would reprice what already landed. The
+        # re-lease is conditional on the token this read observed, so of two
+        # deliveries of the same message exactly one wins -- and the process
+        # that previously held the run, if it is somehow still alive, loses
+        # its fence in the same statement.
+        released = await self.session.execute(
+            update(RuleApplication)
+            .where(RuleApplication.id == application_id)
+            .where(RuleApplication.tenant_id == self._tenant_id())
+            .where(RuleApplication.status == ApplicationStatus.RUNNING)
+            .where(RuleApplication.claimed_by_task_id == task_id)
+            .where(RuleApplication.lease_token.is_not_distinct_from(current.lease_token))
+            .values(lease_token=token, heartbeat_at=now)
+            .returning(RuleApplication.id)
+            .execution_options(synchronize_session=False)
+        )
+        if released.scalars().first() is None:
+            return ClaimOutcome(ClaimResult.ALREADY_RUNNING)
+        return ClaimOutcome(ClaimResult.RESUMED, self._lease(application_id, task_id, token))
+
+    def _lease(
+        self, application_id: uuid.UUID, task_id: str | None, token: uuid.UUID
+    ) -> ApplicationLease:
+        return ApplicationLease(application_id=application_id, task_id=task_id, token=token)
+
+    async def _lock_owned(self, lease: ApplicationLease) -> RuleApplication | None:
+        """Lock the run and return it only if this lease still owns it.
+
+        ``FOR UPDATE`` rather than a plain read, and the caller performs its
+        product and audit writes in the *same* transaction. That is what makes
+        the check a fence instead of a hint: a reclaim arriving mid-batch
+        blocks on the lock until the batch commits, and then finds a heartbeat
+        that has moved, so it takes nothing. The reverse order -- reclaim
+        first -- leaves this read seeing a token that is no longer ours, and it
+        returns ``None`` before a single write is issued.
+
+        A read-then-write without the lock would leave exactly the window this
+        exists to close, and an in-process lock would close nothing at all:
+        the two workers are different processes, usually on different machines.
+        """
+        locked = (
+            (
+                await self.session.execute(
+                    select(RuleApplication)
+                    .where(RuleApplication.tenant_id == self._tenant_id())
+                    .where(RuleApplication.id == lease.application_id)
+                    .with_for_update()
+                    # Overwrite whatever this session already had for the row.
+                    # Without it SQLAlchemy returns the identity-map copy with
+                    # its *original* attributes, so the lock would be taken
+                    # correctly and then compared against a remembered token --
+                    # a fence that reads its own cache is not a fence.
+                    .execution_options(populate_existing=True)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if locked is None or locked.lease_token != lease.token:
+            return None
+        return locked
+
+    async def run_next_batch(
+        self, application_id: uuid.UUID, *, lease: ApplicationLease
+    ) -> BatchOutcome:
+        """Process one bounded batch, under proof of ownership.
 
         One transaction per batch, so a crash loses at most one batch and the
-        cursor never claims work that was rolled back with it.
+        cursor never claims work that was rolled back with it. Ownership is
+        re-established at the start of *every* batch rather than once at the
+        claim: a worker that stalls long enough to be reclaimed and then wakes
+        up is a normal consequence of a bounded heartbeat, and without this it
+        would carry on repricing a catalogue a second worker had already taken
+        over.
         """
-        application = await self.get(application_id)
+        application = await self._lock_owned(lease)
+        if application is None:
+            # Reclaimed, finished, or never ours. Nothing has been written in
+            # this transaction and nothing will be.
+            return BatchOutcome.LOST
         if application.status is ApplicationStatus.CANCELLED:
-            # Cooperative stop: the merchant cancelled between batches.
-            return False
+            # Cooperative stop: the merchant cancelled between batches. Still
+            # ours, so the caller may close it out honestly.
+            return BatchOutcome.CANCELLED
+        if application.status is not ApplicationStatus.RUNNING:
+            return BatchOutcome.LOST
 
         request = self._request_from(application)
         cursor = application.processed_count
         batch = request.product_ids[cursor : cursor + APPLICATION_BATCH_SIZE]
         if not batch:
-            return False
+            return BatchOutcome.DONE
 
         await self._process(application, request, batch)
         application.processed_count = cursor + len(batch)
@@ -753,11 +932,22 @@ class RuleApplicationService(BaseService):
         await self.flush()
         await self._refresh_counts(application)
         await self.flush()
-        return application.processed_count < len(request.product_ids)
+        if application.processed_count < len(request.product_ids):
+            return BatchOutcome.MORE
+        return BatchOutcome.DONE
 
-    async def finalize(self, application_id: uuid.UUID) -> RuleApplication:
-        """Close a run and publish its final counts."""
-        application = await self.get(application_id)
+    async def finalize(
+        self, application_id: uuid.UUID, *, lease: ApplicationLease
+    ) -> RuleApplication | None:
+        """Close a run and publish its final counts. Owner only.
+
+        ``None`` means the lease no longer owns the run -- another worker took
+        it over, so *its* result is the one that will be recorded. Writing a
+        terminal status here would overwrite a run still in progress.
+        """
+        application = await self._lock_owned(lease)
+        if application is None:
+            return None
         await self._refresh_counts(application)
         if application.status is not ApplicationStatus.CANCELLED:
             application.finished_at = datetime.now(UTC)
@@ -766,22 +956,38 @@ class RuleApplicationService(BaseService):
                 if application.failed_count == 0 and application.review_count == 0
                 else ApplicationStatus.PARTIAL
             )
+        application.lease_token = None
         await self.flush()
         await self.session.refresh(application, attribute_names=["items"])
         return application
 
-    async def fail(self, application_id: uuid.UUID, reason: str) -> RuleApplication:
-        """Record that the run could not be completed.
+    async def fail(
+        self, application_id: uuid.UUID, reason: str, *, lease: ApplicationLease
+    ) -> RuleApplication | None:
+        """Record that the run could not be completed. Owner only.
+
+        Owner-conditional for the same reason the batch is, and it matters
+        most here: a worker that lost its run then raised would otherwise mark
+        the *new* owner's run failed from its generic exception handler, which
+        is a healthy run destroyed by a dead one. ``None`` means the lease was
+        already gone, and the correct action is to write nothing.
 
         Counts are recomputed rather than zeroed: batches that committed
         before the failure really did reprice those drafts, and hiding them
         would send the merchant looking for changes the catalogue already has.
         """
-        application = await self.get(application_id)
+        application = await self._lock_owned(lease)
+        if application is None:
+            return None
+        if application.status is not ApplicationStatus.RUNNING:
+            # Cancelled or already closed out by this same worker. Neither is
+            # a failure to record.
+            return None
         await self._refresh_counts(application)
         application.status = ApplicationStatus.FAILED
         application.failure_reason = reason[:500]
         application.finished_at = datetime.now(UTC)
+        application.lease_token = None
         await self.flush()
         return application
 
@@ -843,56 +1049,130 @@ class RuleApplicationService(BaseService):
         )
         return list((await self.session.execute(query)).scalars().all())
 
-    async def reclaim_stale(self, application_id: uuid.UUID, *, task_id: str | None) -> bool:
-        """Take over a run whose worker stopped reporting.
+    async def observe(self, application_id: uuid.UUID) -> LeaseObservation | None:
+        """Snapshot the fields a recovery decision has to be conditional on."""
+        row = (
+            (
+                await self.session.execute(
+                    select(
+                        RuleApplication.id,
+                        RuleApplication.tenant_id,
+                        RuleApplication.heartbeat_at,
+                        RuleApplication.lease_token,
+                        RuleApplication.recovery_count,
+                    )
+                    .where(RuleApplication.tenant_id == self._tenant_id())
+                    .where(RuleApplication.id == application_id)
+                )
+            )
+            .tuples()
+            .first()
+        )
+        if row is None:
+            return None
+        return LeaseObservation(
+            application_id=row[0],
+            tenant_id=row[1],
+            heartbeat_at=row[2],
+            lease_token=row[3],
+            recovery_count=row[4],
+        )
 
-        Conditional on the heartbeat still being stale *at the moment of the
-        write*, so a worker that resumed a second before this ran keeps its
-        run: the UPDATE simply matches no row. That is the whole guarantee
-        against two workers on one application, and it is the database's to
-        make, not a read-then-write in application code.
+    async def reclaim_stale(self, *, observed: LeaseObservation) -> bool:
+        """Return an abandoned run to the queue for a *new* worker to claim.
 
-        Only `running` rows are eligible, so a cancelled or finished run can
-        never be revived. Resuming is safe because the durable cursor and the
-        per-item uniqueness constraint already make a re-entered run neither
-        skip nor repeat work -- the same properties a Celery retry relies on.
+        `running` (silent worker) → **`pending`, unowned**. Not "running under
+        a new owner": the run is handed back to the ordinary
+        `pending -> running` claim, which is the only transition that can mint
+        a lease against a real Celery task id. An earlier version wrote the
+        new owner directly and had no id to write, so it left the row
+        `running` with a NULL owner and enqueued a message whose task then saw
+        `running` under someone else and refused it. Recovery published a
+        message that could never do anything. Going back through `pending` is
+        what makes the published message *able* to take the run.
+
+        Conditional on the exact state that justified the decision -- the
+        heartbeat and lease token the sweep read, the status, and the recovery
+        bound. A worker that committed a batch in between moved its heartbeat,
+        so this matches no row and keeps its run; a second reconciler racing
+        this one finds the values already changed and loses. The guarantee is
+        the database's, not a read-then-write in application code.
+
+        The lease token is cleared in the same statement, which is what fences
+        the old worker: its next batch locks the row, sees a token that is no
+        longer its own, and stops before writing anything.
+
+        Committed batches are untouched. The durable cursor is what the new
+        worker resumes from, so nothing is repriced twice and nothing is
+        skipped.
         """
-        cutoff = datetime.now(UTC) - STALE_AFTER
-        now = datetime.now(UTC)
-        claimed = await self.session.execute(
+        cleared = await self.session.execute(
             update(RuleApplication)
-            .where(RuleApplication.id == application_id)
+            .where(RuleApplication.id == observed.application_id)
             .where(RuleApplication.tenant_id == self._tenant_id())
             .where(RuleApplication.status == ApplicationStatus.RUNNING)
-            .where(RuleApplication.heartbeat_at < cutoff)
+            .where(RuleApplication.recovery_count == observed.recovery_count)
             .where(RuleApplication.recovery_count < MAX_RECOVERIES)
+            .where(RuleApplication.heartbeat_at.is_not_distinct_from(observed.heartbeat_at))
+            .where(RuleApplication.lease_token.is_not_distinct_from(observed.lease_token))
+            .where(stale_running_predicate())
             .values(
-                claimed_by_task_id=task_id,
-                heartbeat_at=now,
+                status=ApplicationStatus.PENDING,
+                claimed_by_task_id=None,
+                lease_token=None,
+                heartbeat_at=None,
+                # Cleared so "pending with no enqueued_at" keeps meaning
+                # "nothing is going to happen to this until it is published",
+                # which is what the pending sweep acts on. Without it a
+                # recovered run would look like one already on the broker.
+                enqueued_at=None,
                 recovery_count=RuleApplication.recovery_count + 1,
             )
             .returning(RuleApplication.id)
             .execution_options(synchronize_session=False)
         )
-        return claimed.scalars().first() is not None
+        return cleared.scalars().first() is not None
 
-    async def abandon_stale(self, application_id: uuid.UUID) -> bool:
+    async def abandon_stale(self, *, observed: LeaseObservation) -> bool:
         """Park a run that has been reclaimed too many times.
 
         Recorded as `failed` with the reason rather than retried forever: a
         run that dies identically on every attempt is a defect to look at, and
         an endless loop would hide it. Committed batches keep their results.
+
+        Conditional on the same observation as the reclaim, for the same
+        reason: a worker that came back to life between the sweep and this
+        write must keep its run rather than have it declared dead.
         """
-        application = await self.get(application_id)
-        if application.status is not ApplicationStatus.RUNNING:
-            return False
-        await self._refresh_counts(application)
-        application.status = ApplicationStatus.FAILED
-        application.failure_reason = (
-            f"Abandoned after {application.recovery_count} recovery attempts. "
-            "Drafts already repriced in committed batches were kept."
+        parked = await self.session.execute(
+            update(RuleApplication)
+            .where(RuleApplication.id == observed.application_id)
+            .where(RuleApplication.tenant_id == self._tenant_id())
+            .where(RuleApplication.status == ApplicationStatus.RUNNING)
+            .where(RuleApplication.recovery_count == observed.recovery_count)
+            .where(RuleApplication.heartbeat_at.is_not_distinct_from(observed.heartbeat_at))
+            .where(RuleApplication.lease_token.is_not_distinct_from(observed.lease_token))
+            .where(stale_running_predicate())
+            .values(
+                status=ApplicationStatus.FAILED,
+                lease_token=None,
+                claimed_by_task_id=None,
+                failure_reason=(
+                    f"Abandoned after {observed.recovery_count} recovery attempts. "
+                    "Drafts already repriced in committed batches were kept."
+                ),
+                finished_at=datetime.now(UTC),
+            )
+            .returning(RuleApplication.id)
+            .execution_options(synchronize_session=False)
         )
-        application.finished_at = datetime.now(UTC)
+        if parked.scalars().first() is None:
+            return False
+        # Counts are recomputed after the status write so the parked run still
+        # reports what its committed batches actually did.
+        application = await self.get(observed.application_id)
+        await self.session.refresh(application)
+        await self._refresh_counts(application)
         await self.flush()
         return True
 

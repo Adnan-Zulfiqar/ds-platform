@@ -28,9 +28,12 @@ from app.schemas.pricing import PricingApplyRequest
 from app.services.pricing_engine import PricingEngine
 from app.services.rule_application import (
     MAX_RECOVERIES,
-    STALE_AFTER,
+    ApplicationLease,
+    BatchOutcome,
     ClaimResult,
+    LeaseObservation,
     RuleApplicationService,
+    stale_running_predicate,
 )
 from app.workers.base import BaseTask, enqueue
 from app.workers.celery_app import celery_app
@@ -174,7 +177,30 @@ async def _resolve_tenant(application_id: uuid.UUID) -> uuid.UUID | None:
         return await RuleApplicationTenantLookup(session).tenant_for(application_id)
 
 
-async def _apply(application_id: uuid.UUID, task_id: str | None) -> dict[str, Any]:
+#: What a worker reports when its run was taken from it. Not a failure: the
+#: new owner's outcome is the run's outcome, and this worker wrote nothing.
+_SUPERSEDED = "superseded"
+
+
+class _LeaseHolder:
+    """Carries the lease out of ``_apply`` for the task's error path.
+
+    The exception handler lives in the Celery task, one layer above the code
+    that obtains ownership, and it must be able to tell "this run is mine and
+    it failed" from "this run stopped being mine". Without the lease up there
+    the handler can only guess, and guessing wrong marks another worker's
+    healthy run as failed.
+    """
+
+    __slots__ = ("lease",)
+
+    def __init__(self) -> None:
+        self.lease: ApplicationLease | None = None
+
+
+async def _apply(
+    application_id: uuid.UUID, task_id: str | None, holder: _LeaseHolder
+) -> dict[str, Any]:
     tenant_id = await _resolve_tenant(application_id)
     if tenant_id is None:
         # A message can outlive its row. Nothing to do, and nothing to retry.
@@ -186,26 +212,54 @@ async def _apply(application_id: uuid.UUID, task_id: str | None) -> dict[str, An
         async with transaction() as session:
             claim = await RuleApplicationService(session).claim(application_id, task_id=task_id)
 
-        if claim not in (ClaimResult.CLAIMED, ClaimResult.RESUMED):
+        if claim.lease is None:
             # Duplicate delivery, another worker's run, a cancellation, or an
             # application that already finished. All four are no-ops.
             logger.info(
                 "rule_application_not_claimed",
                 application_id=str(application_id),
-                reason=claim.value,
+                reason=claim.result.value,
             )
-            return {"status": claim.value, "batches": 0}
+            return {"status": claim.result.value, "batches": 0}
+
+        lease = claim.lease
+        holder.lease = lease
 
         batches = 0
         while batches < _MAX_BATCHES:
             async with transaction() as session:
-                more = await RuleApplicationService(session).run_next_batch(application_id)
+                step = await RuleApplicationService(session).run_next_batch(
+                    application_id, lease=lease
+                )
+            if step is BatchOutcome.LOST:
+                # Reclaimed while this worker was between batches. It wrote
+                # nothing in that transaction and must write nothing now --
+                # including no failure, no heartbeat and no final status.
+                holder.lease = None
+                logger.warning(
+                    "rule_application_ownership_lost",
+                    application_id=str(application_id),
+                    task_id=task_id,
+                    batches=batches,
+                )
+                return {"status": _SUPERSEDED, "batches": batches}
             batches += 1
-            if not more:
+            if step is not BatchOutcome.MORE:
                 break
 
         async with transaction() as session:
-            application = await RuleApplicationService(session).finalize(application_id)
+            application = await RuleApplicationService(session).finalize(
+                application_id, lease=lease
+            )
+            if application is None:
+                holder.lease = None
+                logger.warning(
+                    "rule_application_ownership_lost",
+                    application_id=str(application_id),
+                    task_id=task_id,
+                    batches=batches,
+                )
+                return {"status": _SUPERSEDED, "batches": batches}
             result = {
                 "status": application.status.value,
                 "batches": batches,
@@ -214,20 +268,56 @@ async def _apply(application_id: uuid.UUID, task_id: str | None) -> dict[str, An
                 "review": application.review_count,
                 "failed": application.failed_count,
             }
+        # The run is closed out; there is nothing left for an error path to
+        # mark failed even if something raises on the way out.
+        holder.lease = None
         logger.info("rule_application_finished", application_id=str(application_id), **result)
         return result
     finally:
         clear_context()
 
 
-async def _mark_failed(application_id: uuid.UUID, reason: str) -> None:
+async def _mark_failed(
+    application_id: uuid.UUID, reason: str, lease: ApplicationLease | None
+) -> bool:
+    """Record a worker's failure -- but only if the worker still owns the run.
+
+    Returns whether the failure was actually recorded, so the task reports
+    what happened rather than what it attempted: a worker that was replaced
+    and then fell over did not fail the run, and saying it did would be the
+    same lie in the return value that the write itself is prevented from
+    telling.
+
+    ``lease is None`` covers both "never got ownership" and "lost it", and in
+    both cases the honest action is to write nothing: a run this worker does
+    not own is either waiting to be claimed by someone else or already being
+    processed by them, and stamping `failed` on it would destroy healthy work.
+    ``fail`` re-checks under a row lock as well, so a lease that goes stale
+    between here and the write is caught by the database rather than by
+    timing.
+    """
+    if lease is None:
+        logger.warning(
+            "rule_application_failure_not_recorded",
+            application_id=str(application_id),
+            reason="worker did not hold the lease",
+        )
+        return False
     tenant_id = await _resolve_tenant(application_id)
     if tenant_id is None:
-        return
+        return False
     set_tenant_id(tenant_id)
     try:
         async with transaction() as session:
-            await RuleApplicationService(session).fail(application_id, reason)
+            marked = await RuleApplicationService(session).fail(application_id, reason, lease=lease)
+        if marked is None:
+            logger.warning(
+                "rule_application_failure_not_recorded",
+                application_id=str(application_id),
+                reason="the lease was no longer current",
+            )
+            return False
+        return True
     finally:
         clear_context()
 
@@ -259,8 +349,9 @@ def apply_rules_to_drafts(self: Any, application_id: str, **_: Any) -> dict[str,
     """
     identifier = uuid.UUID(application_id)
     task_id = getattr(self.request, "id", None)
+    holder = _LeaseHolder()
     try:
-        return _run(_apply(identifier, task_id))
+        return _run(_apply(identifier, task_id, holder))
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             logger.error(
@@ -268,8 +359,11 @@ def apply_rules_to_drafts(self: Any, application_id: str, **_: Any) -> dict[str,
                 application_id=application_id,
                 error=str(exc),
             )
-            _run(_mark_failed(identifier, f"{type(exc).__name__}: {exc}"))
-            return {"status": "failed", "batches": 0}
+            # Owner-conditional. A worker whose run was reclaimed mid-flight
+            # raises here just as readily as one that genuinely failed, and
+            # the difference is the lease.
+            recorded = _run(_mark_failed(identifier, f"{type(exc).__name__}: {exc}", holder.lease))
+            return {"status": "failed" if recorded else _SUPERSEDED, "batches": 0}
         raise
 
 
@@ -278,28 +372,47 @@ def apply_rules_to_drafts(self: Any, application_id: str, **_: Any) -> dict[str,
 # ---------------------------------------------------------------------------
 
 
-async def _stale_applications() -> list[tuple[uuid.UUID, uuid.UUID, int]]:
+async def _stale_applications() -> list[LeaseObservation]:
     """Runs still `running` whose heartbeat has gone quiet.
 
     Read unscoped on purpose -- the sweep runs on no tenant's behalf, exactly
     like ``products.sweep_stale`` -- and returns the tenant alongside each id
     so every action taken afterwards is bound to the tenant recorded on the
     row rather than to anything a caller supplied.
+
+    The heartbeat and lease token come back with each row so the write that
+    follows can be conditional on exactly what was seen here. Reading them and
+    then writing unconditionally is the classic time-of-check bug, and in this
+    case it would steal a run from a worker that woke up in between.
+
+    ``stale_running_predicate`` is shared with the reclaim itself, so the two
+    cannot drift into a sweep that keeps selecting rows the write keeps
+    refusing.
     """
-    cutoff = datetime.now(UTC) - STALE_AFTER
     async with transaction() as session:
         rows = await session.execute(
             sa.select(
                 RuleApplication.id,
                 RuleApplication.tenant_id,
+                RuleApplication.heartbeat_at,
+                RuleApplication.lease_token,
                 RuleApplication.recovery_count,
             )
             .where(RuleApplication.status == ApplicationStatus.RUNNING)
-            .where(RuleApplication.heartbeat_at < cutoff)
-            .order_by(RuleApplication.heartbeat_at.asc())
+            .where(stale_running_predicate())
+            .order_by(RuleApplication.heartbeat_at.asc().nullsfirst())
             .limit(_RECONCILE_LIMIT)
         )
-        return [(row[0], row[1], row[2]) for row in rows.all()]
+        return [
+            LeaseObservation(
+                application_id=row[0],
+                tenant_id=row[1],
+                heartbeat_at=row[2],
+                lease_token=row[3],
+                recovery_count=row[4],
+            )
+            for row in rows.all()
+        ]
 
 
 async def _unpublished_applications() -> list[tuple[uuid.UUID, uuid.UUID]]:
@@ -340,34 +453,55 @@ async def _republish(application_id: uuid.UUID, tenant_id: uuid.UUID) -> str:
         clear_context()
 
 
-async def _reconcile_one(application_id: uuid.UUID, tenant_id: uuid.UUID, recoveries: int) -> str:
-    """Reclaim one abandoned run, or park it if it has failed too often."""
-    set_tenant_id(tenant_id)
+async def _reconcile_one(observed: LeaseObservation) -> str:
+    """Return one abandoned run to the queue, or park it if it keeps dying.
+
+    The sequence matters and was wrong once, so it is spelled out:
+
+    1. **`running` → `pending`, unowned**, conditional on the exact state the
+       sweep observed. Committed in its own transaction.
+    2. **Publish, after that commit.** A worker that receives the message
+       before the row is `pending` would find it `running` under someone else
+       and refuse it -- which is precisely what the previous version did, on
+       every recovery, silently.
+    3. The new worker runs the ordinary `pending -> running` claim and mints a
+       lease against its own real Celery task id. Nothing here fabricates one.
+
+    If the publish fails the run stays `pending` with no ``enqueued_at``, which
+    is exactly the state ``_unpublished_applications`` exists to repair. That
+    is bounded -- one message per sweep, and a duplicate finds the run already
+    claimed and does nothing -- so a broker outage delays recovery rather than
+    losing it.
+    """
+    set_tenant_id(observed.tenant_id)
     try:
-        if recoveries >= MAX_RECOVERIES:
+        if observed.recovery_count >= MAX_RECOVERIES:
             async with transaction() as session:
-                parked = await RuleApplicationService(session).abandon_stale(application_id)
-            return "abandoned" if parked else "skipped"
+                parked = await RuleApplicationService(session).abandon_stale(observed=observed)
+            return "abandoned" if parked else "healthy"
 
         async with transaction() as session:
-            reclaimed = await RuleApplicationService(session).reclaim_stale(
-                application_id, task_id=None
-            )
+            reclaimed = await RuleApplicationService(session).reclaim_stale(observed=observed)
         if not reclaimed:
-            # The heartbeat moved between the sweep and the write: the worker
-            # is alive after all. Nothing to do, and nothing was taken from it.
+            # The heartbeat moved between the sweep and the write, or another
+            # reconciler got there first. Either way nothing was taken from a
+            # live worker, which is the property this is here to preserve.
             return "healthy"
+
+        logger.warning(
+            "rule_application_reclaimed",
+            application_id=str(observed.application_id),
+            recovery_count=observed.recovery_count + 1,
+        )
 
         # Re-queued rather than executed here: the reconciler's job is to
         # notice, not to become a second execution path with its own timeouts
         # and its own bugs. The run resumes from the durable cursor, so the
         # batches that already committed are not repeated.
-        enqueue(apply_rules_to_drafts, application_id=str(application_id))
-        logger.warning(
-            "rule_application_reclaimed",
-            application_id=str(application_id),
-            recovery_count=recoveries + 1,
-        )
+        if not publish_rule_application(observed.application_id):
+            return "recovered_unpublished"
+        async with transaction() as session:
+            await RuleApplicationService(session).mark_enqueued(observed.application_id)
         return "requeued"
     finally:
         clear_context()
@@ -384,8 +518,17 @@ def reconcile_applications(self: Any, **_: Any) -> dict[str, int]:
     cancelled at the broker has no message left to redeliver.
 
     The heartbeat is what makes "abandoned" a fact rather than a guess, and the
-    reclaim is a conditional UPDATE against that heartbeat, so a worker that is
-    merely slow keeps its run: this task's write simply matches no row.
+    reclaim is a conditional UPDATE against the exact heartbeat and lease token
+    the sweep read, so a worker that is merely slow keeps its run: this task's
+    write simply matches no row.
+
+    **Recovery returns a run to `pending`**, unowned, and publishes a fresh
+    message afterwards. It does not appoint a new owner itself, because it has
+    no real Celery task id to appoint one with -- and an earlier version that
+    tried left every recovered run `running` with a NULL owner, so the message
+    it published could never claim it. Going back through `pending` means the
+    ordinary claim, with the new delivery's own id and a new lease, is what
+    takes the run.
 
     It also republishes `pending` runs the broker never accepted, which is the
     other half of the same problem: the row and the message cannot be written
@@ -393,8 +536,8 @@ def reconcile_applications(self: Any, **_: Any) -> dict[str, int]:
 
     Cancelled and finished runs are never touched -- only `running` and
     `pending` rows are eligible -- and resuming is safe because the durable
-    cursor and the per-item uniqueness constraint already prevent a re-entered
-    run from repricing anything twice.
+    cursor, the per-batch lease check and the per-item uniqueness constraint
+    together prevent a re-entered run from repricing anything twice.
     """
     outcomes = {
         "requeued": 0,
@@ -402,13 +545,22 @@ def reconcile_applications(self: Any, **_: Any) -> dict[str, int]:
         "healthy": 0,
         "skipped": 0,
         "republished": 0,
+        # Reclaimed to `pending` but the broker would not take the message.
+        # Counted separately because it is the one outcome that leaves work
+        # waiting on the next sweep rather than resolved by this one.
+        "recovered_unpublished": 0,
     }
-    for application_id, tenant_id, recoveries in _run(_stale_applications()):
-        result = _run(_reconcile_one(application_id, tenant_id, recoveries))
+    for observed in _run(_stale_applications()):
+        result = _run(_reconcile_one(observed))
         outcomes[result] = outcomes.get(result, 0) + 1
     for application_id, tenant_id in _run(_unpublished_applications()):
         result = _run(_republish(application_id, tenant_id))
         outcomes[result] = outcomes.get(result, 0) + 1
-    if outcomes["requeued"] or outcomes["abandoned"] or outcomes["republished"]:
+    if (
+        outcomes["requeued"]
+        or outcomes["abandoned"]
+        or outcomes["republished"]
+        or outcomes["recovered_unpublished"]
+    ):
         logger.warning("rule_application_reconcile_summary", **outcomes)
     return outcomes

@@ -27,7 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.context import AuthenticatedUser, get_tenant_id, set_principal
+from app.core.context import AuthenticatedUser, set_principal
 from app.core.exceptions import (
     AuthenticationError,
     NotFoundError,
@@ -368,7 +368,7 @@ TenantRepo = Annotated[TenantRepository, Depends(get_tenant_repository)]
 
 def endpoint_rate_limit(
     name: str, *, limit: int, window_seconds: int
-) -> Callable[[Request], Awaitable[None]]:
+) -> Callable[[Request, AuthenticatedUser | None], Awaitable[None]]:
     """A tighter, named quota for one expensive endpoint.
 
     The broad middleware quota is sized for ordinary browsing, which is far too
@@ -377,23 +377,31 @@ def endpoint_rate_limit(
     there is still one implementation of the window, the circuit breaker and the
     fail-open policy.
 
-    Counted per tenant, falling back to client IP for traffic that has none.
-    Tenant-first matters here: quotas are per customer, and one tenant hammering
-    the preview must not consume another's allowance simply because they share a
-    NAT or a load balancer.
+    Counted per **tenant and user together**, falling back to client IP for
+    traffic that has neither. Both halves are load-bearing. Tenant alone was
+    wrong: one member of a workspace holding down a preview would exhaust the
+    quota for every colleague, which turns a limiter meant to blunt abuse into
+    a way for any single seat to deny the whole account. User alone would be
+    worse, since a user id is only unique within a tenant here.
+
+    The identity comes from ``principal`` — the verified token claims, resolved
+    by FastAPI *before* this dependency runs because this dependency asks for
+    it. That ordering is structural rather than a matter of parameter order,
+    and it is why no header, query parameter or context value a caller controls
+    can choose which bucket to spend. An unauthenticated request has no
+    principal and is counted by address; it cannot name a tenant at all.
 
     Fails open with Redis, exactly as the middleware does. A cache outage
     degrading to "no quota" is the deliberate trade; a cache outage that took
     down pricing would be worse.
     """
 
-    async def dependency(request: Request) -> None:
+    async def dependency(request: Request, principal: OptionalPrincipal) -> None:
         if not settings.security.rate_limit_enabled:
             return
 
-        tenant_id = get_tenant_id()
-        if tenant_id is not None:
-            identity = f"tenant:{tenant_id}"
+        if principal is not None:
+            identity = f"tenant:{principal.tenant_id}:user:{principal.user_id}"
         else:
             forwarded = request.headers.get("x-forwarded-for")
             identity = (
@@ -407,10 +415,14 @@ def endpoint_rate_limit(
             f"ratelimit:{name}:{identity}", limit=limit, window=window_seconds
         )
         if not decision.allowed:
+            # Structured fields rather than the composed key: a log line is
+            # searchable by tenant without anyone parsing a string, and the
+            # identifiers stay out of the response the caller receives.
             logger.warning(
                 "endpoint_rate_limit_exceeded",
                 endpoint=name,
-                identity=identity,
+                tenant_id=str(principal.tenant_id) if principal else None,
+                user_id=str(principal.user_id) if principal else None,
                 limit=limit,
             )
             raise RateLimitExceededError(

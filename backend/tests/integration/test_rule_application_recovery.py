@@ -29,8 +29,11 @@ from app.services import rule_application as service_module
 from app.services.rule_application import (
     MAX_RECOVERIES,
     STALE_AFTER,
+    ApplicationLease,
+    BatchOutcome,
     DraftSelectionFilter,
     ImpactPreviewService,
+    LeaseObservation,
     RuleApplicationService,
 )
 from tests.integration.rule_application_harness import (
@@ -78,14 +81,26 @@ async def row(db_session: AsyncSession, application_id: str) -> RuleApplication:
 async def go_stale(
     db_session: AsyncSession, application_id: str, *, minutes_ago: int = 60
 ) -> RuleApplication:
-    """Put a run in the state a killed worker leaves: running, silent."""
+    """Put a run in the state a killed worker leaves: running, silent.
+
+    Including the lease the dead worker held -- a `running` row always has one,
+    and every recovery decision is conditional on it.
+    """
     record = await row(db_session, application_id)
     record.status = ApplicationStatus.RUNNING
     record.claimed_by_task_id = "worker-that-died"
+    record.lease_token = uuid.uuid4()
     record.started_at = datetime.now(UTC) - timedelta(minutes=minutes_ago + 5)
     record.heartbeat_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     await db_session.flush()
     return record
+
+
+async def observation(db_session: AsyncSession, application_id: str) -> LeaseObservation:
+    """What the reconciler's sweep would have read for this run."""
+    observed = await RuleApplicationService(db_session).observe(uuid.UUID(application_id))
+    assert observed is not None
+    return observed
 
 
 class TestHeartbeat:
@@ -127,8 +142,13 @@ class TestHeartbeat:
         seen: list[datetime] = []
         real_batch = RuleApplicationService.run_next_batch
 
-        async def observing(self: RuleApplicationService, application_id: uuid.UUID) -> bool:
-            more = await real_batch(self, application_id)
+        async def observing(
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
+            more = await real_batch(self, application_id, lease=lease)
             record = await self.get(application_id)
             assert record.heartbeat_at is not None
             seen.append(record.heartbeat_at)
@@ -155,14 +175,21 @@ class TestStuckRunRecovery:
         set_tenant_id(tenant_id)
 
         reclaimed = await RuleApplicationService(db_session).reclaim_stale(
-            uuid.UUID(body["id"]), task_id="rescuer"
+            observed=await observation(db_session, body["id"])
         )
 
         assert reclaimed is True
+        db_session.expire_all()
         record = await row(db_session, body["id"])
-        assert record.claimed_by_task_id == "rescuer"
+        # Back to `pending` and unowned -- the one state a new delivery can
+        # claim. Left `running`, the message the reconciler publishes next
+        # finds the run already owned and refuses it, which was the defect
+        # this transition replaced.
+        assert record.status is ApplicationStatus.PENDING
+        assert record.claimed_by_task_id is None
+        assert record.lease_token is None
+        assert record.enqueued_at is None
         assert record.recovery_count == 1
-        assert record.status is ApplicationStatus.RUNNING
 
     async def test_a_healthy_run_is_never_stolen(
         self, client: AsyncClient, db_session: AsyncSession
@@ -176,18 +203,21 @@ class TestStuckRunRecovery:
             client, headers, productIds=[str(product.id)], idempotencyKey="healthy"
         )
         record = await go_stale(db_session, body["id"])
-        # The worker checks in a moment before the reconciler writes.
+        set_tenant_id(tenant_id)
+        # The sweep reads the run while it still looks abandoned...
+        observed = await observation(db_session, body["id"])
+        # ...and the worker checks in before the reconciler reaches its write.
         record.heartbeat_at = datetime.now(UTC)
         await db_session.flush()
-        set_tenant_id(tenant_id)
 
-        reclaimed = await RuleApplicationService(db_session).reclaim_stale(
-            uuid.UUID(body["id"]), task_id="rescuer"
-        )
+        reclaimed = await RuleApplicationService(db_session).reclaim_stale(observed=observed)
 
         assert reclaimed is False
+        db_session.expire_all()
         refreshed = await row(db_session, body["id"])
+        assert refreshed.status is ApplicationStatus.RUNNING
         assert refreshed.claimed_by_task_id == "worker-that-died"
+        assert refreshed.lease_token == observed.lease_token, "its fence is intact"
         assert refreshed.recovery_count == 0
 
     async def test_a_cancelled_run_is_never_resumed(
@@ -200,15 +230,15 @@ class TestStuckRunRecovery:
             client, headers, productIds=[str(product.id)], idempotencyKey="cancelled-stale"
         )
         record = await go_stale(db_session, body["id"])
+        set_tenant_id(tenant_id)
+        observed = await observation(db_session, body["id"])
         record.status = ApplicationStatus.CANCELLED
         await db_session.flush()
-        set_tenant_id(tenant_id)
 
-        reclaimed = await RuleApplicationService(db_session).reclaim_stale(
-            uuid.UUID(body["id"]), task_id="rescuer"
-        )
+        reclaimed = await RuleApplicationService(db_session).reclaim_stale(observed=observed)
 
         assert reclaimed is False
+        db_session.expire_all()
         assert (await row(db_session, body["id"])).status is ApplicationStatus.CANCELLED
 
     async def test_a_completed_run_is_never_resumed(
@@ -230,10 +260,11 @@ class TestStuckRunRecovery:
         set_tenant_id(tenant_id)
 
         reclaimed = await RuleApplicationService(db_session).reclaim_stale(
-            uuid.UUID(body["id"]), task_id="rescuer"
+            observed=await observation(db_session, body["id"])
         )
 
         assert reclaimed is False
+        db_session.expire_all()
         assert (await row(db_session, body["id"])).status is ApplicationStatus.COMPLETED
 
     async def test_recovery_resumes_without_repricing_anything_twice(
@@ -258,11 +289,16 @@ class TestStuckRunRecovery:
         real_batch = RuleApplicationService.run_next_batch
         calls = {"n": 0}
 
-        async def dies_after_one(self: RuleApplicationService, application_id: uuid.UUID) -> bool:
+        async def dies_after_one(
+            self: RuleApplicationService,
+            application_id: uuid.UUID,
+            *,
+            lease: ApplicationLease,
+        ) -> BatchOutcome:
             calls["n"] += 1
             if calls["n"] > 1:
                 raise RuntimeError("worker killed")
-            return await real_batch(self, application_id)
+            return await real_batch(self, application_id, lease=lease)
 
         monkeypatch.setattr(RuleApplicationService, "run_next_batch", dies_after_one)
         with pytest.raises(Exception, match="worker killed"):
@@ -279,7 +315,7 @@ class TestStuckRunRecovery:
         await db_session.flush()
         set_tenant_id(tenant_id)
         assert await RuleApplicationService(db_session).reclaim_stale(
-            uuid.UUID(body["id"]), task_id="rescuer"
+            observed=await observation(db_session, body["id"])
         )
         # The reclaim is a bulk UPDATE, so the identity map still holds the
         # pre-reclaim row. In production the reconciler and the worker are
@@ -322,8 +358,10 @@ class TestStuckRunRecovery:
         set_tenant_id(tenant_id)
 
         service = RuleApplicationService(db_session)
-        assert await service.reclaim_stale(uuid.UUID(body["id"]), task_id="rescuer") is False
-        assert await service.abandon_stale(uuid.UUID(body["id"])) is True
+        observed = await observation(db_session, body["id"])
+        assert await service.reclaim_stale(observed=observed) is False
+        assert await service.abandon_stale(observed=observed) is True
+        db_session.expire_all()
 
         parked = await row(db_session, body["id"])
         assert parked.status is ApplicationStatus.FAILED

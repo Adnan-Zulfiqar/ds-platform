@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.rule_application import LeaseObservation
 from app.tasks import pricing as pricing_tasks
 from app.workers.celery_app import celery_app
 
@@ -73,6 +74,7 @@ class TestReconcilerTask:
             "healthy": 0,
             "skipped": 0,
             "republished": 0,
+            "recovered_unpublished": 0,
         }
 
     def test_each_stale_run_is_handled_under_its_own_tenant(
@@ -82,10 +84,22 @@ class TestReconcilerTask:
         import uuid as uuid_module
 
         stale = [
-            (uuid_module.uuid4(), uuid_module.uuid4(), 0),
-            (uuid_module.uuid4(), uuid_module.uuid4(), 1),
+            LeaseObservation(
+                application_id=uuid_module.uuid4(),
+                tenant_id=uuid_module.uuid4(),
+                heartbeat_at=None,
+                lease_token=uuid_module.uuid4(),
+                recovery_count=0,
+            ),
+            LeaseObservation(
+                application_id=uuid_module.uuid4(),
+                tenant_id=uuid_module.uuid4(),
+                heartbeat_at=None,
+                lease_token=uuid_module.uuid4(),
+                recovery_count=1,
+            ),
         ]
-        seen: list[tuple[object, object, int]] = []
+        seen: list[LeaseObservation] = []
         calls = {"n": 0}
 
         def fake_run(coro: object) -> object:
@@ -99,8 +113,8 @@ class TestReconcilerTask:
                 return "requeued"
             return []
 
-        async def recording(application_id: object, tenant_id: object, recoveries: int) -> str:
-            seen.append((application_id, tenant_id, recoveries))
+        async def recording(observed: LeaseObservation) -> str:
+            seen.append(observed)
             return "requeued"
 
         monkeypatch.setattr(pricing_tasks, "_reconcile_one", recording)

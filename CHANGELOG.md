@@ -89,6 +89,48 @@ production release.
 
 ### Fixed
 
+- **Recovery of a stuck bulk application never actually resumed it (M3A)** —
+  the reconciler cleared `claimed_by_task_id` but left the row `running`, so
+  the message it published reached a worker that saw a `running` row owned by
+  someone else, reported `already_running` and processed nothing. Every
+  recovery logged `requeued` and rescued nothing. Recovery now returns the run
+  to `pending` and unowned in one conditional UPDATE, commits, and *then*
+  publishes; the new delivery takes it through the ordinary `pending → running`
+  claim under its own real Celery task id, and resumes from the durable cursor.
+  The reclaim is pinned to the exact status, heartbeat, lease and recovery
+  count the sweep observed, so a worker that checked in keeps its run and two
+  racing reconcilers reclaim exactly once. A failed publish leaves the run
+  `pending` with `enqueued_at` NULL, which the pending sweep repairs.
+
+- **A worker whose run had been taken over kept writing to it (M3A)** — the
+  worker claimed once and then looped over batches with nothing re-checking
+  ownership, so a reclaimed worker carried on writing prices, `PriceChange`
+  rows, result rows, progress and heartbeats into a run that belonged to
+  another worker, and could mark that healthy run `failed` from its own error
+  handler. A durable lease (`lease_token`, migration `0028`) is now minted on
+  every grant of ownership and verified under `SELECT … FOR UPDATE` at the
+  start of every batch, in the same transaction as the writes. `finalize`,
+  `fail` and the heartbeat are owner-conditional through the same lock; a
+  replaced worker reports `superseded` and writes nothing at all. The per-item
+  unique constraint was never the safety mechanism here — product writes happen
+  before it.
+
+- **Runs abandoned before migration `0027` were unrecoverable (M3A)** —
+  `heartbeat_at < cutoff` is NULL, never true, for rows that predate the
+  column, so the sweep could not see them and they sat `running` forever.
+  `0028` backfills them, and the sweep now treats a NULL heartbeat as stale
+  once the row itself is older than `STALE_AFTER` — so a legitimately
+  just-started run is still never reclaimed early.
+
+- **One member could exhaust an endpoint quota for a whole workspace (M3A)** —
+  the named endpoint limiter keyed on `tenant` alone. It is now
+  `ratelimit:{name}:tenant:{tenant_id}:user:{user_id}`, taken from verified
+  token claims through a principal the dependency requires, so authentication
+  resolves first by construction and no caller-supplied header can choose a
+  bucket. Two tenants stay isolated, endpoints keep separate names,
+  `Retry-After` is unchanged, there is still one `FixedWindowLimiter`, and the
+  documented fail-open-on-Redis-outage policy is preserved and now tested.
+
 - **A `202` could be returned for an application that was then rolled back
   (M3A)** — the queue hand-off ran as a FastAPI background task, on the
   assumption that yield-dependency teardown (and therefore the commit) happened

@@ -121,7 +121,18 @@ class RuleApplication(TenantScopedBase):
     #: The Celery task holding this run. Set by the claim, and the only way a
     #: redelivery can tell its own retry ("resume") from another worker's
     #: live run ("leave it alone") -- both see status `running`.
+    #:
+    #: Identity, not ownership. A retry of a message carries the *same* task
+    #: id, so two processes can legitimately present it at once; see
+    #: `lease_token`.
     claimed_by_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The fence. Minted fresh on every claim, re-claim and re-lease, so it is
+    #: unique per *attempt* rather than per message. A worker carries the token
+    #: it was issued and every batch is conditional, under a row lock, on that
+    #: token still being the one recorded here -- which is what stops a worker
+    #: whose run was reclaimed from writing a price after a second worker took
+    #: over. NULL whenever the run is unowned (`pending`, or reclaimed).
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Stamped at every batch boundary while a worker holds this run. It is
     #: what makes "stuck" measurable: a `running` row whose heartbeat has gone
