@@ -27,11 +27,10 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.core.context import clear_context, set_tenant_id
+from app.core.context import set_tenant_id
 from app.models.rule_application import (
     ApplicationStatus,
     RuleApplication,
@@ -46,10 +45,19 @@ from app.services.rule_application import (
     RuleApplicationService,
 )
 from app.tasks import pricing as pricing_tasks
+from tests.integration import rule_application_live as live_module
 from tests.integration.rule_application_harness import (
     EnqueueRecorder,
     bind_queue,
     run_task,
+)
+from tests.integration.rule_application_live import (
+    backend_pid,
+    item_targets,
+    live_application,
+    prices_now,
+    read_application,
+    wait_until_blocked,
 )
 from tests.integration.test_rule_application import (
     APPLY,
@@ -698,64 +706,41 @@ class TestTerminalStatesAreNeverRecovered:
 
 
 class TestConcurrentOwnershipAcrossConnections:
-    """The fence under a genuine two-connection race.
+    """The fence under a genuine two-connection race (M3A-H2).
 
     The shared ``db_session`` fixture wraps everything in one transaction, so
     two "workers" driven through it are really one and ``FOR UPDATE`` contends
     with nothing. That is fine for the ownership *logic* above, but it cannot
-    show the lock doing its job. This test therefore commits its own data on
-    its own engine, drives two real connections against it with an explicit
-    barrier, and deletes the tenant afterwards -- the same pattern
-    ``test_product_import_concurrency`` uses.
+    show the lock doing its job, so this commits its own data on its own
+    engine and drives two real connections against it.
+
+    **Nothing here is decided by elapsed time.** The first version of this test
+    slept 0.5 s and then accepted either reclaim outcome, which meant it could
+    not fail on the property it existed to prove. Every rendezvous below is a
+    state PostgreSQL reports — ``pg_blocking_pids()`` — so "the reconciler was
+    unable to proceed" is asserted, and a run in which contention never
+    happened fails rather than passing quietly. The timeouts exist only so a
+    genuine hang is a failure instead of a stall.
     """
 
-    async def test_a_reclaim_arriving_mid_batch_cannot_split_the_batch(
+    async def test_the_reconciler_waits_for_the_batch_lock_and_then_finds_a_live_run(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from app.main import create_application
-
         monkeypatch.setattr(service_module, "APPLICATION_BATCH_SIZE", 2)
-        engine = create_async_engine(settings.database.async_dsn, poolclass=None)
-        factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
-        tenant_id: uuid.UUID | None = None
-        app = create_application()
-        try:
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://testserver"
-            ) as http:
-                from tests.integration.conftest import registration_payload
+        async with live_application(drafts=4, idempotency_key="h2-deterministic") as live:
+            factory = live.session_factory
+            application_id = live.application_id
+            set_tenant_id(live.tenant_id)
 
-                registered = await http.post("/api/v1/auth/register", json=registration_payload())
-                assert registered.status_code == 201, registered.text
-                identity = registered.json()
-                tenant_id = uuid.UUID(identity["identity"]["tenant"]["id"])
-                headers = {"Authorization": f"Bearer {identity['tokens']['accessToken']}"}
-                await create_rule(http, headers)
-
-                async with factory() as seeding:
-                    set_tenant_id(tenant_id)
-                    drafts = [
-                        await seed_draft(seeding, tenant_id, sell_price="30.00") for _ in range(4)
-                    ]
-                    draft_ids = [str(d.id) for d in drafts]
-                    await seeding.commit()
-
-                created = await http.post(
-                    APPLY,
-                    json={"productIds": draft_ids, "idempotencyKey": "real-race"},
-                    headers=headers,
-                )
-                assert created.status_code == 202, created.text
-                application_id = uuid.UUID(created.json()["id"])
-
-            set_tenant_id(tenant_id)
             async with factory() as owner:
                 claim = await RuleApplicationService(owner).claim(
                     application_id, task_id="worker-a"
                 )
                 assert claim.lease is not None
                 lease = claim.lease
-                # Make it look abandoned so the reconciler's predicate matches.
+                # Backdate the heartbeat so the reconciler's predicate matches
+                # and the only thing standing between it and the row is the
+                # lock this test is about.
                 await owner.execute(
                     sa.update(RuleApplication)
                     .where(RuleApplication.id == application_id)
@@ -769,78 +754,87 @@ class TestConcurrentOwnershipAcrossConnections:
                 observed = await RuleApplicationService(owner).observe(application_id)
                 assert observed is not None
 
-            batch_started = asyncio.Event()
-            reclaim_attempted = asyncio.Event()
+            batch_written = asyncio.Event()
+            reconciler_pid_known = asyncio.Event()
+            reconciler_is_blocked = asyncio.Event()
+            state: dict[str, Any] = {}
+            pids: dict[str, int] = {}
 
-            async def worker_batch() -> BatchOutcome:
-                set_tenant_id(tenant_id)
+            async def worker_batch() -> None:
+                """Hold the row lock across the batch's writes, then commit."""
+                set_tenant_id(live.tenant_id)
                 async with factory() as session:
-                    service = RuleApplicationService(session)
-                    # Takes the row lock, then holds the transaction open while
-                    # the reconciler tries to take the run away.
-                    outcome = await service.run_next_batch(application_id, lease=lease)
-                    batch_started.set()
-                    await asyncio.wait_for(reclaim_attempted.wait(), timeout=10)
+                    pids["worker"] = await backend_pid(session)
+                    outcome = await RuleApplicationService(session).run_next_batch(
+                        application_id, lease=lease
+                    )
+                    state["batch"] = outcome
+                    batch_written.set()
+                    # Commit only once the reconciler is provably stuck behind
+                    # this transaction's lock.
+                    await asyncio.wait_for(reconciler_is_blocked.wait(), timeout=30)
                     await session.commit()
-                    return outcome
 
-            async def reconciler() -> bool:
-                await asyncio.wait_for(batch_started.wait(), timeout=10)
-                set_tenant_id(tenant_id)
+            async def reconciler() -> None:
+                set_tenant_id(live.tenant_id)
                 async with factory() as session:
-                    try:
-                        # Blocks on the batch's row lock until it commits.
-                        return await asyncio.wait_for(
-                            RuleApplicationService(session).reclaim_stale(observed=observed),
-                            timeout=10,
-                        )
-                    finally:
-                        await session.commit()
-                        reclaim_attempted.set()
-
-            async def release() -> None:
-                # The reclaim blocks on the lock, so the batch must be told to
-                # commit before the reconciler can finish. Ordering the two
-                # this way is the point of the test: the batch is atomic with
-                # respect to recovery.
-                await asyncio.wait_for(batch_started.wait(), timeout=10)
-                await asyncio.sleep(0.5)
-                reclaim_attempted.set()
-
-            outcome, reclaimed, _ = await asyncio.gather(worker_batch(), reconciler(), release())
-
-            assert outcome is BatchOutcome.MORE, "the batch that held the lock completed"
-            # Whether the reclaim wins depends on which side the lock releases
-            # to first; what must hold either way is that the batch was never
-            # half-applied and the cursor matches the recorded rows.
-            async with factory() as check:
-                record = (
-                    await check.execute(
-                        sa.select(RuleApplication).where(RuleApplication.id == application_id)
+                    pids["reconciler"] = await backend_pid(session)
+                    reconciler_pid_known.set()
+                    await asyncio.wait_for(batch_written.wait(), timeout=30)
+                    state["reclaimed"] = await RuleApplicationService(session).reclaim_stale(
+                        observed=observed
                     )
-                ).scalar_one()
-                items = int(
-                    (
-                        await check.execute(
-                            sa.select(sa.func.count())
-                            .select_from(RuleApplicationItem)
-                            .where(RuleApplicationItem.application_id == application_id)
-                        )
-                    ).scalar_one()
+                    await session.commit()
+
+            async def prove_contention() -> None:
+                await asyncio.wait_for(batch_written.wait(), timeout=30)
+                await asyncio.wait_for(reconciler_pid_known.wait(), timeout=30)
+                state["blockers"] = await wait_until_blocked(
+                    factory, pids["reconciler"], what="reconciler"
                 )
-            assert record.processed_count == 2
-            assert items == 2, "exactly the batch that committed, whoever won the race"
-            if reclaimed:
-                assert record.status is ApplicationStatus.PENDING
-                assert record.lease_token is None
-            else:
-                assert record.status is ApplicationStatus.RUNNING
-                assert record.lease_token == lease.token
-        finally:
-            clear_context()
-            if tenant_id is not None:
-                async with engine.begin() as conn:
-                    await conn.execute(
-                        sa.text("DELETE FROM tenants WHERE id = :id"), {"id": str(tenant_id)}
-                    )
-            await engine.dispose()
+                reconciler_is_blocked.set()
+
+            await asyncio.gather(worker_batch(), reconciler(), prove_contention())
+
+            # 1-2. The reconciler could not touch the row while the batch held
+            # it, and PostgreSQL names the worker as the backend blocking it.
+            assert state["blockers"], "the reconciler never contended for the row lock"
+            assert pids["worker"] in state["blockers"], (
+                f"expected the worker ({pids['worker']}) to be the blocker, got {state['blockers']}"
+            )
+            # 3. Released only after the batch committed, the CAS re-evaluated
+            # the heartbeat the batch had just moved and took nothing.
+            assert state["batch"] is BatchOutcome.MORE
+            assert state["reclaimed"] is False, "a live run was reclaimed out from under a batch"
+
+            record = await read_application(factory, application_id)
+            assert record.processed_count == 2, "the cursor advanced more than once"
+            assert record.status is ApplicationStatus.RUNNING
+            assert record.recovery_count == 0, "recovery_count moved for a healthy run"
+            assert record.lease_token == lease.token, "the worker lost its lease"
+
+            targets = await item_targets(factory, application_id)
+            assert len(targets) == 2, "the batch was split or repeated"
+            assert len(targets) == len(set(targets)), "a target got two result rows"
+
+            priced = await prices_now(factory, live.draft_ids)
+            repriced = [p for p in priced.values() if p == Decimal("21.0000")]
+            assert len(repriced) == 2, "every product in the batch is priced exactly once"
+
+    async def test_a_batch_that_never_contends_is_reported_rather_than_assumed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative control for the helper the test above relies on.
+
+        If ``wait_until_blocked`` could pass without real contention, the whole
+        deterministic claim would be worthless. Here nobody holds the row, so
+        it must raise instead of returning.
+        """
+        monkeypatch.setattr(service_module, "APPLICATION_BATCH_SIZE", 2)
+        async with live_application(drafts=2, idempotency_key="h2-control") as live:
+            factory = live.session_factory
+            async with factory() as idle:
+                pid = await backend_pid(idle)
+                monkeypatch.setattr(live_module, "HANG_GUARD_SECONDS", 0.5)
+                with pytest.raises(AssertionError, match="never blocked"):
+                    await wait_until_blocked(factory, pid, what="idle backend")
