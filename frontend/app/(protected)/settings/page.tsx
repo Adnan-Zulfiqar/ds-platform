@@ -1,4 +1,4 @@
-import { ChevronRight, CreditCard, Plug, User, Users } from "lucide-react";
+import { ChevronRight, CreditCard, Plug, SlidersHorizontal, User, Users } from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType } from "react";
@@ -35,6 +35,13 @@ const SECTIONS: readonly SettingsSection[] = [
     label: "Integrations",
     description: "Connect suppliers and sales channels.",
     icon: Plug,
+    available: true,
+  },
+  {
+    href: "/settings/global-rules",
+    label: "Global Rules",
+    description: "Pricing and shipping rules applied across your catalogue.",
+    icon: SlidersHorizontal,
     available: true,
   },
   {

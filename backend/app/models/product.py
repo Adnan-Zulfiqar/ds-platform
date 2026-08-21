@@ -269,6 +269,35 @@ class Product(TenantScopedBase):
     delivery_time_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ship_to_country: Mapped[str | None] = mapped_column(String(8), nullable=True)
     shipping_cost: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+
+    # --- M3A pricing outcome ------------------------------------------------
+    #
+    # Evidence of how the current price was reached, written whenever a global
+    # rule prices this product. Stored on the product rather than derived on
+    # read because a rule edited afterwards would otherwise make every past
+    # price unexplainable -- the version is the link back to the exact
+    # arithmetic.
+    applied_pricing_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
+    applied_pricing_rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_shipping_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
+    applied_shipping_rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The landed cost the stored price was actually derived from.
+    landed_cost: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    landed_cost_fees: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    pricing_calculated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: Held out of automatic publishing until a human looks. Empty list means
+    #: nothing is wrong; the flag and the reasons move together so a product
+    #: can never be flagged without saying why.
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    pricing_review_reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     warehouse_origin: Mapped[str | None] = mapped_column(String(64), nullable=True)
     requires_shipping: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     hs_code: Mapped[str | None] = mapped_column(String(32), nullable=True)

@@ -19,7 +19,7 @@ The resolution chain:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -32,8 +32,10 @@ from app.core.exceptions import (
     AuthenticationError,
     NotFoundError,
     PermissionDeniedError,
+    RateLimitExceededError,
 )
 from app.core.logging import get_logger
+from app.core.rate_limit import limiter
 from app.core.redis import CacheClient
 from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
@@ -364,6 +366,74 @@ def get_tenant_repository(session: DbSession) -> TenantRepository:
 TenantRepo = Annotated[TenantRepository, Depends(get_tenant_repository)]
 
 
+def endpoint_rate_limit(
+    name: str, *, limit: int, window_seconds: int
+) -> Callable[[Request, AuthenticatedUser | None], Awaitable[None]]:
+    """A tighter, named quota for one expensive endpoint.
+
+    The broad middleware quota is sized for ordinary browsing, which is far too
+    generous for endpoints that price a catalogue or start background work. This
+    adds a second, narrower counter on top of it — through the *same* limiter, so
+    there is still one implementation of the window, the circuit breaker and the
+    fail-open policy.
+
+    Counted per **tenant and user together**, falling back to client IP for
+    traffic that has neither. Both halves are load-bearing. Tenant alone was
+    wrong: one member of a workspace holding down a preview would exhaust the
+    quota for every colleague, which turns a limiter meant to blunt abuse into
+    a way for any single seat to deny the whole account. User alone would be
+    worse, since a user id is only unique within a tenant here.
+
+    The identity comes from ``principal`` — the verified token claims, resolved
+    by FastAPI *before* this dependency runs because this dependency asks for
+    it. That ordering is structural rather than a matter of parameter order,
+    and it is why no header, query parameter or context value a caller controls
+    can choose which bucket to spend. An unauthenticated request has no
+    principal and is counted by address; it cannot name a tenant at all.
+
+    Fails open with Redis, exactly as the middleware does. A cache outage
+    degrading to "no quota" is the deliberate trade; a cache outage that took
+    down pricing would be worse.
+    """
+
+    async def dependency(request: Request, principal: OptionalPrincipal) -> None:
+        if not settings.security.rate_limit_enabled:
+            return
+
+        if principal is not None:
+            identity = f"tenant:{principal.tenant_id}:user:{principal.user_id}"
+        else:
+            forwarded = request.headers.get("x-forwarded-for")
+            identity = (
+                forwarded.split(",")[0].strip()
+                if forwarded
+                else (request.client.host if request.client else "unknown")
+            )
+            identity = f"ip:{identity}"
+
+        decision = await limiter.consume(
+            f"ratelimit:{name}:{identity}", limit=limit, window=window_seconds
+        )
+        if not decision.allowed:
+            # Structured fields rather than the composed key: a log line is
+            # searchable by tenant without anyone parsing a string, and the
+            # identifiers stay out of the response the caller receives.
+            logger.warning(
+                "endpoint_rate_limit_exceeded",
+                endpoint=name,
+                tenant_id=str(principal.tenant_id) if principal else None,
+                user_id=str(principal.user_id) if principal else None,
+                limit=limit,
+            )
+            raise RateLimitExceededError(
+                "You are making changes faster than they can be calculated. "
+                "Please wait a moment and try again.",
+                retry_after_seconds=decision.retry_after,
+            )
+
+    return dependency
+
+
 __all__ = [
     "BearerCredentials",
     "Cache",
@@ -380,6 +450,7 @@ __all__ = [
     "RoleRepo",
     "TenantRepo",
     "UserRepo",
+    "endpoint_rate_limit",
     "get_cache",
     "get_current_principal",
     "get_current_tenant",

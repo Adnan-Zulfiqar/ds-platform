@@ -17,6 +17,7 @@ unit of risk — import/editor/publish is the spine every later milestone
 | M2A | Premium Editor Foundation — concurrency & edit-gating hardening | M1 | **Delivered, acceptance-fix pass applied 2026-08-13** (see [M2_PREMIUM_EDITOR.md](M2_PREMIUM_EDITOR.md)) |
 | M2B | Premium Product Editor — rich-text description | M2A | **Delivered** |
 | M2C–E | Premium Product Editor — remaining scope (see below) | M2A | Planned |
+| M3A | Global Pricing & Shipping Rules | M1, M2A | **Delivered** (see [M3A_GLOBAL_PRICING_RULES.md](M3A_GLOBAL_PRICING_RULES.md)) |
 | M3 | Publish-to-Store Hardening & Multi-Store Publish | M1, existing Shopify OAuth | Planned |
 | M4 | Bulk Import & Feed-Based Sourcing | M1 | Planned |
 | M5 | Order → Fulfilment Bridge (tracking push-back) | Existing order sync | Planned |
@@ -26,6 +27,43 @@ unit of risk — import/editor/publish is the spine every later milestone
 | M9 | Supplier Optimization & Repricing Intelligence | M7 | Planned |
 
 ---
+
+## M3A — Global Pricing & Shipping Rules
+
+**Status: delivered.** Full report:
+[M3A_GLOBAL_PRICING_RULES.md](M3A_GLOBAL_PRICING_RULES.md).
+
+| Sub-milestone | Scope | Status |
+|---|---|---|
+| M3A-1 | Calculation core: landed cost, four strategies, rounding, scope precedence, shipping selection | Delivered |
+| M3A-2 | Versioned rules, append-only history, management API | Delivered |
+| M3A-3 | Import integration, read-only impact preview, confirmed bulk application | Delivered |
+| M3A-3 acceptance fix | Direct import-path tests; real Celery execution with atomic claim, resumable batches and a stated cancellation policy | Delivered |
+| M3A-4A | Settings → Global Rules management UI | Delivered |
+| M3A-4B | Draft impact & bulk-application UI, crash recovery, throttling, target lookup | Delivered |
+
+**Nothing in M3A is outstanding.** Rules are configured, applied at import,
+previewed against existing drafts, and applied in bulk on the Celery queue,
+with crash recovery and an audit trail.
+
+The defects this milestone surfaced are worth keeping in view, because each was
+invisible to the tests that existed at the time:
+
+* **Variant-scoped pricing rules never reached the resolver** — the repository
+  never fetched them. Unit tests of the precedence logic passed throughout.
+* **A misconfigured rule could roll back an entire import**, losing the
+  supplier snapshot that had just been written.
+* **A cross-currency rule priced silently** against a mismatched cost.
+* **The publish ran before the commit** — a FastAPI background task looked like
+  the right place for the queue hand-off and is not, so a `202` was handed out
+  for an application the request then rolled back. Found only by running a real
+  worker.
+* **Celery tasks shared one database engine across `asyncio.run` loops**, so
+  the second task in a worker failed on a connection belonging to a dead loop.
+  Fixed for the pricing tasks; the same latent bug remains in the other task
+  modules and is recorded as outstanding work.
+
+The pattern is consistent: every one of them needed the real thing running.
 
 ## M1 — AliExpress Product Import → Editable Draft
 

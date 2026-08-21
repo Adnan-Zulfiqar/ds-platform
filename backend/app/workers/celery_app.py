@@ -110,6 +110,13 @@ celery_app.conf.update(
             "task": "pricing.recalculate",
             "schedule": 60 * 60 * 12,
         },
+        # Every five minutes. A merchant watching a progress bar that has
+        # stopped needs it to resume in minutes, not hours -- and the sweep is
+        # one indexed query when nothing is wrong.
+        "pricing-reconcile-applications": {
+            "task": "pricing.reconcile_applications",
+            "schedule": 60 * 5,
+        },
         "automation-run": {
             "task": "automation.run",
             "schedule": 60 * 60,

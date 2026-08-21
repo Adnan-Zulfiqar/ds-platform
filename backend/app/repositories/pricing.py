@@ -30,18 +30,31 @@ class PricingRuleRepository(TenantScopedRepository[PricingRule]):
         self,
         *,
         product_id: uuid.UUID,
-        store_id: uuid.UUID | None,
-        category_id: str | None,
+        variant_id: uuid.UUID | None = None,
+        store_id: uuid.UUID | None = None,
+        category_id: str | None = None,
     ) -> list[PricingRule]:
-        """Active rules that could apply to this product, broadest match first.
+        """Active rules that could apply here, broadest match first.
 
         The engine picks the narrowest matching scope among these; fetching
         candidates in one query avoids N lookups per product during a bulk apply.
+
+        ``variant_id`` must be included for a variant-scoped rule to be
+        selectable at all. Omitting it does not merely change precedence --
+        the rule never reaches the resolver, so the narrowest scope in the
+        model silently could not win anywhere. This has to keep mirroring
+        ``ShippingRuleRepository.find_candidates`` exactly: the two feed one
+        shared resolver, and a difference between them is a difference in
+        precedence that no test of the resolver itself can see.
         """
         clauses = [PricingRule.scope == PricingScope.GLOBAL]
         clauses.append(
             (PricingRule.scope == PricingScope.PRODUCT) & (PricingRule.product_id == product_id)
         )
+        if variant_id is not None:
+            clauses.append(
+                (PricingRule.scope == PricingScope.VARIANT) & (PricingRule.variant_id == variant_id)
+            )
         if store_id is not None:
             clauses.append(
                 (PricingRule.scope == PricingScope.STORE) & (PricingRule.store_id == store_id)

@@ -12,6 +12,64 @@ production release.
 
 ### Added
 
+- **M3A-4B — Draft impact, bulk application UI, and final M3A hardening** —
+  **Settings → Global Rules → Preview and Impact**: what the active rules would
+  do to existing drafts, with search, filters, per-product and per-variant
+  figures, and a confirmation stating selected / ready / held / published /
+  expected changes before anything is written. Missing figures read
+  "Unavailable", never zero. Selection never enumerates the catalogue: "select
+  all matching" sends the *filter*, and the server expands it once into a
+  durable snapshot capped at 5000. `202` returns a `pending` run; the screen
+  polls to a terminal state and stops, and the application id and open section
+  live in the URL so a refresh resumes the same run rather than starting
+  another. Results are per item, filterable by outcome, and a partial run shows
+  its successes. Published products are marked, unselectable, excluded from
+  select-all and refused by the service.
+
+  Rules are now scoped **by name**: `GET /global-rules/targets/{kind}` returns
+  labels and ids for products, variants, categories and stores, behind a
+  keyboard-operable combobox, with raw identifier entry kept as an explicit
+  advanced fallback.
+
+  Hardening: a heartbeat plus `pricing.reconcile_applications` recovers runs
+  abandoned by a crashed worker without ever stealing a healthy one; concurrent
+  rule-version writes return `409` with a merchant-facing message; preview,
+  impact and apply carry named per-tenant quotas through the *same* limiter as
+  the global middleware; and `scripts/verify_rule_version_integrity.py` reports
+  on the deferred typed-reference constraint without touching data. Migration
+  `0027`, additive. **M3A is complete.**
+
+- **M3A-4A — Global Rules management UI** — **Settings → Global Rules**
+  (`/settings/global-rules`): pricing rules, shipping rules, application
+  behaviour, a live calculator and append-only rule history, on one route.
+  Strategy fields appear only when the selected strategy uses them; scope
+  controls show only the identifier that scope needs; markup versus gross
+  margin is explained with a worked example. **Every live figure comes from
+  `POST /global-rules/preview`** — no pricing formula is duplicated in
+  TypeScript. Updates and activations carry `expectedUpdatedAt`, and a 409
+  raises a banner offering *Reload latest version* or *Keep my changes*; there
+  is no autosave and no mutation on page load. Owners and admins manage;
+  everyone else reads, previews and reads history, with mutation controls
+  absent rather than disabled. Two supporting API additions: the preview now
+  returns `priceBeforeRounding`, and rule history is paginated in the standard
+  `Page` envelope. The draft impact and bulk-application screen is **M3A-4B**
+  and is not included. See
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md`.
+
+- **M3A — Global pricing and shipping rules** (backend only; UI is M3A-4) —
+  one calculation shared by import, a read-only impact preview and a confirmed
+  bulk application. Scope precedence
+  `variant > product > category > store > global`, versioned rules with an
+  append-only history, and a fail-closed engine that returns a
+  machine-readable reason instead of a price whenever a supplier figure is
+  missing. Confirmed applications run on the **existing Celery queue**: the
+  API returns `202` with a `pending` run, the worker claims it atomically,
+  processes bounded batches that resume correctly after a retry, and records
+  one result row per item including the ones nothing happened to. The broker
+  payload is a single application id, and the tenant is read from the row
+  rather than the message. Migrations `0023`-`0026`, all additive. See
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md`.
+
 - **M2B — Rich-text product description** — TipTap 3 editor
   (`rich-text-description-editor.tsx`) replaces the raw-HTML `<textarea>` on
   the draft editor's Description tab. **Storage format unchanged** (sanitized
@@ -30,6 +88,96 @@ production release.
   (M24B/M24C remain).
 
 ### Fixed
+
+- **Recovery of a stuck bulk application never actually resumed it (M3A)** —
+  the reconciler cleared `claimed_by_task_id` but left the row `running`, so
+  the message it published reached a worker that saw a `running` row owned by
+  someone else, reported `already_running` and processed nothing. Every
+  recovery logged `requeued` and rescued nothing. Recovery now returns the run
+  to `pending` and unowned in one conditional UPDATE, commits, and *then*
+  publishes; the new delivery takes it through the ordinary `pending → running`
+  claim under its own real Celery task id, and resumes from the durable cursor.
+  The reclaim is pinned to the exact status, heartbeat, lease and recovery
+  count the sweep observed, so a worker that checked in keeps its run and two
+  racing reconcilers reclaim exactly once. A failed publish leaves the run
+  `pending` with `enqueued_at` NULL, which the pending sweep repairs.
+
+- **A worker whose run had been taken over kept writing to it (M3A)** — the
+  worker claimed once and then looped over batches with nothing re-checking
+  ownership, so a reclaimed worker carried on writing prices, `PriceChange`
+  rows, result rows, progress and heartbeats into a run that belonged to
+  another worker, and could mark that healthy run `failed` from its own error
+  handler. A durable lease (`lease_token`, migration `0028`) is now minted on
+  every grant of ownership and verified under `SELECT … FOR UPDATE` at the
+  start of every batch, in the same transaction as the writes. `finalize`,
+  `fail` and the heartbeat are owner-conditional through the same lock; a
+  replaced worker reports `superseded` and writes nothing at all. The per-item
+  unique constraint was never the safety mechanism here — product writes happen
+  before it.
+
+- **Runs abandoned before migration `0027` were unrecoverable (M3A)** —
+  `heartbeat_at < cutoff` is NULL, never true, for rows that predate the
+  column, so the sweep could not see them and they sat `running` forever.
+  `0028` backfills them, and the sweep now treats a NULL heartbeat as stale
+  once the row itself is older than `STALE_AFTER` — so a legitimately
+  just-started run is still never reclaimed early.
+
+- **One member could exhaust an endpoint quota for a whole workspace (M3A)** —
+  the named endpoint limiter keyed on `tenant` alone. It is now
+  `ratelimit:{name}:tenant:{tenant_id}:user:{user_id}`, taken from verified
+  token claims through a principal the dependency requires, so authentication
+  resolves first by construction and no caller-supplied header can choose a
+  bucket. Two tenants stay isolated, endpoints keep separate names,
+  `Retry-After` is unchanged, there is still one `FixedWindowLimiter`, and the
+  documented fail-open-on-Redis-outage policy is preserved and now tested.
+
+- **A `202` could be returned for an application that was then rolled back
+  (M3A)** — the queue hand-off ran as a FastAPI background task, on the
+  assumption that yield-dependency teardown (and therefore the commit) happened
+  first. It does not: Starlette awaits background tasks inside the response
+  call, still within the session's scope. The worker looked up a row its own
+  request had not written, the `NotFoundError` escaped after the response had
+  started, and the whole transaction rolled back. The message is now published
+  from an `after_commit` hook, and `reconcile_applications` republishes any
+  `pending` run the broker never accepted. Found by running a real worker.
+- **Every Celery task shared one database engine across `asyncio.run` loops
+  (M3A)** — the engine is a module-level singleton whose pooled connections
+  belong to the loop that opened them, so the *second* task in a worker failed
+  with `'NoneType' object has no attribute 'send'`. Fixed for the pricing tasks
+  by disposing the engine before the loop closes; **the same latent bug remains
+  in the other task modules** and is recorded in
+  `docs/dsers-parity/M3A_GLOBAL_PRICING_RULES.md` §7.
+- **Database constraint text was returned to API clients (all repositories)** —
+  `TenantScopedRepository._translate_integrity_error` put the raw driver
+  message into `details`, which is serialised into the error envelope, so any
+  client able to provoke a duplicate received index names, column names and the
+  offending values. The text now goes to the log, and the response carries the
+  correlation id that ties the two together.
+
+- **Rule history was an unbounded result set (M3A)** —
+  `GET /global-rules/{kind}/{id}/history` returned every version of a rule as a
+  bare array. History is append-only, so a long-lived rule's trail grows
+  without limit; it is now paginated and returns the same `Page` envelope as
+  every other list endpoint in the API.
+
+- **Variant-scoped pricing rules never applied anywhere (M3A)** —
+  `PricingRuleRepository.find_candidates` had no `variant_id` clause, unlike
+  its shipping twin, so a variant-scoped rule was never in the candidate set
+  the resolver chose from. The resolver ranked variant highest and simply
+  never saw one, which is why unit tests of the precedence logic passed
+  throughout. The narrowest scope in the model was silently dead at import, in
+  preview and in bulk apply.
+- **A misconfigured pricing rule could fail an entire import (M3A)** —
+  `compute_sell_price` raises when a strategy is missing the field it needs,
+  and `_apply_global_rules` did not catch it, so the exception rolled back the
+  transaction that had just written the supplier snapshot and the merchant got
+  no draft at all. Pricing failures now flag the draft
+  (`pricing_calculation_failed`) and let the import complete.
+- **A rule denominated in another currency priced silently (M3A)** — the M3A
+  path did no currency check, so a GBP rule's `min_price`, `max_price`,
+  `markup_fixed`, `min_profit` and `fees_fixed` were applied to a USD cost as
+  though the numbers were comparable. It now fails closed with
+  `fx_rate_unavailable`.
 
 - **Draft description saves no longer write on every autosave (M2B)** —
   `ProductService.update_product` sanitized the description *after* the

@@ -134,7 +134,7 @@ disallow_subclassing_any = false
 [[tool.mypy.overrides]]
 module = [
     "app.core.redis",
-    "app.middleware.rate_limit",
+    "app.core.rate_limit",
     "app.integrations.rate_limiter",
 ]
 disallow_untyped_calls = false
