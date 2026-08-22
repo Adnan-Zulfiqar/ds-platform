@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis_clients
 from app.database.session import dispose_engine
+from app.integrations.shopify.graphql import close_shopify_graphql_client
 from app.middleware import (
     RateLimitMiddleware,
     RequestContextMiddleware,
@@ -56,6 +57,10 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     logger.info("application_stopping")
     await dispose_engine()
     await close_redis_clients()
+    # The Shopify GraphQL pool is process-wide and credential-free; closing it
+    # here is the same courtesy as the database pool -- without it, in-flight
+    # TLS connections are severed rather than drained.
+    await close_shopify_graphql_client()
     logger.info("application_stopped")
 
 

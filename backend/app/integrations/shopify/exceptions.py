@@ -45,6 +45,86 @@ class ShopifyRateLimitError(ShopifyError):
     retryable = True
 
 
+class ShopifyGraphQLError(ShopifyError):
+    """Shopify returned a GraphQL response this platform will not act on.
+
+    Separate from :class:`ShopifyResponseError` because the failure modes are
+    genuinely different: a REST response error is about HTTP, while this covers
+    a transport-level 200 whose *body* says the operation did not succeed.
+    Collapsing the two would make "did Shopify do the thing" unanswerable from
+    the error type alone.
+    """
+
+    code = "shopify_graphql_error"
+    message = "Shopify's GraphQL API returned errors."
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        upstream_code: str | None = None,
+        details: dict[str, Any] | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        merged: dict[str, Any] = {**(details or {})}
+        if request_id:
+            # Shopify's own request id, which is what their support asks for.
+            # Safe to surface: it identifies a request, not its contents.
+            merged["shopifyRequestId"] = request_id
+        super().__init__(message, upstream_code=upstream_code, details=merged)
+        self.request_id = request_id
+
+
+class ShopifyThrottledError(ShopifyGraphQLError):
+    """The GraphQL `THROTTLED` code, or an HTTP 429 on the GraphQL endpoint."""
+
+    code = "shopify_graphql_throttled"
+    message = "Shopify is throttling this app's GraphQL requests."
+    retryable = True
+
+
+class ShopifyQueryCostError(ShopifyGraphQLError):
+    """`MAX_COST_EXCEEDED` — the document is too expensive to ever run.
+
+    Explicitly **not** retryable. The same document will cost the same next
+    time, so retrying converts a fixable authoring mistake into a slow outage.
+    """
+
+    code = "shopify_graphql_cost_exceeded"
+    message = "The Shopify GraphQL query exceeds the maximum permitted cost."
+    retryable = False
+
+
+class ShopifyUserError(ShopifyGraphQLError):
+    """A mutation ran and Shopify refused the change via ``userErrors``.
+
+    Transport succeeded. This is the failure that a naive client reports as
+    success, which is why it has its own type rather than being folded into a
+    generic response error.
+    """
+
+    code = "shopify_user_error"
+    message = "Shopify rejected the requested change."
+    retryable = False
+
+
+class ShopifyGidError(ValidationError):
+    code = "shopify_invalid_gid"
+    message = "A Shopify global identifier was missing or malformed."
+
+
+class ShopifyPaginationError(ShopifyError):
+    """Cursor pagination could not be continued safely.
+
+    A missing cursor, a repeated cursor or a page budget exhausted. All three
+    mean "stop", never "loop again" — an unbounded catalogue walk against a
+    merchant's shop is a self-inflicted outage.
+    """
+
+    code = "shopify_pagination_error"
+    message = "Shopify pagination could not be continued safely."
+
+
 class ShopifyResponseError(ShopifyError):
     code = "shopify_response_error"
 

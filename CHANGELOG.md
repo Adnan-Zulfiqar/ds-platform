@@ -12,6 +12,48 @@ production release.
 
 ### Added
 
+- **GQL-1 — Shopify Admin GraphQL client foundation and complete REST
+  inventory.** The first Shopify App Store launch-readiness phase. Shopify
+  requires new public apps to use GraphQL exclusively, and this platform makes
+  twelve versioned Admin REST calls; every one is a submission blocker.
+
+  `ShopifyGraphQLClient` is the single surface future operations go through:
+  pinned to `2026-07` via its own setting (separate from the REST version, since
+  the two are on different clocks, and validated so `latest` is refused at
+  configuration load rather than at the first request); canonical-domain only,
+  normalising nothing, rejecting schemes, ports, paths, IPs and suffix
+  lookalikes through the *existing* OAuth domain authority rather than a second
+  validator; redirects not followed; the token absent from `repr`, logs and
+  exceptions, and absent from the shared connection pool, which carries no
+  credentials at all.
+
+  Responses are typed and carry Shopify's request id and the full
+  `extensions.cost` block, parsed defensively so malformed telemetry can never
+  fail a good response. Top-level `errors` **fail closed** even when `data` is
+  partially populated — `allow_partial_data` exists to make the alternative
+  explicit and is unused. Mutation `userErrors` are a typed failure through a
+  contract that takes the mutation field name from the caller, and a document
+  that forgot to select them is refused rather than read as success. Queries
+  retry only timeouts, 429, 502/503/504 and `THROTTLED`, with `Retry-After`,
+  cost-derived and exponential waits all bounded and jittered; `MAX_COST_EXCEEDED`
+  is never retried, and **mutations never retry automatically**.
+
+  Also: a `ShopifyGid` value object with no API that accepts an array index (a
+  previous generation derived variant identity from position and repriced the
+  wrong variant), and bounded cursor-pagination helpers that refuse a repeated
+  cursor or `hasNextPage` with no `endCursor`.
+
+  `docs/shopify-graphql/` gains the inventory in both Markdown and JSON — twins
+  guarded by a test so they cannot drift — plus the foundation decision record
+  and the six-phase roadmap. Ten of fifteen proposed replacements are marked
+  `unverified` on purpose: the exact 2026-07 fields have not been read yet, and
+  guessing would be worse than the gap.
+
+  **No REST call was migrated, no behaviour changed, no migration added, and no
+  live Shopify request was made** — every test runs through
+  `httpx.MockTransport`.
+
+
 - **M3A-4B — Draft impact, bulk application UI, and final M3A hardening** —
   **Settings → Global Rules → Preview and Impact**: what the active rules would
   do to existing drafts, with search, filters, per-product and per-variant
