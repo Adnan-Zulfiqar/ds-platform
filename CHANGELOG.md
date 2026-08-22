@@ -10,6 +10,72 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GQL-2 acceptance fix — a connected Shopify store can no longer hide broken
+  webhooks.** An independent review returned `GQL-2 requires fixes` on one
+  blocking finding, and it was a real one: OAuth completion ran webhook
+  registration inside a best-effort `try/except` and threw the `ReconcileReport`
+  away, so the merchant was redirected with `shopify=connected` whatever had
+  happened. `webhooks_registered_at` stayed null, the card rendered *Connected*,
+  and the card's only recovery control was gated on the status *not* being
+  connected — so the store that needed it was the one that could not see it. The
+  amber note said "reconnect if sync stalls" next to a hidden reconnect button.
+  The only way out was disconnecting a perfectly valid OAuth connection.
+
+  Keeping the connection was right; presenting it as healthy was not. A store is
+  now disconnected, connected-and-webhook-healthy, or connected-but-degraded,
+  all **derived from the existing persisted authority** — `webhook_health()`
+  reads `status` and `webhooks_registered_at` and there is no new column, because
+  a second health field could only ever disagree with the timestamp it duplicates.
+  The API returns `webhookHealth` so no client has to invent its own rule for
+  what a null timestamp means; the rule the frontend had invented was "assume
+  connected".
+
+  New admin-only endpoint
+  `POST /api/v1/integrations/shopify/stores/{store_id}/webhooks/reconcile`. Not
+  `/shopify/webhooks/reconcile`, which shares a prefix with the unauthenticated
+  HMAC webhook receiver and would be matched as a topic named "reconcile" the
+  moment declaration order changed. It calls the *same* reconciler OAuth uses —
+  no second implementation and no queue — lists every page before creating,
+  never replays a mutation whose outcome is unknown, stamps
+  `webhooks_registered_at` only on a fully healthy report, and returns 200 with
+  an explicit degraded verdict rather than a fake success. A viewer gets 403; a
+  foreign store id is indistinguishable from an unknown one.
+
+  The OAuth callback now consumes the report: `shopify=connected` only when it is
+  healthy, otherwise `shopify=connected_webhooks_degraded` — a distinct value
+  rather than a flag, so an older frontend cannot fall back to rendering full
+  success. No secret or raw error text goes in the query string.
+
+  The Shopify card shows the degraded state, explains that product, inventory and
+  order updates may be missed, and offers **Retry webhook setup** while the store
+  stays connected. The outcome lands in a polite live region that takes focus
+  when the retry settles; viewers see the warning and a read-only explanation but
+  no control; nothing fires on render and the mutation does not self-retry.
+
+  Lock contention (finding F-02) is now bounded: `lock_for_update` takes a
+  `lock_timeout` of 10s, expressed as PostgreSQL's own setting rather than an
+  application timer, scoped with `SET LOCAL` and reset immediately after the lock
+  statement so it governs acquiring that row and nothing else. Expiry becomes
+  `shopify_webhook_reconcile_busy` (409) instead of an unhandled 500. The
+  critical section is unchanged, different stores still do not block each other,
+  and `shopify_webhook_reconcile_finished` now logs `lock_wait_ms` and
+  `duration_ms` on every outcome.
+
+  Documentation corrections: the three mandatory privacy webhooks are assigned to
+  a named milestone, **`SHOPIFY-COMPLIANCE-1`**, marked as blocking App Store
+  submission; the claim that an automated webhook "recovery path" existed is
+  withdrawn — recovery is deterministic but **manual**, and a scheduled sweep is
+  recorded as `SHOPIFY-OPS-1`, unowned; and the inventory test count now
+  distinguishes the 11 newly added drift tests from the file's 25 total.
+
+  Red-before: the new backend acceptance suite was written first and run against
+  the accepted candidate — 17 failed, 3 passed. Green after: 20 passed. Frontend
+  coverage is 12 Playwright tests across two projects with the Shopify payloads
+  **mocked**, labelled as such in the file; the same flow runs against real
+  PostgreSQL in the backend suite.
+
 ### Added
 
 - **GQL-2 — shop currency authority and webhook reconciliation on GraphQL.**

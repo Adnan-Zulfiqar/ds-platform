@@ -115,6 +115,17 @@ export interface AliExpressConnection {
   lastError: string | null;
 }
 
+/**
+ * Whether a connected store's webhooks can be trusted.
+ *
+ * Derived by the API from `status` and `webhooksRegisteredAt` — it is not a
+ * separate stored field, so it cannot disagree with the timestamp. It exists
+ * because the client used to have to invent its own rule for what a null
+ * timestamp meant, and the rule it invented was "assume connected", which hid
+ * stores that were missing every product, inventory and order subscription.
+ */
+export type ShopifyWebhookHealth = "healthy" | "degraded" | "not_applicable";
+
 export interface ShopifyConnection {
   id: string;
   storeId: string;
@@ -124,6 +135,32 @@ export interface ShopifyConnection {
   connectedAt: string;
   lastSyncAt: string | null;
   lastError: string | null;
+  webhooksRegisteredAt: string | null;
+  webhookHealth: ShopifyWebhookHealth;
+}
+
+/** What reconciliation did about one topic. */
+export interface ShopifyWebhookTopicResult {
+  topic: string;
+  status: "already_present" | "created" | "unknown" | "failed";
+  webhookGid: string | null;
+  detail: string | null;
+}
+
+/**
+ * The result of a webhook retry.
+ *
+ * Returned with 200 whether or not the outcome was healthy, so `healthy` — not
+ * the HTTP status — is what decides whether the store is fixed.
+ */
+export interface ShopifyWebhookReconcileResult {
+  storeId: string;
+  healthy: boolean;
+  webhookHealth: ShopifyWebhookHealth;
+  topics: ShopifyWebhookTopicResult[];
+  warnings: string[];
+  listedCount: number;
+  createdCount: number;
   webhooksRegisteredAt: string | null;
 }
 

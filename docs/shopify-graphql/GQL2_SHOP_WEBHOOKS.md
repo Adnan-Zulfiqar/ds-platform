@@ -69,10 +69,17 @@ then:
 
 ## Concurrency: one create, or none
 
-`register_webhooks` is called from OAuth completion, from reconnect, and from
-recovery. Two of those overlapping is ordinary, and the naive shape —
-list, decide, create — duplicates under it: both list an empty shop, both decide
-the topic is missing, both create it.
+`register_webhooks` is called from OAuth completion, from a merchant
+reconnect, and from the manual retry endpoint added in the acceptance fix. Two
+of those overlapping is ordinary, and the naive shape — list, decide, create —
+duplicates under it: both list an empty shop, both decide the topic is missing,
+both create it.
+
+**There is no automated recovery job.** An earlier draft of this document said
+"recovery", which implied a background sweep that does not exist and was never
+written. Recovery is a person clicking *Retry webhook setup*, or completing OAuth
+again. A scheduled reconciler is a reasonable thing to want and is *not* part of
+GQL-2 — it is recorded in the roadmap as unowned rather than implied here.
 
 The fix is a `SELECT … FOR UPDATE` on the `ShopifyConnection` row for the
 duration of list-decide-create:
@@ -220,6 +227,154 @@ appeared necessary — it did not.
 
 ---
 
+## Acceptance fix — a connected store cannot hide broken webhooks
+
+An independent review returned `GQL-2 requires fixes` on one blocking finding.
+
+### F-01 — connected state could hide failed webhook registration
+
+**Root cause.** OAuth completion called `register_webhooks` inside a best-effort
+`try/except` and **discarded the `ReconcileReport`**. The merchant was redirected
+with `shopify=connected` whatever had happened, `webhooks_registered_at` stayed
+null, and the integration card rendered *Connected*. The card's only recovery
+control was gated on `connection.status !== "connected"`, so the store that most
+needed it was the one that could not see it. The amber note even said "reconnect
+if sync stalls" next to a reconnect button that was hidden. The only way out was
+to disconnect a perfectly valid OAuth connection.
+
+Keeping the connection was right; presenting it as healthy was not. Three states
+now exist, all read from the **existing persisted authority** rather than a new
+one:
+
+| State | Condition |
+|---|---|
+| disconnected | `status != connected` → `webhookHealth: not_applicable` |
+| connected, webhook-healthy | `status == connected` and `webhooks_registered_at` set → `healthy` |
+| connected, webhook-degraded | `status == connected` and `webhooks_registered_at` null → `degraded` |
+
+`service.webhook_health()` is the single derivation. It is **not a stored
+column**: `webhooks_registered_at` is already the one value written only after a
+complete healthy reconciliation, so a second field could only ever disagree with
+it. The API returns `webhookHealth` so no client has to invent its own rule for
+what a null timestamp means — the rule the frontend had invented was "assume
+connected".
+
+### The retry endpoint
+
+```
+POST /api/v1/integrations/shopify/stores/{store_id}/webhooks/reconcile
+```
+
+**Why not `/shopify/webhooks/reconcile`**, which the brief suggested. That path
+shares a prefix with `POST /shopify/webhooks/{topic}` — the unauthenticated,
+HMAC-verified receiver — and would be matched as a topic named `reconcile` the
+moment declaration order changed. Store-scoped mutations in this module already
+live under `/shopify/stores/{store_id}` (that is where `disconnect` is), so the
+shipped route follows the established shape and cannot collide with merchant
+webhook traffic.
+
+- **Admin-only** (`RequireAdmin`); a viewer gets 403 and never reaches Shopify.
+- The store is resolved through the tenant-scoped repository, so a **foreign or
+  unknown id returns the same answer** — asserted by a test that compares the two
+  responses field for field.
+- It calls `ShopifyService.register_webhooks` — the *same* reconciler OAuth
+  uses. No second implementation, no queue.
+- Lists every page before creating, creates only what is missing, and **never
+  replays a mutation whose outcome is unknown**.
+- Stamps `webhooks_registered_at` only when the whole report is healthy.
+- Returns **200 with an explicit verdict** for a degraded outcome rather than an
+  error status: the request was handled correctly, and the useful thing to show a
+  merchant is what is still missing.
+
+Response (`ShopifyWebhookReconcileResponse`), incapable of holding a token or a
+raw provider payload because every field is copied explicitly:
+
+```json
+{
+  "storeId": "…", "healthy": false, "webhookHealth": "degraded",
+  "topics": [{"topic": "orders/create", "status": "unknown",
+              "webhookGid": null, "detail": "…"}],
+  "warnings": [], "listedCount": 0, "createdCount": 0,
+  "webhooksRegisteredAt": null
+}
+```
+
+### OAuth result
+
+`shopify=connected` only when the report is healthy; otherwise
+`shopify=connected_webhooks_degraded`. A distinct value rather than a flag on
+`connected`, so a frontend that does not recognise it cannot fall back to
+rendering a full success. The connection is still persisted — a valid token is
+never thrown away because Shopify was briefly unreachable — and the failure is
+logged with tenant-safe structured context (identifiers and statuses, never a
+token or provider payload). Nothing but stable, enumerable status codes travels
+in the query string.
+
+### UI recovery
+
+The Shopify card now distinguishes healthy from degraded, explains that
+*product, inventory and order updates may be missed*, and shows **Retry webhook
+setup** while the store stays connected. Loading, success, still-degraded and
+failure states are all rendered. The outcome sits in a `role="status"
+aria-live="polite"` region that receives focus once the retry settles, so a
+keyboard or screen-reader user is taken to the answer rather than left on a
+button whose label did not change. Viewers see the warning and a *Read only*
+explanation, never the control. **No mutation fires on render, and the mutation
+has `retry: false`** — one click is one request.
+
+The summary badge reads `N needs webhook setup` while any store is degraded, so
+the card cannot say "connected" while `webhooksRegisteredAt` is null.
+
+### F-02 — bounded lock wait
+
+`lock_for_update` now takes `timeout_ms` and the service passes
+`WEBHOOK_LOCK_TIMEOUT_MS` (10s), expressed as PostgreSQL's own `lock_timeout`
+rather than an application timer — only the database can abandon a lock request
+it has already queued. `SET LOCAL` is transaction-scoped so nothing leaks into a
+pooled connection, and it is reset to `DEFAULT` immediately after the lock
+statement so the bound governs acquiring *that row* and not every later
+statement in the request.
+
+Expiry arrives as SQLSTATE `55P03` and is translated into
+`ShopifyWebhookReconcileBusyError` — a `ConflictError` (409) with the stable code
+`shopify_webhook_reconcile_busy`. Left raw it would have reached the merchant as
+a 500, which is the wrong thing to tell someone whose only problem is that the
+work is already running. The SQLSTATE is matched on `sqlstate` *and* `pgcode` so
+a driver swap does not silently degrade the check to "never a lock timeout".
+
+The critical section is unchanged in length: the lock is still held across
+list-decide-create, and the concurrency control test still proves the unlocked
+version duplicates. Different stores are unaffected — a dedicated test holds one
+store's row and requires a second store to complete inside the hang guard.
+
+`shopify_webhook_reconcile_finished` logs `lock_wait_ms` and `duration_ms` on
+every outcome, healthy or not, so contention that never times out is still
+visible.
+
+### What the acceptance fix does *not* do
+
+- **No automated recovery sweep.** Recovery is deterministic but manual — see
+  `SHOPIFY-OPS-1` in the roadmap.
+- **No privacy webhooks.** `SHOPIFY-COMPLIANCE-1` owns those and remains a
+  submission blocker.
+- No webhook deletion, no `appUninstall`, no `shopify.app.toml` migration, no
+  GQL-3 work.
+
+### Evidence
+
+Red-before: `backend/tests/integration/test_shopify_gql2_webhook_recovery.py`
+was written first and run against the accepted candidate — **17 failed,
+3 passed**, with 404s on the missing endpoint and `shopify=connected` where the
+degraded signal belonged. Green after: **20 passed**.
+
+Frontend: `frontend/tests/e2e/shopify-webhook-recovery.spec.ts`, 12 tests
+× 2 projects. The Shopify *status* and *reconcile* payloads are **mocked** —
+reaching a genuinely degraded connected store needs a live Partner app and a
+real token, neither of which exists here — and that is stated in the file. The
+same flow is exercised for real against PostgreSQL in the backend suite.
+
+---
+
 ## Known limitations
 
 1. **`ShopifyClient.fetch_shop_currency_code` and `ShopifyClient.graphql` still
@@ -234,20 +389,34 @@ appeared necessary — it did not.
    `client.py`. It is GQL-6's, and the drift test permits the path string only in
    that module.
 
-3. **The three mandatory privacy webhooks are not implemented.**
-   `customers/data_request`, `customers/redact` and `shop/redact` are required
-   for App Store submission, and a sweep of `backend/app/` found no handler,
-   route or topic mapping for any of them. They are configured in the Partner
-   Dashboard or `shopify.app.toml` rather than through this API, so they are not
-   a REST-migration item and are outside this phase's stated scope
-   (`GQL-000`, `REST-008`, `REST-009`). **This is a submission blocker and is
-   recorded here rather than left to be discovered at review.** The roadmap
-   carried "compliance-webhook audit" under GQL-2; the audit is done and its
-   result is this paragraph — the implementation is not.
+3. **The three mandatory privacy webhooks are not implemented — owned by
+   `SHOPIFY-COMPLIANCE-1`.** `customers/data_request`, `customers/redact` and
+   `shop/redact` are required for App Store submission, and a sweep of
+   `backend/app/` found no handler, route or topic mapping for any of them.
+   They are configured in the Partner Dashboard or `shopify.app.toml` rather
+   than through this API, so they are not a REST-migration item and are outside
+   this phase's stated scope (`GQL-000`, `REST-008`, `REST-009`).
+
+   **`SHOPIFY-COMPLIANCE-1 — Mandatory privacy webhooks` blocks Shopify App
+   Store submission** and is tracked in
+   [`MASTER_MIGRATION_ROADMAP.md`](MASTER_MIGRATION_ROADMAP.md). It is named
+   rather than left as a loose note because an unowned blocker is one nobody
+   schedules. The roadmap carried "compliance-webhook audit" under GQL-2; the
+   audit is done and its result is this paragraph — the implementation is not,
+   and is deliberately not attempted here.
 
 4. **No live Shopify request has ever been made by this code.** Every test drives
    `httpx.MockTransport`. Reconciliation against a real shop is unverified — see
    below.
+
+7. **Lock contention is bounded but reconciliation duration is not.** A caller
+   waits at most `WEBHOOK_LOCK_TIMEOUT_MS` (10s) for the connection row and then
+   gets a typed 409; the reconciliation *holding* that row has no ceiling beyond
+   the GraphQL client's own per-request timeouts. Six topics against a healthy
+   shop is well inside the window, but a shop that is slow on every call could
+   make legitimate retries look busy. `shopify_webhook_reconcile_finished` logs
+   `lock_wait_ms` and `duration_ms` on every outcome so that is measurable
+   before anything is tuned.
 
 5. **Duplicates and mismatches are reported, never repaired.** A shop that
    already has two identical subscriptions stays that way, and its report is
@@ -317,7 +486,11 @@ What a live run would need to confirm, in order:
 | Live Shopify request | **none made** |
 
 Test delta: 56 (operations) + 45 (reconciliation) + 6 (concurrency) + 9
-(currency) + 11 (inventory drift guard) = 127.
+(currency) + 11 **newly added** inventory drift-guard tests = 127.
+
+`backend/tests/unit/test_rest_inventory.py` contains **25 tests in total** — the
+14 GQL-1 wrote plus the 11 added here. An earlier wording ran those two numbers
+together, which read as though the whole file were new.
 
 A pre-existing defect surfaced while adding the guard: both `OAUTH-*` rows cited
 `backend/tests/unit/test_shopify_oauth.py`, which has never existed in this

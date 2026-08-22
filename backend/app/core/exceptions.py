@@ -164,6 +164,25 @@ class ConflictError(AppError):
     message = "The request conflicts with the current state of the resource."
 
 
+class ShopifyWebhookReconcileBusyError(ConflictError):
+    """Another reconciliation already holds this store's connection row.
+
+    Webhook reconciliation is serialised per store so two of them cannot both
+    decide a topic is missing and both create it. A caller arriving while one is
+    running waits a bounded time for the row and is then told to try again,
+    rather than either waiting indefinitely or surfacing PostgreSQL's
+    ``lock_timeout`` as an unhandled 500.
+
+    409 rather than 500 because nothing is wrong: the work is already in
+    flight, and the honest instruction is "try again in a moment". It lives here
+    beside ``ShopifyCurrencyRefreshError`` so the repository layer — which is
+    where the lock is taken — never has to import from an integration package.
+    """
+
+    code = "shopify_webhook_reconcile_busy"
+    message = "Webhook setup for this store is already running. Please try again in a moment."
+
+
 class RateLimitExceededError(AppError):
     """Too many requests within the configured window."""
 

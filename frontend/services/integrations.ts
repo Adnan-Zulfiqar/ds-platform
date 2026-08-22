@@ -12,6 +12,7 @@ import type {
   ShopifyAuthorization,
   ShopifyConnectPayload,
   ShopifyStatus,
+  ShopifyWebhookReconcileResult,
 } from "@/types/api";
 
 /**
@@ -155,6 +156,37 @@ export function useDisconnectShopify() {
       await apiClient.delete(`/integrations/shopify/stores/${storeId}`);
     },
     onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: integrationKeys.shopifyStatus(),
+      });
+    },
+  });
+}
+
+/**
+ * Retry webhook registration for a store that is connected but degraded.
+ *
+ * Deliberately a mutation with no retry and no automatic invocation: the server
+ * side is idempotent, but a client that fires this on render — or retries it on
+ * failure — turns one merchant click into a loop of listings against Shopify.
+ * The button is the only trigger.
+ *
+ * The status query is invalidated on settle rather than on success, because a
+ * *degraded* result is still a result the card must re-read: the authoritative
+ * `webhooksRegisteredAt` may have changed even when the report is unhealthy.
+ */
+export function useReconcileShopifyWebhooks() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    retry: false,
+    mutationFn: async (storeId: string): Promise<ShopifyWebhookReconcileResult> => {
+      const { data } = await apiClient.post<ShopifyWebhookReconcileResult>(
+        `/integrations/shopify/stores/${storeId}/webhooks/reconcile`,
+      );
+      return data;
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: integrationKeys.shopifyStatus(),
       });

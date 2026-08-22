@@ -54,6 +54,51 @@ it has already gone wrong somewhere, and none of them are optional.
    unversioned OAuth endpoints.** `OAUTH-001` and `OAUTH-002` stay; OAuth has no
    GraphQL equivalent. Anything else under `/admin/api/` must be gone.
 
+## Non-migration milestones
+
+Not every App Store blocker is a REST call, and a blocker with no milestone is
+one nobody schedules. These sit outside the GQL-* sequence and can be done in
+parallel with it.
+
+| Milestone | Scope | Blocks submission | Status |
+|---|---|---|---|
+| **`SHOPIFY-COMPLIANCE-1`** | Mandatory privacy webhooks | **yes** | not started |
+| `SHOPIFY-OPS-1` | Scheduled webhook reconciliation sweep | no | not started |
+
+### `SHOPIFY-COMPLIANCE-1` — Mandatory privacy webhooks
+
+**Blocks Shopify App Store submission.** Shopify requires every app to handle
+three privacy topics, and an app that does not is rejected at review regardless
+of how much of the Admin API it has migrated:
+
+- `customers/data_request`
+- `customers/redact`
+- `shop/redact`
+
+A sweep of `backend/app/` during GQL-2 found **no handler, no route and no topic
+mapping** for any of the three. They are configured in the Partner Dashboard or
+`shopify.app.toml` rather than created through `webhookSubscriptionCreate`, so
+they are not a row in the REST inventory and no GQL-* phase would ever pick them
+up — which is exactly why they are named here instead.
+
+Deliberately **not** implemented in GQL-2 or its acceptance fix: the scope there
+was `GQL-000`, `REST-008` and `REST-009`, and quietly widening it would have
+shipped GDPR-relevant handlers nobody reviewed against a requirement.
+
+### `SHOPIFY-OPS-1` — Scheduled webhook reconciliation sweep
+
+**Does not block submission.** After the GQL-2 acceptance fix, recovery from a
+failed webhook registration is *deterministic but manual*: the store is shown as
+connected-but-degraded and an administrator clicks **Retry webhook setup**
+(`POST /api/v1/integrations/shopify/stores/{store_id}/webhooks/reconcile`).
+
+There is **no background job** that reconciles unhealthy stores on its own. The
+reconciler is already idempotent and already serialised per store, so a periodic
+sweep over connections with `webhooks_registered_at IS NULL` would be a thin
+Celery task rather than new machinery — but it is a queue-shaped decision, and
+GQL-2 was explicitly forbidden from introducing a second queue. Until it exists,
+a merchant who never revisits the integrations page stays degraded.
+
 ## Definition of done for a migration phase
 
 A phase is complete when, for every call it owns:
@@ -99,12 +144,8 @@ limitations.
    subscriptions, so running both modes for one topic delivers every event twice
    with no way for this codebase to detect it. Moving to config-managed
    subscriptions needs `webhookSubscriptionDelete` first, which is **GQL-6's**.
-2. **The three mandatory privacy webhooks are missing.**
-   `customers/data_request`, `customers/redact` and `shop/redact` have no
-   handler, route or topic mapping anywhere in `backend/app/`. They are
-   configured outside this API and are therefore not a REST-migration row, but
-   they are a **submission blocker** and need an owner before the App Store
-   listing, independently of GQL-3 to GQL-6.
+2. **The three mandatory privacy webhooks are missing** — see
+   `SHOPIFY-COMPLIANCE-1` below.
 3. **`WebhookSubscription.uri`, not `callbackUrl` or `endpoint`.** GQL-1's
    proposal for `REST-008` named a deprecated field. Later phases should treat
    every `unverified` row the same way: read the 2026-07 reference before

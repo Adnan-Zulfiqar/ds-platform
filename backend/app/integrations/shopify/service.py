@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, Final
 from urllib.parse import parse_qsl
 
 from redis.exceptions import RedisError
@@ -64,6 +66,15 @@ _INSTALL_TICKET_PREFIX = "shopify:install:ticket:"
 
 #: Topics registered after every successful OAuth. Keep in sync with
 #: ``docs/PHASE_8_1_PLAN.md`` Part 5 and the webhook receiver.
+#: How long a caller waits for another reconciliation to finish before being
+#: told the store is busy (GQL-2 acceptance fix, F-02).
+#:
+#: Long enough that an ordinary overlap — six list-and-create round trips —
+#: resolves by waiting rather than by bothering the merchant, and short enough
+#: that a wedged transaction cannot pin an HTTP worker. Expressed in
+#: milliseconds because that is what PostgreSQL's ``lock_timeout`` takes.
+WEBHOOK_LOCK_TIMEOUT_MS: Final = 10_000
+
 WEBHOOK_TOPICS: tuple[str, ...] = (
     "products/create",
     "products/update",
@@ -72,6 +83,39 @@ WEBHOOK_TOPICS: tuple[str, ...] = (
     "orders/updated",
     "app/uninstalled",
 )
+
+
+class WebhookHealth(StrEnum):
+    """Derived, never stored — see ``webhook_health``."""
+
+    #: Nothing to say: the integration is not connected.
+    NOT_APPLICABLE = "not_applicable"
+    #: Connected, and every required subscription was confirmed present.
+    HEALTHY = "healthy"
+    #: Connected with a valid token, but the subscriptions are not confirmed.
+    DEGRADED = "degraded"
+
+
+def webhook_health(connection: ShopifyConnection) -> WebhookHealth:
+    """Whether this connection's webhooks can be trusted.
+
+    **Derived from the persisted authority, not a second health field.**
+    ``webhooks_registered_at`` is already the one thing the system writes only
+    after a complete, healthy reconciliation, so health is a reading of that
+    column plus the connection status — never a parallel column that could
+    disagree with it.
+
+    This exists because the alternative was worse: the API returned the
+    timestamp and left every caller to decide what a null meant, and the UI
+    decided it meant "connected". A connected store with no confirmed
+    subscriptions silently misses product, inventory and order events, so the
+    distinction is named here once and reused.
+    """
+    if connection.status is not IntegrationStatus.CONNECTED:
+        return WebhookHealth.NOT_APPLICABLE
+    if connection.webhooks_registered_at is None:
+        return WebhookHealth.DEGRADED
+    return WebhookHealth.HEALTHY
 
 
 def validate_webhook_callback_base(base: str) -> str:
@@ -737,7 +781,12 @@ class ShopifyService(BaseService):
         desired = desired_subscriptions(WEBHOOK_TOPICS)
 
         client, connection = await self.graphql_client_for_store(store_id)
-        locked = await self.connections.lock_for_update(connection.id)
+
+        lock_started = time.monotonic()
+        locked = await self.connections.lock_for_update(
+            connection.id, timeout_ms=WEBHOOK_LOCK_TIMEOUT_MS
+        )
+        lock_wait_ms = round((time.monotonic() - lock_started) * 1000, 1)
         if locked is None:
             raise ShopifyNotConnectedError()
 
@@ -756,4 +805,18 @@ class ShopifyService(BaseService):
                 warnings=list(report.warnings),
                 statuses=[f"{i.topic}={i.status.value}" for i in report.items],
             )
+        # Duration and lock wait are logged on every outcome, healthy or not:
+        # contention that never times out is invisible without it, and "how long
+        # does reconciliation actually hold the row" is the number that decides
+        # whether WEBHOOK_LOCK_TIMEOUT_MS is set sensibly.
+        logger.info(
+            "shopify_webhook_reconcile_finished",
+            store_id=str(store_id),
+            healthy=report.healthy,
+            listed=report.listed_count,
+            created=report.created_count,
+            warnings=len(report.warnings),
+            lock_wait_ms=lock_wait_ms,
+            duration_ms=round((time.monotonic() - lock_started) * 1000, 1),
+        )
         return report

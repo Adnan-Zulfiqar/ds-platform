@@ -1,8 +1,16 @@
 "use client";
 
-import { AlertCircle, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Link2,
+  Loader2,
+  RefreshCw,
+  Unlink,
+} from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -27,13 +35,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api-client";
+import { useAuth } from "@/providers/auth-provider";
 import {
   useClaimShopifyInstall,
   useConnectShopify,
   useDisconnectShopify,
+  useReconcileShopifyWebhooks,
   useShopifyStatus,
 } from "@/services/integrations";
-import type { ShopifyConnection } from "@/types/api";
+import type { ShopifyConnection, ShopifyWebhookReconcileResult } from "@/types/api";
 
 function formatDate(value: string | null): string {
   if (!value) return "Never";
@@ -85,23 +95,54 @@ function normaliseShopInput(raw: string): string {
   return value;
 }
 
+/** How many topics a reconciliation result still could not confirm. */
+function unresolvedCount(result: ShopifyWebhookReconcileResult): number {
+  return result.topics.filter(
+    (topic) => topic.status !== "already_present" && topic.status !== "created",
+  ).length;
+}
+
 function ConnectionRow({
   connection,
   onDisconnect,
   onReconnect,
+  onRetryWebhooks,
   disconnecting,
   reconnecting,
+  retrying,
+  retryResult,
+  retryError,
+  canManage,
   disconnectError,
 }: {
   connection: ShopifyConnection;
   onDisconnect: (storeId: string) => void;
   onReconnect: (shopDomain: string) => void;
+  onRetryWebhooks: (storeId: string) => void;
   disconnecting: boolean;
   reconnecting: boolean;
+  retrying: boolean;
+  retryResult: ShopifyWebhookReconcileResult | null;
+  retryError: string | null;
+  canManage: boolean;
   disconnectError: string | null;
 }) {
-  const busy = disconnecting || reconnecting;
+  const busy = disconnecting || reconnecting || retrying;
   const canReconnect = connection.status !== "connected";
+  // Derived by the API from the same timestamp it returns, so the card cannot
+  // reach a different verdict than the server did. This is the fix for a store
+  // rendering as fully connected while no webhook had ever been registered.
+  const degraded = connection.webhookHealth === "degraded";
+  const statusRef = useRef<HTMLDivElement | null>(null);
+
+  // Move focus to the outcome once a retry settles, so a keyboard or screen
+  // reader user is taken to the answer rather than left on a button whose
+  // label did not change.
+  useEffect(() => {
+    if (retryResult || retryError) {
+      statusRef.current?.focus();
+    }
+  }, [retryResult, retryError]);
 
   return (
     <div className="rounded-md border p-3 text-sm">
@@ -118,62 +159,142 @@ function ConnectionRow({
             <p className="text-muted-foreground">
               Webhooks: {formatDate(connection.webhooksRegisteredAt)}
             </p>
-          ) : connection.status === "connected" ? (
-            <p className="text-amber-700 dark:text-amber-400">
-              Webhooks not registered yet — reconnect if sync stalls.
-            </p>
           ) : null}
         </div>
-        <Badge variant={statusVariant(connection.status)}>
-          {statusLabel(connection.status)}
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          {degraded ? (
+            <Badge variant="warning">Webhooks incomplete</Badge>
+          ) : connection.webhookHealth === "healthy" ? (
+            <Badge variant="success">Webhooks active</Badge>
+          ) : null}
+          <Badge variant={statusVariant(connection.status)}>
+            {statusLabel(connection.status)}
+          </Badge>
+        </div>
       </div>
+
+      {degraded ? (
+        <Alert variant="warning" className="mt-3">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            DropPilot could not confirm this store&rsquo;s Shopify webhooks.{" "}
+            <strong>Product, inventory and order updates may be missed</strong>{" "}
+            until setup completes. Your store stays connected — you do not need
+            to disconnect.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* One live region per connection. Polite rather than assertive: this
+          reports the outcome of something the user just asked for, so it should
+          not interrupt what they are already reading. */}
+      <div
+        ref={statusRef}
+        role="status"
+        aria-live="polite"
+        tabIndex={-1}
+        className="mt-2 outline-none"
+        data-testid={`shopify-webhook-status-${connection.storeId}`}
+      >
+        {retrying ? (
+          <p className="text-muted-foreground">Retrying webhook setup…</p>
+        ) : retryError ? (
+          <p className="text-destructive">{retryError}</p>
+        ) : retryResult?.healthy ? (
+          <p className="text-success">
+            <CheckCircle2 className="mr-1 inline h-4 w-4" />
+            Webhook setup completed. {retryResult.createdCount} created.
+          </p>
+        ) : retryResult ? (
+          <p className="text-warning">
+            Webhook setup is still incomplete — {unresolvedCount(retryResult)} of{" "}
+            {retryResult.topics.length} topics unconfirmed. Try again in a
+            moment; nothing was duplicated.
+          </p>
+        ) : null}
+      </div>
+
       {connection.lastError ? (
         <p className="mt-2 text-destructive">{connection.lastError}</p>
       ) : null}
       {disconnectError ? (
         <p className="mt-2 text-destructive">{disconnectError}</p>
       ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {canReconnect ? (
+
+      {canManage ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {degraded ? (
+            <Button
+              variant="default"
+              size="sm"
+              disabled={busy}
+              aria-describedby={`shopify-webhook-status-${connection.storeId}`}
+              onClick={() => onRetryWebhooks(connection.storeId)}
+            >
+              {retrying ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Retry webhook setup
+            </Button>
+          ) : null}
+          {canReconnect ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => onReconnect(connection.shopDomain)}
+            >
+              {reconnecting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Reconnect
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
             disabled={busy}
-            onClick={() => onReconnect(connection.shopDomain)}
+            onClick={() => onDisconnect(connection.storeId)}
           >
-            {reconnecting ? (
+            {disconnecting ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
+              <Unlink className="mr-2 h-4 w-4" />
             )}
-            Reconnect
+            Disconnect
           </Button>
-        ) : null}
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => onDisconnect(connection.storeId)}
-        >
-          {disconnecting ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Unlink className="mr-2 h-4 w-4" />
-          )}
-          Disconnect
-        </Button>
-      </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">
+          <Badge variant="outline" className="mr-2">
+            Read only
+          </Badge>
+          Your role can view this connection. Ask an administrator to
+          {degraded ? " retry webhook setup" : " make changes"}.
+        </p>
+      )}
     </div>
   );
 }
 
 export function ShopifyCard() {
   const searchParams = useSearchParams();
+  const { hasRole } = useAuth();
+  const canManage = hasRole("owner") || hasRole("admin");
   const { data, isPending, isError, refetch } = useShopifyStatus();
   const connect = useConnectShopify();
   const claim = useClaimShopifyInstall();
   const disconnect = useDisconnectShopify();
+  const reconcile = useReconcileShopifyWebhooks();
+  const [retryTarget, setRetryTarget] = useState<string | null>(null);
+  const [retryResults, setRetryResults] = useState<
+    Record<string, ShopifyWebhookReconcileResult>
+  >({});
+  const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
   const [shop, setShop] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -214,6 +335,40 @@ export function ShopifyCard() {
             ? error.message
             : "Could not disconnect this store.",
       }));
+    }
+  }
+
+  /**
+   * Retry webhook registration for one store.
+   *
+   * Only ever called from the button. There is no effect that fires it on
+   * mount and no automatic re-attempt on failure: the endpoint is idempotent,
+   * but a self-retrying client would turn one merchant click into a loop of
+   * listings against Shopify.
+   */
+  async function handleRetryWebhooks(storeId: string) {
+    setRetryTarget(storeId);
+    setRetryErrors((previous) => {
+      const { [storeId]: _removed, ...rest } = previous;
+      return rest;
+    });
+    setRetryResults((previous) => {
+      const { [storeId]: _removed, ...rest } = previous;
+      return rest;
+    });
+    try {
+      const result = await reconcile.mutateAsync(storeId);
+      setRetryResults((previous) => ({ ...previous, [storeId]: result }));
+    } catch (error) {
+      setRetryErrors((previous) => ({
+        ...previous,
+        [storeId]:
+          error instanceof ApiError
+            ? error.message
+            : "Could not retry webhook setup. Please try again in a moment.",
+      }));
+    } finally {
+      setRetryTarget(null);
     }
   }
 
@@ -275,6 +430,9 @@ export function ShopifyCard() {
   const connections = data?.connections ?? [];
   const configured = data?.configured ?? false;
   const connectedCount = connections.filter((c) => c.status === "connected").length;
+  const degradedCount = connections.filter(
+    (c) => c.webhookHealth === "degraded",
+  ).length;
   const connecting = connect.isPending || claim.isPending;
 
   return (
@@ -282,12 +440,21 @@ export function ShopifyCard() {
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>Shopify</CardTitle>
-          <Badge variant={connectedCount ? "success" : "secondary"}>
-            {connectedCount
-              ? `${connectedCount} connected`
-              : connections.length
-                ? "Needs attention"
-                : "Not connected"}
+          {/* A store whose webhooks were never confirmed is not "connected" in
+              any sense a merchant cares about, so the summary badge refuses to
+              say so while one is degraded. */}
+          <Badge
+            variant={
+              degradedCount ? "warning" : connectedCount ? "success" : "secondary"
+            }
+          >
+            {degradedCount
+              ? `${degradedCount} needs webhook setup`
+              : connectedCount
+                ? `${connectedCount} connected`
+                : connections.length
+                  ? "Needs attention"
+                  : "Not connected"}
           </Badge>
         </div>
         <CardDescription>
@@ -332,8 +499,15 @@ export function ShopifyCard() {
           <ConnectionRow
             key={connection.id}
             connection={connection}
+            canManage={canManage}
             disconnecting={disconnect.isPending}
             reconnecting={connect.isPending}
+            retrying={retryTarget === connection.storeId}
+            retryResult={retryResults[connection.storeId] ?? null}
+            retryError={retryErrors[connection.storeId] ?? null}
+            onRetryWebhooks={(storeId) => {
+              void handleRetryWebhooks(storeId);
+            }}
             disconnectError={disconnectErrors[connection.storeId] ?? null}
             onDisconnect={(storeId) => {
               void handleDisconnect(storeId);

@@ -40,6 +40,13 @@ class ShopifyConnectionRead(CamelCaseModel):
     last_sync_at: datetime | None
     last_error: str | None
     webhooks_registered_at: datetime | None
+    #: Derived from ``status`` and ``webhooks_registered_at`` by
+    #: ``service.webhook_health`` — never a stored column, so it cannot drift
+    #: from the timestamp it is read from. Named here so a client does not have
+    #: to invent its own rule for what a null timestamp means; the previous
+    #: answer was "assume connected", which hid stores that were missing every
+    #: product, inventory and order subscription.
+    webhook_health: str
 
 
 class ShopifyStatusResponse(CamelCaseModel):
@@ -49,6 +56,46 @@ class ShopifyStatusResponse(CamelCaseModel):
 
 class ShopifyWebhookAckResponse(CamelCaseModel):
     status: str = "received"
+
+
+class ShopifyWebhookTopicResult(CamelCaseModel):
+    """What reconciliation did about one topic.
+
+    ``status`` is the reconciler's own vocabulary — ``already_present``,
+    ``created``, ``unknown``, ``failed`` — kept rather than collapsed into a
+    boolean, because "we could not tell whether that create landed" is a
+    materially different thing to tell a merchant than "that create was
+    refused".
+    """
+
+    topic: str
+    status: str
+    webhook_gid: str | None = None
+    detail: str | None = None
+
+
+class ShopifyWebhookReconcileResponse(CamelCaseModel):
+    """The result of a deterministic webhook retry.
+
+    Returned with 200 whether or not the outcome was healthy: the request was
+    handled correctly either way, and an unhealthy reconciliation is a *result*
+    to be shown, not a transport failure. ``healthy`` and ``webhook_health``
+    carry the verdict, so a client can never read a 200 as "webhooks are fine".
+
+    Carries no token, no shop secret and no raw provider payload — the fields
+    here are incapable of holding one.
+    """
+
+    store_id: uuid.UUID
+    healthy: bool
+    webhook_health: str
+    topics: list[ShopifyWebhookTopicResult] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    listed_count: int = 0
+    created_count: int = 0
+    #: Present only when the whole reconciliation was healthy; null is the
+    #: honest answer for a store that is still degraded.
+    webhooks_registered_at: datetime | None = None
 
 
 class ShopifyPublishRequest(CamelCaseModel):
