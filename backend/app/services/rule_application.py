@@ -869,27 +869,42 @@ class RuleApplicationService(BaseService):
         exists to close, and an in-process lock would close nothing at all:
         the two workers are different processes, usually on different machines.
         """
-        locked = (
+        locked = await self._lock_row(lease.application_id)
+        if locked is None or locked.lease_token != lease.token:
+            return None
+        return locked
+
+    async def _lock_row(self, application_id: uuid.UUID) -> RuleApplication | None:
+        """Take this tenant's row and hold it for the rest of the transaction.
+
+        The single place any caller acquires the application row, so the
+        ordering guarantees are stated once. Two properties matter and both are
+        easy to lose:
+
+        * ``FOR UPDATE`` — whoever else wants the row waits here rather than
+          reading a version that is about to change. Every decision made after
+          this line is made about a row nobody else can move.
+        * ``populate_existing`` — SQLAlchemy would otherwise hand back the
+          identity-map copy with its *original* attributes, so the lock would be
+          taken correctly and then a stale copy inspected. A guard that reads
+          its own cache is not a guard.
+
+        Tenant-scoped, so a foreign identifier finds nothing and the caller
+        reports it as missing rather than forbidden.
+        """
+        return (
             (
                 await self.session.execute(
                     select(RuleApplication)
                     .where(RuleApplication.tenant_id == self._tenant_id())
-                    .where(RuleApplication.id == lease.application_id)
+                    .where(RuleApplication.id == application_id)
                     .with_for_update()
-                    # Overwrite whatever this session already had for the row.
-                    # Without it SQLAlchemy returns the identity-map copy with
-                    # its *original* attributes, so the lock would be taken
-                    # correctly and then compared against a remembered token --
-                    # a fence that reads its own cache is not a fence.
                     .execution_options(populate_existing=True)
                 )
             )
             .scalars()
             .first()
         )
-        if locked is None or locked.lease_token != lease.token:
-            return None
-        return locked
 
     async def run_next_batch(
         self, application_id: uuid.UUID, *, lease: ApplicationLease
@@ -1009,9 +1024,33 @@ class RuleApplicationService(BaseService):
           catalogue actually contains.
 
         Idempotent: cancelling an already-cancelled run returns it unchanged.
+
+        **The row is locked before its status is read** (M3A-H1). This was a
+        read-then-write: a plain ``SELECT``, the guard above evaluated against
+        it, then a flush. Nothing held the row in between and there is no
+        version column, so the flush emitted ``UPDATE … WHERE id = ?`` and
+        overwrote whatever had landed meanwhile. A cancellation racing a
+        worker's ``finalize`` read `running`, passed the guard, waited on the
+        worker's lock, and then rewrote a **completed** run as cancelled —
+        precisely the outcome the guard exists to refuse. Prices and result
+        rows were never at risk; the record of what happened was, and that is
+        the only account a merchant has afterwards.
+
+        Locking first makes the inspection and the mutation one atomic step:
+        a cancellation arriving mid-finalize now waits, re-reads the row the
+        worker actually left, and refuses it. The lease is deliberately *not*
+        consulted — cancelling is the merchant's action and no worker owns it —
+        so what makes this safe is the lock and the status, not ownership.
         """
-        application = await self.get(application_id)
+        application = await self._lock_row(application_id)
+        if application is None:
+            # 404 for missing and for another tenant's alike.
+            raise NotFoundError("Application not found.")
         if application.status is ApplicationStatus.CANCELLED:
+            # Idempotent and **silent**: returning early rather than rewriting
+            # keeps `finished_at`, the reason and the counters at the values
+            # the first cancellation recorded. A second request should be able
+            # to confirm what happened without changing it.
             return application
         if application.status not in (ApplicationStatus.PENDING, ApplicationStatus.RUNNING):
             raise ConflictError(

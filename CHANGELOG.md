@@ -89,6 +89,31 @@ production release.
 
 ### Fixed
 
+- **A cancellation racing a finishing run could rewrite it as cancelled
+  (M3A-H1)** — `cancel()` was a read-then-write: a plain `SELECT`, the
+  terminal-state guard evaluated against it, then a flush. Nothing held the row
+  in between and there is no version column, so the flush emitted
+  `UPDATE … WHERE id = ?` and overwrote whatever had landed meanwhile. A
+  cancellation arriving while a worker was in `finalize` read `running`, passed
+  the guard, waited on the worker's lock and then rewrote a **completed** run as
+  cancelled — the one outcome the guard exists to refuse. Product prices,
+  result rows and progress were never affected; the record of what happened was.
+  Cancellation now takes the same tenant-scoped `SELECT … FOR UPDATE` the worker
+  paths use, so inspecting the status and mutating it are one atomic step: a
+  finished run is refused with `409`, an already-cancelled run is returned
+  without rewriting `finished_at`, the reason, the counters or any audit row,
+  and a `pending`/`running` run is cancelled cooperatively with committed
+  batches intact. Cross-tenant identifiers still find nothing and return `404`.
+  No schema change: the existing status column plus row locking is the whole
+  mechanism.
+
+- **The mid-batch concurrency test could not fail (M3A-H2)** — it slept 0.5 s
+  and accepted either reclaim outcome. Replaced with deterministic
+  two-connection tests that wait on PostgreSQL's own `pg_blocking_pids()`,
+  assert the worker is the blocking backend, and prove the reclaim CAS
+  re-evaluates the moved heartbeat and takes nothing — plus a negative control
+  proving the helper raises when there is no contention.
+
 - **Recovery of a stuck bulk application never actually resumed it (M3A)** —
   the reconciler cleared `claimed_by_task_id` but left the row `running`, so
   the message it published reached a worker that saw a `running` row owned by

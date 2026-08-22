@@ -402,6 +402,51 @@ more.
 
 There is still no hard task termination anywhere.
 
+#### Cancelling a run (M3A-H1)
+
+Cancellation is the merchant's action, so it deliberately carries **no lease** —
+no worker owns it, and requiring ownership would make a run unstoppable exactly
+when its worker had died. What makes it safe is the row lock and the status.
+
+`cancel()` takes the same tenant-scoped `SELECT … FOR UPDATE` the worker paths
+use, then decides:
+
+| Status when the row is locked | Outcome |
+|---|---|
+| `pending` | cancelled outright; the claim refuses the message when it arrives |
+| `running` | cancelled cooperatively; the worker stops at its next batch boundary |
+| `cancelled` | returned unchanged — no write at all |
+| `completed` / `partial` / `failed` | refused, `409` |
+
+**This was a read-then-write and it was wrong.** The guard above used to be
+evaluated against a plain `SELECT`, with nothing holding the row and no version
+column, so the flush emitted `UPDATE … WHERE id = ?` and overwrote whatever had
+landed meanwhile. A cancellation racing a worker's `finalize` read `running`,
+passed the guard, waited on the worker's lock, and then rewrote a **completed**
+run as cancelled — the one outcome the guard exists to refuse. Reproduced
+against `2d2f49d` before the fix, with PostgreSQL's own `pg_blocking_pids()`
+confirming the contention was real.
+
+Prices and committed result rows were never at risk. What was at risk is the
+only account a merchant has afterwards of whether the run was stopped or
+finished, which is worth as much as the prices themselves.
+
+Three orderings are now pinned by tests on two real connections:
+
+* **finalize wins** — the cancellation blocks, re-reads `completed`, and is
+  refused with `409`. `finished_at`, the counters and the absence of a
+  cancellation reason all stay the worker's.
+* **cancellation wins** — `finalize` still closes the run out and records final
+  counts, but leaves the status `cancelled` and does not touch `finished_at`.
+* **two cancellations** — exactly one performs the transition; the second
+  blocks, sees `cancelled` and returns it **without rewriting** `finished_at`,
+  the reason, the counters or any result row.
+
+Cancellation never changes a product price, never removes a result row, never
+resets `processed_count`, never invents or clears a lease, and never bypasses
+tenant scoping — a foreign identifier finds no row under the lock and is
+reported as `404`, never `403`.
+
 #### NULL heartbeats
 
 `heartbeat_at` arrived in 0027, so a run abandoned by a worker that died before
@@ -418,6 +463,17 @@ Two things fix it, deliberately both:
 **Manual check:** `SELECT id, status, heartbeat_at, recovery_count, lease_token
 FROM rule_applications WHERE status = 'running' ORDER BY heartbeat_at NULLS
 FIRST;`
+
+#### How the concurrency claims are tested (M3A-H2)
+
+The two-connection tests wait on **`pg_blocking_pids()`**, not on a sleep. An
+earlier version slept 0.5 s and then accepted either reclaim outcome, so it
+could not fail on the property it existed to prove. Each rendezvous is now a
+state PostgreSQL reports, the blocking backend is asserted to be the expected
+one, and a run in which contention never happened fails rather than passing
+quietly. A negative-control test proves the helper raises when nobody holds the
+row, so the mechanism cannot pass vacuously. Timeouts remain only so a genuine
+hang is a failure instead of a stall.
 
 ### The historical typed-reference constraint
 
