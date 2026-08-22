@@ -47,6 +47,28 @@ class ShopifyConnectionRepository(TenantScopedRepository[ShopifyConnection]):
         )
         return result.scalar_one_or_none()
 
+    async def lock_for_update(self, connection_id: uuid.UUID) -> ShopifyConnection | None:
+        """Take this connection's row for the rest of the transaction (GQL-2).
+
+        Webhook reconciliation is list-decide-create, and two of them running at
+        once would both see a topic missing and both create it — leaving the
+        shop receiving every event twice. Serialising on the connection row is
+        enough: it is the row the reconciliation is about, one per store, and
+        already tenant-scoped by ``_base_query``.
+
+        ``FOR UPDATE`` rather than an in-process lock, because the racing callers
+        are usually two web workers or a worker and a Celery task, and an
+        ``asyncio.Lock`` protects neither. ``populate_existing`` forces a fresh
+        read: a guard that inspects its session's remembered copy is not a guard.
+        """
+        result = await self.session.execute(
+            self._base_query()
+            .where(ShopifyConnection.id == connection_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
 
 class StoreListingRepository(TenantScopedRepository[StoreListing]):
     sortable_fields = frozenset({"created_at", "updated_at", "last_synced_at"})

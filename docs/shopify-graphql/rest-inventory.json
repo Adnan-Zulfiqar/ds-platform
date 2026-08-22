@@ -12,14 +12,18 @@
       "caller": "ShopifySyncService._create_or_adopt",
       "purpose": "Look up an existing product by handle so a retried publish adopts it instead of creating a duplicate.",
       "operation": "query",
-      "scopes": ["read_products"],
+      "scopes": [
+        "read_products"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "none (read); result feeds StoreListing.external_product_id",
       "shopifySideEffect": "none",
       "idempotency": "safe; this call is itself the idempotency guard for REST-002",
       "retry": "ShopifyClient generic retry: timeouts, 429, 5xx",
       "pagination": "limit=1, no cursor",
-      "tests": ["backend/tests/unit/test_shopify_publish_idempotency.py"],
+      "tests": [
+        "backend/tests/unit/test_shopify_publish_idempotency.py"
+      ],
       "proposedGraphql": "query { productByIdentifier(identifier: {handle: $handle}) { id } }",
       "targetPhase": "GQL-3",
       "schemaVerification": "unverified",
@@ -36,14 +40,18 @@
       "caller": "ShopifySyncService._create_or_adopt",
       "purpose": "Create the Shopify product for a DropPilot draft.",
       "operation": "mutation",
-      "scopes": ["write_products"],
+      "scopes": [
+        "write_products"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "StoreListing.external_product_id, external_variant_map, inventory_item_map, status",
       "shopifySideEffect": "creates a product and its variants",
       "idempotency": "not idempotent; guarded by the handle lookup in REST-001",
       "retry": "ShopifyClient generic retry — a known hazard: a retried POST can duplicate a product",
       "pagination": "n/a",
-      "tests": ["backend/tests/unit/test_shopify_publish_idempotency.py"],
+      "tests": [
+        "backend/tests/unit/test_shopify_publish_idempotency.py"
+      ],
       "proposedGraphql": "mutation productSet($input: ProductSetInput!) { productSet(input: $input) { product { id variants(first: 250) { nodes { id inventoryItem { id } } } } userErrors { field message code } } }",
       "targetPhase": "GQL-3",
       "schemaVerification": "unverified",
@@ -60,14 +68,18 @@
       "caller": "ShopifySyncService.publish_product",
       "purpose": "Update an already-published product (title, body, variants, images).",
       "operation": "mutation",
-      "scopes": ["write_products"],
+      "scopes": [
+        "write_products"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "StoreListing.external_variant_map, inventory_item_map, last_synced_at",
       "shopifySideEffect": "replaces product fields; an incomplete variant list can DELETE variants",
       "idempotency": "idempotent by product id",
       "retry": "ShopifyClient generic retry",
       "pagination": "n/a",
-      "tests": ["backend/tests/unit/test_shopify_publish_idempotency.py"],
+      "tests": [
+        "backend/tests/unit/test_shopify_publish_idempotency.py"
+      ],
       "proposedGraphql": "mutation productSet($input: ProductSetInput!) { productSet(input: $input) { product { id } userErrors { field message code } } }",
       "targetPhase": "GQL-3",
       "schemaVerification": "unverified",
@@ -84,7 +96,9 @@
       "caller": "ShopifySyncService.push_inventory",
       "purpose": "Find a location to set inventory against.",
       "operation": "query",
-      "scopes": ["read_locations"],
+      "scopes": [
+        "read_locations"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "none",
       "shopifySideEffect": "none",
@@ -108,7 +122,9 @@
       "caller": "ShopifySyncService.push_inventory",
       "purpose": "Set available quantity for one inventory item at one location.",
       "operation": "mutation",
-      "scopes": ["write_inventory"],
+      "scopes": [
+        "write_inventory"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "StoreListing.last_synced_at",
       "shopifySideEffect": "overwrites available stock",
@@ -132,7 +148,9 @@
       "caller": "ShopifySyncService.push_price",
       "purpose": "Push a recalculated sell price to one Shopify variant.",
       "operation": "mutation",
-      "scopes": ["write_products"],
+      "scopes": [
+        "write_products"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "PriceChange rows via the pricing engine caller",
       "shopifySideEffect": "changes the customer-visible price",
@@ -156,7 +174,9 @@
       "caller": "ShopifySyncService.import_orders",
       "purpose": "Poll recent Shopify orders into DropPilot.",
       "operation": "query",
-      "scopes": ["read_orders"],
+      "scopes": [
+        "read_orders"
+      ],
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "Order and OrderItem rows",
       "shopifySideEffect": "none",
@@ -185,15 +205,20 @@
       "writesLocally": "none",
       "shopifySideEffect": "none",
       "idempotency": "safe",
-      "retry": "ShopifyClient generic retry",
-      "pagination": "unpaginated",
-      "tests": ["backend/tests/integration/test_shopify_webhook_processing.py"],
-      "proposedGraphql": "query { webhookSubscriptions(first: 100) { nodes { id topic endpoint { __typename } } pageInfo { hasNextPage endCursor } } }",
+      "retry": "ShopifyGraphQLClient bounded retry (query)",
+      "pagination": "cursor-paginated via PageWalker (was unpaginated over REST)",
+      "tests": [
+        "backend/tests/unit/test_shopify_gql2_operations.py",
+        "backend/tests/unit/test_shopify_gql2_reconciliation.py",
+        "backend/tests/integration/test_shopify_gql2_webhook_concurrency.py",
+        "backend/tests/integration/test_shopify_webhook_processing.py"
+      ],
+      "proposedGraphql": "query WebhookSubscriptions($first: Int!, $after: String) { webhookSubscriptions(first: $first, after: $after) { nodes { id topic uri format includeFields filter } pageInfo { hasNextPage endCursor } } }",
       "targetPhase": "GQL-2",
-      "schemaVerification": "unverified",
+      "schemaVerification": "verified",
       "risk": "low",
-      "productionUsage": "post-install webhook registration",
-      "removalStatus": "present",
+      "productionUsage": "none - the call site was removed in GQL-2; replaced by graphql_operations.list_webhook_subscriptions",
+      "removalStatus": "removed",
       "permittedInNewPublicApp": false
     },
     {
@@ -208,16 +233,20 @@
       "authority": "store_id -> ShopifyConnection (tenant-scoped)",
       "writesLocally": "ShopifyConnection.webhooks_registered_at",
       "shopifySideEffect": "creates a webhook subscription",
-      "idempotency": "guarded by REST-008; Shopify also rejects exact duplicates",
-      "retry": "ShopifyClient generic retry",
+      "idempotency": "guarded by a re-list plus SELECT ... FOR UPDATE on the connection row; never automatically retried, so an unknown outcome is resolved by re-listing",
+      "retry": "never - mutation; the shared client refuses automatic mutation retry",
       "pagination": "n/a",
-      "tests": ["backend/tests/integration/test_shopify_webhook_processing.py"],
-      "proposedGraphql": "mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) { webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) { webhookSubscription { id } userErrors { field message } } }",
+      "tests": [
+        "backend/tests/unit/test_shopify_gql2_operations.py",
+        "backend/tests/unit/test_shopify_gql2_reconciliation.py",
+        "backend/tests/integration/test_shopify_gql2_webhook_concurrency.py"
+      ],
+      "proposedGraphql": "mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) { webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) { webhookSubscription { id topic uri format includeFields filter } userErrors { field message } } }",
       "targetPhase": "GQL-2",
       "schemaVerification": "verified",
       "risk": "medium",
-      "productionUsage": "post-install webhook registration",
-      "removalStatus": "present",
+      "productionUsage": "none - the call site was removed in GQL-2; replaced by graphql_operations.create_webhook_subscription",
+      "removalStatus": "removed",
       "permittedInNewPublicApp": false
     },
     {
@@ -307,7 +336,10 @@
       "idempotency": "safe",
       "retry": "n/a (browser redirect)",
       "pagination": "n/a",
-      "tests": ["backend/tests/unit/test_shopify_oauth.py"],
+      "tests": [
+        "backend/tests/unit/test_shopify_install.py",
+        "backend/tests/unit/test_shopify_shop_domain_uniqueness.py"
+      ],
       "proposedGraphql": "n/a — OAuth is not part of the Admin GraphQL surface",
       "targetPhase": "none",
       "schemaVerification": "not-applicable",
@@ -331,7 +363,7 @@
       "idempotency": "single-use code; a replay fails at Shopify",
       "retry": "none",
       "pagination": "n/a",
-      "tests": ["backend/tests/unit/test_shopify_oauth.py"],
+      "tests": [],
       "proposedGraphql": "n/a — OAuth is not part of the Admin GraphQL surface",
       "targetPhase": "none",
       "schemaVerification": "not-applicable",
@@ -353,16 +385,34 @@
       "writesLocally": "Store.currency, currency_last_synced_at",
       "shopifySideEffect": "none",
       "idempotency": "safe",
-      "retry": "ShopifyClient generic retry",
+      "retry": "ShopifyGraphQLClient bounded retry (query)",
       "pagination": "n/a",
-      "tests": ["backend/tests/unit/test_m24a_currency_fx.py"],
-      "proposedGraphql": "query ShopCurrency { shop { currencyCode } } — already GraphQL; moves onto ShopifyGraphQLClient in GQL-2",
+      "tests": [
+        "backend/tests/unit/test_shopify_gql2_operations.py",
+        "backend/tests/integration/test_shopify_gql2_currency.py",
+        "backend/tests/unit/test_m24a_currency_fx.py"
+      ],
+      "proposedGraphql": "query ShopAuthority { shop { currencyCode } }",
       "targetPhase": "GQL-2",
       "schemaVerification": "verified",
       "risk": "low",
-      "productionUsage": "store connect and currency refresh",
-      "removalStatus": "present",
+      "productionUsage": "none - store connect and currency refresh now use graphql_operations.fetch_shop_authority; ShopifyClient.fetch_shop_currency_code is retained only for its existing unit test and has no production caller",
+      "removalStatus": "migrated",
       "permittedInNewPublicApp": true
+    }
+  ],
+  "migrationLog": [
+    {
+      "phase": "GQL-2",
+      "date": "2026-08-22",
+      "migrated": [
+        "GQL-000",
+        "REST-008",
+        "REST-009"
+      ],
+      "summary": "Shop currency authority and shop-scoped webhook reconciliation moved onto ShopifyGraphQLClient. REST-008 and REST-009 were deleted from app/integrations/shopify/service.py. GQL-000's document moved off ShopifyClient.graphql onto the shared client; the legacy method is retained with no production caller because an existing unit test drives it directly.",
+      "correction": "GQL-1 proposed 'endpoint { __typename }' for REST-008. The official 2026-07 reference deprecates callbackUrl and the endpoint union; 'uri' is current, and the shipped document selects it.",
+      "notMigrated": "Shop-scoped subscriptions are retained. App-scoped shopify.app.toml subscriptions are deliberately not introduced: running both modes for one topic delivers every event twice, and webhookSubscriptions cannot see the app-scoped half. Removing per-shop subscriptions needs webhookSubscriptionDelete, which is GQL-6's."
     }
   ]
 }

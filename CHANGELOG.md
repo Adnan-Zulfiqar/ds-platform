@@ -12,6 +12,66 @@ production release.
 
 ### Added
 
+- **GQL-2 — shop currency authority and webhook reconciliation on GraphQL.**
+  The first three inventory rows migrate onto the GQL-1 foundation: `GQL-000`
+  (`shop.currencyCode`), `REST-008` (webhook list) and `REST-009` (webhook
+  create). Same topics, same delivery URIs, same shop-scoped model, same
+  `Store.currency` semantics — only the transport changed. Ten of twelve
+  versioned Admin REST calls remain.
+
+  A new operation layer (`graphql_operations.py`) holds the three static
+  documents; `webhook_reconciliation.py` holds the compare-and-create logic.
+  Both were written against the official 2026-07 reference, which corrected
+  GQL-1's own proposal: `WebhookSubscription.uri` is the current endpoint field,
+  and `callbackUrl` and the `endpoint` union are deprecated. A document written
+  from the unverified proposal would have compared endpoints by `__typename` and
+  never matched anything.
+
+  **Concurrent registration can no longer duplicate.** OAuth completion,
+  reconnect and recovery all call `register_webhooks`; two of them overlapping
+  would each list an empty shop, each decide a topic was missing, and each
+  create it, leaving the merchant receiving every event twice. Reconciliation is
+  now serialised per store with `SELECT … FOR UPDATE` on the `ShopifyConnection`
+  row — the same coordination mechanism the bulk-pricing work uses, not a second
+  locking architecture, and not an in-process lock that would protect neither of
+  two workers. Proven by two reconcilers on two real PostgreSQL connections with
+  a `pg_blocking_pids()` rendezvous, alongside a control test showing the same
+  race without the lock does duplicate.
+
+  The create mutation is **never retried automatically** — the old REST path
+  inherited a generic retry, so a lost response could create a second
+  subscription. An unknown outcome is reported as `unknown` and resolved by
+  re-listing on the next run, and `webhooks_registered_at` is stamped only when
+  every desired subscription is confirmed present with no warnings.
+
+  Shop currency still fails closed with no USD fallback, and a failed refresh
+  still retains a previously trusted currency rather than clearing it.
+
+  **No migration was required** — no webhook identifier is persisted anywhere,
+  so Shopify's list stays the only authority and `alembic heads` is unchanged at
+  `0028`.
+
+  Deliberately not done, and recorded rather than assumed safe: `shopify.app.toml`
+  subscriptions are **not** introduced, because `webhookSubscriptions` returns
+  only shop-scoped subscriptions and running both modes for one topic would
+  duplicate every event with no way for this codebase to detect it; that move
+  needs `webhookSubscriptionDelete`, which is GQL-6's. Nothing is deleted in this
+  phase — duplicates and mismatches are reported as warnings.
+
+  The inventory drift test now checks the document against the **code**, not just
+  against its sibling document: a row may only claim `migrated`/`removed` if the
+  call site is genuinely gone, and a cited test file must actually exist. That
+  guard immediately caught a pre-existing defect — both `OAUTH-*` rows cited a
+  test file that has never existed in this repository.
+
+  Known gap, unowned by any GQL phase: the three mandatory privacy webhooks
+  (`customers/data_request`, `customers/redact`, `shop/redact`) have no handler
+  anywhere in the backend. They are configured outside this API, so they are not
+  a REST-migration row, but they are an App Store submission blocker. See
+  `docs/shopify-graphql/GQL2_SHOP_WEBHOOKS.md`.
+
+  No live Shopify request was made; live verification is recorded as not run.
+
 - **GQL-1 — Shopify Admin GraphQL client foundation and complete REST
   inventory.** The first Shopify App Store launch-readiness phase. Shopify
   requires new public apps to use GraphQL exclusively, and this platform makes
