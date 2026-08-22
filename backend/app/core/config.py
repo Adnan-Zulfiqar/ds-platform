@@ -11,6 +11,7 @@ flat object with fifty attributes.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -553,11 +554,38 @@ class ShopifySettings(_EnvFileSettings):
     api_version: str = Field(
         default="2026-07",
         description=(
-            "Shopify Admin API version for new GraphQL paths (shop currency). "
-            "Legacy REST callers still read this setting — remaining REST debt "
-            "is tracked separately."
+            "Shopify Admin **REST** API version. Legacy REST callers read this "
+            "setting and only this one; GraphQL reads `graphql_api_version`."
         ),
     )
+    graphql_api_version: str = Field(
+        default="2026-07",
+        description=(
+            "Shopify Admin GraphQL API version. Deliberately separate from the "
+            "REST setting: the two surfaces are on different migration clocks, "
+            "and one shared value would let a REST pin silently drag GraphQL "
+            "backwards (or the reverse) with no reviewer noticing."
+        ),
+    )
+
+    @field_validator("graphql_api_version", "api_version")
+    @classmethod
+    def _reject_unpinned_api_version(cls, value: str) -> str:
+        """Require an explicit ``YYYY-MM`` quarter — never ``latest``.
+
+        Shopify accepts ``/admin/api/latest/``, and it is a trap: the schema
+        changes under a deployed app four times a year with no code change and
+        no deploy to correlate against. Every request this platform makes names
+        the version it was written for, so an upgrade is a reviewed edit.
+        """
+        candidate = value.strip()
+        if not re.fullmatch(r"\d{4}-(01|04|07|10)", candidate):
+            raise ValueError(
+                "Shopify API version must be a pinned quarterly release such as "
+                "'2026-07'. 'latest', 'unstable' and unpinned values are refused."
+            )
+        return candidate
+
     callback_url: str = Field(
         default="http://localhost:8000/api/v1/integrations/shopify/callback",
     )

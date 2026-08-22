@@ -184,6 +184,30 @@ future stage, not started), *Blocked* (external constraint).
 
 ---
 
+## 11. Shopify App Store launch readiness
+
+Shopify requires new public apps submitted to the App Store to use GraphQL
+exclusively (changelog, effective 1 April 2025). This section tracks that
+requirement rather than a DSers feature.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Shared Admin GraphQL client (pinned 2026-07) | Existing and verified | `app/integrations/shopify/graphql.py`, 159 tests |
+| Complete Admin REST inventory | Existing and verified | `docs/shopify-graphql/REST_INVENTORY.md` + `rest-inventory.json`, drift-guarded |
+| Shopify GID value object | Existing and verified | `app/integrations/shopify/gid.py` |
+| Bounded cursor pagination helpers | Existing and verified | `app/integrations/shopify/pagination.py` |
+| Webhook registration on GraphQL | Missing — GQL-2 | `REST-008`, `REST-009` still REST |
+| Products/variants/media on GraphQL | Missing — GQL-3 | `REST-001`–`REST-003`, `REST-006` still REST |
+| Inventory/locations/unit cost on GraphQL | Missing — GQL-4 | `REST-004`, `REST-005` still REST |
+| Orders/fulfillment on GraphQL | Missing — GQL-5 | `REST-007` still REST |
+| Uninstall via `appUninstall` | Missing — GQL-6 | `REST-012` still REST |
+| **Zero versioned Admin REST calls** | **Missing** | 12 remain; see the inventory |
+
+The last row is the submission gate. Until it reads "verified", the app cannot be
+submitted as a new public app.
+
+---
+
 ## Notes on method
 
 This matrix was built by reading routers (`backend/app/api/v1/*/router.py`),
