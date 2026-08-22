@@ -56,7 +56,6 @@ class TestGidParsing:
             "gid://other/Product/1",
             "https://shopify.com/Product/1",
             "gid://shopify/Product/1/extra",
-            "gid://shopify/Product/1?x=2",
             "gid://shopify/Product/1#f",
             "gid://shopify/Product/ 1",
             "gid://shopify/9Product/1",
@@ -98,6 +97,110 @@ class TestGidParsing:
         assert [g.numeric_id for g in gids] == ["900", "100"]
         with pytest.raises(ShopifyGidError):
             parse_gid(0)
+
+
+class TestParameterizedGids:
+    """F-01 — Shopify officially issues parameterized GIDs.
+
+    The documented structure is
+    ``gid://shopify/{child}/{child_id}?{parent}_id={parent_id}``, and the
+    reference gives ``gid://shopify/InventoryLevel/123?inventory_item_id=456``
+    verbatim. The first version of this parser terminated the id at ``?``, so
+    every InventoryLevel identifier Shopify hands out was rejected outright —
+    GQL-4 would have hit it on its first inventory call.
+    """
+
+    OFFICIAL = "gid://shopify/InventoryLevel/123?inventory_item_id=456"
+
+    def test_the_official_parameterized_example_parses(self) -> None:
+        gid = parse_gid(self.OFFICIAL)
+        assert gid.resource == "InventoryLevel"
+        assert gid.numeric_id == "123"
+
+    def test_the_complete_gid_round_trips_exactly(self) -> None:
+        """The persistence contract: what Shopify sent is what is stored and
+        what is sent back. Truncating at the ``?`` would silently address a
+        different inventory level."""
+        gid = parse_gid(self.OFFICIAL)
+        assert gid.value == self.OFFICIAL
+        assert str(gid) == self.OFFICIAL
+
+    def test_parameters_are_exposed_without_polluting_the_base_id(self) -> None:
+        gid = parse_gid(self.OFFICIAL)
+        assert gid.numeric_id == "123", "the base id must not carry the query"
+        assert gid.parameters == {"inventory_item_id": "456"}
+
+    def test_an_unparameterized_gid_has_no_parameters(self) -> None:
+        gid = parse_gid("gid://shopify/Product/123")
+        assert gid.parameters == {}
+        assert gid.value == "gid://shopify/Product/123"
+
+    def test_the_expected_resource_check_still_applies(self) -> None:
+        with pytest.raises(ShopifyGidError):
+            parse_gid(self.OFFICIAL, expected_resource="Product")
+        assert parse_gid(self.OFFICIAL, expected_resource="InventoryLevel").resource == (
+            "InventoryLevel"
+        )
+
+    def test_parameters_are_read_only(self) -> None:
+        """A caller must not be able to mutate a parsed identifier into a
+        different one."""
+        gid = parse_gid(self.OFFICIAL)
+        with pytest.raises((TypeError, AttributeError)):
+            gid.parameters["inventory_item_id"] = "999"  # type: ignore[index]
+
+    def test_multiple_parameters_are_supported_generically(self) -> None:
+        """Shopify documents one parameter today and does not promise only one.
+        Nothing here is specific to InventoryLevel."""
+        raw = "gid://shopify/SomeChild/1?parent_id=2&other_id=3"
+        gid = parse_gid(raw)
+        assert gid.value == raw
+        assert gid.parameters == {"parent_id": "2", "other_id": "3"}
+
+    def test_parameter_order_is_never_rewritten(self) -> None:
+        raw = "gid://shopify/SomeChild/1?b_id=2&a_id=3"
+        assert parse_gid(raw).value == raw
+
+    @pytest.mark.parametrize(
+        "rejected",
+        [
+            "gid://shopify/InventoryLevel/123?",
+            "gid://shopify/InventoryLevel/123?=456",
+            "gid://shopify/InventoryLevel/123?inventory_item_id",
+            "gid://shopify/InventoryLevel/123?inventory_item_id=",
+            "gid://shopify/InventoryLevel/123?a=1&",
+            "gid://shopify/InventoryLevel/123?a=1&&b=2",
+            "gid://shopify/InventoryLevel/123?a=1&a=2",
+            "gid://shopify/InventoryLevel/123?a=1#frag",
+            "gid://shopify/InventoryLevel/123#frag",
+            "gid://shopify/InventoryLevel/?inventory_item_id=456",
+            "gid://shopify/InventoryLevel/123?bad key=1",
+            "gid://shopify/InventoryLevel/123?a=%zz",
+            "gid://shopify/InventoryLevel/123?a=%2",
+            "gid://user@shopify/InventoryLevel/123?a=1",
+            "gid://shopify:443/InventoryLevel/123?a=1",
+            "gid://other/InventoryLevel/123?a=1",
+            "https://shopify/InventoryLevel/123?a=1",
+            "gid://shopify/InventoryLevel/123?a=1 2",
+            "gid://shopify/InventoryLevel/123?a=1\n",
+            "gid://shopify/InventoryLevel/123?a=\t1",
+        ],
+    )
+    def test_malformed_or_unsafe_parameterized_gids_are_refused(self, rejected: str) -> None:
+        """An arbitrary query string is not automatically safe.
+
+        Duplicate keys are refused rather than silently collapsed: the two
+        readings address different objects and nothing here should pick one.
+        """
+        with pytest.raises(ShopifyGidError):
+            parse_gid(rejected)
+
+    def test_a_percent_encoded_value_is_preserved_verbatim(self) -> None:
+        raw = "gid://shopify/SomeChild/1?ref=a%2Fb"
+        gid = parse_gid(raw)
+        assert gid.value == raw
+        assert gid.parameters == {"ref": "a/b"}, "decoded for inspection"
+        assert str(gid) == raw, "but never re-encoded on the way out"
 
 
 class TestPageInfoParsing:

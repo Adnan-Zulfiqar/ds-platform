@@ -75,6 +75,21 @@ class ShopifyGraphQLError(ShopifyError):
         self.request_id = request_id
 
 
+class ShopifyOperationError(ShopifyGraphQLError):
+    """The GraphQL document could not be parsed, or its operation resolved.
+
+    Raised **before** any request leaves the process, so it never describes
+    something Shopify did. A subclass of :class:`ShopifyGraphQLError` so that
+    callers already handling GraphQL failures keep working, but distinguishable
+    because the remedy is different: this is a bug in a document or a call site,
+    not an upstream condition to retry.
+    """
+
+    code = "shopify_graphql_operation_invalid"
+    message = "The GraphQL operation could not be resolved."
+    retryable = False
+
+
 class ShopifyThrottledError(ShopifyGraphQLError):
     """The GraphQL `THROTTLED` code, or an HTTP 429 on the GraphQL endpoint."""
 

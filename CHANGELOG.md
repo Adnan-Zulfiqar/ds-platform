@@ -49,6 +49,18 @@ production release.
   `unverified` on purpose: the exact 2026-07 fields have not been read yet, and
   guessing would be worse than the gap.
 
+  Acceptance fixes on the same phase, each with a recorded red-before result:
+  parameterized Shopify GIDs (`gid://shopify/InventoryLevel/123?inventory_item_id=456`)
+  were rejected outright because the parser terminated the id at `?`; retry
+  eligibility was taken from a caller-declared `OperationType`, so a mutation
+  declared as a query got three HTTP attempts at a `productCreate`; and the
+  foundation document wrongly called `2026-10` the latest stable release when it
+  is the release candidate until 1 October 2026. GIDs now support both documented
+  shapes with the complete opaque string as the persistence authority, and the
+  document is parsed with `graphql-core` (MIT, no runtime dependencies, declared
+  explicitly) so the operation's kind is a fact rather than an assertion — a
+  mislabelled mutation now makes zero HTTP requests.
+
   **No REST call was migrated, no behaviour changed, no migration added, and no
   live Shopify request was made** — every test runs through
   `httpx.MockTransport`.

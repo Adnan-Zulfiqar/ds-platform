@@ -38,9 +38,14 @@ mistakes an assumption for a fact:
   one-second backoff and says nothing about the header. The client honours it
   *if present* because doing so is free and correct, but the cost-derived wait
   is the real mechanism.
-* **`2026-10` is now the latest stable version.** This phase pins `2026-07` as
-  instructed; the setting is configurable precisely so the quarterly move is a
-  reviewed edit rather than a rewrite.
+* **`2026-10` is the release candidate, not a stable version.** An earlier
+  revision of this document said it was "now the latest stable", which was
+  wrong. Per the release table, `2026-07` released on 1 July 2026 and `2026-10`
+  releases on **1 October 2026**; a release candidate is *"published on the same
+  date as the stable release"*, so `2026-10` has been the RC since 1 July. As of
+  22 August 2026 the latest **stable** version is `2026-07`, which is what
+  production is pinned to. The setting is configurable so the quarterly move to
+  `2026-10` after 1 October is a reviewed edit rather than a rewrite.
 
 ## Architecture decision
 
@@ -49,12 +54,37 @@ mistakes an assumption for a fact:
 | Concern | Decision |
 |---|---|
 | HTTP | `httpx`, already the only client in the backend. Shopify's Node library is not introduced into a Python service. |
-| Dependencies | **None added.** `httpx` plus the existing typing tools cover this entirely; a GraphQL codegen toolchain would be a large dependency for a client that sends static documents. |
+| Dependencies | **One added: `graphql-core`** (see below). A codegen toolchain is still declined — this is a parser, not a schema pipeline. |
 | Errors | Extends `ShopifyError` / `app.core.exceptions`, so a GraphQL failure lands in the same envelope with the same `code` discipline as everything else. |
 | Logging | The existing `structlog` `get_logger`, with the existing correlation id attached by middleware. |
 | Tokens | Unchanged. Still encrypted at rest, still decrypted by `ShopifyIntegrationService.client_for_store`. GQL-1 changes no persistence. |
 | Shop domain | The **existing** authority in `auth.py`, factored into `is_canonical_shop_domain` and shared. No second validator. |
 | Settings | Extends `ShopifySettings`, next to the REST configuration it deliberately does not share. |
+
+### The one dependency: `graphql-core`
+
+Added by acceptance finding F-02. Retry eligibility must come from the document,
+and deciding "is this a mutation" needs a real parser — the word appears in
+comments, in fragment names and in field names, a document can hold several
+operations of different kinds, and the failure mode of guessing is a duplicated
+`productCreate`.
+
+| | |
+|---|---|
+| Package | `graphql-core` |
+| Version policy | `>=3.2.0,<4` — pinned below the next major, which is where spec-level breaking changes would land |
+| Installed | 3.2.11 |
+| Licence | MIT |
+| Runtime dependencies | **none** on Python 3.13 (`typing-extensions` only below 3.10) |
+| Why this one | The reference Python implementation of the GraphQL spec, a direct port of `graphql-js` |
+
+Declared as a **direct production dependency** in `pyproject.toml`, not relied on
+transitively: nothing else in this project pulls it in, and production code must
+not import something that merely happens to be installed.
+
+A regex or substring detector was explicitly rejected. It is not a smaller
+version of this — it is a different, worse thing that fails silently on exactly
+the documents where being wrong is dangerous.
 
 ### Why a new module rather than extending `ShopifyClient`
 
@@ -81,6 +111,16 @@ reviewer noticing. Both are validated against `\d{4}-(01|04|07|10)`, so
 `latest`, `unstable` and typos like `2026-7` are refused **at configuration
 load**, not at the first request. `/latest` is never constructed.
 
+### Version status as of 22 August 2026
+
+| Version | Released | Status | Supported until |
+|---|---|---|---|
+| `2026-07` | 1 July 2026 | **latest stable — pinned here** | 16 July 2027 |
+| `2026-10` | 1 October 2026 | release candidate | 16 October 2027 |
+
+Do not move production to a release candidate. `2026-10` becomes eligible on
+1 October 2026.
+
 ### Quarterly upgrade procedure
 
 Shopify ships a stable version each quarter and supports each for at least
@@ -104,13 +144,44 @@ of another change.
 ### Required inputs
 
 A canonical `.myshopify.com` domain, a decrypted token from the existing
-connection service, a named operation, a static document, separate variables and
-an **explicit** `OperationType`. Nothing is inferred.
+connection service, a static document, and separate variables. `operation_name`
+may be omitted when the document defines exactly one operation. `operation_type`
+is optional and is only an assertion.
 
-The operation type matters more than it looks: it decides whether a failure is
-retried. Sniffing the document for the word `mutation` would be guesswork — it
-appears in comments, in fragment names, and in a query that merely mentions one —
-so the caller states it or the call does not happen.
+### Operation classification and the retry invariant
+
+**The parsed document decides whether a call may be retried. Nothing else.**
+
+This was acceptance finding F-02. The first version took `OperationType` from the
+caller and used it directly: a mutation declared as a query became eligible for
+automatic retry, so a timed-out `productCreate` got three attempts and could
+leave the merchant with three products. A behavioural probe against that code
+recorded exactly that — three HTTP attempts at a mutation.
+
+`operations.select_operation` now parses the document with `graphql-core` before
+any request is made and resolves the operation using GraphQL semantics:
+
+| Case | Behaviour |
+|---|---|
+| One operation, no `operationName` | selected; anonymous operations send no `operationName` |
+| Several operations, valid `operationName` | that one is selected |
+| Several operations, no `operationName` | local error |
+| `operationName` not in the document | local error |
+| Fragments before or after an operation | handled |
+| Leading comments and whitespace | handled |
+| Malformed document | local error, **no request** |
+| Fragments-only document | local error, **no request** |
+| `subscription` | local error — the Admin API here is request/response, and treating one as a query would give it query retries |
+| Declared type disagrees with the parsed one | local error, **either direction** |
+
+Failures raise `ShopifyOperationError` — a subclass of `ShopifyGraphQLError` so
+existing handlers keep working, but distinct because the remedy differs: it is a
+bug in a document or a call site, not an upstream condition to retry. It always
+precedes the network, so it never describes something Shopify did.
+
+The declaration is checked in both directions. Declaring a query as a mutation is
+the harmless direction, but it is still a false statement about the document, and
+a mismatch tolerated one way is a mismatch trusted the other.
 
 ### URL and SSRF safety
 
@@ -210,7 +281,8 @@ Never retried: 400, 401, 403, validation errors, `MAX_COST_EXCEEDED` (the same
 document costs the same next time, so retrying converts an authoring mistake into
 a slow outage), and `userErrors`.
 
-**Mutations never retry automatically in GQL-1.** Replay safety is a per-operation
+**Mutations never retry automatically**, and after F-02 that is enforced by the
+parsed document rather than by a caller's word. Replay safety is a per-operation
 question — does Shopify dedupe it, is there an idempotency key, would a second
 run create a second product — and the operation layer is where that is known.
 `REST-002` in the inventory is the cautionary example: it is a POST that the
@@ -226,11 +298,37 @@ propagates and a shutting-down worker is not held open by a backoff.
 
 ## GID and pagination foundations
 
-`gid.py` parses `gid://shopify/{Resource}/{id}`, retains the **complete** GID as
-the thing to persist, and offers `expect(resource)` because a `ProductVariant`
-GID passed where an `InventoryItem` was meant parses perfectly and fails
-silently. There is no API here that accepts an array index — the blueprint guard
-about identity-by-position is enforced by there being no way to do it.
+`gid.py` parses both documented shapes:
+
+* `gid://shopify/{object_name}/{id}` — e.g. `gid://shopify/Product/123`
+* `gid://shopify/{child}/{child_id}?{parent}_id={parent_id}` — the official
+  example is `gid://shopify/InventoryLevel/123?inventory_item_id=456`
+
+Parameterized GIDs were acceptance finding F-01: the first parser terminated the
+id at `?` and rejected every one Shopify issues, which GQL-4 would have hit on
+its first inventory call.
+
+**The persistence contract.** The complete, opaque GID string is the authority.
+`value` is exactly what Shopify sent — same characters, same parameter order,
+same percent-encoding — and that is what is stored and what is sent back.
+`resource`, `numeric_id` and `parameters` are *validation and convenience views*:
+safe to read, log or branch on, never a basis for reconstructing an identifier. A
+parameterized GID rebuilt from its parts would be a different string, and for an
+`InventoryLevel` a different string addresses a different inventory level.
+
+Nothing is specific to `InventoryLevel`. Shopify documents one parameter today
+and promises nothing about tomorrow, so the *syntax* is validated — key shape,
+value character class, percent-escape validity, no duplicate keys — and the
+semantics are left to Shopify. An arbitrary query string is not treated as safe
+just because it arrived attached to a GID: an empty query, a bare key, an empty
+value, a duplicate key or a bad escape are all refused rather than repaired,
+because each has more than one plausible reading and guessing which one Shopify
+meant is not a choice a client should have.
+
+`expect(resource)` still rejects the wrong type, because a `ProductVariant` GID
+passed where an `InventoryItem` was meant parses perfectly and fails silently.
+There is no API that accepts an array index — the blueprint guard about
+identity-by-position is enforced by there being no way to do it.
 
 `pagination.py` supplies `PageInfo`, a bounded `PageWalker` and
 `connection_nodes`. Cursor-only, explicit page and node budgets, duplicate-cursor
@@ -264,3 +362,24 @@ made during this phase — every test runs through `httpx.MockTransport`.
 5. **The shared pool is process-wide.** Correct for a pool, but it means a
    pathological shop can occupy connections other shops would use. Bounded at 20;
    revisit if a per-tenant limit is ever needed.
+
+## Deferred acceptance findings
+
+Raised by the independent review, deliberately **not** implemented in this pass
+so the acceptance fix stays the size it claims to be.
+
+* **F-04 — version-calendar enforcement.** Nothing checks at runtime that the
+  configured version is a released stable one rather than a future or
+  release-candidate quarter. The format validator would accept `2027-10` today.
+  Low risk while the value is a reviewed constant; worth a startup assertion
+  against a maintained table when the first quarterly upgrade happens.
+* **F-05 — API-version fall-forward detection.** Shopify returns
+  `X-Shopify-API-Version` on every response, and it can differ from the version
+  requested when the requested one is unsupported. This client does not compare
+  them, so a silently fallen-forward version would go unnoticed until a schema
+  difference bit. Cheap to add — one header comparison and a log — and it wants
+  a deliberate decision about whether the mismatch should warn or fail.
+
+Neither is a blocker for GQL-1: the version is pinned to a released stable
+quarter, and the migration phases that would notice a schema difference have not
+started.

@@ -26,6 +26,11 @@ each REST call is migrated in its own phase.
 Nothing here was written from memory of the schema; anything not confirmed in
 the official reference is marked ``unverified`` in the REST inventory instead of
 being guessed at.
+
+**Retry eligibility comes from the parsed document**, not from a caller's
+declaration -- see ``operations.py``. That was an acceptance finding (F-02): a
+mutation declared as a query was eligible for automatic retry, which is three
+chances to create three products.
 """
 
 from __future__ import annotations
@@ -38,7 +43,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
-from enum import StrEnum
 from typing import Any, Final
 
 import httpx
@@ -56,6 +60,12 @@ from app.integrations.shopify.exceptions import (
     ShopifyThrottledError,
     ShopifyTimeoutError,
     ShopifyUserError,
+)
+from app.integrations.shopify.operations import (
+    OperationType,
+    SelectedOperation,
+    assert_declaration_matches,
+    select_operation,
 )
 
 logger = get_logger(__name__)
@@ -77,19 +87,6 @@ _RETRYABLE_STATUSES: Final = frozenset({502, 503, 504})
 
 _MAX_BACKOFF_SECONDS: Final[float] = 30.0
 _MAX_TOTAL_WAIT_SECONDS: Final[float] = 60.0
-
-
-class OperationType(StrEnum):
-    """Declared by the caller. Never inferred from the document text.
-
-    Sniffing for the word ``mutation`` in a GraphQL string is guesswork: it
-    appears in comments, in fragment names and in a query that merely *mentions*
-    one. Getting it wrong here decides whether a failed call is retried, so it is
-    the caller's explicit statement or nothing.
-    """
-
-    QUERY = "query"
-    MUTATION = "mutation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +122,9 @@ class GraphQLResponse:
     """
 
     data: Mapping[str, Any]
-    operation_name: str
+    #: The selected operation's name, or ``None`` for an anonymous operation --
+    #: which GraphQL permits when a document holds exactly one.
+    operation_name: str | None
     api_version: str
     request_id: str | None = None
     cost: QueryCost = field(default_factory=QueryCost)
@@ -453,8 +452,8 @@ class ShopifyGraphQLClient:
         self,
         *,
         document: str,
-        operation_name: str,
-        operation_type: OperationType,
+        operation_name: str | None = None,
+        operation_type: OperationType | None = None,
         variables: Mapping[str, Any] | None = None,
         allow_partial_data: bool = False,
     ) -> GraphQLResponse:
@@ -465,31 +464,43 @@ class ShopifyGraphQLClient:
         the document is how a GraphQL injection happens, and it also defeats
         Shopify's query-cost caching.
 
+        ``operation_name`` may be omitted when the document defines exactly one
+        operation. ``operation_type``, if given, is an **assertion** checked
+        against the parsed document -- it decides nothing on its own.
+
         ``allow_partial_data`` exists so the option is explicit and greppable. It
         defaults to closed and is unused on every GQL-1 path: a response that
         carries both ``data`` and ``errors`` is a partial failure, and treating
         it as success is how half a catalogue silently goes unsynced.
         """
-        if not operation_name or not operation_name.strip():
-            raise ShopifyGraphQLError("A GraphQL operation name is required.")
-        if not document or not document.strip():
-            raise ShopifyGraphQLError("A GraphQL document is required.")
+        # Parse first. Nothing goes on the wire until the document is known to
+        # be valid and the operation is known to be one this client may send --
+        # and, critically, until its *kind* is known from the document rather
+        # than from what the caller said about it.
+        selected = select_operation(document, operation_name)
+        assert_declaration_matches(selected, operation_type)
 
         body: dict[str, Any] = {
             "query": document,
             "variables": dict(variables or {}),
-            "operationName": operation_name,
         }
+        if selected.name is not None:
+            # Omitted for an anonymous operation: sending a name Shopify cannot
+            # match in the document is an error, not a courtesy.
+            body["operationName"] = selected.name
         headers = {
             "X-Shopify-Access-Token": self._token,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
 
-        # Mutations never retry automatically in GQL-1: replay safety is a
+        # Mutations never retry automatically: replay safety is a
         # per-operation decision (does Shopify dedupe it? is there an
         # idempotency key?) and the operation layer is where that is known.
-        attempts = 1 if operation_type is OperationType.MUTATION else max(1, self._max_attempts)
+        #
+        # `selected` -- the parsed document -- is the authority. A caller
+        # cannot buy retries for a mutation by claiming it is a query.
+        attempts = max(1, self._max_attempts) if selected.is_retryable_kind else 1
         client = await self._client()
         started = time.monotonic()
         waited = 0.0
@@ -528,7 +539,7 @@ class ShopifyGraphQLClient:
             if response.status_code == 403:
                 # Distinguished from 401 in the log; the merchant-facing error
                 # stays uniform because both mean "reconnect the store".
-                self._log("shopify_graphql_forbidden", operation_name, request_id, 403, attempt)
+                self._log("shopify_graphql_forbidden", selected.name, request_id, 403, attempt)
                 raise ShopifyAuthError()
 
             if response.status_code in _RETRYABLE_STATUSES:
@@ -549,7 +560,7 @@ class ShopifyGraphQLClient:
 
             return self._parse(
                 response=response,
-                operation_name=operation_name,
+                operation_name=selected.name,
                 request_id=request_id,
                 attempt=attempt,
                 allow_partial_data=allow_partial_data,
@@ -578,7 +589,7 @@ class ShopifyGraphQLClient:
         self,
         *,
         response: httpx.Response,
-        operation_name: str,
+        operation_name: str | None,
         request_id: str | None,
         attempt: int,
         allow_partial_data: bool,
@@ -664,7 +675,7 @@ class ShopifyGraphQLClient:
     def _log(
         self,
         event: str,
-        operation_name: str,
+        operation_name: str | None,
         request_id: str | None,
         status: int,
         attempt: int,
@@ -719,8 +730,11 @@ def _cost_log(cost: QueryCost) -> dict[str, Any]:
 
 __all__ = [
     "GraphQLResponse",
+    # Re-exported from `operations` so existing imports keep working; the enum
+    # is defined there now because that is where it is interpreted.
     "OperationType",
     "QueryCost",
+    "SelectedOperation",
     "ShopifyGraphQLClient",
     "ThrottleStatus",
     "backoff_seconds",
@@ -729,5 +743,6 @@ __all__ = [
     "parse_cost",
     "raise_for_user_errors",
     "retry_after_seconds",
+    "select_operation",
     "user_errors",
 ]

@@ -6,7 +6,9 @@ must only use GraphQL"*, effective 1 April 2025). This platform makes **twelve**
 versioned Admin REST calls today. Each one is a submission blocker, each is
 inventoried in [`REST_INVENTORY.md`](REST_INVENTORY.md), and each has a phase.
 
-Pinned GraphQL Admin API version: **`2026-07`**.
+Pinned GraphQL Admin API version: **`2026-07`** — the latest *stable* release
+as of 22 August 2026. `2026-10` is the release candidate and becomes stable on
+1 October 2026; production does not run a release candidate.
 
 ## Phases
 
