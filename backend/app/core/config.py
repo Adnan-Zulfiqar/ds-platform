@@ -14,8 +14,10 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AliasChoices,
@@ -68,6 +70,32 @@ class _EnvFileSettings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+
+def _is_internal_address(host: str) -> bool:
+    """Whether ``host`` is an IP literal eBay could never reach.
+
+    Only *literal* addresses are judged. A hostname that happens to resolve
+    privately is not something configuration can settle — that is a DNS and
+    network question — and pretending otherwise here would give false
+    assurance.
+    """
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return False
+    return bool(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+#: eBay's documented verification-token character set: alphanumerics,
+#: underscore and hyphen, and nothing else.
+_EBAY_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class Environment(StrEnum):
@@ -531,6 +559,145 @@ class AliExpressSettings(_EnvFileSettings):
     webhook_shed_window_seconds: int = Field(default=60, ge=1)
 
 
+class EbayEnvironment(StrEnum):
+    """Which eBay estate this deployment talks to.
+
+    Chooses the Notification API host and nothing else in EBAY-C0. It is a real
+    enum rather than a string so a typo cannot silently point production at the
+    sandbox, which would make every signature verification fail against keys
+    that do not exist.
+    """
+
+    SANDBOX = "sandbox"
+    PRODUCTION = "production"
+
+
+class EbaySettings(_EnvFileSettings):
+    """eBay Developers Program application credentials and compliance endpoint.
+
+    These are **platform** credentials belonging to DropPilot's own eBay
+    application, not something a merchant types in. They are never surfaced to
+    the frontend and never returned by an API — there is no response schema in
+    this codebase capable of holding one.
+
+    EBAY-C0 uses only ``client_id``/``client_secret`` (for the client-credentials
+    token that reads notification public keys) and the two marketplace-deletion
+    fields. ``dev_id`` and ``redirect_uri_name`` are declared now because the
+    portal issues all four together and splitting the block across phases
+    invites a half-configured deployment; they are unused until EBAY-C1.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="EBAY_", extra="ignore")
+
+    environment: EbayEnvironment = EbayEnvironment.PRODUCTION
+    client_id: str = ""
+    client_secret: SecretStr | None = None
+    dev_id: str = ""
+    redirect_uri_name: str = ""
+
+    #: The exact, byte-for-byte URL registered in the eBay developer portal.
+    #: It participates in the challenge hash, so a single character of
+    #: difference — including a trailing slash — makes endpoint validation fail
+    #: with no useful error from eBay. Never derived from a request header.
+    marketplace_deletion_endpoint: str = ""
+    marketplace_deletion_verification_token: SecretStr | None = None
+
+    @property
+    def notification_api_base(self) -> str:
+        """Fixed eBay host for the Notification API.
+
+        A constant per environment, never assembled from anything a caller
+        supplies. That is what makes SSRF impossible on the public-key path:
+        the only attacker-influenced value is a key id, and it is validated as
+        a UUID before it is used.
+        """
+        if self.environment is EbayEnvironment.SANDBOX:
+            return "https://api.sandbox.ebay.com"
+        return "https://api.ebay.com"
+
+    @property
+    def is_deletion_configured(self) -> bool:
+        """Whether the compliance endpoint can answer at all.
+
+        Fails closed: an unconfigured deployment refuses the challenge rather
+        than hashing an empty token, which would produce a stable-looking but
+        meaningless digest that eBay would reject anyway — after telling the
+        operator nothing about why.
+        """
+        token = self.marketplace_deletion_verification_token
+        return bool(
+            self.marketplace_deletion_endpoint.strip()
+            and token is not None
+            and token.get_secret_value().strip()
+        )
+
+    @field_validator("marketplace_deletion_verification_token")
+    @classmethod
+    def _validate_verification_token(cls, value: SecretStr | None) -> SecretStr | None:
+        """eBay's documented token rule, enforced at configuration load.
+
+        *"The verification token has to be between 32 and 80 characters, and
+        allowed characters include alphanumeric characters, underscore (_), and
+        hyphen (-). No other characters are allowed."* Checking it here means a
+        bad token is a boot failure with a clear message, not a silent endpoint
+        validation failure in the eBay portal days later.
+
+        The token itself never appears in the error — only its length and
+        whether the character set was the problem.
+        """
+        if value is None:
+            return None
+        raw = value.get_secret_value()
+        if not raw:
+            return value
+        if not 32 <= len(raw) <= 80:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN must be 32-80 characters "
+                f"(got {len(raw)})."
+            )
+        if not _EBAY_TOKEN_PATTERN.fullmatch(raw):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN may contain only letters, "
+                "digits, underscore and hyphen."
+            )
+        return value
+
+    @field_validator("marketplace_deletion_endpoint")
+    @classmethod
+    def _validate_endpoint_shape(cls, value: str) -> str:
+        """Reject shapes eBay itself refuses, without normalising anything.
+
+        Deliberately **not** normalising: adding or removing a trailing slash
+        here would silently change the challenge hash and break the very
+        validation this setting exists for. What is registered in the portal is
+        what must be configured, character for character.
+
+        Deployment-sensitive rules (HTTPS, no localhost or internal address)
+        are applied in ``_validate_ebay_deletion_endpoint`` on the composed
+        settings, where the environment is known.
+        """
+        candidate = value.strip()
+        if not candidate:
+            return candidate
+        if candidate != value:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not have leading or trailing "
+                "whitespace; it is hashed byte-for-byte."
+            )
+        parts = urlsplit(candidate)
+        if parts.scheme not in {"http", "https"}:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must be an http(s) URL.")
+        if not parts.hostname:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must name a host.")
+        if parts.username or parts.password:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must not carry userinfo.")
+        if parts.fragment or parts.query:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not carry a query or fragment."
+            )
+        return candidate
+
+
 class ShopifySettings(_EnvFileSettings):
     """Shopify Partner / custom app configuration.
 
@@ -791,6 +958,7 @@ class Settings(_EnvFileSettings):
     fx: FxSettings = Field(default_factory=FxSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
+    ebay: EbaySettings = Field(default_factory=EbaySettings)
     ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
@@ -860,6 +1028,8 @@ class Settings(_EnvFileSettings):
                 "request bodies contain customer data."
             )
 
+        self._verify_ebay_deletion_endpoint()
+
         self._validate_deployed_encryption()
 
         if not self.security.cookie_secure:
@@ -873,6 +1043,39 @@ class Settings(_EnvFileSettings):
             raise ValueError(
                 f"SECURITY_COOKIE_SECURE must be true in {self.environment}; "
                 "the refresh cookie would otherwise travel over plain HTTP."
+            )
+
+    def _verify_ebay_deletion_endpoint(self) -> None:
+        """Deployed-environment rules for the eBay compliance endpoint.
+
+        eBay states the endpoint *"should use the 'https' protocol, and it
+        should not contain an internal IP address or 'localhost' in its path"*.
+        Enforced at boot because the failure it prevents is otherwise silent:
+        eBay simply refuses to validate the endpoint and the keyset stays
+        inactive, with nothing in this application's logs to say why.
+
+        Local and test environments keep http/localhost so the receiver can be
+        exercised without a tunnel.
+        """
+        endpoint = self.ebay.marketplace_deletion_endpoint
+        if not endpoint:
+            return
+        parts = urlsplit(endpoint)
+        if parts.scheme != "https":
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must use https in "
+                f"{self.environment}; eBay rejects plaintext endpoints."
+            )
+        host = (parts.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost"):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not be localhost in "
+                f"{self.environment}; eBay must be able to reach it."
+            )
+        if _is_internal_address(host):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not be an internal IP address in "
+                f"{self.environment}; eBay must be able to reach it."
             )
 
     def _validate_deployed_encryption(self) -> None:

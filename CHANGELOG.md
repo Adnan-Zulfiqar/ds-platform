@@ -10,6 +10,80 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **EBAY-C0 — eBay credentials and Marketplace Account Deletion compliance.**
+  eBay requires every Developers Program application to subscribe to Marketplace
+  Account Deletion/Closure notifications — or formally opt out — before its
+  first production API call, and the keyset stays inactive until the endpoint
+  validates. This is that endpoint, and nothing else: no OAuth, no listings, no
+  inventory, no orders.
+
+  `GET`/`POST /api/v1/integrations/ebay/marketplace-account-deletion`, public by
+  protocol design because eBay cannot present a JWT. What replaces
+  authentication is not nothing: the GET proves endpoint ownership through a
+  shared secret and returns a digest rather than any stored data, and the POST
+  proves origin cryptographically over the exact bytes received before a single
+  field is read. Plus a 64 KiB body ceiling, content-type validation, a
+  dedicated rate-limit budget and logging that never touches the payload.
+
+  **The signature format was proven, not recalled.** eBay documents no prose
+  specification for `X-EBAY-SIGNATURE`; its guide points at the Event
+  Notification SDKs. Those were read, the format resolved to ECDSA-P-256 with
+  SHA-1 over the raw body with a DER signature and a PEM key, and it was
+  verified in Python against eBay's own published test vector *before* the
+  verifier was written. That vector is pinned in the test suite, because a
+  verifier can pass against fixtures it generated itself and still reject every
+  real notification.
+
+  The challenge hashes `challengeCode + verificationToken + endpoint` in exactly
+  that order, using the **configured** endpoint string — never a `Host` or
+  `X-Forwarded-Host` header, which behind a proxy are attacker-influenced. The
+  endpoint is validated but never normalised: adding or removing a trailing
+  slash would silently change the hash, which is the exact failure the setting
+  exists to prevent.
+
+  Public keys come from eBay's fixed Notification API host with a
+  client-credentials token, cached in Redis for the hour eBay recommends. SSRF
+  and traversal are prevented by construction rather than by filtering — the
+  host is a constant and the only variable in the path is a parsed `uuid.UUID`,
+  a type that cannot hold a slash, a scheme or a host.
+
+  Nothing is acknowledged until the signature is verified, the schema validated,
+  a durable receipt written and the erasure completed — all in one transaction.
+  eBay retries for 24 hours and never resends an acknowledged notification, so a
+  retryable 5xx costs a delay while a premature 2xx costs a person's deletion
+  request. Invalid signature or rejected schema returns **412**, matching what
+  eBay's own SDKs return.
+
+  Migration **0029** adds one table, `ebay_compliance_notifications`, holding
+  **no personal data at all** — eBay's payload carries `username`, `userId` and
+  `eiasToken`, and none has a column. A SHA-256 payload digest supplies identity
+  without content, so the ledger cannot leak what it records and cannot itself
+  become something that must be erased next time. `notification_id` is UNIQUE,
+  and that constraint *is* the idempotency mechanism: two concurrent deliveries
+  race to insert and the database arbitrates, where an application-level
+  check-then-insert would let both through.
+
+  A model-layer audit found **no table storing eBay user data**, so the correct
+  behaviour today is a *verified zero-match deletion* — authenticated, recorded,
+  completed, nothing erased. That is checked by searching the models on every
+  test run rather than asserted in prose, and it doubles as the release guard:
+  the moment EBAY-C1 adds an eBay-identifying column without registering a
+  deletion owner, the test fails. eBay data persistence cannot be called
+  production-ready while it is red.
+
+  No Celery task was introduced. The erasure and the ledger row commit together,
+  so there is no window in which the ledger claims completion for work that
+  rolled back; handing it to a broker would add that window rather than close
+  one.
+
+  **No live eBay request was made anywhere.** Every provider call is fixtures
+  and `httpx.MockTransport`, labelled as mocked in each test module. The
+  production verification token does not exist yet and is generated after
+  deployment; a previously exposed token is treated as permanently compromised
+  and appears nowhere in this repository.
+
 ### Fixed
 
 - **GQL-2 F-01b — a webhook confirmation can no longer go stale.** The previous

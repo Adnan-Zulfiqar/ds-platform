@@ -45,6 +45,28 @@ logger = get_logger(__name__)
 # Shopify webhooks are HMAC-verified; returning 429 would provoke redelivery.
 _SHOPIFY_WEBHOOK_PREFIX = "/api/v1/integrations/shopify/webhooks"
 
+# The eBay compliance endpoint is throttled, but on its own budget rather than
+# the general per-IP quota.
+#
+# Exempting it entirely — the choice made for the AliExpress webhook, and
+# recorded in TECHNICAL_DEBT.md as a cost — is not acceptable here: this handler
+# is not inert. It writes to the database and performs erasure, so an
+# unthrottled public POST is a way to make the server do work.
+#
+# Applying the *general* quota is equally wrong. eBay delivers from its own
+# infrastructure, so every notification shares a small set of source addresses
+# and would be counted as one identity; a burst of legitimate deletion
+# notifications would hit 429, and eBay reads 429 as failure and redelivers —
+# converting a burst into a larger one, and eventually marking the endpoint
+# down. eBay retries unacknowledged notifications for 24 hours before doing so.
+#
+# So: a dedicated, much larger budget on a separate counter. Enough that no
+# plausible volume of real notifications is refused, small enough that a flood
+# is still stopped rather than absorbed.
+_EBAY_COMPLIANCE_PATH = "/api/v1/integrations/ebay/marketplace-account-deletion"
+_EBAY_COMPLIANCE_LIMIT = 600
+_EBAY_COMPLIANCE_WINDOW = 60
+
 _EXEMPT_PATHS = frozenset(
     {
         "/health",
@@ -77,6 +99,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
+        if request.url.path == _EBAY_COMPLIANCE_PATH:
+            return await self._dispatch_ebay_compliance(request, call_next)
+
         identity = self._identity(request)
         allowed, remaining, retry_after = await self._consume(identity)
 
@@ -93,6 +118,39 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Limit"] = str(self._limit)
         response.headers["X-RateLimit-Remaining"] = str(max(remaining, 0))
         return response
+
+    async def _dispatch_ebay_compliance(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Throttle the eBay compliance endpoint on its own counter.
+
+        A separate Redis key, so eBay's traffic neither consumes nor is
+        consumed by the general per-IP budget — a merchant browsing the app from
+        the same egress address cannot throttle a deletion notification, and a
+        flood here cannot lock that merchant out.
+        """
+        identity = f"ebay-compliance:{self._client_ip(request)}"
+        decision = await limiter.consume(
+            f"ratelimit:{identity}",
+            limit=_EBAY_COMPLIANCE_LIMIT,
+            window=_EBAY_COMPLIANCE_WINDOW,
+        )
+        if not decision.allowed:
+            logger.warning(
+                "rate_limit_exceeded",
+                identity=identity,
+                path=request.url.path,
+                limit=_EBAY_COMPLIANCE_LIMIT,
+            )
+            return self._too_many_requests(decision.retry_after)
+        return await call_next(request)
+
+    @staticmethod
+    def _client_ip(request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
 
     def _identity(self, request: Request) -> str:
         """Choose the key a quota is counted against.

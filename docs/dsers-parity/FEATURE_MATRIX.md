@@ -136,7 +136,7 @@ future stage, not started), *Blocked* (external constraint).
 | Publish a draft to a connected Shopify store | Existing and verified | `docs/SHOPIFY_OAUTH_IMPLEMENTATION.md`; publish creates a `StoreListing`, which is what moves a row from Drafts to Products |
 | Currency-mismatch guard before publish | Existing and verified | Blocks publish when variant/store currency disagree (`docs/ALIEXPRESS_LOCALIZED_PRICING.md`) |
 | Publish to more than one store/channel simultaneously | Existing but incomplete | Data model supports multiple `StoreListing` rows per product; UI publish flow verified for one store at a time only |
-| Publish to non-Shopify channels (Amazon, eBay, TikTok Shop, WooCommerce) | Missing | Only `app/integrations/shopify/` exists |
+| Publish to non-Shopify channels (Amazon, eBay, TikTok Shop, WooCommerce) | Missing | `app/integrations/ebay/` exists but is **compliance only** (EBAY-C0); publication is EBAY-C3 |
 
 ## 6. Synchronization
 
@@ -218,6 +218,34 @@ requirement rather than a DSers feature.
 The last row is the submission gate. Until it reads "verified", the app cannot be
 submitted as a new public app — and `SHOPIFY-COMPLIANCE-1` above it is a second,
 independent blocker outside the GQL-* sequence.
+
+---
+
+## 12. eBay channel readiness
+
+eBay requires every Developers Program application to subscribe to Marketplace
+Account Deletion/Closure notifications — or formally opt out — **before its
+first production API call**, and the keyset stays inactive until the endpoint
+validates. This section tracks that requirement and the phases behind it.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Marketplace account deletion challenge endpoint | Existing and verified | `GET /api/v1/integrations/ebay/marketplace-account-deletion`, `backend/tests/unit/test_ebay_c0_challenge.py` |
+| Signed deletion-notification receiver | Existing and verified | `POST` on the same path; ECDSA verified against eBay's **official published vector**, `backend/tests/unit/test_ebay_c0_signature.py` |
+| Public-key retrieval, fixed host, Redis-cached | Existing and verified | `app/integrations/ebay/public_key.py`; SSRF-proof by construction (fixed host + `uuid.UUID` path segment) |
+| Duplicate-delivery idempotency | Existing and verified | UNIQUE `notification_id` in migration `0029`; concurrent-duplicate test on two real connections |
+| Compliance ledger holds no personal data | Existing and verified | `app/models/ebay.py` — no username/userId/eiasToken/payload column exists |
+| Deletion processor (verified zero-match) | Existing and verified | `app/integrations/ebay/deletion.py`; no table stores eBay user data, checked by test on every run |
+| eBay platform credentials configured safely | Existing and verified | `EbaySettings`; `SecretStr`, blank in `.env.example`, no frontend field, never in a response |
+| **Live eBay endpoint validation** | **Missing — not permitted in this pass** | No developer credentials and no registered endpoint; everything is mocked and labelled as such |
+| eBay OAuth connect/reconnect/revoke | Missing — EBAY-C1 | Blocked on registering a deletion data owner first — see the roadmap's release guard |
+| eBay listing publication | Missing — EBAY-C3 | |
+| eBay inventory/pricing sync | Missing — EBAY-C4 | |
+| eBay orders and fulfilment | Missing — EBAY-C5 | |
+
+**No eBay data storage may ship without deletion coverage.** That is enforced by
+a failing test, not a convention — see
+[MASTER_EBAY_ROADMAP.md](../ebay/MASTER_EBAY_ROADMAP.md).
 
 ---
 

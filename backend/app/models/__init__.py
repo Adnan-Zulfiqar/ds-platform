@@ -24,6 +24,11 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
+from app.models.ebay import (
+    EbayComplianceNotification,
+    NotificationProcessing,
+    NotificationVerification,
+)
 from app.models.email_verification import EmailVerificationToken
 from app.models.integration import AliExpressConnection, IntegrationStatus
 from app.models.inventory import (
@@ -93,6 +98,7 @@ __all__ = [
     "AutomationRun",
     "AutomationSchedule",
     "Base",
+    "EbayComplianceNotification",
     "EmailVerificationToken",
     "FulfillmentStatus",
     "IdentifiedBase",
@@ -104,6 +110,8 @@ __all__ = [
     "ListingSyncStatus",
     "Notification",
     "NotificationKind",
+    "NotificationProcessing",
+    "NotificationVerification",
     "Order",
     "OrderEvent",
     "OrderEventType",
