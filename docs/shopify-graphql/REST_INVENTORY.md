@@ -48,9 +48,29 @@ how a migration ships a mutation that silently does the wrong thing.
 
 | Status | Calls |
 |---|---|
-| `verified` | REST-009, REST-012, GQL-000 |
-| `unverified` | REST-001, REST-002, REST-003, REST-004, REST-005, REST-006, REST-007, REST-008, REST-010, REST-011 |
+| `verified` | REST-008, REST-009, REST-012, GQL-000 |
+| `unverified` | REST-001, REST-002, REST-003, REST-004, REST-005, REST-006, REST-007, REST-010, REST-011 |
 | `not-applicable` | OAUTH-001, OAUTH-002 |
+
+## Migration progress
+
+One row per shipped phase. A call is `removed` when its call site is gone from
+the codebase, and `migrated` when the code still exists but has no production
+caller. Both claims are enforced by
+`backend/tests/unit/test_rest_inventory.py`, which greps the application
+package: a status can only be asserted here if the code actually agrees.
+
+| Phase | Shipped | Calls | Status |
+|---|---|---|---|
+| GQL-1 | 2026-08-22 | — | foundation only; migrated nothing, by design |
+| GQL-2 | 2026-08-22 | `GQL-000`, `REST-008`, `REST-009` | `REST-008`/`REST-009` removed, `GQL-000` migrated |
+| GQL-3 | — | `REST-001`, `REST-002`, `REST-003`, `REST-006` | pending |
+| GQL-4 | — | `REST-004`, `REST-005` | pending |
+| GQL-5 | — | `REST-007` | pending |
+| GQL-6 | — | `REST-010`, `REST-011`, `REST-012` | pending |
+
+**10 of 12 versioned Admin REST calls remain.** GQL-2 is not a claim that the
+app is GraphQL-only; it is two calls out of twelve.
 
 ## Summary table
 
@@ -63,14 +83,14 @@ how a migration ships a mutation that silently does the wrong thing.
 | `REST-005` | POST | `/admin/api/{version}/inventory_levels/set.json` | `ShopifySyncService.push_inventory` | GQL-4 | `unverified` | high | **no** |
 | `REST-006` | PUT | `/admin/api/{version}/variants/{variant_id}.json` | `ShopifySyncService.push_price` | GQL-3 | `unverified` | high | **no** |
 | `REST-007` | GET | `/admin/api/{version}/orders.json?status=any&limit={limit}` | `ShopifySyncService.import_orders` | GQL-5 | `unverified` | medium | **no** |
-| `REST-008` | GET | `/admin/api/{version}/webhooks.json` | `ShopifyIntegrationService.register_webhooks` | GQL-2 | `unverified` | low | **no** |
-| `REST-009` | POST | `/admin/api/{version}/webhooks.json` | `ShopifyIntegrationService.register_webhooks` | GQL-2 | `verified` | medium | **no** |
+| ~~`REST-008`~~ | GET | `/admin/api/{version}/webhooks.json` | ~~`ShopifyIntegrationService.register_webhooks`~~ | GQL-2 ✅ | `verified` | low | removed |
+| ~~`REST-009`~~ | POST | `/admin/api/{version}/webhooks.json` | ~~`ShopifyIntegrationService.register_webhooks`~~ | GQL-2 ✅ | `verified` | medium | removed |
 | `REST-010` | GET | `/admin/api/{version}/webhooks.json` | `ShopifyClient.delete_registered_webhooks` | GQL-6 | `unverified` | low | **no** |
 | `REST-011` | DELETE | `/admin/api/{version}/webhooks/{webhook_id}.json` | `ShopifyClient.delete_registered_webhooks` | GQL-6 | `unverified` | low | **no** |
 | `REST-012` | DELETE | `/admin/api/{version}/api_permissions/current.json` | `ShopifyClient.revoke_access_token` | GQL-6 | `verified` | high | **no** |
 | `OAUTH-001` | GET | `/admin/oauth/authorize` | `build_authorization_url` | none | `not-applicable` | low | yes |
 | `OAUTH-002` | POST | `/admin/oauth/access_token` | `ShopifyClient.exchange_token` | none | `not-applicable` | low | yes |
-| `GQL-000` | POST | `/admin/api/{version}/graphql.json` | `ShopifyClient.fetch_shop_currency_code` | GQL-2 | `verified` | low | yes |
+| `GQL-000` | POST | `/admin/api/{version}/graphql.json` | `graphql_operations.fetch_shop_authority` | GQL-2 ✅ | `verified` | low | yes |
 
 ## Detail
 
@@ -223,7 +243,7 @@ how a migration ships a mutation that silently does the wrong thing.
 
 ### REST-008 — GET `/admin/api/{version}/webhooks.json`
 
-- **Source**: `backend/app/integrations/shopify/service.py` → `ShopifyIntegrationService.register_webhooks`
+- **Source**: `backend/app/integrations/shopify/service.py` → `ShopifyIntegrationService.register_webhooks` — **removed in GQL-2**
 - **Purpose**: List existing webhook subscriptions so registration is idempotent.
 - **Operation**: query
 - **Scopes**: none beyond install
@@ -231,37 +251,48 @@ how a migration ships a mutation that silently does the wrong thing.
 - **Written locally**: none
 - **Shopify side effect**: none
 - **Idempotency**: safe
-- **Retry**: ShopifyClient generic retry
-- **Pagination**: unpaginated
-- **Current tests**: `backend/tests/integration/test_shopify_webhook_processing.py`
-- **Proposed GraphQL**: `query { webhookSubscriptions(first: 100) { nodes { id topic endpoint { __typename } } pageInfo { hasNextPage endCursor } } }`
+- **Retry**: ShopifyGraphQLClient bounded retry (query)
+- **Pagination**: cursor-paginated via PageWalker (was unpaginated over REST)
+- **Current tests**: `backend/tests/unit/test_shopify_gql2_operations.py`, `backend/tests/unit/test_shopify_gql2_reconciliation.py`, `backend/tests/integration/test_shopify_gql2_webhook_concurrency.py`, `backend/tests/integration/test_shopify_webhook_processing.py`
+- **Proposed GraphQL**: `query WebhookSubscriptions($first: Int!, $after: String) { webhookSubscriptions(first: $first, after: $after) { nodes { id topic uri format includeFields filter } pageInfo { hasNextPage endCursor } } }`
 - **Target phase**: GQL-2
-- **Schema verification**: `unverified`
+- **Schema verification**: `verified`
 - **Risk**: low
-- **Production usage**: post-install webhook registration
-- **Removal status**: `present`
-- **Permitted in a new public app**: **no — must be migrated**
+- **Production usage**: none - the call site was removed in GQL-2; replaced by graphql_operations.list_webhook_subscriptions
+- **Removal status**: `removed`
+- **Permitted in a new public app**: **no — migrated, no longer called**
+
+> **GQL-2 correction.** GQL-1 proposed `endpoint { __typename }`. The official
+> 2026-07 reference deprecates `callbackUrl` and the `endpoint` union; `uri` is
+> the current field, and the shipped document selects it. Checking rather than
+> recalling is what caught this.
 
 ### REST-009 — POST `/admin/api/{version}/webhooks.json`
 
-- **Source**: `backend/app/integrations/shopify/service.py` → `ShopifyIntegrationService.register_webhooks`
+- **Source**: `backend/app/integrations/shopify/service.py` → `ShopifyIntegrationService.register_webhooks` — **removed in GQL-2**
 - **Purpose**: Create a webhook subscription for a topic DropPilot consumes.
 - **Operation**: mutation
 - **Scopes**: none beyond install
 - **Tenant/store authority**: store_id -> ShopifyConnection (tenant-scoped)
 - **Written locally**: ShopifyConnection.webhooks_registered_at
 - **Shopify side effect**: creates a webhook subscription
-- **Idempotency**: guarded by REST-008; Shopify also rejects exact duplicates
-- **Retry**: ShopifyClient generic retry
+- **Idempotency**: guarded by a re-list plus SELECT ... FOR UPDATE on the connection row; never automatically retried, so an unknown outcome is resolved by re-listing
+- **Retry**: never - mutation; the shared client refuses automatic mutation retry
 - **Pagination**: n/a
-- **Current tests**: `backend/tests/integration/test_shopify_webhook_processing.py`
-- **Proposed GraphQL**: `mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) { webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) { webhookSubscription { id } userErrors { field message } } }`
+- **Current tests**: `backend/tests/unit/test_shopify_gql2_operations.py`, `backend/tests/unit/test_shopify_gql2_reconciliation.py`, `backend/tests/integration/test_shopify_gql2_webhook_concurrency.py`
+- **Proposed GraphQL**: `mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) { webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) { webhookSubscription { id topic uri format includeFields filter } userErrors { field message } } }`
 - **Target phase**: GQL-2
 - **Schema verification**: `verified`
 - **Risk**: medium
-- **Production usage**: post-install webhook registration
-- **Removal status**: `present`
-- **Permitted in a new public app**: **no — must be migrated**
+- **Production usage**: none - the call site was removed in GQL-2; replaced by graphql_operations.create_webhook_subscription
+- **Removal status**: `removed`
+- **Permitted in a new public app**: **no — migrated, no longer called**
+
+> **GQL-2 note.** The REST version inherited `ShopifyClient`'s generic retry, so
+> a timed-out POST could be replayed and create a second subscription. The
+> GraphQL replacement is parsed as a mutation and is never retried
+> automatically; an unknown outcome is resolved by re-listing on the next
+> reconciliation.
 
 ### REST-010 — GET `/admin/api/{version}/webhooks.json`
 
@@ -338,7 +369,7 @@ how a migration ships a mutation that silently does the wrong thing.
 - **Idempotency**: safe
 - **Retry**: n/a (browser redirect)
 - **Pagination**: n/a
-- **Current tests**: `backend/tests/unit/test_shopify_oauth.py`
+- **Current tests**: `backend/tests/unit/test_shopify_install.py`, `backend/tests/unit/test_shopify_shop_domain_uniqueness.py`
 - **Proposed GraphQL**: `n/a — OAuth is not part of the Admin GraphQL surface`
 - **Target phase**: none
 - **Schema verification**: `not-applicable`
@@ -359,7 +390,7 @@ how a migration ships a mutation that silently does the wrong thing.
 - **Idempotency**: single-use code; a replay fails at Shopify
 - **Retry**: none
 - **Pagination**: n/a
-- **Current tests**: `backend/tests/unit/test_shopify_oauth.py`
+- **Current tests**: **none**
 - **Proposed GraphQL**: `n/a — OAuth is not part of the Admin GraphQL surface`
 - **Target phase**: none
 - **Schema verification**: `not-applicable`
@@ -370,7 +401,7 @@ how a migration ships a mutation that silently does the wrong thing.
 
 ### GQL-000 — POST `/admin/api/{version}/graphql.json`
 
-- **Source**: `backend/app/integrations/shopify/client.py` → `ShopifyClient.fetch_shop_currency_code`
+- **Source**: `backend/app/integrations/shopify/client.py` → `ShopifyClient.fetch_shop_currency_code` — **migrated in GQL-2** to `app/integrations/shopify/graphql_operations.py` → `fetch_shop_authority`
 - **Purpose**: Read shop.currencyCode as the store-currency authority.
 - **Operation**: query
 - **Scopes**: none beyond install
@@ -378,16 +409,24 @@ how a migration ships a mutation that silently does the wrong thing.
 - **Written locally**: Store.currency, currency_last_synced_at
 - **Shopify side effect**: none
 - **Idempotency**: safe
-- **Retry**: ShopifyClient generic retry
+- **Retry**: ShopifyGraphQLClient bounded retry (query)
 - **Pagination**: n/a
-- **Current tests**: `backend/tests/unit/test_m24a_currency_fx.py`
-- **Proposed GraphQL**: `query ShopCurrency { shop { currencyCode } } — already GraphQL; moves onto ShopifyGraphQLClient in GQL-2`
+- **Current tests**: `backend/tests/unit/test_shopify_gql2_operations.py`, `backend/tests/integration/test_shopify_gql2_currency.py`, `backend/tests/unit/test_m24a_currency_fx.py`
+- **Proposed GraphQL**: `query ShopAuthority { shop { currencyCode } }`
 - **Target phase**: GQL-2
 - **Schema verification**: `verified`
 - **Risk**: low
-- **Production usage**: store connect and currency refresh
-- **Removal status**: `present`
+- **Production usage**: none - store connect and currency refresh now use graphql_operations.fetch_shop_authority; ShopifyClient.fetch_shop_currency_code is retained only for its existing unit test and has no production caller
+- **Removal status**: `migrated`
 - **Permitted in a new public app**: yes
+
+> **Why the old method still exists.** `ShopifyClient.fetch_shop_currency_code`
+> has zero production callers after GQL-2, but is not deleted:
+> `backend/tests/unit/test_m24a_currency_fx.py` drives it directly, and the
+> phase brief forbids weakening an existing test to make a migration look
+> tidier. A drift test asserts the caller count stays at zero, so the method
+> cannot quietly come back. Deleting it, and its test, belongs to GQL-6 along
+> with the rest of the legacy client.
 
 ## What the sweep also found
 

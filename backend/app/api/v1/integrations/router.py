@@ -38,10 +38,17 @@ from app.integrations.shopify.schemas import (
     ShopifyStatusResponse,
     ShopifySyncRequest,
     ShopifyWebhookAckResponse,
+    ShopifyWebhookReconcileResponse,
+    ShopifyWebhookTopicResult,
 )
-from app.integrations.shopify.service import ShopifyService, append_frontend_query
+from app.integrations.shopify.service import (
+    ShopifyService,
+    append_frontend_query,
+    webhook_health,
+)
 from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
+from app.integrations.shopify.webhook_reconciliation import ReconcileReport
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
@@ -240,6 +247,7 @@ def _shopify_to_read(connection: ShopifyConnection) -> ShopifyConnectionRead:
         last_sync_at=connection.last_sync_at,
         last_error=connection.last_error,
         webhooks_registered_at=connection.webhooks_registered_at,
+        webhook_health=webhook_health(connection).value,
     )
 
 
@@ -373,15 +381,38 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             append_frontend_query(return_url, shopify="denied"),
             status_code=303,
         )
+    webhooks_healthy = False
     try:
         connection = await ShopifyService(session).complete_connection(
             query_string=str(request.url.query),
         )
-        # Best-effort webhook registration — failure must not undo OAuth.
+        # Webhook registration stays best-effort: a valid access token must not
+        # be thrown away because Shopify was briefly unreachable. What changed
+        # in the acceptance fix is that the *result* is no longer discarded.
+        # Reporting a plain success here is what let a store sit in the UI as
+        # "Connected" while every product, inventory and order subscription was
+        # missing, with the reconnect control hidden because the status said
+        # connected.
         try:
-            await ShopifyService(session).register_webhooks(connection.store_id)
+            report = await ShopifyService(session).register_webhooks(connection.store_id)
+            webhooks_healthy = report.healthy
+            if not webhooks_healthy:
+                logger.warning(
+                    "shopify_webhook_registration_degraded",
+                    store_id=str(connection.store_id),
+                    tenant_id=str(connection.tenant_id),
+                    created=report.created_count,
+                    warnings=len(report.warnings),
+                    statuses=[f"{i.topic}={i.status.value}" for i in report.items],
+                )
         except Exception:
-            logger.exception("shopify_webhook_registration_failed")
+            # Tenant-safe context only: identifiers and the exception type,
+            # never the shop token or a provider payload.
+            logger.exception(
+                "shopify_webhook_registration_failed",
+                store_id=str(connection.store_id),
+                tenant_id=str(connection.tenant_id),
+            )
     except Exception as exc:
         from app.integrations.shopify.exceptions import (
             ShopifyOAuthExchangeError,
@@ -409,8 +440,15 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
             append_frontend_query(return_url, shopify=reason),
             status_code=303,
         )
+    # Two stable, enumerable status codes, no secret and no raw error text. The
+    # degraded one is deliberately a distinct value rather than an extra flag on
+    # "connected", so a frontend that does not recognise it cannot fall back to
+    # rendering a full success.
     return RedirectResponse(
-        append_frontend_query(return_url, shopify="connected"),
+        append_frontend_query(
+            return_url,
+            shopify="connected" if webhooks_healthy else "connected_webhooks_degraded",
+        ),
         status_code=303,
     )
 
@@ -464,6 +502,79 @@ async def disconnect_shopify(
 ) -> MessageResponse:
     await ShopifyService(session).disconnect(store_id=store_id)
     return MessageResponse(message="Shopify store disconnected and credentials deleted.")
+
+
+def _reconcile_response(
+    *,
+    store_id: UUID,
+    report: ReconcileReport,
+    connection: ShopifyConnection | None,
+) -> ShopifyWebhookReconcileResponse:
+    """Project a reconciliation into its public shape.
+
+    Copies fields explicitly, like ``_to_read_model`` above, so the response
+    cannot be widened by accident into carrying a token or a provider payload.
+    """
+    return ShopifyWebhookReconcileResponse(
+        store_id=store_id,
+        healthy=report.healthy,
+        webhook_health=(webhook_health(connection).value if connection is not None else "degraded"),
+        topics=[
+            ShopifyWebhookTopicResult(
+                topic=item.topic,
+                status=item.status.value,
+                webhook_gid=item.webhook_gid,
+                detail=item.detail,
+            )
+            for item in report.items
+        ],
+        warnings=list(report.warnings),
+        listed_count=report.listed_count,
+        created_count=report.created_count,
+        webhooks_registered_at=(
+            connection.webhooks_registered_at if connection is not None else None
+        ),
+    )
+
+
+@router.post(
+    "/shopify/stores/{store_id}/webhooks/reconcile",
+    response_model=ShopifyWebhookReconcileResponse,
+    summary="Retry Shopify webhook registration for a connected store",
+)
+async def reconcile_shopify_webhooks(
+    store_id: UUID,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyWebhookReconcileResponse:
+    """Deterministic recovery for a connected-but-degraded store.
+
+    **Why this route and not** ``/shopify/webhooks/reconcile``. That path sits
+    under the same prefix as ``POST /shopify/webhooks/{topic}``, the
+    unauthenticated HMAC-verified receiver, and would be matched as a topic
+    named "reconcile" the moment declaration order changed. Store-scoped
+    mutations in this module already live under ``/shopify/stores/{store_id}``,
+    which is where ``disconnect`` is, so this follows the established shape and
+    cannot collide with merchant traffic.
+
+    Admin-only, and the store id is resolved through the tenant-scoped
+    repository, so a foreign or unknown id produces the same "not connected"
+    answer and never confirms that somebody else's store exists.
+
+    Delegates to ``ShopifyService.register_webhooks`` — the *same* reconciler
+    OAuth uses. There is no second implementation and no queue: it lists every
+    page first, creates only what is genuinely missing, never replays a mutation
+    whose outcome is unknown, and stamps ``webhooks_registered_at`` only when
+    the whole report is healthy.
+
+    Returns 200 with an explicit verdict for a degraded outcome rather than an
+    error status: the request was handled correctly, and the useful thing to
+    show a merchant is *what* is still missing.
+    """
+    service = ShopifyService(session)
+    report = await service.register_webhooks(store_id)
+    connection = await service.connections.get_by_store(store_id)
+    return _reconcile_response(store_id=store_id, report=report, connection=connection)
 
 
 @router.post(

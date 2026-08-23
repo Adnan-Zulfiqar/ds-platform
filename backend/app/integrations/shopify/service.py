@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, Final
 from urllib.parse import parse_qsl
 
 from redis.exceptions import RedisError
@@ -43,6 +45,13 @@ from app.integrations.shopify.exceptions import (
     ShopifyShopTakenError,
     ShopifyWebhookConfigError,
 )
+from app.integrations.shopify.graphql import ShopifyGraphQLClient
+from app.integrations.shopify.graphql_operations import fetch_shop_authority
+from app.integrations.shopify.webhook_reconciliation import (
+    ReconcileReport,
+    WebhookReconciler,
+    desired_subscriptions,
+)
 from app.models.integration import IntegrationStatus
 from app.models.shopify import ShopifyConnection
 from app.models.store import Store, StorePlatform, StoreStatus
@@ -57,6 +66,15 @@ _INSTALL_TICKET_PREFIX = "shopify:install:ticket:"
 
 #: Topics registered after every successful OAuth. Keep in sync with
 #: ``docs/PHASE_8_1_PLAN.md`` Part 5 and the webhook receiver.
+#: How long a caller waits for another reconciliation to finish before being
+#: told the store is busy (GQL-2 acceptance fix, F-02).
+#:
+#: Long enough that an ordinary overlap — six list-and-create round trips —
+#: resolves by waiting rather than by bothering the merchant, and short enough
+#: that a wedged transaction cannot pin an HTTP worker. Expressed in
+#: milliseconds because that is what PostgreSQL's ``lock_timeout`` takes.
+WEBHOOK_LOCK_TIMEOUT_MS: Final = 10_000
+
 WEBHOOK_TOPICS: tuple[str, ...] = (
     "products/create",
     "products/update",
@@ -65,6 +83,52 @@ WEBHOOK_TOPICS: tuple[str, ...] = (
     "orders/updated",
     "app/uninstalled",
 )
+
+
+class WebhookHealth(StrEnum):
+    """Derived, never stored — see ``webhook_health``."""
+
+    #: Nothing to say: the integration is not connected.
+    NOT_APPLICABLE = "not_applicable"
+    #: Connected, and every required subscription was confirmed present.
+    HEALTHY = "healthy"
+    #: Connected with a valid token, but the subscriptions are not confirmed.
+    DEGRADED = "degraded"
+
+
+def webhook_health(connection: ShopifyConnection) -> WebhookHealth:
+    """Whether this connection's webhooks can be trusted.
+
+    **Derived from the persisted authority, not a second health field.**
+    ``webhooks_registered_at`` is already the one thing the system writes only
+    after a complete, healthy reconciliation, so health is a reading of that
+    column plus the connection status — never a parallel column that could
+    disagree with it.
+
+    This exists because the alternative was worse: the API returned the
+    timestamp and left every caller to decide what a null meant, and the UI
+    decided it meant "connected". A connected store with no confirmed
+    subscriptions silently misses product, inventory and order events, so the
+    distinction is named here once and reused.
+
+    **What a non-null value means (F-01b).** It means *the most recent completed
+    reconciliation for the current connection credentials was healthy* — not
+    "some reconciliation once succeeded". That is only true because
+    ``register_webhooks`` commits a NULL before it makes any Shopify request and
+    ``complete_connection`` clears it when it stores refreshed credentials.
+    Without those two, one good run in the past vouched for every failure since,
+    and a store whose subscriptions had gone missing still read as healthy —
+    which also hid the Retry control, since that appears only while degraded.
+
+    It is deliberately **not** a claim about live provider state. Shopify can
+    delete a subscription without telling this application, and nothing here
+    observes that. It is a confirmation with a date on it, and the UI says so.
+    """
+    if connection.status is not IntegrationStatus.CONNECTED:
+        return WebhookHealth.NOT_APPLICABLE
+    if connection.webhooks_registered_at is None:
+        return WebhookHealth.DEGRADED
+    return WebhookHealth.HEALTHY
 
 
 def validate_webhook_callback_base(base: str) -> str:
@@ -401,6 +465,13 @@ class ShopifyService(BaseService):
                 status=IntegrationStatus.CONNECTED,
                 last_error=None,
                 user_id=user_id,
+                # F-01b: the previous confirmation belonged to the *previous*
+                # credentials. Cleared in the same statement that stores the new
+                # token, so there is no instant at which a rotated connection
+                # carries an inherited confirmation -- including the case where
+                # reconciliation is never reached at all because the process
+                # dies right after this commit.
+                webhooks_registered_at=None,
             )
         else:
             # Reconnect after disconnect leaves the Store row; reusing it
@@ -446,10 +517,10 @@ class ShopifyService(BaseService):
         # Currency sync is best-effort: OAuth success must not roll back if
         # shop.currencyCode is temporarily unreachable.
         try:
-            client = ShopifyClient(
+            # GQL-2: shop.currencyCode now travels on the shared GraphQL client.
+            client = ShopifyGraphQLClient(
                 shop_domain=shop_domain,
                 access_token=access_token,
-                tenant_id=str(tenant_id),
             )
             await self._apply_shop_currency(store, client=client)
         except Exception:
@@ -463,10 +534,19 @@ class ShopifyService(BaseService):
             )
         return connection
 
-    async def _apply_shop_currency(self, store: Store, *, client: ShopifyClient) -> str:
-        """Persist verified Shopify selling currency from GraphQL shop.currencyCode."""
-        code = await client.fetch_shop_currency_code()
-        normalised = normalise_currency(code)
+    async def _apply_shop_currency(self, store: Store, *, client: ShopifyGraphQLClient) -> str:
+        """Persist verified Shopify selling currency from GraphQL shop.currencyCode.
+
+        GQL-2 moved this onto ``ShopifyGraphQLClient``. The authority, the
+        validation and the update semantics are unchanged: the code still comes
+        from ``shop.currencyCode``, is still normalised by the money layer, and
+        a failure still leaves a previously trusted currency alone rather than
+        clearing it.
+        """
+        authority = await fetch_shop_authority(client)
+        # `fetch_shop_authority` already normalised; kept explicit so the
+        # money layer remains the single validator on this path.
+        normalised = normalise_currency(authority.currency_code)
         synced_at = datetime.now(UTC)
         await self.stores.update(
             store,
@@ -501,7 +581,7 @@ class ShopifyService(BaseService):
         previous_currency = store.currency
         previous_synced_at = store.currency_last_synced_at
         try:
-            client, _connection = await self.client_for_store(store_id)
+            client, _connection = await self.graphql_client_for_store(store_id)
             await self._apply_shop_currency(store, client=client)
         except ShopifyCurrencyRefreshError:
             raise
@@ -624,6 +704,34 @@ class ShopifyService(BaseService):
             revoke_remote=False,
         )
 
+    async def graphql_client_for_store(
+        self, store_id: uuid.UUID
+    ) -> tuple[ShopifyGraphQLClient, ShopifyConnection]:
+        """The one place a store-scoped GraphQL client is constructed (GQL-2).
+
+        Deliberately a sibling of ``client_for_store`` rather than a
+        replacement: the legacy REST client still serves the calls GQL-3 to
+        GQL-6 own, and every *new* GraphQL operation goes through this one so
+        the token path, the domain authority and the retry stack stay single.
+
+        The token is decrypted through the existing secret-management path and
+        handed to a per-request client. It never reaches the process-wide
+        connection pool, which is created with no credentials at all.
+        ``ShopifyGraphQLClient`` re-validates the shop domain against the
+        canonical authority in ``auth.py`` -- no second validator -- and builds
+        its own endpoint, so no caller can supply a URL.
+        """
+        connection = await self.connections.get_by_store(store_id)
+        if connection is None or connection.status is not IntegrationStatus.CONNECTED:
+            # Same typed error the REST path raises, so a disconnected or
+            # revoked integration behaves identically whichever client asked.
+            raise ShopifyNotConnectedError()
+        client = ShopifyGraphQLClient(
+            shop_domain=connection.shop_domain,
+            access_token=decrypt(connection.encrypted_access_token),
+        )
+        return client, connection
+
     async def client_for_store(
         self, store_id: uuid.UUID
     ) -> tuple[ShopifyClient, ShopifyConnection]:
@@ -668,37 +776,137 @@ class ShopifyService(BaseService):
                 status=StoreStatus.ERROR,
             )
 
-    async def register_webhooks(self, store_id: uuid.UUID) -> None:
-        client, connection = await self.client_for_store(store_id)
-        base = validate_webhook_callback_base(settings.shopify.webhook_callback_base)
+    async def _invalidate_webhook_confirmation(self, store_id: uuid.UUID) -> None:
+        """Commit ``webhooks_registered_at = NULL`` before any provider work.
 
-        existing_payload = await client.get("/webhooks.json")
-        existing_rows = existing_payload.get("webhooks")
-        existing: dict[str, str] = {}
-        if isinstance(existing_rows, list):
-            for row in existing_rows:
-                if not isinstance(row, dict):
-                    continue
-                topic = row.get("topic")
-                address = row.get("address")
-                if isinstance(topic, str) and isinstance(address, str):
-                    existing[topic] = address
+        **Why it must be committed, not merely flushed.** The failure modes this
+        guards are precisely the ones that roll a request back: a provider
+        exception, a lock timeout, a worker dying mid-reconciliation. A pending
+        UPDATE would be undone by exactly the event that makes the old
+        confirmation wrong, restoring it. So this is its own committed
+        transaction, and the reconciliation that follows runs in the next one.
 
-        for topic in WEBHOOK_TOPICS:
-            address = webhook_delivery_address(base=base, topic=topic)
-            if existing.get(topic) == address:
-                continue
-            await client.post(
-                "/webhooks.json",
-                json_body={
-                    "webhook": {
-                        "topic": topic,
-                        "address": address,
-                        "format": "json",
-                    }
-                },
-            )
-        await self.connections.update(
-            connection,
-            webhooks_registered_at=datetime.now(UTC),
+        **Why the caller's session and not an independent one.**
+        ``ProductImportService._persist_failure_durably`` uses
+        ``session_factory()`` for the same "must survive the rollback" reason and
+        documents the deadlock that costs: a second connection cannot touch a row
+        the caller's still-open transaction already holds. That is not
+        hypothetical here -- the OAuth path reaches ``register_webhooks`` with
+        ``complete_connection``'s UPDATE of this very row uncommitted, so an
+        independent connection would block on it until the request timed out,
+        and the request cannot finish until this returns. Committing the caller's
+        session avoids that by construction, and on the OAuth path it is also
+        what makes the refreshed credentials durable before Shopify is called --
+        which is what the connected-but-degraded state is supposed to mean.
+
+        This is a deliberate, narrow departure from ``get_db_session``'s
+        "handlers never commit" rule (see ``app/api/deps.py``). That rule exists
+        so a request leaves no partial trace; here a trace surviving the failure
+        is the entire point. Nothing else in either calling path is pending that
+        should not be committed: the retry endpoint has written nothing, and the
+        OAuth callback has written a connection it explicitly wants to keep.
+
+        Takes the row lock with the same bounded wait as the reconciliation, so
+        a caller arriving while another reconciliation holds the row is told the
+        store is busy rather than waiting indefinitely -- and, crucially, is
+        refused *before* it can clear a confirmation it is not going to replace.
+        """
+        locked = await self.connections.lock_for_update(
+            (await self._connection_id_for(store_id)),
+            timeout_ms=WEBHOOK_LOCK_TIMEOUT_MS,
         )
+        if locked is None:
+            raise ShopifyNotConnectedError()
+        if locked.webhooks_registered_at is not None:
+            await self.connections.update(locked, webhooks_registered_at=None)
+            logger.info(
+                "shopify_webhook_confirmation_invalidated",
+                store_id=str(store_id),
+                tenant_id=str(locked.tenant_id),
+            )
+        # Unconditional: this also releases the row lock taken above, so the
+        # reconciliation acquires it fresh rather than inheriting a lock whose
+        # transaction has other work in it.
+        await self.session.commit()
+
+    async def _connection_id_for(self, store_id: uuid.UUID) -> uuid.UUID:
+        """Tenant-scoped store -> connection id, or "not connected".
+
+        Kept separate so the invalidation never has to widen its own lookup:
+        a foreign or unknown store id fails here, before anything is cleared.
+        """
+        connection = await self.connections.get_by_store(store_id)
+        if connection is None or connection.status is not IntegrationStatus.CONNECTED:
+            raise ShopifyNotConnectedError()
+        return connection.id
+
+    async def register_webhooks(self, store_id: uuid.UUID) -> ReconcileReport:
+        """Reconcile this shop's webhook subscriptions over GraphQL (GQL-2).
+
+        Replaces the REST list-and-create pair. Same topics, same delivery URIs,
+        same shop-scoped model -- only the transport changed.
+
+        **Serialised per store.** Two OAuth completions, or a connect racing a
+        reconnect, would otherwise both list, both see a topic missing and both
+        create it, leaving the shop receiving every event twice. The
+        ``ShopifyConnection`` row is taken with ``SELECT ... FOR UPDATE`` for the
+        duration of list-decide-create: it is the row this reconciliation is
+        about, it already exists, it is already tenant-scoped, and unlike an
+        in-process ``asyncio.Lock`` it holds across workers and machines. That
+        is the same coordination mechanism the bulk-pricing work uses; no second
+        locking architecture is introduced.
+
+        ``webhooks_registered_at`` is stamped only when the reconciliation is
+        actually healthy. Stamping it after an unknown or failed create is what
+        would make a half-registered shop look finished.
+        """
+        # Fail before touching Shopify (or taking a lock) if the callback
+        # configuration is unusable.
+        desired = desired_subscriptions(WEBHOOK_TOPICS)
+
+        # F-01b. Everything past this line may fail, and any confirmation left
+        # standing would then describe a reconciliation that is no longer the
+        # most recent one. Invalidated first, and committed, so a crash between
+        # here and the stamp leaves the store degraded rather than confirmed.
+        await self._invalidate_webhook_confirmation(store_id)
+
+        client, connection = await self.graphql_client_for_store(store_id)
+
+        lock_started = time.monotonic()
+        locked = await self.connections.lock_for_update(
+            connection.id, timeout_ms=WEBHOOK_LOCK_TIMEOUT_MS
+        )
+        lock_wait_ms = round((time.monotonic() - lock_started) * 1000, 1)
+        if locked is None:
+            raise ShopifyNotConnectedError()
+
+        report = await WebhookReconciler(client).reconcile(desired)
+
+        if report.healthy:
+            await self.connections.update(
+                locked,
+                webhooks_registered_at=datetime.now(UTC),
+            )
+        else:
+            logger.warning(
+                "shopify_webhook_reconcile_incomplete",
+                store_id=str(store_id),
+                created=report.created_count,
+                warnings=list(report.warnings),
+                statuses=[f"{i.topic}={i.status.value}" for i in report.items],
+            )
+        # Duration and lock wait are logged on every outcome, healthy or not:
+        # contention that never times out is invisible without it, and "how long
+        # does reconciliation actually hold the row" is the number that decides
+        # whether WEBHOOK_LOCK_TIMEOUT_MS is set sensibly.
+        logger.info(
+            "shopify_webhook_reconcile_finished",
+            store_id=str(store_id),
+            healthy=report.healthy,
+            listed=report.listed_count,
+            created=report.created_count,
+            warnings=len(report.warnings),
+            lock_wait_ms=lock_wait_ms,
+            duration_ms=round((time.monotonic() - lock_started) * 1000, 1),
+        )
+        return report

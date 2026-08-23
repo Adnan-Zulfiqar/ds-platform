@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
@@ -40,12 +40,24 @@ const ALIEXPRESS_CALLBACK: Record<
 
 const SHOPIFY_CALLBACK: Record<
   string,
-  { variant: "default" | "destructive"; title: string; body: string }
+  {
+    variant: "default" | "destructive" | "warning";
+    title: string;
+    body: string;
+  }
 > = {
   connected: {
     variant: "default",
     title: "Shopify connected",
     body: "Your Shopify store is now linked to this workspace.",
+  },
+  // The store *is* connected and its token is valid, so this is not a failure
+  // banner — but calling it a plain success is what previously left merchants
+  // believing sync was working when no subscription had been created.
+  connected_webhooks_degraded: {
+    variant: "warning",
+    title: "Connected — webhook setup incomplete",
+    body: "Your store is linked, but DropPilot could not confirm its Shopify webhooks. Product, inventory and order updates may be missed until you retry webhook setup below. You do not need to disconnect.",
   },
   denied: {
     variant: "destructive",
@@ -115,6 +127,8 @@ function CallbackBanner() {
     <Alert variant={message.variant}>
       {message.variant === "destructive" ? (
         <XCircle className="h-4 w-4" />
+      ) : message.variant === "warning" ? (
+        <AlertTriangle className="h-4 w-4" />
       ) : (
         <CheckCircle2 className="h-4 w-4" />
       )}

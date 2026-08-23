@@ -15,7 +15,8 @@ the file(s) that are the evidence. Status values:
   not started.
 
 Audit date: 2026-08-12 (M1); §3 corrected 2026-08-12 (M2A); §3 rebaselined
-2026-08-13 (M2A acceptance-fix pass, capability-by-capability). Branch:
+2026-08-13 (M2A acceptance-fix pass, capability-by-capability); Shopify
+GraphQL section updated 2026-08-22 (GQL-2). Branch:
 `feature/dsers-parity-m2a-editor-foundation`.
 
 ---
@@ -196,15 +197,27 @@ requirement rather than a DSers feature.
 | Complete Admin REST inventory | Existing and verified | `docs/shopify-graphql/REST_INVENTORY.md` + `rest-inventory.json`, drift-guarded |
 | Shopify GID value object | Existing and verified | `app/integrations/shopify/gid.py` |
 | Bounded cursor pagination helpers | Existing and verified | `app/integrations/shopify/pagination.py` |
-| Webhook registration on GraphQL | Missing — GQL-2 | `REST-008`, `REST-009` still REST |
+| Shop currency authority on GraphQL | Existing and verified | `app/integrations/shopify/graphql_operations.py::fetch_shop_authority`, `backend/tests/integration/test_shopify_gql2_currency.py` |
+| Webhook reconciliation on GraphQL | Existing and verified | `app/integrations/shopify/webhook_reconciliation.py`, `backend/tests/unit/test_shopify_gql2_reconciliation.py`, `backend/tests/integration/test_shopify_gql2_webhook_concurrency.py` |
+| A webhook confirmation cannot go stale | Existing and verified | `webhooks_registered_at` is committed as NULL before any Shopify call and cleared when reconnect stores new credentials, so a non-null value means the *most recent* reconciliation for the *current* credentials was healthy; `backend/tests/integration/test_shopify_gql2_webhook_freshness.py` |
+| Webhook health is stated as "last confirmed", not "active" | Existing and verified | DropPilot cannot observe a subscription Shopify deletes on its own; the card shows the confirmation date rather than claiming live provider state |
+| Connected-but-degraded webhook state is visible | Existing and verified | `app/integrations/shopify/service.py::webhook_health` (derived from `webhooks_registered_at`, not a second column), `backend/tests/integration/test_shopify_gql2_webhook_recovery.py::TestStatusProjection` |
+| Retry webhook setup without disconnecting | Existing and verified | `POST /integrations/shopify/stores/{storeId}/webhooks/reconcile` (admin-only), `components/integrations/shopify-card.tsx`, `frontend/tests/e2e/shopify-webhook-recovery.spec.ts` |
+| OAuth result distinguishes degraded webhooks | Existing and verified | `shopify=connected_webhooks_degraded`, `TestOAuthResultHonesty` |
+| Automated webhook recovery sweep | Missing — `SHOPIFY-OPS-1` | Recovery is deterministic but **manual**; a degraded store stays degraded until an administrator retries |
+| Concurrent webhook registration is safe | Existing and verified | `SELECT … FOR UPDATE` on the connection row; two-connection race test with a `pg_blocking_pids` rendezvous and an unlocked control |
 | Products/variants/media on GraphQL | Missing — GQL-3 | `REST-001`–`REST-003`, `REST-006` still REST |
 | Inventory/locations/unit cost on GraphQL | Missing — GQL-4 | `REST-004`, `REST-005` still REST |
 | Orders/fulfillment on GraphQL | Missing — GQL-5 | `REST-007` still REST |
 | Uninstall via `appUninstall` | Missing — GQL-6 | `REST-012` still REST |
-| **Zero versioned Admin REST calls** | **Missing** | 12 remain; see the inventory |
+| Delete a webhook subscription | Missing — GQL-6 | `REST-010`, `REST-011` still REST; GQL-2 reports duplicates but never deletes |
+| Config-managed (`shopify.app.toml`) webhooks | Missing — GQL-6 | Blocked on `webhookSubscriptionDelete`; running both modes for one topic would deliver every event twice |
+| Mandatory privacy webhooks (`customers/data_request`, `customers/redact`, `shop/redact`) | **Missing — `SHOPIFY-COMPLIANCE-1`** | No handler, route or topic mapping anywhere in `backend/app/`; **App Store submission blocker**, tracked in [MASTER_MIGRATION_ROADMAP.md](../shopify-graphql/MASTER_MIGRATION_ROADMAP.md) |
+| **Zero versioned Admin REST calls** | **Missing** | **10 of 12 remain** after GQL-2; see the inventory |
 
 The last row is the submission gate. Until it reads "verified", the app cannot be
-submitted as a new public app.
+submitted as a new public app — and `SHOPIFY-COMPLIANCE-1` above it is a second,
+independent blocker outside the GQL-* sequence.
 
 ---
 

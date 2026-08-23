@@ -10,7 +10,181 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GQL-2 F-01b — a webhook confirmation can no longer go stale.** The previous
+  fix made a store that had *never* reconciled visibly degraded. It did not
+  cover the opposite case. `webhooks_registered_at` was only ever written, never
+  cleared, and `webhook_health()` read any non-null value as healthy — so one
+  successful run vouched for every failure after it. A later unhealthy
+  reconciliation, a provider outage, or a reconnect that stored **brand-new
+  OAuth credentials** all left the previous timestamp standing, and
+  `complete_connection` rotated the access token without touching it at all. The
+  card showed a healthy state for a store whose subscriptions were missing, and
+  because Retry appears only while degraded, the stale timestamp also removed
+  the way out.
+
+  A non-null `webhooks_registered_at` now means *the most recent completed
+  reconciliation for the current credentials was healthy* — not "some
+  reconciliation once succeeded". `register_webhooks` commits the column to NULL
+  in its own short transaction **before** it makes any Shopify request, so a
+  provider exception, a lock timeout or a worker dying mid-reconciliation leaves
+  the store degraded instead of restoring a confirmation the rollback would have
+  brought back. `complete_connection` clears it in the same UPDATE that stores
+  refreshed credentials, so an old confirmation can never authenticate a token
+  it has never seen.
+
+  The invalidation runs on the caller's session rather than an independent one:
+  the OAuth path reaches `register_webhooks` with `complete_connection`'s UPDATE
+  of that very row uncommitted, and a second connection would block on it until
+  the request timed out — the deadlock
+  `ProductImportService._persist_failure_durably` already documents. It is a
+  deliberate, narrow departure from "handlers never commit", because here a
+  trace surviving the failure is the entire point.
+
+  Concurrency is unchanged: the same bounded row lock still serialises
+  reconciliation per store, the control test proving an unlocked race duplicates
+  still passes, and different stores stay independent. Invalidation takes the
+  same bounded wait, so a caller arriving while another reconciliation holds the
+  row is refused *before* it can clear a confirmation it is not going to
+  replace. Reads never mutate — viewing the status page does not reconcile.
+
+  The UI stops claiming more than it can know. Nothing observes a subscription
+  Shopify deletes outside DropPilot, so the badge reads **Webhooks last
+  confirmed** with its date rather than *Webhooks active*, and the degraded
+  warning says confirmation failed *on the most recent attempt*.
+
+  Red-before: the new suite was written first and run against `8abd9cc` —
+  12 failed, 9 passed. Green after: 21 passed. Full backend suite 1741 passed
+  (baseline 1720, +21); 82 Playwright tests across chromium and mobile-chrome,
+  with the Shopify payloads mocked and labelled as such. No migration; Alembic
+  remains a single head at `0028`.
+
+- **GQL-2 acceptance fix — a connected Shopify store can no longer hide broken
+  webhooks.** An independent review returned `GQL-2 requires fixes` on one
+  blocking finding, and it was a real one: OAuth completion ran webhook
+  registration inside a best-effort `try/except` and threw the `ReconcileReport`
+  away, so the merchant was redirected with `shopify=connected` whatever had
+  happened. `webhooks_registered_at` stayed null, the card rendered *Connected*,
+  and the card's only recovery control was gated on the status *not* being
+  connected — so the store that needed it was the one that could not see it. The
+  amber note said "reconnect if sync stalls" next to a hidden reconnect button.
+  The only way out was disconnecting a perfectly valid OAuth connection.
+
+  Keeping the connection was right; presenting it as healthy was not. A store is
+  now disconnected, connected-and-webhook-healthy, or connected-but-degraded,
+  all **derived from the existing persisted authority** — `webhook_health()`
+  reads `status` and `webhooks_registered_at` and there is no new column, because
+  a second health field could only ever disagree with the timestamp it duplicates.
+  The API returns `webhookHealth` so no client has to invent its own rule for
+  what a null timestamp means; the rule the frontend had invented was "assume
+  connected".
+
+  New admin-only endpoint
+  `POST /api/v1/integrations/shopify/stores/{store_id}/webhooks/reconcile`. Not
+  `/shopify/webhooks/reconcile`, which shares a prefix with the unauthenticated
+  HMAC webhook receiver and would be matched as a topic named "reconcile" the
+  moment declaration order changed. It calls the *same* reconciler OAuth uses —
+  no second implementation and no queue — lists every page before creating,
+  never replays a mutation whose outcome is unknown, stamps
+  `webhooks_registered_at` only on a fully healthy report, and returns 200 with
+  an explicit degraded verdict rather than a fake success. A viewer gets 403; a
+  foreign store id is indistinguishable from an unknown one.
+
+  The OAuth callback now consumes the report: `shopify=connected` only when it is
+  healthy, otherwise `shopify=connected_webhooks_degraded` — a distinct value
+  rather than a flag, so an older frontend cannot fall back to rendering full
+  success. No secret or raw error text goes in the query string.
+
+  The Shopify card shows the degraded state, explains that product, inventory and
+  order updates may be missed, and offers **Retry webhook setup** while the store
+  stays connected. The outcome lands in a polite live region that takes focus
+  when the retry settles; viewers see the warning and a read-only explanation but
+  no control; nothing fires on render and the mutation does not self-retry.
+
+  Lock contention (finding F-02) is now bounded: `lock_for_update` takes a
+  `lock_timeout` of 10s, expressed as PostgreSQL's own setting rather than an
+  application timer, scoped with `SET LOCAL` and reset immediately after the lock
+  statement so it governs acquiring that row and nothing else. Expiry becomes
+  `shopify_webhook_reconcile_busy` (409) instead of an unhandled 500. The
+  critical section is unchanged, different stores still do not block each other,
+  and `shopify_webhook_reconcile_finished` now logs `lock_wait_ms` and
+  `duration_ms` on every outcome.
+
+  Documentation corrections: the three mandatory privacy webhooks are assigned to
+  a named milestone, **`SHOPIFY-COMPLIANCE-1`**, marked as blocking App Store
+  submission; the claim that an automated webhook "recovery path" existed is
+  withdrawn — recovery is deterministic but **manual**, and a scheduled sweep is
+  recorded as `SHOPIFY-OPS-1`, unowned; and the inventory test count now
+  distinguishes the 11 newly added drift tests from the file's 25 total.
+
+  Red-before: the new backend acceptance suite was written first and run against
+  the accepted candidate — 17 failed, 3 passed. Green after: 20 passed. Frontend
+  coverage is 12 Playwright tests across two projects with the Shopify payloads
+  **mocked**, labelled as such in the file; the same flow runs against real
+  PostgreSQL in the backend suite.
+
 ### Added
+
+- **GQL-2 — shop currency authority and webhook reconciliation on GraphQL.**
+  The first three inventory rows migrate onto the GQL-1 foundation: `GQL-000`
+  (`shop.currencyCode`), `REST-008` (webhook list) and `REST-009` (webhook
+  create). Same topics, same delivery URIs, same shop-scoped model, same
+  `Store.currency` semantics — only the transport changed. Ten of twelve
+  versioned Admin REST calls remain.
+
+  A new operation layer (`graphql_operations.py`) holds the three static
+  documents; `webhook_reconciliation.py` holds the compare-and-create logic.
+  Both were written against the official 2026-07 reference, which corrected
+  GQL-1's own proposal: `WebhookSubscription.uri` is the current endpoint field,
+  and `callbackUrl` and the `endpoint` union are deprecated. A document written
+  from the unverified proposal would have compared endpoints by `__typename` and
+  never matched anything.
+
+  **Concurrent registration can no longer duplicate.** OAuth completion,
+  reconnect and recovery all call `register_webhooks`; two of them overlapping
+  would each list an empty shop, each decide a topic was missing, and each
+  create it, leaving the merchant receiving every event twice. Reconciliation is
+  now serialised per store with `SELECT … FOR UPDATE` on the `ShopifyConnection`
+  row — the same coordination mechanism the bulk-pricing work uses, not a second
+  locking architecture, and not an in-process lock that would protect neither of
+  two workers. Proven by two reconcilers on two real PostgreSQL connections with
+  a `pg_blocking_pids()` rendezvous, alongside a control test showing the same
+  race without the lock does duplicate.
+
+  The create mutation is **never retried automatically** — the old REST path
+  inherited a generic retry, so a lost response could create a second
+  subscription. An unknown outcome is reported as `unknown` and resolved by
+  re-listing on the next run, and `webhooks_registered_at` is stamped only when
+  every desired subscription is confirmed present with no warnings.
+
+  Shop currency still fails closed with no USD fallback, and a failed refresh
+  still retains a previously trusted currency rather than clearing it.
+
+  **No migration was required** — no webhook identifier is persisted anywhere,
+  so Shopify's list stays the only authority and `alembic heads` is unchanged at
+  `0028`.
+
+  Deliberately not done, and recorded rather than assumed safe: `shopify.app.toml`
+  subscriptions are **not** introduced, because `webhookSubscriptions` returns
+  only shop-scoped subscriptions and running both modes for one topic would
+  duplicate every event with no way for this codebase to detect it; that move
+  needs `webhookSubscriptionDelete`, which is GQL-6's. Nothing is deleted in this
+  phase — duplicates and mismatches are reported as warnings.
+
+  The inventory drift test now checks the document against the **code**, not just
+  against its sibling document: a row may only claim `migrated`/`removed` if the
+  call site is genuinely gone, and a cited test file must actually exist. That
+  guard immediately caught a pre-existing defect — both `OAUTH-*` rows cited a
+  test file that has never existed in this repository.
+
+  Known gap, unowned by any GQL phase: the three mandatory privacy webhooks
+  (`customers/data_request`, `customers/redact`, `shop/redact`) have no handler
+  anywhere in the backend. They are configured outside this API, so they are not
+  a REST-migration row, but they are an App Store submission blocker. See
+  `docs/shopify-graphql/GQL2_SHOP_WEBHOOKS.md`.
+
+  No live Shopify request was made; live verification is recorded as not run.
 
 - **GQL-1 — Shopify Admin GraphQL client foundation and complete REST
   inventory.** The first Shopify App Store launch-readiness phase. Shopify

@@ -123,6 +123,18 @@ class ShopifyUserError(ShopifyGraphQLError):
     retryable = False
 
 
+class ShopifyWebhookTopicError(ValidationError):
+    """A webhook topic has no verified GraphQL enum member.
+
+    Raised locally, before any request. An unmapped topic is a code change that
+    forgot the mapping table, and sending a guessed enum name to Shopify would
+    turn it into a rejected mutation at OAuth time instead of a failing test.
+    """
+
+    code = "shopify_webhook_topic_unmapped"
+    message = "That webhook topic is not mapped to a Shopify GraphQL topic."
+
+
 class ShopifyGidError(ValidationError):
     code = "shopify_invalid_gid"
     message = "A Shopify global identifier was missing or malformed."
