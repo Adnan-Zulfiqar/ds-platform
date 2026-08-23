@@ -92,6 +92,11 @@ failed webhook registration is *deterministic but manual*: the store is shown as
 connected-but-degraded and an administrator clicks **Retry webhook setup**
 (`POST /api/v1/integrations/shopify/stores/{store_id}/webhooks/reconcile`).
 
+It would also close the one gap F-01b cannot: `webhooks_registered_at` records
+when the last healthy reconciliation happened, and nothing observes a
+subscription Shopify deletes afterwards. A periodic re-check is what would turn
+"last confirmed" into something closer to "currently correct".
+
 There is **no background job** that reconciles unhealthy stores on its own. The
 reconciler is already idempotent and already serialised per store, so a periodic
 sweep over connections with `webhooks_registered_at IS NULL` would be a thin

@@ -20,11 +20,14 @@ import { isApiReachable, registerAndSignIn } from "./helpers/auth";
  * is stubbed is only the two API payloads.
  *
  * Backend behaviour for the same flow is exercised for real against PostgreSQL
- * in `backend/tests/integration/test_shopify_gql2_webhook_recovery.py`.
+ * in `backend/tests/integration/test_shopify_gql2_webhook_recovery.py`, and the
+ * freshness invariant behind the "last confirmed" wording in
+ * `test_shopify_gql2_webhook_freshness.py`.
  */
 
 const STATUS_ROUTE = "**/api/v1/integrations/shopify/status";
-const RECONCILE_ROUTE = "**/api/v1/integrations/shopify/stores/*/webhooks/reconcile";
+const RECONCILE_ROUTE =
+  "**/api/v1/integrations/shopify/stores/*/webhooks/reconcile";
 const STORE_ID = "11111111-2222-3333-4444-555555555555";
 
 test.beforeAll(async () => {
@@ -36,20 +39,50 @@ test.beforeAll(async () => {
 
 type Health = "healthy" | "degraded" | "not_applicable";
 
-function connection(health: Health) {
+// Three instants that render as three *different* strings at minute
+// precision, in any timezone. The card shows "Connected", "Webhooks last
+// confirmed" and the retry's new timestamp, so fixtures that collide at minute
+// precision make "the old date is gone" assert against the wrong line — which
+// is exactly what happened before these were spread out.
+const CONNECTED_AT = "2026-08-18T08:15:00Z";
+const FIRST_CONFIRMATION = "2026-08-19T11:40:05Z";
+const SECOND_CONFIRMATION = "2026-08-20T16:25:00Z";
+
+function connection(health: Health, confirmedAt: string = FIRST_CONFIRMATION) {
   return {
     id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     storeId: STORE_ID,
     shopDomain: "recovery-demo.myshopify.com",
     status: "connected",
     scopes: "read_products,read_orders,read_inventory",
-    connectedAt: "2026-08-20T10:00:00Z",
+    connectedAt: CONNECTED_AT,
     lastSyncAt: null,
     lastError: null,
-    webhooksRegisteredAt:
-      health === "healthy" ? "2026-08-20T10:00:05Z" : null,
+    // The server clears this the moment a new reconciliation starts, so a
+    // degraded row never carries a previous confirmation (F-01b).
+    webhooksRegisteredAt: health === "healthy" ? confirmedAt : null,
     webhookHealth: health,
   };
+}
+
+/**
+ * How the card renders a confirmation date.
+ *
+ * Evaluated **in the page**, not in Node: `toLocaleString` resolves against the
+ * host's timezone and locale, and the browser's need not match the test
+ * runner's. Computing it here rather than there made every date assertion fail
+ * by exactly one hour on a machine off UTC — the kind of difference that passes
+ * in CI and fails on a developer's laptop.
+ */
+async function displayed(page: Page, iso: string): Promise<string> {
+  return page.evaluate(
+    (value) =>
+      new Date(value).toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    iso,
+  );
 }
 
 interface StatusStub {
@@ -62,15 +95,21 @@ interface StatusStub {
    * the card must be re-reading the server rather than trusting the mutation
    * response — flipping this is how the test tells the difference.
    */
-  setHealth: (next: Health) => void;
+  setHealth: (next: Health, confirmedAt?: string) => void;
 }
 
-async function stubStatus(page: Page, health: Health): Promise<StatusStub> {
+async function stubStatus(
+  page: Page,
+  health: Health,
+  confirmedAt: string = FIRST_CONFIRMATION,
+): Promise<StatusStub> {
   let current = health;
+  let currentAt = confirmedAt;
   const stub: StatusStub = {
     calls: 0,
-    setHealth: (next: Health) => {
+    setHealth: (next: Health, at?: string) => {
       current = next;
+      if (at) currentAt = at;
     },
   };
   await page.route(STATUS_ROUTE, async (route: Route) => {
@@ -78,7 +117,10 @@ async function stubStatus(page: Page, health: Health): Promise<StatusStub> {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ configured: true, connections: [connection(current)] }),
+      body: JSON.stringify({
+        configured: true,
+        connections: [connection(current, currentAt)],
+      }),
     });
   });
   return stub;
@@ -133,7 +175,7 @@ function reconcileBody(healthy: boolean) {
     warnings: [],
     listedCount: 0,
     createdCount: healthy ? topics.length : 0,
-    webhooksRegisteredAt: healthy ? "2026-08-20T10:05:00Z" : null,
+    webhooksRegisteredAt: healthy ? SECOND_CONFIRMATION : null,
   };
 }
 
@@ -172,11 +214,30 @@ function shopifyRegion(page: Page) {
 }
 
 function retryButton(page: Page) {
-  return shopifyRegion(page).getByRole("button", { name: "Retry webhook setup" });
+  return shopifyRegion(page).getByRole("button", {
+    name: "Retry webhook setup",
+  });
 }
 
 function statusRegion(page: Page) {
   return page.getByTestId(`shopify-webhook-status-${STORE_ID}`);
+}
+
+/**
+ * The badge, not the timestamp line.
+ *
+ * Both read "Webhooks last confirmed" — the badge alone, the line followed by
+ * a colon and the date — so an unqualified text match is ambiguous. `exact`
+ * picks the badge; `confirmedLine` picks the line.
+ */
+function confirmedBadge(page: Page) {
+  return shopifyRegion(page).getByText("Webhooks last confirmed", {
+    exact: true,
+  });
+}
+
+function confirmedLine(page: Page) {
+  return shopifyRegion(page).getByText(/Webhooks last confirmed:/);
 }
 
 test.describe("Shopify card — connected but webhook-degraded (mocked API)", () => {
@@ -188,7 +249,9 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     await page.goto("/settings/integrations");
 
     const shopify = shopifyRegion(page);
-    await expect(shopify.getByText("recovery-demo.myshopify.com")).toBeVisible();
+    await expect(
+      shopify.getByText("recovery-demo.myshopify.com"),
+    ).toBeVisible();
     await expect(shopify.getByText("Webhooks incomplete")).toBeVisible();
     await expect(
       shopify.getByText(/Product, inventory and order updates may be missed/i),
@@ -198,7 +261,9 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     await expect(shopify.getByText("1 connected")).toHaveCount(0);
   });
 
-  test("the retry action is available without disconnecting", async ({ page }) => {
+  test("the retry action is available without disconnecting", async ({
+    page,
+  }) => {
     await registerAndSignIn(page);
     await stubStatus(page, "degraded");
     await page.goto("/settings/integrations");
@@ -234,11 +299,16 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     const before = status.calls;
     // The authoritative answer changes, exactly as a real successful retry
     // would make it change.
-    status.setHealth("healthy");
+    status.setHealth("healthy", SECOND_CONFIRMATION);
     await retryButton(page).click();
 
-    await expect(statusRegion(page)).toContainText(/Webhook setup completed/i);
-    await expect(shopifyRegion(page).getByText("Webhooks active")).toBeVisible();
+    await expect(statusRegion(page)).toContainText(/Webhook setup confirmed/i);
+    await expect(confirmedBadge(page)).toBeVisible();
+    // The date is shown, because "confirmed" without a date is the claim this
+    // wording exists to avoid making.
+    await expect(confirmedLine(page)).toContainText(
+      await displayed(page, SECOND_CONFIRMATION),
+    );
     await expect(retryButton(page)).toHaveCount(0);
     expect(reconcile.calls).toBe(1);
     expect(status.calls).toBeGreaterThan(before);
@@ -256,7 +326,9 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
 
     await expect(statusRegion(page)).toContainText(/still incomplete/i);
     await expect(
-      shopifyRegion(page).getByText(/Product, inventory and order updates may be missed/i),
+      shopifyRegion(page).getByText(
+        /Product, inventory and order updates may be missed/i,
+      ),
     ).toBeVisible();
     await expect(retryButton(page)).toBeVisible();
     // One click, one request — no self-retry loop.
@@ -264,7 +336,9 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     expect(reconcile.calls).toBe(1);
   });
 
-  test("a rejected retry shows the failure and does not loop", async ({ page }) => {
+  test("a rejected retry shows the failure and does not loop", async ({
+    page,
+  }) => {
     await registerAndSignIn(page);
     await stubStatus(page, "degraded");
     const reconcile = await stubReconcile(page, "error");
@@ -291,7 +365,7 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     await expect(button).toBeFocused();
     await page.keyboard.press("Enter");
 
-    await expect(statusRegion(page)).toContainText(/Webhook setup completed/i);
+    await expect(statusRegion(page)).toContainText(/Webhook setup confirmed/i);
     // Focus lands on the answer rather than being lost or left on a control
     // that has now disappeared.
     await expect(statusRegion(page)).toBeFocused();
@@ -299,12 +373,21 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     await expect(statusRegion(page)).toHaveAttribute("role", "status");
   });
 
-  test("a healthy store shows no warning and no retry control", async ({ page }) => {
+  test("a healthy store shows no warning and no retry control", async ({
+    page,
+  }) => {
     await registerAndSignIn(page);
     await stubStatus(page, "healthy");
     await page.goto("/settings/integrations");
 
-    await expect(shopifyRegion(page).getByText("Webhooks active")).toBeVisible();
+    await expect(confirmedBadge(page)).toBeVisible();
+    await expect(confirmedLine(page)).toContainText(
+      await displayed(page, FIRST_CONFIRMATION),
+    );
+    // Never an unqualified claim about live provider state.
+    await expect(shopifyRegion(page).getByText("Webhooks active")).toHaveCount(
+      0,
+    );
     await expect(retryButton(page)).toHaveCount(0);
     await expect(
       shopifyRegion(page).getByText(/updates may be missed/i),
@@ -316,7 +399,9 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
   }) => {
     await registerAndSignIn(page);
     await stubStatus(page, "degraded");
-    await page.goto("/settings/integrations?shopify=connected_webhooks_degraded");
+    await page.goto(
+      "/settings/integrations?shopify=connected_webhooks_degraded",
+    );
 
     const banner = page.getByRole("alert").first();
     await expect(
@@ -396,8 +481,184 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
 
     await page.goto("/settings/integrations");
     await retryButton(page).click();
-    await expect(statusRegion(page)).toContainText(/completed/i);
+    await expect(statusRegion(page)).toContainText(/confirmed/i);
 
     expect(errors).toEqual([]);
+  });
+});
+
+/**
+ * F-01b — a confirmation must describe the most recent attempt.
+ *
+ * Before this fix, `webhooksRegisteredAt` was only ever written. A store that
+ * reconciled successfully once kept that timestamp through every later failure,
+ * so the card rendered a healthy state for a store whose subscriptions were
+ * gone — and, because Retry only appears while degraded, the stale timestamp
+ * also removed the way out.
+ *
+ * The server now clears the timestamp before it contacts Shopify, so these
+ * tests drive the card with the payloads that change actually produces.
+ */
+test.describe("Shopify card — a stale confirmation cannot persist (mocked API)", () => {
+  test("a previously confirmed store that fails reconciliation renders degraded", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    const status = await stubStatus(page, "healthy");
+    await page.goto("/settings/integrations");
+
+    await expect(confirmedBadge(page)).toBeVisible();
+    await expect(confirmedLine(page)).toContainText(
+      await displayed(page, FIRST_CONFIRMATION),
+    );
+
+    // What the server does when a later reconciliation fails: it clears the
+    // confirmation before contacting Shopify, so the next authoritative read
+    // carries no date at all.
+    status.setHealth("degraded");
+    await page.goto("/settings/integrations");
+
+    await expect(
+      shopifyRegion(page).getByText("Webhooks incomplete"),
+    ).toBeVisible();
+    await expect(confirmedBadge(page)).toHaveCount(0);
+    await expect(confirmedLine(page)).toHaveCount(0);
+    await expect(
+      shopifyRegion(page).getByText(await displayed(page, FIRST_CONFIRMATION)),
+    ).toHaveCount(0);
+    await expect(
+      shopifyRegion(page).getByText(
+        /Product, inventory and order updates may be missed/i,
+      ),
+    ).toBeVisible();
+  });
+
+  test("the retry action stays available after a failed retry on a once-healthy store", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    const status = await stubStatus(page, "healthy");
+    const reconcile = await stubReconcile(page, "degraded");
+    await page.goto("/settings/integrations");
+    await expect(confirmedBadge(page)).toBeVisible();
+
+    // The store degrades, the merchant reloads, and Retry is now offered.
+    status.setHealth("degraded");
+    await page.goto("/settings/integrations");
+    await retryButton(page).click();
+    await expect(statusRegion(page)).toContainText(/still incomplete/i);
+
+    // The merchant is not stranded: the control that got them here is still
+    // there, and it has not fired again on its own.
+    await expect(retryButton(page)).toBeVisible();
+    await expect(retryButton(page)).toBeEnabled();
+    await page.waitForTimeout(1000);
+    expect(reconcile.calls).toBe(1);
+  });
+
+  test("a degraded row never carries a previous confirmation date", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await stubStatus(page, "degraded");
+    await page.goto("/settings/integrations");
+
+    const shopify = shopifyRegion(page);
+    await expect(shopify.getByText("Webhooks incomplete")).toBeVisible();
+    await expect(confirmedBadge(page)).toHaveCount(0);
+    await expect(confirmedLine(page)).toHaveCount(0);
+    await expect(
+      shopify.getByText(await displayed(page, FIRST_CONFIRMATION)),
+    ).toHaveCount(0);
+  });
+
+  test("a degraded reconnect result cannot show the previous healthy confirmation", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await stubStatus(page, "degraded");
+    await page.goto(
+      "/settings/integrations?shopify=connected_webhooks_degraded",
+    );
+
+    const banner = page.getByRole("alert").first();
+    await expect(
+      banner.getByRole("heading", { name: /webhook setup incomplete/i }),
+    ).toBeVisible();
+    await expect(confirmedBadge(page)).toHaveCount(0);
+    await expect(confirmedLine(page)).toHaveCount(0);
+    await expect(retryButton(page)).toBeVisible();
+  });
+
+  test("recovering re-confirms with the new date, not the old one", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    const status = await stubStatus(page, "degraded");
+    await stubReconcile(page, "healthy");
+    await page.goto("/settings/integrations");
+    // Wait for the degraded card before changing what the server would say --
+    // flipping first can beat the first status fetch, and the card then renders
+    // healthy with no Retry control to click.
+    await expect(retryButton(page)).toBeVisible();
+
+    status.setHealth("healthy", SECOND_CONFIRMATION);
+    await retryButton(page).click();
+
+    await expect(confirmedLine(page)).toContainText(
+      await displayed(page, SECOND_CONFIRMATION),
+    );
+    await expect(
+      shopifyRegion(page).getByText(await displayed(page, FIRST_CONFIRMATION)),
+    ).toHaveCount(0);
+  });
+
+  test("a once-healthy degraded store still renders in dark mode on mobile", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await stubStatus(page, "degraded");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings/integrations");
+
+    await expect(retryButton(page)).toBeVisible();
+    const box = await retryButton(page).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  });
+
+  test("a viewer sees the degraded explanation but never the control", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await asViewer(page);
+    await stubStatus(page, "degraded");
+    const reconcile = await stubReconcile(page, "healthy");
+    await page.goto("/settings/integrations");
+
+    await expect(
+      shopifyRegion(page).getByText(
+        /Product, inventory and order updates may be missed/i,
+      ),
+    ).toBeVisible();
+    await expect(retryButton(page)).toHaveCount(0);
+    expect(reconcile.calls).toBe(0);
+  });
+
+  test("no reconcile request is made when a healthy store is merely viewed", async ({
+    page,
+  }) => {
+    await registerAndSignIn(page);
+    await stubStatus(page, "healthy");
+    const reconcile = await stubReconcile(page, "healthy");
+    await page.goto("/settings/integrations");
+
+    await expect(confirmedBadge(page)).toBeVisible();
+    await page.waitForTimeout(1000);
+    // Reading must never invalidate: a page view that reconciled would clear a
+    // good confirmation for as long as the round trip took.
+    expect(reconcile.calls).toBe(0);
   });
 });

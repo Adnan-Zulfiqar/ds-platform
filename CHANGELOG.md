@@ -12,6 +12,54 @@ production release.
 
 ### Fixed
 
+- **GQL-2 F-01b — a webhook confirmation can no longer go stale.** The previous
+  fix made a store that had *never* reconciled visibly degraded. It did not
+  cover the opposite case. `webhooks_registered_at` was only ever written, never
+  cleared, and `webhook_health()` read any non-null value as healthy — so one
+  successful run vouched for every failure after it. A later unhealthy
+  reconciliation, a provider outage, or a reconnect that stored **brand-new
+  OAuth credentials** all left the previous timestamp standing, and
+  `complete_connection` rotated the access token without touching it at all. The
+  card showed a healthy state for a store whose subscriptions were missing, and
+  because Retry appears only while degraded, the stale timestamp also removed
+  the way out.
+
+  A non-null `webhooks_registered_at` now means *the most recent completed
+  reconciliation for the current credentials was healthy* — not "some
+  reconciliation once succeeded". `register_webhooks` commits the column to NULL
+  in its own short transaction **before** it makes any Shopify request, so a
+  provider exception, a lock timeout or a worker dying mid-reconciliation leaves
+  the store degraded instead of restoring a confirmation the rollback would have
+  brought back. `complete_connection` clears it in the same UPDATE that stores
+  refreshed credentials, so an old confirmation can never authenticate a token
+  it has never seen.
+
+  The invalidation runs on the caller's session rather than an independent one:
+  the OAuth path reaches `register_webhooks` with `complete_connection`'s UPDATE
+  of that very row uncommitted, and a second connection would block on it until
+  the request timed out — the deadlock
+  `ProductImportService._persist_failure_durably` already documents. It is a
+  deliberate, narrow departure from "handlers never commit", because here a
+  trace surviving the failure is the entire point.
+
+  Concurrency is unchanged: the same bounded row lock still serialises
+  reconciliation per store, the control test proving an unlocked race duplicates
+  still passes, and different stores stay independent. Invalidation takes the
+  same bounded wait, so a caller arriving while another reconciliation holds the
+  row is refused *before* it can clear a confirmation it is not going to
+  replace. Reads never mutate — viewing the status page does not reconcile.
+
+  The UI stops claiming more than it can know. Nothing observes a subscription
+  Shopify deletes outside DropPilot, so the badge reads **Webhooks last
+  confirmed** with its date rather than *Webhooks active*, and the degraded
+  warning says confirmation failed *on the most recent attempt*.
+
+  Red-before: the new suite was written first and run against `8abd9cc` —
+  12 failed, 9 passed. Green after: 21 passed. Full backend suite 1741 passed
+  (baseline 1720, +21); 82 Playwright tests across chromium and mobile-chrome,
+  with the Shopify payloads mocked and labelled as such. No migration; Alembic
+  remains a single head at `0028`.
+
 - **GQL-2 acceptance fix — a connected Shopify store can no longer hide broken
   webhooks.** An independent review returned `GQL-2 requires fixes` on one
   blocking finding, and it was a real one: OAuth completion ran webhook

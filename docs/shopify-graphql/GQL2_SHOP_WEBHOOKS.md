@@ -375,6 +375,134 @@ same flow is exercised for real against PostgreSQL in the backend suite.
 
 ---
 
+## F-01b — a confirmation must describe the most recent attempt
+
+The first acceptance fix made a store that had **never** reconciled visibly
+degraded. It did not touch the opposite case.
+
+**Root cause.** `webhooks_registered_at` was only ever written, never cleared,
+and `webhook_health()` read any non-null value as healthy. So one successful run
+vouched for every failure after it: a later unhealthy reconciliation, a provider
+outage, or a reconnect that stored **brand-new OAuth credentials** all left the
+previous timestamp standing. The card showed a healthy state for a store whose
+subscriptions were missing — and because Retry appears only while degraded, the
+stale timestamp also removed the way out. `complete_connection` updated the
+existing connection row with a rotated token and did not touch the timestamp at
+all, so an old confirmation could authenticate credentials it had never seen.
+
+**The invariant now enforced:**
+
+> A non-null `webhooks_registered_at` means the most recent **completed**
+> reconciliation for the **current** connection credentials was healthy.
+
+Not "some reconciliation once succeeded".
+
+### Transaction design
+
+Two transactions, in this order, on the caller's session:
+
+```
+tx1   SELECT … FOR UPDATE (bounded)  →  webhooks_registered_at = NULL  →  COMMIT
+tx2   SELECT … FOR UPDATE (bounded)  →  list → create → stamp if healthy
+```
+
+**Why the clear must be committed, not flushed.** The failure modes it guards
+are exactly the ones that roll a request back — a provider exception, a lock
+timeout, a worker dying mid-reconciliation. A pending UPDATE would be undone by
+the very event that makes the old confirmation wrong, restoring it. So it gets
+its own committed transaction, and everything that can fail happens in the next
+one.
+
+**Why the caller's session and not an independent one.**
+`ProductImportService._persist_failure_durably` uses `session_factory()` for the
+same "must survive the rollback" reason, and documents what that costs: a second
+connection cannot touch a row the caller's still-open transaction already holds.
+That is not hypothetical here — the OAuth path reaches `register_webhooks` with
+`complete_connection`'s UPDATE of this very row uncommitted, so an independent
+connection would block on it until the request timed out, and the request cannot
+finish until the invalidation returns. Committing the caller's session avoids
+that by construction, and on the OAuth path it is also what makes the refreshed
+credentials durable before Shopify is called — which is what
+connected-but-degraded is supposed to mean.
+
+This is a deliberate, narrow departure from `get_db_session`'s "handlers never
+commit" rule. That rule exists so a request leaves no partial trace; here a
+trace surviving the failure is the entire point. Nothing else is pending in
+either calling path that should not be committed: the retry endpoint has written
+nothing, and the OAuth callback has written a connection it explicitly wants to
+keep.
+
+**The commit is unconditional**, even when the timestamp was already NULL,
+because it also releases the lock taken in `tx1` — so `tx2` acquires the row
+fresh rather than inheriting a lock whose transaction has other work in it.
+
+### Entry points
+
+Every production path that reconciles now goes through one method:
+
+| Entry point | Invalidates |
+|---|---|
+| OAuth first connect (`shopify_callback`) | `register_webhooks` → `_invalidate_webhook_confirmation` |
+| Reconnect with rotated credentials | `complete_connection` clears it in the same UPDATE that stores the new token, **and** `register_webhooks` again before listing |
+| Admin retry endpoint | `register_webhooks` → `_invalidate_webhook_confirmation` |
+
+There is no fourth caller — `grep register_webhooks app/` returns the two router
+call sites and the definition. The invalidation is the first durable step
+*inside* `register_webhooks` rather than something a caller must remember, so a
+future caller cannot reconcile without it.
+
+### Outcome matrix
+
+Asserted against the committed column, read from a **separate PostgreSQL
+connection**, in `test_shopify_gql2_webhook_freshness.py`:
+
+| Outcome | `webhooks_registered_at` | Test |
+|---|---|---|
+| Healthy complete reconciliation | new timestamp | `test_a_later_healthy_run_writes_a_new_confirmation` |
+| Unhealthy report (`userErrors`) | `NULL` | `test_a_later_unhealthy_report_clears_the_confirmation` |
+| Provider exception | `NULL` | `test_a_provider_exception_clears_the_confirmation` |
+| Unknown mutation outcome (timeout) | `NULL` | `test_an_unknown_mutation_outcome_clears_the_confirmation` |
+| Lock-busy after the retry began | `NULL` | `test_a_busy_store_does_not_restore_the_stale_confirmation` |
+| In flight, read by another process | `NULL` | `test_the_confirmation_is_already_gone_while_shopify_is_being_called` |
+| Reconnect, reconciliation fails | `NULL`, token still rotated | `test_a_reconnect_whose_reconciliation_fails_stays_degraded` |
+| Reconnect, healthy | new timestamp | `test_a_successful_reconnect_records_a_fresh_confirmation` |
+| Status page viewed | unchanged | `test_viewing_the_status_page_does_not_clear_the_confirmation` |
+| Viewer attempts retry | unchanged (403 first) | `test_a_viewer_cannot_invalidate_a_confirmation` |
+| Another tenant attempts retry | unchanged | `test_a_foreign_store_is_neither_cleared_nor_enumerated` |
+
+A **read never mutates**: invalidation belongs to reconciliation, and the status
+endpoint does not reconcile.
+
+### Honest wording
+
+The badge no longer says *Webhooks active*. DropPilot cannot observe a
+subscription Shopify deletes on its own, so the claim it can honestly make is
+about the last successful confirmation and its date:
+
+- badge — **Webhooks last confirmed**
+- line — **Webhooks last confirmed: 20 Aug 2026, 16:25**
+- retry success — **Webhook setup confirmed at …**
+
+The degraded warning now says DropPilot could not confirm the webhooks *on its
+most recent attempt*, which is what the state actually means after F-01b.
+
+### Concurrency, unchanged
+
+Reconciliation is still serialised per store by the same row lock, and the
+control test that proves an unlocked race duplicates still passes. Invalidation
+takes the same bounded wait, so a caller arriving while another reconciliation
+holds the row is told the store is busy **before** it can clear a confirmation
+it is not going to replace. Different stores remain independent — asserted by
+holding one store's reconciliation open and requiring another store's to
+complete inside the hang guard.
+
+### Red-before
+
+`test_shopify_gql2_webhook_freshness.py` was written first and run against
+`8abd9cc`: **12 failed, 9 passed**. Green after: **21 passed**.
+
+---
+
 ## Known limitations
 
 1. **`ShopifyClient.fetch_shop_currency_code` and `ShopifyClient.graphql` still
@@ -417,6 +545,20 @@ same flow is exercised for real against PostgreSQL in the backend suite.
    make legitimate retries look busy. `shopify_webhook_reconcile_finished` logs
    `lock_wait_ms` and `duration_ms` on every outcome so that is measurable
    before anything is tuned.
+
+8. **A confirmation is a timestamp, not a live check.** Nothing observes a
+   subscription that Shopify deletes outside DropPilot, so
+   `webhooks_registered_at` says when the last healthy reconciliation happened
+   and no more. The UI says exactly that — *Webhooks last confirmed*, with the
+   date — rather than claiming the webhooks are active right now. Closing that
+   gap needs a periodic re-check, which is `SHOPIFY-OPS-1`.
+
+9. **Invalidation widens the degraded window on the happy path.** A healthy
+   store that is reconciled again reads as degraded for the duration of the
+   reconciliation — a second or two — because the clear commits before the
+   Shopify calls. That is the correct trade: the alternative is a window in
+   which a store reads healthy on the strength of a run that has already been
+   superseded.
 
 5. **Duplicates and mismatches are reported, never repaired.** A shop that
    already has two identical subscriptions stays that way, and its report is

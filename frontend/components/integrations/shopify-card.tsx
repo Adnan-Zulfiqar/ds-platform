@@ -157,15 +157,20 @@ function ConnectionRow({
           </p>
           {connection.webhooksRegisteredAt ? (
             <p className="text-muted-foreground">
-              Webhooks: {formatDate(connection.webhooksRegisteredAt)}
+              Webhooks last confirmed:{" "}
+              {formatDate(connection.webhooksRegisteredAt)}
             </p>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* "Last confirmed", never "active". DropPilot cannot observe a
+              subscription Shopify deletes on its own, so the honest claim is
+              about the last successful confirmation and its date — which the
+              line above carries — not about live provider state. */}
           {degraded ? (
             <Badge variant="warning">Webhooks incomplete</Badge>
           ) : connection.webhookHealth === "healthy" ? (
-            <Badge variant="success">Webhooks active</Badge>
+            <Badge variant="success">Webhooks last confirmed</Badge>
           ) : null}
           <Badge variant={statusVariant(connection.status)}>
             {statusLabel(connection.status)}
@@ -177,7 +182,8 @@ function ConnectionRow({
         <Alert variant="warning" className="mt-3">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            DropPilot could not confirm this store&rsquo;s Shopify webhooks.{" "}
+            DropPilot could not confirm this store&rsquo;s Shopify webhooks on
+            its most recent attempt.{" "}
             <strong>Product, inventory and order updates may be missed</strong>{" "}
             until setup completes. Your store stays connected — you do not need
             to disconnect.
@@ -203,7 +209,11 @@ function ConnectionRow({
         ) : retryResult?.healthy ? (
           <p className="text-success">
             <CheckCircle2 className="mr-1 inline h-4 w-4" />
-            Webhook setup completed. {retryResult.createdCount} created.
+            Webhook setup confirmed
+            {retryResult.webhooksRegisteredAt
+              ? ` at ${formatDate(retryResult.webhooksRegisteredAt)}`
+              : ""}
+            . {retryResult.createdCount} created.
           </p>
         ) : retryResult ? (
           <p className="text-warning">
