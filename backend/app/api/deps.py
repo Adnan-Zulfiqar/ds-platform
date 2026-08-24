@@ -26,6 +26,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import client_ip_or_unknown
 from app.core.config import settings
 from app.core.context import AuthenticatedUser, set_principal
 from app.core.exceptions import (
@@ -403,13 +404,9 @@ def endpoint_rate_limit(
         if principal is not None:
             identity = f"tenant:{principal.tenant_id}:user:{principal.user_id}"
         else:
-            forwarded = request.headers.get("x-forwarded-for")
-            identity = (
-                forwarded.split(",")[0].strip()
-                if forwarded
-                else (request.client.host if request.client else "unknown")
-            )
-            identity = f"ip:{identity}"
+            # Same resolver as the middleware: one rule for who a caller is,
+            # so a forged header cannot buy a second per-endpoint quota either.
+            identity = f"ip:{client_ip_or_unknown(request)}"
 
         decision = await limiter.consume(
             f"ratelimit:{name}:{identity}", limit=limit, window=window_seconds

@@ -36,7 +36,7 @@ from app.integrations.ebay.deletion import EbayAccountDeletionProcessor
 from app.integrations.ebay.exceptions import (
     EbayChallengeError,
     EbayNotConfiguredError,
-    EbayPayloadTooLargeError,
+    EbayNotificationConflictError,
 )
 from app.integrations.ebay.public_key import EbayPublicKeyClient
 from app.integrations.ebay.schemas import (
@@ -63,6 +63,10 @@ MAX_CHALLENGE_CODE_LENGTH: Final = 256
 #: sample is ~500 bytes. 64 KiB leaves two orders of magnitude of headroom for
 #: a future field while refusing a body sent to exhaust memory. Enforced on the
 #: bytes actually read, not on a Content-Length header a caller controls.
+#:
+#: Enforced by ``app.core.request_body.read_bounded_body`` *while* the body is
+#: streaming, so an oversized request is abandoned rather than buffered and
+#: then measured.
 MAX_NOTIFICATION_BODY_BYTES: Final = 64 * 1024
 
 #: Content types eBay's AsyncAPI contract declares for the notification.
@@ -114,13 +118,6 @@ def _challenge_rejected(reason: str) -> EbayChallengeError:
     # and the reason category is what an operator actually needs.
     logger.warning("ebay_challenge_rejected", reason=reason)
     return EbayChallengeError(details={"reason": reason})
-
-
-def enforce_body_limit(raw: bytes) -> None:
-    """Refuse an oversized body after reading, on the real byte count."""
-    if len(raw) > MAX_NOTIFICATION_BODY_BYTES:
-        logger.warning("ebay_notification_rejected", reason="oversized_body", size=len(raw))
-        raise EbayPayloadTooLargeError()
 
 
 def accepts_content_type(header: str | None) -> bool:
@@ -179,7 +176,7 @@ class EbayComplianceService:
 
         existing = await self.ledger.get_by_notification_id(notification.notification_id)
         if existing is not None:
-            return await self._record_duplicate(existing, now)
+            return await self._record_duplicate(existing, now, digest=digest)
 
         try:
             record = await self.ledger.claim(
@@ -201,7 +198,7 @@ class EbayComplianceService:
             if duplicate is None:  # pragma: no cover - only if the row vanished
                 raise
             logger.info("ebay_notification_duplicate", reason="insert_race")
-            return await self._record_duplicate(duplicate, now)
+            return await self._record_duplicate(duplicate, now, digest=digest)
 
         outcome = await EbayAccountDeletionProcessor(self.session).erase(notification.subject)
         await self.ledger.complete(
@@ -217,14 +214,40 @@ class EbayComplianceService:
         return record
 
     async def _record_duplicate(
-        self, record: EbayComplianceNotification, now: datetime
+        self, record: EbayComplianceNotification, now: datetime, *, digest: str
     ) -> EbayComplianceNotification:
-        """Acknowledge a repeat without repeating destructive work.
+        """Acknowledge a genuine repeat; refuse an impostor.
 
-        The receipt is counted so an operator can see redelivery happening, but
-        no owner is run again. eBay retries until acknowledged, so duplicates
-        are normal traffic rather than an anomaly.
+        A repeat is only a repeat if it is the *same* notification. eBay's id is
+        the idempotency key, so two deliveries sharing one must carry identical
+        bytes — and the stored SHA-256 is exactly the evidence needed to check
+        that without having kept the payload.
+
+        When the digests differ, neither available action is safe, so the
+        endpoint refuses instead of choosing:
+
+        * counting it as a repeat would acknowledge a notification that was
+          never processed, and eBay never resends an acknowledged one — the
+          deletion instruction would be lost silently;
+        * re-running erasure would repeat destructive work under an identity
+          that has already been settled, and would overwrite the digest that
+          says what was actually processed.
+
+        The original record is left exactly as it was: same digest, same
+        outcome, same receipt count. Nothing about the conflicting delivery is
+        written, and neither payload appears in the error or the log — both are
+        unauthenticated input and one carries personal data.
         """
+        if record.payload_digest != digest:
+            logger.warning(
+                "ebay_notification_conflict",
+                notification_id_digest=hashlib.sha256(
+                    record.notification_id.encode("utf-8")
+                ).hexdigest()[:16],
+                stored_status=record.processing_status.value,
+            )
+            raise EbayNotificationConflictError()
+
         logger.info("ebay_notification_duplicate", receipts=record.receipt_count + 1)
         return await self.ledger.record_repeat(record, received_at=now)
 
@@ -235,6 +258,5 @@ __all__ = [
     "EbayComplianceService",
     "accepts_content_type",
     "challenge_response",
-    "enforce_body_limit",
     "parse_notification",
 ]

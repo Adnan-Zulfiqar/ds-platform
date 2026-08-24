@@ -207,7 +207,8 @@ response, an error or a log line.
 
 Order is the security property: **verify → parse → claim → erase → acknowledge**.
 
-1. Read raw bytes; refuse anything over **64 KiB** (eBay's sample is ~500 bytes).
+1. Stream the body through `read_bounded_body`, refusing anything over
+   **64 KiB** *while it arrives* (eBay's sample is ~500 bytes).
 2. Require `application/json`.
 3. Require and decode `X-EBAY-SIGNATURE`; extract only `kid`, validated as a
    `uuid.UUID`.
@@ -341,6 +342,165 @@ searches for each value.
 
 ---
 
+## Acceptance fix — the review findings
+
+An independent review returned `EBAY-C0 blocked` on two blockers and five medium
+findings. Each is closed below, with the evidence that it was real.
+
+### BLOCKER — the body was buffered before it was measured
+
+`await request.body()` reads the whole request, and the 64 KiB check ran
+*after* it returned. On an unauthenticated route that means anyone who learns
+the URL decides how much memory the process allocates.
+
+Measured, not argued: a test offered a 16 MiB body in 8 KiB chunks and counted
+what the application asked for. Against `db6e986` it consumed
+**16,777,216 bytes before rejecting a 65,536-byte limit**.
+
+`app/core/request_body.read_bounded_body` replaces it — one reusable reader
+that pulls `request.stream()` and stops *asking* the moment the accumulated
+length passes the ceiling. `Content-Length` is used only as a cheap
+short-circuit when a caller honestly declares an oversize; a forged small value
+changes nothing, because the streaming bound runs regardless. A client
+disconnect becomes a 400 rather than a 500.
+
+The returned bytes are exactly what arrived — no decoding, no normalisation, no
+re-serialisation — and JSON is still parsed only after the signature verifies.
+A test splits a signed notification across two chunks and asserts the verifier
+received the identical byte string.
+
+### BLOCKER — a forwarding header was believed from any caller
+
+Five places each did `X-Forwarded-For.split(",")[0]`, so a direct attacker could
+rotate the header and be a new client on every request — defeating the general
+quota, the eBay compliance budget *and* the login throttle.
+
+`app/core/client_ip.py` is now the single answer. A forwarding header is
+evidence **only** when the immediate socket peer is inside a configured
+`SECURITY_TRUSTED_PROXIES` CIDR; otherwise it is ignored entirely and the socket
+address is the identity. When the peer is trusted the chain is walked from the
+**right**, skipping our own proxies and taking the first hop that is not one —
+because `[0]` is the value the original caller chose, which is forged even
+behind a correct proxy. `CF-Connecting-IP` is honoured only from a trusted peer;
+`CF-Ray` grants nothing, since anyone can send one.
+
+Every returned value is a parsed `ip_address` rendered back to text, so a Redis
+key built from it is an address or the `unknown` constant and can be nothing
+else. Malformed entries stop the walk rather than being guessed at.
+
+**Default: nothing is trusted.** That is deliberate. A deployment that gains a
+proxy and forgets this setting sees every client collapse to the proxy's
+address — visibly wrong, and fixable — rather than letting the internet forge
+identities silently.
+
+#### Cloudflare Tunnel
+
+`cloudflared` runs beside the API and connects over loopback, so the trusted
+value is the loopback host, not a Cloudflare range:
+
+```
+SECURITY_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+```
+
+Behind Nginx in a compose network, use that network's CIDR. Set it to the
+address the proxy connects **from**, never the one it listens on. No private
+deployment address is hardcoded anywhere in this repository.
+
+### MEDIUM — public-key cache namespace
+
+The cache key was the bare key id, so the same id in sandbox and production
+shared one slot. It is now
+`ebay:notification:public_key:<schema>:<environment>:<key-id>` — environment so
+the two estates cannot collide, and an explicit schema segment so a change to
+the stored shape retires old entries instead of misreading them. Corrupt or
+incomplete entries are discarded and refetched; algorithm, digest and PEM are
+all validated before use; a Redis outage degrades to a live fetch and never to
+skipping verification.
+
+### MEDIUM — same notification id, different payload
+
+A repeat `notificationId` was counted as an ordinary duplicate without checking
+the payload. Two different notifications cannot share one id, and neither
+available action was safe — acknowledging would discard a real deletion request
+that eBay would never resend, and re-running erasure would repeat destructive
+work under a settled identity.
+
+The stored SHA-256 is now compared. Same id **and** same digest is an idempotent
+repeat. Same id, different digest raises `ebay_notification_conflict` (**409**),
+which eBay treats as a failed delivery and retries — the honest outcome, since
+the endpoint genuinely cannot act on it. The original record keeps its digest,
+outcome and receipt count; nothing about the conflicting delivery is written;
+neither payload appears in the error or the log. Concurrency is still decided by
+the database, and a test drives two conflicting deliveries on separate
+connections.
+
+**No migration was needed** — `payload_digest` already existed.
+
+### MEDIUM — the official curve
+
+The verifier accepted any EC key. eBay's published fixture is `secp256r1`
+(P-256) and the `getPublicKey` reference describes no other curve, so P-384 —
+a perfectly good curve — is not one eBay would ever have signed with here. It is
+now required, and RSA, Ed25519, other curves and malformed keys are all refused
+with 412 and zero writes.
+
+SHA-1 stays. It is what eBay's key metadata returns, and "upgrading" it would
+reject every real notification. That is provider-mandated compatibility, not an
+oversight — see the module docstring.
+
+### MEDIUM — pinned authority and independent reproduction
+
+| | |
+|---|---|
+| Repository | `github.com/eBay/event-notification-nodejs-sdk` |
+| Commit | `feaf3378ca263a81432cf5b8c8a6fd8cb3d3e2f3` |
+| Tag | `1.0.3` (same commit) |
+| Fixture | `test/test.json`, blob `092dabc78180a410fdaf90f8afcc14d3cd73dd97`, 5344 bytes |
+| Retrieved | 23 August 2026 |
+
+Reproduced twice, independently:
+
+| | Node | Python |
+|---|---|---|
+| runtime | v24.18.0 | 3.13.14 |
+| command | `node verify.mjs` (scratch) | `pytest tests/unit/test_ebay_c0_signature.py` |
+| alg / digest | `ecdsa` / `SHA1` | `ECDSA` / `SHA1` |
+| curve | — | `secp256r1` (256-bit) |
+| message | 434 bytes | 434 bytes |
+| message SHA-256 | `4fc046be55cdfb1a9cf42cfd7b8d4934361b82484c74b7d73c4786fa9af73aec` | `4fc046be55cdfb1a9cf42cfd7b8d4934361b82484c74b7d73c4786fa9af73aec` |
+| result | **verified** | **verified** |
+
+The identical message digest is the point: both implementations verified the
+same 434 bytes, so the byte-level contract is confirmed rather than assumed. The
+Node check ran in a scratch directory; no eBay SDK was added as a dependency and
+no frontend package file was touched.
+
+Everything in the fixture is public: a public key, a signature eBay published,
+and eBay's own test identifiers. No private key exists in this repository.
+
+### MEDIUM — deletion-owner governance
+
+The old guard was a regex over column names. It catches `ebay_user_id` and
+misses an identifier inside a `JSONB` bag, an encrypted column named
+`credentials`, a field called `external_reference`, or an audit row quoting a
+payload. **A guard that looks thorough and is not is worse than an honest one.**
+
+So the contract is inverted. `EBAY_STORAGE_DECLARATIONS` is an explicit
+registration: a change that persists eBay personal data declares the storage and
+names the owner that erases it, and the tests fail when the two disagree —
+declared storage with no eraser is a release blocker, and an eraser with no
+declaration is flagged as a probable leftover. A test declares storage with no
+owner and requires the failure to appear, so the guard is provably live.
+
+The column sweep remains as a backstop and is broadened across ten model
+surfaces, generic `JSON`/`JSONB`/`Text` columns and every encrypted credential
+column. Its limits are stated in the module rather than implied away.
+
+Today both mechanisms agree: nothing stores eBay personal data, nothing is
+declared, nothing is erased, and the zero-match result is unchanged.
+
+---
+
 ## Known limitations
 
 1. **No live eBay verification.** No developer credentials, no registered
@@ -358,6 +518,16 @@ searches for each value.
 6. **Rate-limit budget is a judgement, not a measurement.** 600/minute for this
    path, chosen because eBay's real volume is unknown and the general 100/minute
    quota would certainly be too low. Revisit with real traffic.
+
+9. **`SECURITY_TRUSTED_PROXIES` must be set at deploy time.** Blank is safe but
+   not *correct* behind a proxy: every client resolves to the proxy's own
+   address, so per-IP limits become per-deployment limits. The Cloudflare Tunnel
+   value is documented above; nothing can infer it automatically.
+
+10. **Automated discovery of future eBay storage is not possible in general.**
+    The declaration contract is the mechanism; the regex sweep is a backstop
+    that cannot see identifiers inside generic or encrypted columns. Stated
+    plainly because a future author will otherwise assume the sweep is enough.
 7. **No opt-out path is implemented.** This application will persist eBay data
    from EBAY-C1, so subscribing is the correct choice; the opt-out route in
    eBay's portal is not modelled here.

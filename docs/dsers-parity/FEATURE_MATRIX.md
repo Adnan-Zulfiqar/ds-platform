@@ -236,6 +236,8 @@ validates. This section tracks that requirement and the phases behind it.
 | Duplicate-delivery idempotency | Existing and verified | UNIQUE `notification_id` in migration `0029`; concurrent-duplicate test on two real connections |
 | Compliance ledger holds no personal data | Existing and verified | `app/models/ebay.py` — no username/userId/eiasToken/payload column exists |
 | Deletion processor (verified zero-match) | Existing and verified | `app/integrations/ebay/deletion.py`; no table stores eBay user data, checked by test on every run |
+| Compliance endpoint body is bounded while streaming | Existing and verified | `app/core/request_body.py`; a 16 MiB body is abandoned after ~64 KiB, asserted on bytes the application actually consumed |
+| Client IP cannot be forged by a forwarding header | Existing and verified | `app/core/client_ip.py`; a header is believed only from a configured `SECURITY_TRUSTED_PROXIES` peer, and the chain is walked from the right |
 | eBay platform credentials configured safely | Existing and verified | `EbaySettings`; `SecretStr`, blank in `.env.example`, no frontend field, never in a response |
 | **Live eBay endpoint validation** | **Missing — not permitted in this pass** | No developer credentials and no registered endpoint; everything is mocked and labelled as such |
 | eBay OAuth connect/reconnect/revoke | Missing — EBAY-C1 | Blocked on registering a deletion data owner first — see the roadmap's release guard |

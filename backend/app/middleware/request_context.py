@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
 from app.core.context import set_request_id, set_tenant_id, set_user_id
 from app.core.logging import get_logger
@@ -112,17 +113,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_ip(request: Request) -> str | None:
-        """Resolve the originating client IP.
+        """Resolve the originating client IP for the log line.
 
-        ``X-Forwarded-For`` is only trustworthy because Nginx sits in front and
-        overwrites it. Exposing this service directly to the internet would make
-        the header client-controlled and therefore worthless for rate limiting
-        or abuse tracking.
+        Uses the same validated resolver as the rate limiter, so a log entry and
+        a throttle decision can never disagree about who called — and so a
+        forged header cannot write an arbitrary address into the logs.
         """
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else None
+        return resolve_client_ip(request)
 
 
 __all__ = ["REQUEST_ID_HEADER", "RequestContextMiddleware"]

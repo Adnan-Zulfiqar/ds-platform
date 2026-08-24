@@ -79,6 +79,10 @@ _SUPPORTED_DIGESTS: Final[dict[str, hashes.HashAlgorithm]] = {
 #: eBay's SDK sends ``"ecdsa"``; the getPublicKey response says ``"ECDSA"``.
 _SUPPORTED_ALGORITHMS: Final = frozenset({"ECDSA"})
 
+#: The curve in eBay's published fixture, and the only one their Notification
+#: API reference describes. Named here so widening it is a visible decision.
+_REQUIRED_CURVE: Final = "secp256r1"
+
 _PEM_START: Final = "-----BEGIN PUBLIC KEY-----"
 _PEM_END: Final = "-----END PUBLIC KEY-----"
 _BASE64_BODY: Final = re.compile(r"[A-Za-z0-9+/=\s]+")
@@ -181,12 +185,24 @@ def format_public_key_pem(key: str) -> str:
 
 
 def load_public_key(key: str) -> EllipticCurvePublicKey:
-    """Load eBay's public key, refusing anything that is not an EC key.
+    """Load eBay's public key, refusing anything that is not P-256 EC.
 
     The type check is not decoration. ``load_pem_public_key`` happily returns an
     RSA key, and ``verify`` on an RSA key takes a padding argument this code
-    does not supply — so without this the failure would be a ``TypeError`` deep
+    does not supply — so without it the failure would be a ``TypeError`` deep
     inside verification rather than a clean rejection.
+
+    The **curve** check is the tighter one, and it matters for the same reason
+    the digest is taken from eBay's metadata rather than the caller's header:
+    the narrower the set of keys this endpoint will accept, the less an attacker
+    who gains any influence over the key response can do with it. eBay's
+    published fixture is ``secp256r1`` (P-256) and the `getPublicKey` reference
+    describes no other curve, so P-384 — a perfectly good curve — is not one
+    eBay would ever have signed with here.
+
+    If eBay ever publishes another curve, this is the single line to widen, and
+    widening it should be a deliberate change with a fixture behind it rather
+    than an accident of accepting whatever loads.
     """
     try:
         loaded = serialization.load_pem_public_key(format_public_key_pem(key).encode("ascii"))
@@ -194,6 +210,8 @@ def load_public_key(key: str) -> EllipticCurvePublicKey:
         raise _reject("key_unloadable") from exc
     if not isinstance(loaded, EllipticCurvePublicKey):
         raise _reject("key_not_elliptic_curve")
+    if loaded.curve.name != _REQUIRED_CURVE:
+        raise _reject("unsupported_curve")
     return loaded
 
 

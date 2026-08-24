@@ -74,6 +74,30 @@ class EbayNotificationRejectedError(AppError):
     message = "The eBay notification payload was not accepted."
 
 
+class EbayNotificationConflictError(AppError):
+    """The same ``notificationId`` arrived carrying a different payload.
+
+    eBay's notification id is the idempotency key, so two deliveries that share
+    one must be the same notification. When the payload digest differs they are
+    not, and there is no safe reading of that: acknowledging would silently
+    discard a real deletion instruction, because eBay never resends an
+    acknowledged notification; re-running the erasure would repeat destructive
+    work under an identity that has already been settled.
+
+    **409**, which eBay treats as a failed delivery and retries. That is the
+    honest outcome — the endpoint genuinely cannot act on it — and the retry
+    costs nothing if the conflict was transient. If it is not, an operator has a
+    ledger row and a stable code to investigate with, rather than silence.
+
+    The differing payloads are never included. Both are unauthenticated input
+    on a public route and one of them carries personal data.
+    """
+
+    code = "ebay_notification_conflict"
+    status_code = 409
+    message = "That eBay notification identifier was already received with different content."
+
+
 class EbayPayloadTooLargeError(AppError):
     """The body exceeded the documented ceiling.
 

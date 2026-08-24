@@ -41,8 +41,20 @@ logger = get_logger(__name__)
 #: eBay's recommendation, verbatim: "one-hour is recommended".
 PUBLIC_KEY_CACHE_TTL_SECONDS: Final = 3_600
 
-#: Namespaced like every other cache key in this application.
-_CACHE_PREFIX: Final = "ebay:notification:public_key:"
+#: Namespaced like every other cache key in this application, plus two things
+#: a bare key id cannot carry.
+#:
+#: **The environment**, because sandbox and production are different estates
+#: that can legitimately issue the same key id. Sharing a slot means a
+#: production notification could be verified against a sandbox key, or refused
+#: because of one — and the symptom would be an intermittent 412 that looks
+#: like an eBay problem.
+#:
+#: **A schema version**, because the cached value is a serialised shape. When
+#: that shape changes, entries written by the old code must not be read by the
+#: new: bumping this retires them without a flush.
+_CACHE_PREFIX: Final = "ebay:notification:public_key"
+PUBLIC_KEY_CACHE_SCHEMA: Final = "v1"
 
 #: The client-credentials scope named in the getPublicKey reference. It is the
 #: same literal string in sandbox and production — it is a scope identifier,
@@ -127,8 +139,11 @@ class EbayPublicKeyClient:
     @staticmethod
     def _cache_key(key_id: uuid.UUID) -> str:
         # `str(uuid)` is canonical lowercase, so two spellings of the same id
-        # cannot occupy two cache slots.
-        return f"{_CACHE_PREFIX}{key_id}"
+        # cannot occupy two cache slots. The environment and schema segments
+        # are what stop two *different* keys occupying one.
+        return (
+            f"{_CACHE_PREFIX}:{PUBLIC_KEY_CACHE_SCHEMA}:{settings.ebay.environment.value}:{key_id}"
+        )
 
     async def _read_cache(self, key_id: uuid.UUID) -> NotificationPublicKey | None:
         try:

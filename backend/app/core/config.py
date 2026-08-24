@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from functools import lru_cache
-from ipaddress import ip_address
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 from urllib.parse import urlsplit
@@ -408,6 +408,40 @@ class SecuritySettings(_EnvFileSettings):
     cookie_domain: str | None = None
     refresh_cookie_name: str = "droppilot_refresh"
 
+    # Comma-separated CIDRs whose forwarding headers may be believed, e.g.
+    #   SECURITY_TRUSTED_PROXIES=127.0.0.1/32,10.0.0.0/8
+    #
+    # **Empty by default, and that default is the safe one.** With no entry,
+    # `X-Forwarded-For` and `CF-Connecting-IP` are ignored from every caller and
+    # the socket peer is the identity. That is correct for a service reachable
+    # directly, and it fails closed for one that has just gained a proxy: the
+    # operator sees every client collapse to the proxy's address, which is a
+    # visible misconfiguration, rather than the internet being able to forge
+    # identities silently.
+    #
+    # `NoDecode` for the same reason as `cors_origins` — pydantic-settings would
+    # otherwise `json.loads` the raw value before the validator runs, making the
+    # documented comma-separated form unusable.
+    trusted_proxies: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _split_trusted_proxies(cls, value: object) -> object:
+        """Accept the comma-separated form documented in ``.env.example``."""
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """Configured CIDRs, parsed.
+
+        Parsed on read rather than stored, so a malformed entry surfaces where
+        the message can name it. Empty means nothing is trusted, which is the
+        default and the safe answer — see ``app/core/client_ip.py``.
+        """
+        return _parse_trusted_proxies(self.trusted_proxies)
+
     rate_limit_enabled: bool = True
     rate_limit_requests: int = Field(default=100, ge=1, description="Requests per window.")
     rate_limit_window_seconds: int = Field(default=60, ge=1)
@@ -696,6 +730,31 @@ class EbaySettings(_EnvFileSettings):
                 "EBAY_MARKETPLACE_DELETION_ENDPOINT must not carry a query or fragment."
             )
         return candidate
+
+
+def _parse_trusted_proxies(values: list[str]) -> tuple[IPv4Network | IPv6Network, ...]:
+    """Parse configured CIDRs, refusing anything that is not one.
+
+    A malformed entry is a boot failure rather than a silently dropped rule: a
+    trusted-proxy list that quietly lost a network would make every client
+    behind it share one identity, and nothing would say so.
+
+    A bare address is accepted and read as a single host (``/32`` or ``/128``),
+    because that is what an operator writing ``127.0.0.1`` means.
+    """
+    networks: list[IPv4Network | IPv6Network] = []
+    for raw in values:
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ip_network(candidate, strict=False))
+        except ValueError as exc:
+            raise ValueError(
+                f"SECURITY_TRUSTED_PROXIES contains {candidate!r}, which is not an "
+                "IPv4/IPv6 address or CIDR."
+            ) from exc
+    return tuple(networks)
 
 
 class ShopifySettings(_EnvFileSettings):

@@ -32,6 +32,19 @@ deliberately, narrowly, and only from the compliance receiver. It is not
 reachable from any merchant-authenticated endpoint, which is what stops it
 becoming a way for one tenant to reach another's rows.
 
+## What automated discovery cannot do
+
+``test_ebay_c0_ledger`` sweeps the model layer for eBay-shaped column names, and
+that sweep is a backstop, not a guarantee. It cannot see an identifier inside a
+``JSONB`` bag, an encrypted column named ``credentials``, a field called
+``external_reference``, or an audit row that quotes a payload — and any regex
+that tried would either miss those or flag half the schema.
+
+That is why ``EBAY_STORAGE_DECLARATIONS`` exists and why it is a *declaration*.
+The obligation sits with the change that introduces the storage, and the guard
+checks that the declaration and the owner agree. Claiming the sweep alone makes
+this safe would be the kind of assurance that is worse than none.
+
 ## Erasure, not soft deletion
 
 The compliance requirement is that *"even the highest system privilege cannot
@@ -101,9 +114,43 @@ class EbayDataOwner(Protocol):
         ...
 
 
-#: **Empty by design as of EBAY-C0.** No table in this application stores eBay
-#: user data yet. EBAY-C1 registers the first owner here, in the same change
-#: that introduces the storage — never after it.
+@dataclass(frozen=True, slots=True)
+class EbayStorageDeclaration:
+    """A place this application stores eBay personal data, declared explicitly.
+
+    **Declaration, not discovery.** A regex over column names finds
+    ``ebay_user_id`` and misses every interesting case: an identifier inside a
+    ``JSONB`` settings bag, an encrypted token column named ``credentials``, a
+    field called ``external_reference``, an audit row that quotes a payload.
+    Pretending otherwise would be worse than useless — it would look like a
+    guarantee.
+
+    So the contract is inverted. A service that persists eBay personal data
+    declares that fact here, naming the storage and the owner that erases it,
+    and the guard test checks the two halves agree. The regex sweep still runs
+    as a backstop for the obvious cases, but the declaration is the mechanism.
+
+    ``owner_name`` must match a registered owner's ``name``. A declaration with
+    no owner is a build failure, which is the whole point: it is not possible to
+    declare eBay storage and forget the eraser.
+    """
+
+    #: Dotted model path or table name — whatever a reader would grep for.
+    storage: str
+    #: The ``EbayDataOwner.name`` responsible for erasing it.
+    owner_name: str
+    #: What personal data lives there, in one line. Reviewed by a human.
+    holds: str
+
+
+#: **Empty as of EBAY-C0**, because nothing in this application stores eBay
+#: personal data. EBAY-C1 adds the first entry here in the *same change* that
+#: introduces the storage, and the guard test below fails until a matching owner
+#: exists.
+EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = ()
+
+#: **Empty by design as of EBAY-C0.** EBAY-C1 registers the first owner here,
+#: in the same change that introduces the storage — never after it.
 _OWNERS: Final[tuple[EbayDataOwner, ...]] = ()
 
 
@@ -123,6 +170,37 @@ class EbayAccountDeletionProcessor:
     @staticmethod
     def registered_owners() -> Sequence[EbayDataOwner]:
         return _OWNERS
+
+    @staticmethod
+    def declarations() -> Sequence[EbayStorageDeclaration]:
+        return EBAY_STORAGE_DECLARATIONS
+
+    @staticmethod
+    def undeclared_owner_names() -> tuple[str, ...]:
+        """Owners with no declaration — an eraser for storage nobody named.
+
+        Not automatically wrong, but always worth explaining: it usually means
+        the storage was removed and the owner was left behind, and a dead owner
+        is one that stops being maintained while still looking like coverage.
+        """
+        declared = {declaration.owner_name for declaration in EBAY_STORAGE_DECLARATIONS}
+        return tuple(owner.name for owner in _OWNERS if owner.name not in declared)
+
+    @staticmethod
+    def unowned_declarations() -> tuple[str, ...]:
+        """Declared storage with no eraser. **Always** a release blocker.
+
+        This is the guard the roadmap refers to: declaring that eBay personal
+        data is stored, without registering something that erases it, means the
+        application cannot honour a deletion request it is legally obliged to
+        honour.
+        """
+        owners = {owner.name for owner in _OWNERS}
+        return tuple(
+            declaration.storage
+            for declaration in EBAY_STORAGE_DECLARATIONS
+            if declaration.owner_name not in owners
+        )
 
     async def erase(self, subject: DeletionSubject) -> DeletionOutcome:
         outcome = DeletionOutcome()

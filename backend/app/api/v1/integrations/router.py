@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 from app.api.deps import CurrentPrincipal, DbSession, OptionalPrincipal, RequireAdmin
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.request_body import read_bounded_body
 from app.integrations.aliexpress.schemas import (
     AliExpressAuthorizationResponse,
     AliExpressConnectionRead,
@@ -30,10 +31,10 @@ from app.integrations.aliexpress.schemas import (
 from app.integrations.aliexpress.service import AliExpressService
 from app.integrations.aliexpress.webhook import receive_webhook
 from app.integrations.ebay.compliance import (
+    MAX_NOTIFICATION_BODY_BYTES,
     EbayComplianceService,
     accepts_content_type,
     challenge_response,
-    enforce_body_limit,
     parse_notification,
 )
 from app.integrations.ebay.exceptions import EbayNotificationRejectedError
@@ -527,8 +528,11 @@ async def ebay_marketplace_account_deletion_notification(
     propagates as a 5xx so eBay resends; it retries for 24 hours, and losing a
     deletion request is far worse than delaying one.
     """
-    raw = await request.body()
-    enforce_body_limit(raw)
+    # Streamed and bounded, never `await request.body()`. On an
+    # unauthenticated route that call lets anyone who knows the URL decide how
+    # much memory the process allocates, because the size is only measured once
+    # the whole body has already arrived.
+    raw = await read_bounded_body(request, max_bytes=MAX_NOTIFICATION_BODY_BYTES)
 
     if not accepts_content_type(request.headers.get("content-type")):
         raise EbayNotificationRejectedError(details={"reason": "unsupported_content_type"})

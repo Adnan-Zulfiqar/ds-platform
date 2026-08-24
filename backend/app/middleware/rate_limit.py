@@ -19,6 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
+from app.core.client_ip import client_ip_or_unknown
 from app.core.config import settings
 from app.core.context import get_request_id, get_tenant_id
 from app.core.logging import get_logger
@@ -129,7 +130,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         the same egress address cannot throttle a deletion notification, and a
         flood here cannot lock that merchant out.
         """
-        identity = f"ebay-compliance:{self._client_ip(request)}"
+        identity = f"ebay-compliance:{client_ip_or_unknown(request)}"
         decision = await limiter.consume(
             f"ratelimit:{identity}",
             limit=_EBAY_COMPLIANCE_LIMIT,
@@ -145,13 +146,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return self._too_many_requests(decision.retry_after)
         return await call_next(request)
 
-    @staticmethod
-    def _client_ip(request: Request) -> str:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
-
     def _identity(self, request: Request) -> str:
         """Choose the key a quota is counted against.
 
@@ -163,13 +157,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if tenant_id := get_tenant_id():
             return f"tenant:{tenant_id}"
 
-        forwarded = request.headers.get("x-forwarded-for")
-        client_ip = (
-            forwarded.split(",")[0].strip()
-            if forwarded
-            else (request.client.host if request.client else "unknown")
-        )
-        return f"ip:{client_ip}"
+        # Resolved, never read straight from a header — see
+        # ``app.core.client_ip``. Rotating ``X-Forwarded-For`` from an
+        # untrusted peer used to mint a fresh quota per request.
+        return f"ip:{client_ip_or_unknown(request)}"
 
     async def _consume(self, identity: str) -> tuple[bool, int, int]:
         """Count this request against the broad quota."""

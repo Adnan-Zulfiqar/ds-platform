@@ -21,6 +21,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import CurrentPrincipal, CurrentTenant, CurrentUser, DbSession, RoleRepo
+from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError
 from app.schemas.auth import (
@@ -50,14 +51,13 @@ _REFRESH_COOKIE_PATH = "/api/v1/auth"
 def _client_ip(request: Request) -> str | None:
     """Resolve the caller's IP for login throttling.
 
-    ``X-Forwarded-For`` is trustworthy only because Nginx overwrites it. If this
-    service were ever exposed directly, the header would be client-controlled
-    and the IP dimension of the throttle worthless.
+    Delegates to ``app.core.client_ip``, which believes a forwarding header only
+    when the immediate peer is a configured trusted proxy. The previous version
+    trusted ``X-Forwarded-For`` from anyone, which made the IP dimension of the
+    login throttle worthless against exactly the attacker it exists to slow
+    down: one who can send an extra header per attempt.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
+    return resolve_client_ip(request)
 
 
 def _set_refresh_cookie(response: Response, token: str, max_age_seconds: int) -> None:
