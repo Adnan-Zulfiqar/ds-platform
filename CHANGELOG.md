@@ -12,6 +12,133 @@ production release.
 
 ### Fixed
 
+- **EBAY-C0 acceptance fix — two blockers and five medium findings.** An
+  independent review returned `EBAY-C0 blocked`. Every finding was real and each
+  was reproduced before being fixed.
+
+  **The request body was buffered before it was measured.** `await
+  request.body()` reads everything, and the 64 KiB check ran afterwards, so an
+  unauthenticated caller decided how much memory the process allocated. Measured
+  rather than argued: a test offered 16 MiB in 8 KiB chunks and counted what the
+  application asked for — 16,777,216 bytes consumed before rejecting a
+  65,536-byte limit. `app/core/request_body.read_bounded_body` now streams and
+  stops *asking* at the ceiling. `Content-Length` is a cheap short-circuit for an
+  honest oversize and nothing more; a forged small value changes nothing. A
+  disconnect is a 400, not a 500. The bytes are returned exactly as received and
+  JSON is still parsed only after the signature verifies.
+
+  **A forwarding header was believed from any caller.** Five places did
+  `X-Forwarded-For.split(",")[0]`, so a direct attacker could rotate the header
+  and be a new client every request — defeating the general quota, the eBay
+  compliance budget and the login throttle alike. `app/core/client_ip.py` is now
+  the single answer: a forwarding header counts only when the socket peer is
+  inside a configured `SECURITY_TRUSTED_PROXIES` CIDR, and the chain is walked
+  from the **right** so the caller's own prefix is never believed.
+  `CF-Connecting-IP` is honoured only from a trusted peer; `CF-Ray` grants
+  nothing. Every resolved value is a parsed IP address, so nothing
+  attacker-shaped can reach a Redis key. **Nothing is trusted by default** — a
+  deployment that forgets the setting sees clients collapse to the proxy's
+  address, which is visible, rather than silently trusting the internet.
+
+  Also: the public-key cache key now carries the eBay environment and a schema
+  version, so sandbox and production cannot share a slot; a repeat
+  `notificationId` carrying a *different* payload is refused with a typed
+  `ebay_notification_conflict` (409) instead of being counted as a duplicate,
+  leaving the original digest and outcome authoritative and never re-running
+  deletion; the verifier requires eBay's P-256 curve rather than any EC key; and
+  the deletion guard is now an explicit `EBAY_STORAGE_DECLARATIONS` registration
+  contract, because a regex over column names cannot see an identifier inside a
+  JSONB bag or an encrypted column — a limitation now stated rather than implied
+  away.
+
+  The signature authority is pinned: `eBay/event-notification-nodejs-sdk`
+  commit `feaf3378…` (tag 1.0.3), fixture `test/test.json` blob `092dabc7…`,
+  retrieved 23 August 2026. The published signature was reproduced
+  independently in Node v24.18.0 and in this repository's Python verifier, both
+  over the same 434 bytes with the same SHA-256 — so the byte-level contract is
+  confirmed, not assumed. SHA-1 stays because eBay's key metadata returns it;
+  that is provider-mandated compatibility and is documented as such.
+
+  No migration was required. Alembic remains a single head at `0029`. No live
+  eBay request was made; no frontend code changed, so frontend gates were not
+  run and are not claimed.
+
+### Added
+
+- **EBAY-C0 — eBay credentials and Marketplace Account Deletion compliance.**
+  eBay requires every Developers Program application to subscribe to Marketplace
+  Account Deletion/Closure notifications — or formally opt out — before its
+  first production API call, and the keyset stays inactive until the endpoint
+  validates. This is that endpoint, and nothing else: no OAuth, no listings, no
+  inventory, no orders.
+
+  `GET`/`POST /api/v1/integrations/ebay/marketplace-account-deletion`, public by
+  protocol design because eBay cannot present a JWT. What replaces
+  authentication is not nothing: the GET proves endpoint ownership through a
+  shared secret and returns a digest rather than any stored data, and the POST
+  proves origin cryptographically over the exact bytes received before a single
+  field is read. Plus a 64 KiB body ceiling, content-type validation, a
+  dedicated rate-limit budget and logging that never touches the payload.
+
+  **The signature format was proven, not recalled.** eBay documents no prose
+  specification for `X-EBAY-SIGNATURE`; its guide points at the Event
+  Notification SDKs. Those were read, the format resolved to ECDSA-P-256 with
+  SHA-1 over the raw body with a DER signature and a PEM key, and it was
+  verified in Python against eBay's own published test vector *before* the
+  verifier was written. That vector is pinned in the test suite, because a
+  verifier can pass against fixtures it generated itself and still reject every
+  real notification.
+
+  The challenge hashes `challengeCode + verificationToken + endpoint` in exactly
+  that order, using the **configured** endpoint string — never a `Host` or
+  `X-Forwarded-Host` header, which behind a proxy are attacker-influenced. The
+  endpoint is validated but never normalised: adding or removing a trailing
+  slash would silently change the hash, which is the exact failure the setting
+  exists to prevent.
+
+  Public keys come from eBay's fixed Notification API host with a
+  client-credentials token, cached in Redis for the hour eBay recommends. SSRF
+  and traversal are prevented by construction rather than by filtering — the
+  host is a constant and the only variable in the path is a parsed `uuid.UUID`,
+  a type that cannot hold a slash, a scheme or a host.
+
+  Nothing is acknowledged until the signature is verified, the schema validated,
+  a durable receipt written and the erasure completed — all in one transaction.
+  eBay retries for 24 hours and never resends an acknowledged notification, so a
+  retryable 5xx costs a delay while a premature 2xx costs a person's deletion
+  request. Invalid signature or rejected schema returns **412**, matching what
+  eBay's own SDKs return.
+
+  Migration **0029** adds one table, `ebay_compliance_notifications`, holding
+  **no personal data at all** — eBay's payload carries `username`, `userId` and
+  `eiasToken`, and none has a column. A SHA-256 payload digest supplies identity
+  without content, so the ledger cannot leak what it records and cannot itself
+  become something that must be erased next time. `notification_id` is UNIQUE,
+  and that constraint *is* the idempotency mechanism: two concurrent deliveries
+  race to insert and the database arbitrates, where an application-level
+  check-then-insert would let both through.
+
+  A model-layer audit found **no table storing eBay user data**, so the correct
+  behaviour today is a *verified zero-match deletion* — authenticated, recorded,
+  completed, nothing erased. That is checked by searching the models on every
+  test run rather than asserted in prose, and it doubles as the release guard:
+  the moment EBAY-C1 adds an eBay-identifying column without registering a
+  deletion owner, the test fails. eBay data persistence cannot be called
+  production-ready while it is red.
+
+  No Celery task was introduced. The erasure and the ledger row commit together,
+  so there is no window in which the ledger claims completion for work that
+  rolled back; handing it to a broker would add that window rather than close
+  one.
+
+  **No live eBay request was made anywhere.** Every provider call is fixtures
+  and `httpx.MockTransport`, labelled as mocked in each test module. The
+  production verification token does not exist yet and is generated after
+  deployment; a previously exposed token is treated as permanently compromised
+  and appears nowhere in this repository.
+
+### Fixed
+
 - **GQL-2 F-01b — a webhook confirmation can no longer go stale.** The previous
   fix made a store that had *never* reconciled visibly degraded. It did not
   cover the opposite case. `webhooks_registered_at` was only ever written, never

@@ -11,15 +11,17 @@ structurally rather than by discipline: the response models in
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import CurrentPrincipal, DbSession, OptionalPrincipal, RequireAdmin
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.request_body import read_bounded_body
 from app.integrations.aliexpress.schemas import (
     AliExpressAuthorizationResponse,
     AliExpressConnectionRead,
@@ -28,6 +30,16 @@ from app.integrations.aliexpress.schemas import (
 )
 from app.integrations.aliexpress.service import AliExpressService
 from app.integrations.aliexpress.webhook import receive_webhook
+from app.integrations.ebay.compliance import (
+    MAX_NOTIFICATION_BODY_BYTES,
+    EbayComplianceService,
+    accepts_content_type,
+    challenge_response,
+    parse_notification,
+)
+from app.integrations.ebay.exceptions import EbayNotificationRejectedError
+from app.integrations.ebay.schemas import ChallengeResponse
+from app.integrations.ebay.signature import SIGNATURE_HEADER
 from app.integrations.shopify.schemas import (
     ShopifyAuthorizationResponse,
     ShopifyClaimInstallRequest,
@@ -451,6 +463,96 @@ async def shopify_callback(request: Request, session: DbSession) -> RedirectResp
         ),
         status_code=303,
     )
+
+
+# ---------------------------------------------------------------------------
+# eBay Marketplace Account Deletion/Closure (EBAY-C0)
+#
+# Both routes are **public by protocol design**: eBay is not an authenticated
+# user of this API and cannot present a JWT. Neither depends on a principal.
+# What replaces authentication is not nothing:
+#
+#   * GET  proves endpoint ownership through a secret only eBay and this server
+#          share, and returns a digest rather than any stored data;
+#   * POST proves origin cryptographically, against eBay's own published key,
+#          over the exact bytes received, before a single field is read.
+#
+# Registered with no trailing slash, matching the URL in the eBay developer
+# portal exactly. FastAPI is not asked to redirect between the two spellings:
+# a redirect would change the URL eBay actually reached, and the configured
+# endpoint string is part of the challenge hash.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/ebay/marketplace-account-deletion",
+    response_model=ChallengeResponse,
+    response_model_by_alias=True,
+    summary="eBay marketplace account deletion endpoint validation challenge",
+)
+async def ebay_marketplace_account_deletion_challenge(
+    challenge_code: Annotated[str | None, Query(alias="challenge_code")] = None,
+) -> ChallengeResponse:
+    """Answer eBay's challenge with ``SHA256(code + token + endpoint)``.
+
+    The alias is exactly ``challenge_code`` because that is the parameter eBay
+    sends; the Python name is snake_case for the same reason every other
+    parameter here is.
+
+    Returns 200 with ``application/json`` — both required by eBay's guide, and
+    both produced by FastAPI's real JSON encoder rather than a hand-built
+    string, which is what avoids the byte order mark the guide warns about.
+    """
+    return challenge_response(challenge_code)
+
+
+@router.post(
+    "/ebay/marketplace-account-deletion",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Receive an eBay marketplace account deletion notification",
+)
+async def ebay_marketplace_account_deletion_notification(
+    request: Request,
+    session: DbSession,
+) -> Response:
+    """Verify, record and process one account-deletion notification.
+
+    Order is the security property here: **verify, parse, claim, erase,
+    acknowledge**. Nothing is parsed until the signature is proven over the raw
+    bytes, and nothing is acknowledged until the erasure and the ledger row have
+    been committed together.
+
+    204 on success — one of the four codes eBay accepts, and the honest one:
+    there is no representation to return. A signature or schema failure is 412,
+    matching what eBay's own SDKs return. A transient failure anywhere else
+    propagates as a 5xx so eBay resends; it retries for 24 hours, and losing a
+    deletion request is far worse than delaying one.
+    """
+    # Streamed and bounded, never `await request.body()`. On an
+    # unauthenticated route that call lets anyone who knows the URL decide how
+    # much memory the process allocates, because the size is only measured once
+    # the whole body has already arrived.
+    raw = await read_bounded_body(request, max_bytes=MAX_NOTIFICATION_BODY_BYTES)
+
+    if not accepts_content_type(request.headers.get("content-type")):
+        raise EbayNotificationRejectedError(details={"reason": "unsupported_content_type"})
+
+    service = EbayComplianceService(session)
+    # Signature first, over the bytes exactly as received. Parsing before
+    # verifying would mean acting on the shape of an unauthenticated payload.
+    await service.verify(
+        raw_body=raw,
+        signature_header=request.headers.get(SIGNATURE_HEADER),
+    )
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EbayNotificationRejectedError(details={"reason": "malformed_json"}) from exc
+
+    notification = parse_notification(payload)
+    await service.process(raw_body=raw, notification=notification)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

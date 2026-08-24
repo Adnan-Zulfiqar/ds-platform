@@ -14,8 +14,10 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AliasChoices,
@@ -68,6 +70,32 @@ class _EnvFileSettings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+
+def _is_internal_address(host: str) -> bool:
+    """Whether ``host`` is an IP literal eBay could never reach.
+
+    Only *literal* addresses are judged. A hostname that happens to resolve
+    privately is not something configuration can settle — that is a DNS and
+    network question — and pretending otherwise here would give false
+    assurance.
+    """
+    try:
+        address = ip_address(host)
+    except ValueError:
+        return False
+    return bool(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+#: eBay's documented verification-token character set: alphanumerics,
+#: underscore and hyphen, and nothing else.
+_EBAY_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class Environment(StrEnum):
@@ -380,6 +408,40 @@ class SecuritySettings(_EnvFileSettings):
     cookie_domain: str | None = None
     refresh_cookie_name: str = "droppilot_refresh"
 
+    # Comma-separated CIDRs whose forwarding headers may be believed, e.g.
+    #   SECURITY_TRUSTED_PROXIES=127.0.0.1/32,10.0.0.0/8
+    #
+    # **Empty by default, and that default is the safe one.** With no entry,
+    # `X-Forwarded-For` and `CF-Connecting-IP` are ignored from every caller and
+    # the socket peer is the identity. That is correct for a service reachable
+    # directly, and it fails closed for one that has just gained a proxy: the
+    # operator sees every client collapse to the proxy's address, which is a
+    # visible misconfiguration, rather than the internet being able to forge
+    # identities silently.
+    #
+    # `NoDecode` for the same reason as `cors_origins` — pydantic-settings would
+    # otherwise `json.loads` the raw value before the validator runs, making the
+    # documented comma-separated form unusable.
+    trusted_proxies: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _split_trusted_proxies(cls, value: object) -> object:
+        """Accept the comma-separated form documented in ``.env.example``."""
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """Configured CIDRs, parsed.
+
+        Parsed on read rather than stored, so a malformed entry surfaces where
+        the message can name it. Empty means nothing is trusted, which is the
+        default and the safe answer — see ``app/core/client_ip.py``.
+        """
+        return _parse_trusted_proxies(self.trusted_proxies)
+
     rate_limit_enabled: bool = True
     rate_limit_requests: int = Field(default=100, ge=1, description="Requests per window.")
     rate_limit_window_seconds: int = Field(default=60, ge=1)
@@ -529,6 +591,170 @@ class AliExpressSettings(_EnvFileSettings):
         description="Max webhook deliveries processed per IP per window when unsigned.",
     )
     webhook_shed_window_seconds: int = Field(default=60, ge=1)
+
+
+class EbayEnvironment(StrEnum):
+    """Which eBay estate this deployment talks to.
+
+    Chooses the Notification API host and nothing else in EBAY-C0. It is a real
+    enum rather than a string so a typo cannot silently point production at the
+    sandbox, which would make every signature verification fail against keys
+    that do not exist.
+    """
+
+    SANDBOX = "sandbox"
+    PRODUCTION = "production"
+
+
+class EbaySettings(_EnvFileSettings):
+    """eBay Developers Program application credentials and compliance endpoint.
+
+    These are **platform** credentials belonging to DropPilot's own eBay
+    application, not something a merchant types in. They are never surfaced to
+    the frontend and never returned by an API — there is no response schema in
+    this codebase capable of holding one.
+
+    EBAY-C0 uses only ``client_id``/``client_secret`` (for the client-credentials
+    token that reads notification public keys) and the two marketplace-deletion
+    fields. ``dev_id`` and ``redirect_uri_name`` are declared now because the
+    portal issues all four together and splitting the block across phases
+    invites a half-configured deployment; they are unused until EBAY-C1.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="EBAY_", extra="ignore")
+
+    environment: EbayEnvironment = EbayEnvironment.PRODUCTION
+    client_id: str = ""
+    client_secret: SecretStr | None = None
+    dev_id: str = ""
+    redirect_uri_name: str = ""
+
+    #: The exact, byte-for-byte URL registered in the eBay developer portal.
+    #: It participates in the challenge hash, so a single character of
+    #: difference — including a trailing slash — makes endpoint validation fail
+    #: with no useful error from eBay. Never derived from a request header.
+    marketplace_deletion_endpoint: str = ""
+    marketplace_deletion_verification_token: SecretStr | None = None
+
+    @property
+    def notification_api_base(self) -> str:
+        """Fixed eBay host for the Notification API.
+
+        A constant per environment, never assembled from anything a caller
+        supplies. That is what makes SSRF impossible on the public-key path:
+        the only attacker-influenced value is a key id, and it is validated as
+        a UUID before it is used.
+        """
+        if self.environment is EbayEnvironment.SANDBOX:
+            return "https://api.sandbox.ebay.com"
+        return "https://api.ebay.com"
+
+    @property
+    def is_deletion_configured(self) -> bool:
+        """Whether the compliance endpoint can answer at all.
+
+        Fails closed: an unconfigured deployment refuses the challenge rather
+        than hashing an empty token, which would produce a stable-looking but
+        meaningless digest that eBay would reject anyway — after telling the
+        operator nothing about why.
+        """
+        token = self.marketplace_deletion_verification_token
+        return bool(
+            self.marketplace_deletion_endpoint.strip()
+            and token is not None
+            and token.get_secret_value().strip()
+        )
+
+    @field_validator("marketplace_deletion_verification_token")
+    @classmethod
+    def _validate_verification_token(cls, value: SecretStr | None) -> SecretStr | None:
+        """eBay's documented token rule, enforced at configuration load.
+
+        *"The verification token has to be between 32 and 80 characters, and
+        allowed characters include alphanumeric characters, underscore (_), and
+        hyphen (-). No other characters are allowed."* Checking it here means a
+        bad token is a boot failure with a clear message, not a silent endpoint
+        validation failure in the eBay portal days later.
+
+        The token itself never appears in the error — only its length and
+        whether the character set was the problem.
+        """
+        if value is None:
+            return None
+        raw = value.get_secret_value()
+        if not raw:
+            return value
+        if not 32 <= len(raw) <= 80:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN must be 32-80 characters "
+                f"(got {len(raw)})."
+            )
+        if not _EBAY_TOKEN_PATTERN.fullmatch(raw):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN may contain only letters, "
+                "digits, underscore and hyphen."
+            )
+        return value
+
+    @field_validator("marketplace_deletion_endpoint")
+    @classmethod
+    def _validate_endpoint_shape(cls, value: str) -> str:
+        """Reject shapes eBay itself refuses, without normalising anything.
+
+        Deliberately **not** normalising: adding or removing a trailing slash
+        here would silently change the challenge hash and break the very
+        validation this setting exists for. What is registered in the portal is
+        what must be configured, character for character.
+
+        Deployment-sensitive rules (HTTPS, no localhost or internal address)
+        are applied in ``_validate_ebay_deletion_endpoint`` on the composed
+        settings, where the environment is known.
+        """
+        candidate = value.strip()
+        if not candidate:
+            return candidate
+        if candidate != value:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not have leading or trailing "
+                "whitespace; it is hashed byte-for-byte."
+            )
+        parts = urlsplit(candidate)
+        if parts.scheme not in {"http", "https"}:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must be an http(s) URL.")
+        if not parts.hostname:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must name a host.")
+        if parts.username or parts.password:
+            raise ValueError("EBAY_MARKETPLACE_DELETION_ENDPOINT must not carry userinfo.")
+        if parts.fragment or parts.query:
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not carry a query or fragment."
+            )
+        return candidate
+
+
+def _parse_trusted_proxies(values: list[str]) -> tuple[IPv4Network | IPv6Network, ...]:
+    """Parse configured CIDRs, refusing anything that is not one.
+
+    A malformed entry is a boot failure rather than a silently dropped rule: a
+    trusted-proxy list that quietly lost a network would make every client
+    behind it share one identity, and nothing would say so.
+
+    A bare address is accepted and read as a single host (``/32`` or ``/128``),
+    because that is what an operator writing ``127.0.0.1`` means.
+    """
+    networks: list[IPv4Network | IPv6Network] = []
+    for raw in values:
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        try:
+            networks.append(ip_network(candidate, strict=False))
+        except ValueError as exc:
+            raise ValueError(
+                f"SECURITY_TRUSTED_PROXIES contains {candidate!r}, which is not an "
+                "IPv4/IPv6 address or CIDR."
+            ) from exc
+    return tuple(networks)
 
 
 class ShopifySettings(_EnvFileSettings):
@@ -791,6 +1017,7 @@ class Settings(_EnvFileSettings):
     fx: FxSettings = Field(default_factory=FxSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
+    ebay: EbaySettings = Field(default_factory=EbaySettings)
     ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
@@ -860,6 +1087,8 @@ class Settings(_EnvFileSettings):
                 "request bodies contain customer data."
             )
 
+        self._verify_ebay_deletion_endpoint()
+
         self._validate_deployed_encryption()
 
         if not self.security.cookie_secure:
@@ -873,6 +1102,39 @@ class Settings(_EnvFileSettings):
             raise ValueError(
                 f"SECURITY_COOKIE_SECURE must be true in {self.environment}; "
                 "the refresh cookie would otherwise travel over plain HTTP."
+            )
+
+    def _verify_ebay_deletion_endpoint(self) -> None:
+        """Deployed-environment rules for the eBay compliance endpoint.
+
+        eBay states the endpoint *"should use the 'https' protocol, and it
+        should not contain an internal IP address or 'localhost' in its path"*.
+        Enforced at boot because the failure it prevents is otherwise silent:
+        eBay simply refuses to validate the endpoint and the keyset stays
+        inactive, with nothing in this application's logs to say why.
+
+        Local and test environments keep http/localhost so the receiver can be
+        exercised without a tunnel.
+        """
+        endpoint = self.ebay.marketplace_deletion_endpoint
+        if not endpoint:
+            return
+        parts = urlsplit(endpoint)
+        if parts.scheme != "https":
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must use https in "
+                f"{self.environment}; eBay rejects plaintext endpoints."
+            )
+        host = (parts.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost"):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not be localhost in "
+                f"{self.environment}; eBay must be able to reach it."
+            )
+        if _is_internal_address(host):
+            raise ValueError(
+                "EBAY_MARKETPLACE_DELETION_ENDPOINT must not be an internal IP address in "
+                f"{self.environment}; eBay must be able to reach it."
             )
 
     def _validate_deployed_encryption(self) -> None:
