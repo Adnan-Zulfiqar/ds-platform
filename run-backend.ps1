@@ -35,4 +35,11 @@ From the repository root:
 Set-Location $BackendRoot
 Write-Host "Starting DropPilot backend on http://localhost:8000"
 Write-Host "API docs: http://localhost:8000/docs"
-& $Uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# --no-proxy-headers is a security setting, not a preference. Uvicorn's default
+# is to parse X-Forwarded-For and overwrite scope["client"] whenever the socket
+# peer is 127.0.0.1 — which is exactly what cloudflared is. That would put a
+# second, separately-configured proxy-trust decision underneath the application,
+# and anything able to connect on loopback could then choose its own client
+# address. `app.core.client_ip` is the single authority; see
+# docs/PRODUCTION_SECURITY.md section 7.
+& $Uvicorn app.main:app --reload --no-proxy-headers --host 0.0.0.0 --port 8000

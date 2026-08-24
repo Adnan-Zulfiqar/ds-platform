@@ -84,4 +84,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # No --reload and no --workers. Process count is the orchestrator's decision
 # (scale replicas), not the image's; baking in workers double-multiplies
 # concurrency and exhausts the database connection pool.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+#
+# --no-proxy-headers: uvicorn would otherwise rewrite scope["client"] from
+# X-Forwarded-For for any peer in its own trusted list, giving the deployment
+# two competing proxy-trust authorities. The application's resolver
+# (`app.core.client_ip`, driven by SECURITY_TRUSTED_PROXIES) is the only one.
+# See docs/PRODUCTION_SECURITY.md section 7.
+CMD ["uvicorn", "app.main:app", "--no-proxy-headers", "--host", "0.0.0.0", "--port", "8000"]

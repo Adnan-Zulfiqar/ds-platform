@@ -91,8 +91,14 @@ alembic upgrade head
 ```
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --no-proxy-headers
 ```
+
+`--no-proxy-headers` is required in every environment, not only production:
+it keeps `app.core.client_ip` the single authority on whether a forwarding
+header may be believed. Running without it lets anything on loopback choose
+its own client address, which silently defeats every per-IP limit — so a
+developer testing a throttle would get a misleading answer.
 
 ### Frontend
 

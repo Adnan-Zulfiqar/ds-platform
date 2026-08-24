@@ -10,6 +10,50 @@ production release.
 
 ## [Unreleased]
 
+### Security
+
+- **EBAY-C0 proxy-boundary hardening — the application resolver is now the only
+  proxy-trust authority.** The EBAY-C0 acceptance fix made
+  `app/core/client_ip.py` the single place that decides whether a forwarding
+  header may be believed, and its unit tests proved it correct. Running the
+  server the way this repository actually runs it showed the guarantee stopped
+  one layer too high.
+
+  Uvicorn enables `ProxyHeadersMiddleware` by default with `forwarded_allow_ips`
+  defaulting to `127.0.0.1`, so it rewrites `scope["client"]` from
+  `X-Forwarded-For` before any application middleware runs — and loopback is
+  precisely where cloudflared connects from. The resolver was handed a "socket
+  peer" the caller had chosen.
+
+  Measured against the repository's real launch command: **700 requests rotating
+  a forged `X-Forwarded-For` produced zero 429 responses and 650 separate
+  rate-limit buckets**, where 700 requests from one address produced 53. Not a
+  degraded quota — no quota. Every ASGI-level test passed throughout, which is
+  the point: the defect was never in the application.
+
+  Every launch surface now passes `--no-proxy-headers` — `run-backend.ps1`,
+  `docker/backend.Dockerfile`, `docker-compose.yml`, the CI end-to-end job and
+  the documented developer command. `--forwarded-allow-ips` was rejected as a
+  substitute: it leaves uvicorn parsing the chain in parallel with the
+  application, and two authorities that can disagree is worse than either alone.
+
+  `tests/integration/test_proxy_boundary_real_server.py` launches real uvicorn
+  processes and asserts on what a caller can observe — whether the quota can be
+  escaped — with blank trusted proxies, with loopback explicitly trusted, and
+  from a non-loopback peer. One test deliberately starts an *unhardened* server
+  and requires the bypass to reappear, so the flag is provably the cause rather
+  than a coincidence. `tests/unit/test_server_launch_surfaces.py` holds the
+  launch-surface manifest and fails if any command loses the flag, reintroduces
+  uvicorn-side trust, or if a new uvicorn invocation appears anywhere the
+  manifest does not cover.
+
+  No application code changed: no migration, no schema change, no API contract
+  change, no frontend change. The committed `SECURITY_TRUSTED_PROXIES` default
+  stays blank; the Cloudflare Tunnel value is a deployment step, documented in
+  `PRODUCTION_SECURITY.md` §7 along with an operator verification loop and
+  rollback. **EBAY-C0 must not be activated in production until the deployment
+  runs the hardened launch configuration.**
+
 ### Fixed
 
 - **EBAY-C0 acceptance fix — two blockers and five medium findings.** An

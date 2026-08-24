@@ -393,6 +393,16 @@ proxy and forgets this setting sees every client collapse to the proxy's
 address — visibly wrong, and fixable — rather than letting the internet forge
 identities silently.
 
+> **Correction (proxy-boundary follow-up).** When this was written the claim
+> stopped one layer too high. The resolver is authoritative only if nothing
+> below it has already answered the same question, and uvicorn had: it parses
+> `X-Forwarded-For` by default and trusts `127.0.0.1`, which is where
+> cloudflared connects from, so `scope["client"]` was rewritten before any
+> application middleware ran. Blank `SECURITY_TRUSTED_PROXIES` was therefore
+> **not** fail-closed end to end under the repository's own launch command.
+> Every launch surface now passes `--no-proxy-headers`; see
+> [PRODUCTION_SECURITY.md §7](../PRODUCTION_SECURITY.md).
+
 #### Cloudflare Tunnel
 
 `cloudflared` runs beside the API and connects over loopback, so the trusted
@@ -405,6 +415,16 @@ SECURITY_TRUSTED_PROXIES=127.0.0.1/32,::1/128
 Behind Nginx in a compose network, use that network's CIDR. Set it to the
 address the proxy connects **from**, never the one it listens on. No private
 deployment address is hardcoded anywhere in this repository.
+
+This value is only meaningful alongside `--no-proxy-headers` on the server
+process. With uvicorn still parsing forwarding headers, the application never
+sees the real socket peer and the setting decides nothing.
+
+> **Activation gate.** Do not enter this endpoint or a verification token in
+> the eBay Developer Portal until the deployment runs the hardened launch
+> configuration. This endpoint is unauthenticated and public, and its
+> 600/minute budget is per-client — under a server that still parses proxy
+> headers it is per-forged-header, which is no budget at all.
 
 ### MEDIUM — public-key cache namespace
 
@@ -519,10 +539,14 @@ declared, nothing is erased, and the zero-match result is unchanged.
    path, chosen because eBay's real volume is unknown and the general 100/minute
    quota would certainly be too low. Revisit with real traffic.
 
-9. **`SECURITY_TRUSTED_PROXIES` must be set at deploy time.** Blank is safe but
-   not *correct* behind a proxy: every client resolves to the proxy's own
-   address, so per-IP limits become per-deployment limits. The Cloudflare Tunnel
-   value is documented above; nothing can infer it automatically.
+9. **`SECURITY_TRUSTED_PROXIES` must be set at deploy time, and the server must
+   run with `--no-proxy-headers`.** Blank is safe but not *correct* behind a
+   proxy: every client resolves to the proxy's own address, so per-IP limits
+   become per-deployment limits. The Cloudflare Tunnel value is documented
+   above; nothing can infer it automatically. The flag is the other half — the
+   resolver decides nothing if uvicorn has already rewritten the peer from a
+   header, which it does by default. Both are release gates for activation; see
+   [PRODUCTION_SECURITY.md §7](../PRODUCTION_SECURITY.md).
 
 10. **Automated discovery of future eBay storage is not possible in general.**
     The declaration contract is the mechanism; the regex sweep is a backstop

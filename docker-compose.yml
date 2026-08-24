@@ -114,8 +114,10 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+    # --no-proxy-headers keeps `app.core.client_ip` the only layer that decides
+    # whether a forwarding header may be believed. See PRODUCTION_SECURITY.md §7.
     command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      uvicorn app.main:app --no-proxy-headers --host 0.0.0.0 --port 8000 --reload
     networks: [droppilot]
 
   worker:
