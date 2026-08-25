@@ -587,7 +587,7 @@ jobs:
       - name: Start API
         working-directory: backend
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          uvicorn app.main:app --no-proxy-headers --host 127.0.0.1 --port 8000 &
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:8000/health/live >/dev/null && exit 0
             sleep 2
