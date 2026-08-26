@@ -58,11 +58,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Final, Protocol
+from typing import Any, Final, Protocol, cast
 
+from sqlalchemy import delete
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.models.ebay import EbayConnection
 
 logger = get_logger(__name__)
 
@@ -143,15 +146,70 @@ class EbayStorageDeclaration:
     holds: str
 
 
-#: **Empty as of EBAY-C0**, because nothing in this application stores eBay
-#: personal data. EBAY-C1 adds the first entry here in the *same change* that
-#: introduces the storage, and the guard test below fails until a matching owner
-#: exists.
-EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = ()
+class EbayConnectionOwner:
+    """Erases a seller's eBay connection when eBay says to delete the account.
 
-#: **Empty by design as of EBAY-C0.** EBAY-C1 registers the first owner here,
-#: in the same change that introduces the storage — never after it.
-_OWNERS: Final[tuple[EbayDataOwner, ...]] = ()
+    **What "erase" means here, and why it is a delete rather than an anonymise.**
+    The row's whole purpose is to hold eBay credentials and eBay's immutable
+    account id. Anonymise the identifier and what remains is an encrypted access
+    token belonging to an account we have been told to forget — worse than
+    useless, because it is retained credential material with nothing left to
+    associate it with. So the row goes.
+
+    **Matched on ``ebay_user_id`` only.** eBay's notification carries
+    ``userId``, ``username`` and ``eiasToken``; only the first is the immutable
+    identifier this platform keys on. Matching on ``username`` as a fallback
+    would be worse than not matching: a seller who renamed could collide with a
+    different account that has since taken the old name, and erasing the wrong
+    workspace's connection is unrecoverable.
+
+    **Deliberately crosses tenants**, which is why it lives here rather than in
+    a repository. eBay is not making a request on behalf of one workspace; it is
+    telling the platform that a person is gone. The statement is narrow — one
+    equality predicate on an indexed, globally-unique column — rather than a
+    general query surface.
+
+    Idempotent by construction: a redelivery finds nothing and returns 0.
+    """
+
+    name = "ebay_connection"
+
+    async def erase(self, session: AsyncSession, subject: DeletionSubject) -> int:
+        if not subject.user_id:
+            # Without the immutable id there is nothing safe to match. Erasing
+            # on a mutable name is how the wrong tenant loses its connection.
+            logger.info("ebay_connection_erase_skipped_no_immutable_id")
+            return 0
+
+        result = await session.execute(
+            delete(EbayConnection).where(EbayConnection.ebay_user_id == subject.user_id)
+        )
+        # `rowcount` exists on the cursor result a DELETE returns, but
+        # `execute` is typed as returning the general Result — same cast as
+        # `BaseRepository.update_where`.
+        erased = int(cast("CursorResult[Any]", result).rowcount or 0)
+        # Count only. The identifier is the thing being erased; logging it would
+        # leave it behind in exactly the place nobody thinks to purge.
+        logger.info("ebay_connection_erased", rows=erased)
+        return erased
+
+
+#: Declared in the **same change** that introduced ``ebay_connections`` — see
+#: migration ``0030``. The guard test fails if this and ``_OWNERS`` disagree, so
+#: shipping the table without its eraser is not possible.
+EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
+    EbayStorageDeclaration(
+        storage="app.models.ebay.EbayConnection",
+        owner_name="ebay_connection",
+        holds=(
+            "eBay immutable userId, display username, marketplace and account "
+            "type, plus encrypted access and refresh tokens for the seller."
+        ),
+    ),
+)
+
+#: One owner, matching the one declaration above.
+_OWNERS: Final[tuple[EbayDataOwner, ...]] = (EbayConnectionOwner(),)
 
 
 class EbayAccountDeletionProcessor:

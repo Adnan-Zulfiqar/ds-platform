@@ -10,6 +10,122 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **EBAY-C1 — eBay seller OAuth connection, and a functional eBay card.** The
+  integrations page previously showed eBay as a greyed-out "Coming soon"
+  placeholder. It now carries a working card that connects, reports, reconnects
+  and disconnects a real eBay seller account.
+
+  Four endpoints: `GET /ebay/status` (any authenticated role),
+  `POST /ebay/connect` and `DELETE /ebay/disconnect` (admin or owner), and a
+  public `GET /ebay/callback` that eBay redirects a browser to. Migration `0030`
+  adds `ebay_connections`.
+
+  The decisions that shaped it, each recorded with its trade-off in
+  [`docs/ebay/EBAY_C1_SELLER_CONNECTION.md`](docs/ebay/EBAY_C1_SELLER_CONNECTION.md):
+
+  * **The consent URL is pinned character for character** against eBay's
+    published documentation and OpenAPI specifications, because a wrong host,
+    `redirect_uri` or scope fails on eBay's own page where there is no log to
+    read. `auth.ebay.com` is not `api.ebay.com`; the Identity API is on
+    `apiz.ebay.com`; `redirect_uri` carries the opaque **RuName**, not a URL.
+  * **Five scopes, and what is absent matters as much.** No `sell.finances`,
+    `sell.payment.dispute`, `sell.marketing` or `sell.advertising`, and only the
+    minimal `commerce.identity.readonly` — which returns the account id without
+    the person, so no extra personal data has to be declared and erased.
+  * **The identity is eBay's immutable `userId`, never the mutable username.**
+    A seller who renames is the same seller; keyed on the name, a reconnect
+    would orphan the old row and the deletion contract would no longer find what
+    it must erase.
+  * **One seller per workspace, enforced by a global unique constraint** rather
+    than a lookup. A check-then-insert races, and a cross-tenant lookup would be
+    an existence oracle — a caller could learn whether a given eBay seller uses
+    DropPilot by watching which error came back. The conflict names no workspace.
+  * **State is consumed before the authorization code is spent**, is keyed in
+    Redis only by its SHA-256, and binds the callback to the workspace that
+    started the flow — not to whichever browser arrives.
+  * **Refresh is serialised by `SELECT … FOR UPDATE`.** Proved against real
+    contention: the first caller is held inside eBay's token call after taking
+    the lock, and the test waits for PostgreSQL's own `pg_blocking_pids()` to
+    report the second caller blocked. A companion test removes the lock and
+    requires the duplicate refresh to reappear, so a green result is evidence
+    about the lock rather than about the scheduler.
+  * **Revocation is permanent, and is not confused with an outage.** A 4xx
+    `invalid_grant` marks the connection `reconnect_required` and drops the dead
+    ciphertext; a 5xx does not, because asking every merchant to re-authorise
+    over an eBay outage is the worse failure.
+
+  Tokens are encrypted at rest with the platform Fernet keys, and no response
+  schema anywhere has a field capable of holding a token, a ciphertext, or the
+  immutable `ebayUserId`.
+
+  96 backend tests and 24 Playwright tests (chromium and mobile-chrome) cover
+  it, against real PostgreSQL, real Redis, real encryption and the real
+  migrations; only eBay's network is faked, and an unexpected outbound URL
+  raises rather than escaping.
+
+  **`SECURITY_ENCRYPTION_KEYS` is now a hard requirement for eBay.** `connect`
+  refuses to begin a consent flow without it, deliberately — discovering the
+  platform cannot store a token after a seller has granted consent wastes their
+  time and leaves a live credential with nowhere safe to go.
+
+  Not included, and stated plainly: no listing, inventory, pricing, order or
+  fulfilment work; no background token refresh; no provider-side revocation on
+  disconnect (eBay documents no endpoint an application can call for this grant,
+  so the local credentials are destroyed and the merchant is told to revoke at
+  eBay); and **no live eBay round trip** — no seller has granted consent and no
+  real eBay token has ever been exchanged.
+
+### Fixed
+
+- **eBay OAuth state could never be consumed on the deployed Redis.** Found by
+  running the code against the Redis this platform actually deploys on, not by
+  review.
+
+  Consuming single-use CSRF state atomically is what `GETDEL` is for, and it was
+  the obvious choice. It was added in **Redis 6.2**; the Windows deployments run
+  the 3.0.504 build, where the command does not exist. The resulting `unknown
+  command` error surfaced as `EbayOAuthStateError` — *indistinguishable from a
+  genuine CSRF rejection*. Every eBay consent would have failed with "that
+  authorization request is no longer valid", and the logs would have agreed.
+
+  Replaced with a `MULTI`/`EXEC` transaction containing `GET` then `DEL`, which
+  gives exactly the same single-use guarantee (Redis runs a queued block with no
+  other client's command interleaved) on every server version from 1.2 onward,
+  in one round trip.
+
+  The underlying divergence remains and is recorded in the eBay roadmap: local
+  Redis is 3.0.504 while `docker-compose.yml` and CI both run `redis:7-alpine`.
+  Until it is closed, no new code should assume a command newer than Redis 3.0.
+
+### Changed
+
+- **Three EBAY-C0 guard tests now assert the EBAY-C1 truth.** They failed when
+  `ebay_connections` was added, which is exactly what they were built to do:
+  storage with no registered eraser is a release blocker. Rewritten to assert
+  the property that survives the milestone — every declaration has an owner,
+  every owner has a declaration, and no undeclared model holds an eBay
+  identifier — rather than "nothing is stored", which was the right assertion
+  while zero was the right number and a useless one afterwards.
+
+  Two migration assertions in the C0 suite were also corrected: one pinned the
+  Alembic head to the literal `0029` (the invariant worth protecting is that the
+  history never *forks*, not that a particular revision is newest), and the
+  downgrade/re-upgrade cycle now restores the database to head so it cannot
+  leave later tests in the session running against a schema missing `0030`.
+
+- **`ruff`'s ASYNC110 and a shared lock helper.** `backend/tests/integration/live_locks.py`
+  now holds `pg_blocking_pids()`-based contention helpers extracted from the
+  GQL-2 harness, which re-exports them so existing imports keep working. Two
+  copies of a concurrency primitive is how one of them quietly stops matching
+  the other.
+
+- **The Playwright CI job configures synthetic eBay application identifiers**, so
+  the eBay card's coverage runs there instead of skipping. Nothing in those tests
+  contacts eBay: `connect` only builds a consent URL, and the redirect is aborted
+  by the test.
+
 ### Security
 
 - **EBAY-C0 proxy-boundary hardening — the application resolver is now the only

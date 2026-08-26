@@ -8,11 +8,10 @@ it lives here — the same split ``rule_application_live`` uses.
 a *different* PostgreSQL connection to see the row and contend for it, which a
 shared test transaction would make impossible.
 
-**Blocking is observed, never timed.** ``pg_blocking_pids()`` is PostgreSQL's
-own answer to "is this backend waiting on somebody else's lock", so a test can
-wait for that fact rather than for a sleep that is generous enough today and
-flaky on a loaded machine tomorrow. The timeout here exists only so a genuine
-hang fails the suite instead of stalling it; it is never the thing asserted.
+**Blocking is observed, never timed** — see ``live_locks``, which holds the
+lock-contention helpers. They were extracted there when the eBay refresh tests
+needed the same rendezvous; they are re-exported below so these imports keep
+working.
 
 **Only Shopify's wire is faked.** ``CountingShopify`` answers HTTP. The service,
 the repository, the row lock, the GraphQL client, the document parser and the
@@ -24,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -43,11 +41,11 @@ from app.models.integration import IntegrationStatus
 from app.models.shopify import ShopifyConnection
 from app.models.store import Store, StorePlatform, StoreStatus
 from app.models.tenant import Tenant
-
-#: Upper bound on how long a helper waits for a state that should arrive in
-#: milliseconds. Reaching it means something is genuinely stuck — a failure
-#: worth seeing rather than a slow machine to accommodate.
-HANG_GUARD_SECONDS = 30.0
+from tests.integration.live_locks import (
+    HANG_GUARD_SECONDS,
+    backend_pid,
+    wait_until_blocked,
+)
 
 
 class CountingShopify:
@@ -221,23 +219,13 @@ async def own_connection(live: LiveStore) -> AsyncIterator[AsyncSession]:
         await engine.dispose()
 
 
-async def backend_pid(session: AsyncSession) -> int:
-    return int((await session.execute(sa.text("SELECT pg_backend_pid()"))).scalar_one())
-
-
-async def wait_until_blocked(factory: Callable[[], AsyncSession], pid: int) -> list[int]:
-    """Wait for PostgreSQL to report ``pid`` waiting on somebody else's lock.
-
-    Polling this turns a race into a rendezvous: the test moves on the instant
-    contention is real, and fails outright if contention never happens.
-    """
-    deadline = time.monotonic() + HANG_GUARD_SECONDS
-    while time.monotonic() < deadline:
-        async with factory() as observer:
-            blockers = (
-                await observer.execute(sa.text("SELECT pg_blocking_pids(:p)"), {"p": pid})
-            ).scalar_one()
-        if blockers:
-            return list(blockers)
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"backend {pid} never blocked — no lock contention occurred")
+#: Re-exported from ``live_locks`` — the GQL-2 tests import them from here.
+__all__ = [
+    "HANG_GUARD_SECONDS",
+    "CountingShopify",
+    "LiveStore",
+    "backend_pid",
+    "live_stores",
+    "own_connection",
+    "wait_until_blocked",
+]

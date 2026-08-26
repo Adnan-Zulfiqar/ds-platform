@@ -193,14 +193,27 @@ class TestThrottling:
 
 
 class TestMigration:
-    def test_the_migration_is_a_single_new_head(self) -> None:
+    def test_the_history_has_a_single_head_containing_this_revision(self) -> None:
+        """One head, and 0029 on the path to it.
+
+        Rewritten in EBAY-C1, which added 0030 on top: pinning the head to a
+        literal revision made this test assert "0029 is the newest migration",
+        which was never the property worth protecting and fails on the next
+        change to land. The invariant is that the history never forks — a second
+        head is a merge nobody has resolved, and it stops `upgrade head` dead.
+        """
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
         config = Config(str(_BACKEND_ROOT / "alembic.ini"))
         config.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
-        heads = ScriptDirectory.from_config(config).get_heads()
-        assert list(heads) == ["0029"], f"expected exactly one head 0029, got {heads}"
+        script = ScriptDirectory.from_config(config)
+
+        heads = script.get_heads()
+        assert len(heads) == 1, f"the migration history has forked: {heads}"
+
+        ancestry = {revision.revision for revision in script.walk_revisions("base", heads[0])}
+        assert "0029" in ancestry, "0029 is not on the path to head"
 
     def test_the_migration_declares_0028_as_its_parent(self) -> None:
         source = next(
@@ -249,6 +262,12 @@ class TestMigration:
                 ]
         finally:
             engine.dispose()
+            # Put the database back where this test found it. Added in
+            # EBAY-C1: with 0030 on top, stopping at 0029 left every later
+            # test in the session running against a schema with no
+            # `ebay_connections` table — a failure that would look like a
+            # bug in whichever test happened to run next.
+            command.upgrade(config, "head")
 
     def test_the_migration_is_additive_only(self) -> None:
         """It must not alter anything that already exists."""

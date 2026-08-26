@@ -12,35 +12,41 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | Phase | Scope | Status |
 |---|---|---|
 | **EBAY-C0** | Compliance challenge, signed deletion notifications, safe configuration | **complete** |
-| EBAY-C1 | OAuth connect / reconnect / revoke, encrypted per-tenant tokens | not started |
+| **EBAY-C1** | OAuth connect / reconnect / disconnect, encrypted per-tenant tokens, functional integration card | **complete** |
 | EBAY-C2 | Seller policies, marketplaces, inventory locations | not started |
 | EBAY-C3 | Draft-to-eBay listing publication | not started |
 | EBAY-C4 | Inventory and pricing synchronisation | not started |
 | EBAY-C5 | Orders, fulfilment, tracking, cancellation | not started |
 | EBAY-C6 | Production growth-check and operational hardening | not started |
 
-Only EBAY-C0 is complete. See
-[`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) for the verified contracts,
-the design decisions and the known limitations.
+EBAY-C0 and EBAY-C1 are complete. See
+[`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) and
+[`EBAY_C1_SELLER_CONNECTION.md`](EBAY_C1_SELLER_CONNECTION.md) for the verified
+contracts, the design decisions and the known limitations of each.
 
 ---
 
-## The release guard EBAY-C1 must satisfy
+## The release guard — satisfied by EBAY-C1, and still live
 
 **No eBay data storage may ship without deletion coverage.** This is not a
 convention — it is a test that fails.
 
-EBAY-C0 established that *no table in this application stores eBay user data*,
-and re-establishes it on every test run by searching the model layer
-(`test_no_model_stores_an_ebay_user_identifier`). That is what makes today's
-correct behaviour a **verified zero-match deletion**: a real notification is
-authenticated, recorded and completed, and nothing is erased because there is
-nothing to erase.
+EBAY-C0 established that *no table in this application stored eBay user data*,
+which is what made its correct behaviour a **verified zero-match deletion**.
+EBAY-C1 changed that: `ebay_connections` holds a seller's immutable eBay
+`userId`, their display username, and their encrypted access and refresh tokens.
 
-The moment EBAY-C1 adds a column that stores an eBay user identifier, that test
-fails. Clearing it requires registering a data owner in `_OWNERS`
-(`app/integrations/ebay/deletion.py`) **in the same change** that introduces the
-storage. Every owner must:
+The guard did its job. Adding that table failed three tests in the C0 suite until
+the storage was **declared** in `EBAY_STORAGE_DECLARATIONS` and an eraser was
+**registered** in `_OWNERS` (`app/integrations/ebay/deletion.py`), in the same
+change. What the guard now checks, on every run:
+
+* every declaration has an owner (`unowned_declarations()` — a release blocker);
+* every owner has a declaration (`undeclared_owner_names()` — a dead eraser that
+  looks like coverage);
+* no model *outside* `ebay.py` grows an eBay identifier without being declared.
+
+Every owner must:
 
 * erase irreversibly — physical delete or irreversible anonymisation. A
   soft-delete does not satisfy eBay's requirement that *"even the highest
@@ -50,8 +56,9 @@ storage. Every owner must:
 * be idempotent — eBay redelivers, and a second run must not fail;
 * be safe when nothing matches.
 
-Until an owner exists for it, eBay data persistence **is not production-ready**,
-whatever else works.
+The same obligation applies unchanged to C2 onwards. Any table that stores an
+eBay listing id, order, buyer detail or policy tied to a seller account is
+declared and erased in the change that introduces it, or it does not ship.
 
 ---
 
@@ -72,17 +79,38 @@ whatever else works.
    never be able to supply a URL.
 5. **Platform credentials are not merchant settings.** `EBAY_CLIENT_*`,
    `EBAY_DEV_ID` and the verification token belong to DropPilot's application
-   and must never gain a frontend input field. Per-seller OAuth tokens in
-   EBAY-C1 are the opposite: encrypted, per-tenant, and never returned by an
-   API — the same shape as `shopify_connections`.
-6. **`dev_id` and `redirect_uri_name` are already declared** and unused. EBAY-C1
-   consumes them rather than adding new settings.
+   and must never gain a frontend input field. Per-seller OAuth tokens are the
+   opposite: encrypted, per-tenant, and never returned by an API — the same
+   shape as `shopify_connections`. EBAY-C1 kept both halves of that.
+6. **`redirect_uri_name` is the RuName, not a URL.** EBAY-C1 consumes it. eBay
+   resolves it to the accept and decline URLs registered in the portal; sending
+   an actual URL fails on eBay's own page with nothing diagnosable. `dev_id`
+   remains declared and unused.
+7. **`access_token_for` is the only way to obtain a usable token.** Every eBay
+   call from C2 onwards goes through it, so "is it still valid, and who
+   refreshes it" is answered once rather than at each call site. Do not decrypt
+   `encrypted_access_token` anywhere else.
+8. **The scope set was audited once and requested in full.** eBay's consent is
+   per-authorization, so adding a scope in a later milestone sends every
+   connected merchant back through consent. C2-C5 must work within
+   `EBAY_OAUTH_SCOPES` or accept that cost deliberately.
+9. **Assume nothing newer than Redis 3.0.** The Windows deployments run the
+   3.0.504 build while compose and CI run Redis 7. EBAY-C1 shipped `GETDEL` and
+   had to replace it with `MULTI`/`EXEC`, because the resulting error was
+   indistinguishable from a genuine CSRF rejection. Until that divergence is
+   closed, check the command's version before using it.
 
 ---
 
 ## Not started, and deliberately so
 
-EBAY-C0 implements no OAuth, no listing, no inventory, no orders and no
-fulfilment. It also implements no opt-out flow: this application will persist
-eBay data from EBAY-C1 onwards, so subscribing is the correct choice and the
+EBAY-C1 ends at "this workspace has a usable eBay access token, and the platform
+can prove whose it is". It implements no listing, no inventory, no pricing, no
+orders and no fulfilment, and no background token refresh.
+
+C2 begins at the first call that *uses* that token: the seller's business
+policies, marketplaces and inventory locations. Nothing was built ahead for it.
+
+Neither milestone implements an opt-out flow. This application now persists eBay
+data, so subscribing to deletion notifications is the correct choice and the
 portal's exemption route is not modelled.

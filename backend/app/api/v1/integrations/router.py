@@ -37,8 +37,18 @@ from app.integrations.ebay.compliance import (
     challenge_response,
     parse_notification,
 )
-from app.integrations.ebay.exceptions import EbayNotificationRejectedError
-from app.integrations.ebay.schemas import ChallengeResponse
+from app.integrations.ebay.connection import EbayConnectionService
+from app.integrations.ebay.exceptions import (
+    EbayNotificationRejectedError,
+    EbayOAuthStateError,
+    EbaySellerAlreadyLinkedError,
+)
+from app.integrations.ebay.schemas import (
+    ChallengeResponse,
+    EbayAuthorizationResponse,
+    EbayConnectionRead,
+    EbayStatusResponse,
+)
 from app.integrations.ebay.signature import SIGNATURE_HEADER
 from app.integrations.shopify.schemas import (
     ShopifyAuthorizationResponse,
@@ -61,6 +71,7 @@ from app.integrations.shopify.service import (
 from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.integrations.shopify.webhook_reconciliation import ReconcileReport
+from app.models.ebay import EbayConnection
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
@@ -553,6 +564,171 @@ async def ebay_marketplace_account_deletion_notification(
     notification = parse_notification(payload)
     await service.process(raw_body=raw, notification=notification)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# eBay seller connection (EBAY-C1)
+#
+# Shaped like the AliExpress endpoints rather than inventing a second style:
+# status is readable by any authenticated role, mutation is admin-only, and the
+# callback is public because eBay redirects a browser to it with no session.
+# ---------------------------------------------------------------------------
+
+
+def _ebay_to_read(connection: EbayConnection) -> EbayConnectionRead:
+    return EbayConnectionRead(
+        id=connection.id,
+        status=connection.status,
+        environment=connection.environment,
+        ebay_username=connection.ebay_username,
+        marketplace_id=connection.marketplace_id,
+        account_type=connection.account_type,
+        scopes=connection.granted_scopes.split() if connection.granted_scopes else [],
+        connected_at=connection.connected_at,
+        last_verified_at=connection.last_verified_at,
+        access_token_expires_at=connection.access_token_expires_at,
+        needs_reconnect=connection.needs_reconnect,
+        reconnect_reason=connection.reconnect_reason,
+        last_error=connection.last_error,
+    )
+
+
+@router.get(
+    "/ebay/status",
+    response_model=EbayStatusResponse,
+    summary="Current eBay seller connection status",
+)
+async def ebay_status(session: DbSession, _principal: CurrentPrincipal) -> EbayStatusResponse:
+    """Report whether eBay is configured, connected, and healthy.
+
+    Readable by every authenticated role, matching the other integrations:
+    knowing whether a sales channel is working is operational information the
+    whole team needs, even members who cannot change it.
+
+    ``configured`` is reported separately from ``connected`` so the card can
+    tell "this server has no eBay credentials" apart from "nobody has connected
+    yet" — two situations with completely different remedies.
+    """
+    connection = await EbayConnectionService(session).get_connection()
+    return EbayStatusResponse(
+        configured=settings.ebay.is_oauth_configured,
+        connected=connection is not None and connection.is_usable,
+        connection=_ebay_to_read(connection) if connection else None,
+    )
+
+
+@router.post(
+    "/ebay/connect",
+    response_model=EbayAuthorizationResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Begin an eBay seller connection",
+)
+async def connect_ebay(
+    session: DbSession,
+    principal: RequireAdmin,
+) -> EbayAuthorizationResponse:
+    """Return the eBay consent URL for this workspace.
+
+    **Admin or owner only.** Connecting a selling channel decides where this
+    workspace's listings and orders go; that is not a change a viewer or member
+    should be able to make.
+
+    The same endpoint serves reconnection. eBay's consent flow is identical in
+    both cases, and a separate "reconnect" route would be the same code behind a
+    different name — with two places to keep the scope list correct.
+    """
+    url, state = await EbayConnectionService(session).begin_connection(user_id=principal.user_id)
+    return EbayAuthorizationResponse(
+        authorization_url=url,
+        state=state,
+        expires_in_seconds=settings.ebay.oauth_state_ttl_seconds,
+    )
+
+
+@router.get(
+    "/ebay/callback",
+    summary="OAuth callback from eBay",
+    response_class=RedirectResponse,
+)
+async def ebay_callback(
+    session: DbSession,
+    code: Annotated[str | None, Query(description="Authorization code.")] = None,
+    state: Annotated[str | None, Query(description="CSRF state token.")] = None,
+    error: Annotated[str | None, Query(description="Error from eBay.")] = None,
+    error_description: Annotated[str | None, Query()] = None,
+) -> RedirectResponse:
+    """Complete consent and send the seller back into the application.
+
+    **No bearer token is required, and none would help.** eBay redirects the
+    browser here directly. The ``state`` token — issued during an authenticated
+    admin request and validated server-side — is what binds this callback to a
+    workspace. Nothing in the query string is treated as authority: the tenant,
+    the user and the environment all come from the stored state record.
+
+    Redirects rather than returning JSON, because the seller arrives from eBay's
+    consent screen and must land on a page. Failures redirect too, carrying a
+    short reason drawn from a fixed vocabulary this application controls — never
+    an upstream message, which could be reflected into the page.
+
+    The full query string is never logged: it carries the authorization code.
+    """
+    return_url = settings.ebay.frontend_return_url
+
+    if error:
+        # The seller pressed "Not now", or eBay refused the request. Logged as a
+        # bounded code, not the upstream description.
+        logger.info("ebay_callback_declined", upstream_error=error[:64])
+        return RedirectResponse(f"{return_url}?ebay=denied", status_code=303)
+
+    if not code or not state:
+        logger.warning("ebay_callback_missing_parameters")
+        return RedirectResponse(f"{return_url}?ebay=invalid", status_code=303)
+
+    service = EbayConnectionService(session)
+    try:
+        connection = await service.complete_connection(code=code, state_token=state)
+    except EbayOAuthStateError:
+        logger.warning("ebay_callback_state_invalid")
+        return RedirectResponse(f"{return_url}?ebay=invalid", status_code=303)
+    except EbaySellerAlreadyLinkedError:
+        logger.warning("ebay_callback_seller_already_linked")
+        return RedirectResponse(f"{return_url}?ebay=already_linked", status_code=303)
+    except Exception:
+        # Deliberately broad. Whatever failed, the seller must land back in the
+        # application rather than on an error page they cannot act on. The
+        # traceback goes to the log; the page shows a generic failure.
+        logger.exception("ebay_callback_failed")
+        return RedirectResponse(f"{return_url}?ebay=failed", status_code=303)
+
+    logger.info("ebay_callback_succeeded", tenant_id=str(connection.tenant_id))
+    return RedirectResponse(f"{return_url}?ebay=connected", status_code=303)
+
+
+@router.delete(
+    "/ebay/disconnect",
+    response_model=MessageResponse,
+    summary="Disconnect eBay",
+)
+async def disconnect_ebay(session: DbSession, _principal: RequireAdmin) -> MessageResponse:
+    """Remove the connection and its stored credentials.
+
+    Admin or owner only, matching connect. Idempotent: disconnecting when
+    nothing is connected reports success rather than erroring, so a double click
+    cannot produce a confusing failure.
+
+    Local credentials are destroyed. The grant itself lives on eBay and is not
+    revoked from here — see ``EbayConnectionService.disconnect`` and the eBay
+    integration guide for why, and for what to tell a merchant who wants it gone
+    at eBay too.
+    """
+    removed = await EbayConnectionService(session).disconnect()
+    return MessageResponse(
+        message=(
+            "eBay has been disconnected and the stored credentials deleted."
+            if removed
+            else "No eBay connection was present."
+        )
+    )
 
 
 @router.post(

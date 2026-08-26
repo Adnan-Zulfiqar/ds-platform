@@ -516,8 +516,15 @@ The column sweep remains as a backstop and is broadened across ten model
 surfaces, generic `JSON`/`JSONB`/`Text` columns and every encrypted credential
 column. Its limits are stated in the module rather than implied away.
 
-Today both mechanisms agree: nothing stores eBay personal data, nothing is
-declared, nothing is erased, and the zero-match result is unchanged.
+When EBAY-C0 shipped, both mechanisms agreed that nothing stored eBay personal
+data, nothing was declared, and nothing was erased.
+
+**EBAY-C1 changed that, which is what the contract was for.** `ebay_connections`
+is now declared in `EBAY_STORAGE_DECLARATIONS` and erased by
+`EbayConnectionOwner`, registered in the same change that created the table —
+because three tests in this suite failed until it was. The guard was a mechanism,
+not a note. See
+[`EBAY_C1_SELLER_CONNECTION.md`](EBAY_C1_SELLER_CONNECTION.md).
 
 ---
 
@@ -530,11 +537,15 @@ declared, nothing is erased, and the zero-match result is unchanged.
 2. **The production verification token does not exist yet.** It is generated and
    installed after this work is deployed. A previously exposed token is treated
    as permanently compromised and appears nowhere in this repository.
-3. **Zero-match deletion is correct only while nothing stores eBay data.** True
-   today and checked on every run; EBAY-C1 changes it.
+3. **Zero-match deletion was correct only while nothing stored eBay data.**
+   ~~True today~~ — superseded by EBAY-C1, which added `ebay_connections` and
+   registered its eraser in the same change. A deletion notification for a
+   connected seller now erases a real row. The check that enforces this still
+   runs; what changed is the answer, not the mechanism.
 4. **SHA-1 is eBay's digest choice.** Documented rather than silently
    "improved".
-5. **`dev_id` and `redirect_uri_name` are declared but unused** until EBAY-C1.
+5. **`dev_id` is declared but unused.** `redirect_uri_name` was too until
+   EBAY-C1, which consumes it as the RuName in the OAuth `redirect_uri`.
 6. **Rate-limit budget is a judgement, not a measurement.** 600/minute for this
    path, chosen because eBay's real volume is unknown and the general 100/minute
    quota would certainly be too low. Revisit with real traffic.

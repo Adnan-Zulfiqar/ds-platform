@@ -12,6 +12,7 @@ application stores.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
@@ -20,6 +21,8 @@ from pydantic import BaseModel, Field
 
 from app.integrations.ebay.deletion import DeletionSubject
 from app.integrations.ebay.exceptions import EbayNotificationRejectedError
+from app.models.ebay import EbayConnectionStatus
+from app.schemas.base import CamelCaseModel
 
 #: The only topic this endpoint accepts. Anything else fails closed — an
 #: unknown topic means eBay is sending something this code has never been
@@ -162,9 +165,78 @@ def _reject(reason: str) -> EbayNotificationRejectedError:
     return EbayNotificationRejectedError(details={"reason": reason})
 
 
+# ---------------------------------------------------------------------------
+# EBAY-C1: what the seller-connection endpoints return to this platform's own
+# clients.
+# ---------------------------------------------------------------------------
+
+
+class EbayConnectionRead(CamelCaseModel):
+    """Connection state as the integrations card shows it.
+
+    **There is nowhere in this model to put a credential.** No access token, no
+    refresh token, no ciphertext, no client secret, no verification token, and
+    no raw provider payload. That is the structural guarantee: a token cannot
+    leak through this endpoint by accident, because the response has no field
+    capable of carrying one.
+
+    ``ebayUsername`` is display-only and may be stale between verifies — eBay
+    lets sellers change it. The immutable id is what the platform matches on,
+    and it is *not* exposed: it is eBay personal data, the card has no use for
+    it, and putting it in an API response would create a second place it has to
+    be erased from.
+    """
+
+    id: uuid.UUID
+    status: EbayConnectionStatus
+    environment: str
+    ebay_username: str | None = Field(
+        default=None, description="Display name; the seller can change it on eBay."
+    )
+    marketplace_id: str | None = None
+    account_type: str | None = None
+    scopes: list[str] = Field(default_factory=list, description="Scopes eBay granted.")
+    connected_at: datetime | None = None
+    last_verified_at: datetime | None = None
+    access_token_expires_at: datetime | None = None
+    needs_reconnect: bool
+    reconnect_reason: str | None = Field(
+        default=None, description="Stable machine code; never upstream text."
+    )
+    last_error: str | None = None
+
+
+class EbayStatusResponse(CamelCaseModel):
+    """Response for the eBay status endpoint.
+
+    ``configured`` and ``connected`` are separate, and the distinction matters
+    to the card: a server with no eBay credentials cannot offer a Connect button
+    at all, which is a different message from "nobody has connected yet".
+
+    ``connected`` is computed server-side so every consumer agrees on what it
+    means — a connection awaiting reconnection is *not* connected, and a client
+    inferring that from the enum would get it wrong.
+    """
+
+    configured: bool = Field(description="Whether this server has eBay OAuth credentials.")
+    connected: bool
+    connection: EbayConnectionRead | None = None
+
+
+class EbayAuthorizationResponse(CamelCaseModel):
+    """The consent URL the browser should be sent to."""
+
+    authorization_url: str
+    state: str = Field(description="Opaque CSRF token; echoed back on callback.")
+    expires_in_seconds: int
+
+
 __all__ = [
     "MARKETPLACE_ACCOUNT_DELETION",
     "ChallengeResponse",
+    "EbayAuthorizationResponse",
+    "EbayConnectionRead",
+    "EbayStatusResponse",
     "MarketplaceAccountDeletion",
     "parse_notification",
 ]

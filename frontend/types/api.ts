@@ -195,6 +195,73 @@ export interface AliExpressAuthorization {
   expiresInSeconds: number;
 }
 
+/**
+ * eBay seller connection states.
+ *
+ * `reconnect_required` is its own state rather than a flavour of `error`,
+ * because the remedy is different and only the merchant can apply it: eBay
+ * revokes the grant when a seller changes their password or login name, and no
+ * amount of retrying will bring it back.
+ */
+export type EbayConnectionStatus =
+  | "pending"
+  | "connected"
+  | "reconnect_required"
+  | "error";
+
+/**
+ * An eBay seller connection as returned by the API.
+ *
+ * Note what is absent, and that it is absent by construction rather than by
+ * convention: no access token, no refresh token, no ciphertext, no client
+ * secret — the server's response model has no field capable of holding one.
+ *
+ * `ebayUserId` is absent too, which is a narrower decision worth stating. It is
+ * eBay's immutable identifier for a person, the card has no use for it, and
+ * putting it in a response would create a second place it has to be erased from
+ * when eBay sends an account-deletion notification.
+ */
+export interface EbayConnection {
+  id: string;
+  status: EbayConnectionStatus;
+  environment: string;
+  /** Display name only. The seller can change this on eBay at any time. */
+  ebayUsername: string | null;
+  marketplaceId: string | null;
+  accountType: string | null;
+  scopes: string[];
+  connectedAt: string | null;
+  lastVerifiedAt: string | null;
+  accessTokenExpiresAt: string | null;
+  needsReconnect: boolean;
+  /** Stable machine code, never upstream text. */
+  reconnectReason: string | null;
+  lastError: string | null;
+}
+
+export interface EbayStatus {
+  /**
+   * Whether this server has eBay OAuth credentials at all.
+   *
+   * Separate from `connected` because the two have completely different
+   * remedies: one is an operator configuring the deployment, the other is a
+   * merchant clicking Connect.
+   */
+  configured: boolean;
+  /**
+   * Computed server-side. A connection awaiting reconnection is not connected,
+   * so clients must not infer this from `status` alone.
+   */
+  connected: boolean;
+  connection: EbayConnection | null;
+}
+
+export interface EbayAuthorization {
+  authorizationUrl: string;
+  state: string;
+  expiresInSeconds: number;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;

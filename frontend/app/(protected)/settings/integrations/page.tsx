@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { AliExpressCard } from "@/components/integrations/aliexpress-card";
+import { EbayCard } from "@/components/integrations/ebay-card";
 import { ShopifyCard } from "@/components/integrations/shopify-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -104,9 +105,39 @@ const SHOPIFY_CALLBACK: Record<
   },
 };
 
+const EBAY_CALLBACK: Record<
+  string,
+  { variant: "default" | "destructive"; title: string; body: string }
+> = {
+  connected: {
+    variant: "default",
+    title: "eBay connected",
+    body: "Your eBay seller account is now linked to this workspace.",
+  },
+  denied: {
+    variant: "destructive",
+    title: "Authorization declined",
+    body: "The request was declined on eBay, so nothing was connected.",
+  },
+  invalid: {
+    variant: "destructive",
+    title: "Authorization expired",
+    body: "That eBay authorization request expired or was already used. Click Connect eBay and try again.",
+  },
+  already_linked: {
+    variant: "destructive",
+    title: "eBay account already linked",
+    body: "That eBay seller account is already connected to another DropPilot workspace. Disconnect it there first, then try again.",
+  },
+  failed: {
+    variant: "destructive",
+    title: "Connection failed",
+    body: "eBay could not be connected. Please try again, and ask your DropPilot operator to check the eBay application settings if it keeps failing.",
+  },
+};
+
 const PLANNED_PROVIDERS = [
   { name: "WooCommerce", description: "Sync your WordPress storefront." },
-  { name: "eBay", description: "List and fulfil across eBay marketplaces." },
   { name: "Etsy", description: "Reach Etsy buyers with the same catalogue." },
   { name: "TikTok Shop", description: "Sell through TikTok's marketplace." },
 ] as const;
@@ -115,10 +146,12 @@ function CallbackBanner() {
   const searchParams = useSearchParams();
   const aliexpress = searchParams.get("aliexpress");
   const shopify = searchParams.get("shopify");
+  const ebay = searchParams.get("ebay");
 
   const message =
     (aliexpress && ALIEXPRESS_CALLBACK[aliexpress]) ||
     (shopify && SHOPIFY_CALLBACK[shopify]) ||
+    (ebay && EBAY_CALLBACK[ebay]) ||
     null;
 
   if (!message) return null;
@@ -168,11 +201,16 @@ export default function IntegrationsPage() {
           <ShopifyCard />
         </Suspense>
 
+        <Suspense fallback={<Skeleton className="h-64 w-full rounded-lg" />}>
+          <EbayCard />
+        </Suspense>
+
         <Alert>
           <Info className="h-4 w-4" />
           <AlertDescription>
-            Additional sales channels remain planned. Shopify is available when
-            the server has Shopify app credentials configured.
+            Additional sales channels remain planned. Shopify and eBay are
+            available when the server has that provider&apos;s app credentials
+            configured.
           </AlertDescription>
         </Alert>
 

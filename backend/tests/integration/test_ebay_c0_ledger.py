@@ -8,9 +8,12 @@ Three separate claims, each tested against real PostgreSQL:
 2. **The ledger holds no personal data.** Asserted against the table's columns
    rather than a remembered list, so a future column that could hold an
    identifier fails immediately.
-3. **No table in this application stores eBay user data.** That is what makes a
-   verified zero-match deletion the correct outcome today, and it is checked by
-   searching the model layer rather than asserted in prose.
+3. **Every table that stores eBay user data is declared, and every declaration
+   has an eraser.** Through EBAY-C0 the answer was that nothing stored any, which
+   made a verified zero-match deletion correct. EBAY-C1 added ``ebay_connections``,
+   so the claim moved up a level to the one that survives: storage with no eraser
+   is a release blocker. Checked by searching the model layer and by comparing the
+   declarations against the registered owners, not asserted in prose.
 
 eBay's network is mocked. No live request is made.
 """
@@ -18,6 +21,7 @@ eBay's network is mocked. No live request is made.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 from collections.abc import AsyncIterator
@@ -235,23 +239,49 @@ class TestLedgerHoldsNoPersonalData:
             f"ledger gained a PII-capable column: {columns & forbidden}"
         )
 
-    def test_the_model_source_names_no_identifier_column(self) -> None:
-        source = (_MODELS / "ebay.py").read_text(encoding="utf-8")
-        for banned in ("eias_token", "raw_payload", "access_token"):
-            assert f'"{banned}"' not in source
-            assert f"{banned}: Mapped" not in source
+    def test_the_ledger_model_source_names_no_identifier_column(self) -> None:
+        """Scoped to the ledger class, and matched on whole names.
+
+        Rewritten in EBAY-C1. This used to scan the whole ``ebay.py`` module for
+        the substring ``access_token``, which was fine while the module held
+        only the ledger. C1 added ``EbayConnection`` beside it, and
+        ``encrypted_access_token`` contains that substring — so the test would
+        have failed on the *encrypted* column, which is the opposite of the
+        thing it exists to catch.
+
+        The claim itself is unchanged and still worth keeping: the ledger is the
+        one eBay table that must hold nothing erasable, because it is the record
+        that an erasure happened.
+        """
+        source = inspect.getsource(EbayComplianceNotification)
+        for banned in ("eias_token", "raw_payload", "access_token", "username"):
+            assert not re.search(rf"(?<![a-z_]){banned}", source), (
+                f"the ledger model names {banned!r}"
+            )
 
 
 # ------------------------------------------------------- the eBay-data audit
-class TestNoEbayUserDataExistsYet:
-    """The evidence behind a verified zero-match deletion."""
+class TestEbayUserDataIsDeclaredAndErasable:
+    """The release guard, now that EBAY-C1 has given it something to guard.
 
-    def test_no_model_stores_an_ebay_user_identifier(self) -> None:
+    Renamed from ``TestNoEbayUserDataExistsYet``. Through EBAY-C0 the correct
+    answer was that nothing stored eBay user data, and these tests asserted
+    exactly that. C1 added ``ebay_connections``, so the enduring claim is no
+    longer "nothing is stored" but "everything stored is declared, and every
+    declaration has something that erases it".
+
+    That is the same guard, stated at the level that survives the milestone: the
+    thing that must never happen is eBay personal data with no eraser, not eBay
+    personal data at all.
+    """
+
+    def test_no_undeclared_model_stores_an_ebay_user_identifier(self) -> None:
         """Searched, not assumed.
 
-        If EBAY-C1 adds a column that stores an eBay user identifier without
-        registering a deletion owner, this fails — which is the release guard
-        the roadmap refers to.
+        ``ebay.py`` is skipped because it is the declared home of eBay storage
+        and is covered by the declaration/owner agreement below. A *different*
+        model growing an eBay identifier is storage nobody declared, which is
+        the case this sweep exists to catch.
         """
         pattern = re.compile(
             r"^\s*(ebay_user_id|ebay_username|eias_token|ebay_buyer_id|ebay_seller_id)\s*:",
@@ -268,18 +298,38 @@ class TestNoEbayUserDataExistsYet:
             "app/integrations/ebay/deletion.py before this can ship"
         )
 
-    def test_every_ebay_data_owner_is_registered(self) -> None:
+    def test_every_declared_storage_has_something_that_erases_it(self) -> None:
         """The guard, stated as a test rather than a note to a future author.
 
-        Zero owners is correct **only** while nothing stores eBay user data. The
-        moment something does, the assertion above fails and this one becomes
-        the instruction for what to do about it.
+        Rewritten in EBAY-C1, which registered the first owner. The old form
+        asserted zero owners, which was the right assertion while zero was the
+        right number and a useless one afterwards. Declared storage with no
+        eraser is a release blocker: it means the platform cannot honour a
+        deletion it is legally obliged to honour.
         """
-        owners = EbayAccountDeletionProcessor.registered_owners()
-        assert len(owners) == 0, (
-            "owners are registered — update test_no_model_stores_an_ebay_user_identifier "
-            "to expect the tables they cover"
+        assert EbayAccountDeletionProcessor.unowned_declarations() == (), (
+            "eBay personal data is declared with no eraser registered for it"
         )
+
+    def test_no_eraser_is_left_behind_without_storage(self) -> None:
+        """The other direction, which is not automatically wrong but is a smell.
+
+        An owner with no declaration usually means the storage was removed and
+        the eraser was forgotten — and a dead owner looks like coverage while
+        maintaining nothing.
+        """
+        assert EbayAccountDeletionProcessor.undeclared_owner_names() == ()
+
+    def test_the_connection_table_is_the_declared_storage(self) -> None:
+        """Names what C1 actually shipped, so the declaration cannot drift.
+
+        A declaration that stopped matching the table would still satisfy the
+        two agreement tests above while erasing nothing real.
+        """
+        declarations = EbayAccountDeletionProcessor.declarations()
+        assert [d.storage for d in declarations] == ["app.models.ebay.EbayConnection"]
+        assert declarations[0].owner_name == "ebay_connection"
+        assert declarations[0].holds.strip(), "the declaration says nothing about what it holds"
 
     def test_the_store_platform_enum_offers_ebay_without_storing_user_data(self) -> None:
         """A named platform is not the same as stored personal data.

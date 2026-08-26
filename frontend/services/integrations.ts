@@ -9,6 +9,8 @@ import { apiClient } from "@/lib/api-client";
 import type {
   AliExpressAuthorization,
   AliExpressStatus,
+  EbayAuthorization,
+  EbayStatus,
   ShopifyAuthorization,
   ShopifyConnectPayload,
   ShopifyStatus,
@@ -31,6 +33,8 @@ export const integrationKeys = {
   aliexpressStatus: () => [...integrationKeys.aliexpress(), "status"] as const,
   shopify: () => [...integrationKeys.all, "shopify"] as const,
   shopifyStatus: () => [...integrationKeys.shopify(), "status"] as const,
+  ebay: () => [...integrationKeys.all, "ebay"] as const,
+  ebayStatus: () => [...integrationKeys.ebay(), "status"] as const,
 };
 
 async function fetchAliExpressStatus(): Promise<AliExpressStatus> {
@@ -190,6 +194,68 @@ export function useReconcileShopifyWebhooks() {
       void queryClient.invalidateQueries({
         queryKey: integrationKeys.shopifyStatus(),
       });
+    },
+  });
+}
+
+/**
+ * eBay seller connection.
+ *
+ * The same shape as AliExpress rather than a second style: status is a query,
+ * connect and disconnect are mutations, and the redirect is left to the caller.
+ *
+ * No eBay credential is ever sent from the browser. The client id, certificate
+ * id and RuName live in server environment configuration; the merchant only
+ * approves access for their own seller account on eBay's own page.
+ */
+async function fetchEbayStatus(): Promise<EbayStatus> {
+  const { data } = await apiClient.get<EbayStatus>("/integrations/ebay/status");
+  return data;
+}
+
+export function useEbayStatus(): UseQueryResult<EbayStatus> {
+  return useQuery({
+    queryKey: integrationKeys.ebayStatus(),
+    queryFn: fetchEbayStatus,
+    // Shorter than the global default, matching the other integrations: the
+    // merchant usually arrives here straight off an eBay redirect, and stale
+    // data would tell them "not connected" seconds after they connected.
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * Begin a connection, returning the eBay consent URL.
+ *
+ * Navigation is the caller's job. A service module that redirects the browser
+ * cannot be used from a test, a retry, or any flow that wants to do something
+ * before leaving the page.
+ */
+export function useConnectEbay() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (): Promise<EbayAuthorization> => {
+      const { data } = await apiClient.post<EbayAuthorization>(
+        "/integrations/ebay/connect",
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.ebayStatus() });
+    },
+  });
+}
+
+export function useDisconnectEbay() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      await apiClient.delete("/integrations/ebay/disconnect");
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.ebayStatus() });
     },
   });
 }

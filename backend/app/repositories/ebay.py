@@ -22,17 +22,21 @@ The narrowness that makes it acceptable:
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError
 from app.models.ebay import (
     EbayComplianceNotification,
+    EbayConnection,
     NotificationProcessing,
     NotificationVerification,
 )
-from app.repositories.base import BaseRepository
+from app.repositories.base import BaseRepository, TenantScopedRepository
 
 
 class EbayComplianceLedgerRepository(BaseRepository[EbayComplianceNotification]):
@@ -111,4 +115,73 @@ class EbayComplianceLedgerRepository(BaseRepository[EbayComplianceNotification])
         return record
 
 
-__all__ = ["EbayComplianceLedgerRepository"]
+class EbayConnectionRepository(TenantScopedRepository[EbayConnection]):
+    """A workspace's eBay seller connection. Tenant-scoped, like every other
+    business repository.
+
+    Note what is *not* here: no ``get_by_ebay_user_id`` that searches across
+    tenants. Cross-tenant ownership is settled by the global unique constraint
+    on ``ebay_user_id``, and the conflict surfaces as an integrity error on
+    insert. A lookup would be an existence oracle — a caller could discover
+    whether a given eBay seller uses the platform by observing which error came
+    back — and it would race with a concurrent insert anyway.
+
+    The one place that legitimately reads across tenants is the compliance
+    deletion path, which acts on eBay's instruction rather than a merchant's
+    request. It lives in ``app.integrations.ebay.deletion`` and holds its own
+    narrowly-scoped statement rather than a general query surface here.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, EbayConnection)
+
+    async def get_for_tenant(self) -> EbayConnection | None:
+        """The current tenant's connection, or ``None``.
+
+        ``populate_existing`` because callers act on freshly-refreshed token
+        state; a stale identity-mapped row could hand back an access token that
+        another request has already rotated.
+        """
+        result = await self.session.execute(
+            self._base_query().execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def lock_for_update(self, connection_id: uuid.UUID) -> EbayConnection | None:
+        """Take a row lock so only one refresh runs per connection.
+
+        This is the serialisation point for token refresh. Two concurrent
+        requests that both find an expiring token would otherwise both call
+        eBay, and the second would store a token the first had already
+        superseded — or burn the daily refresh quota for nothing.
+
+        Still tenant-scoped: the predicate comes from ``_base_query``, so a
+        caller cannot lock another workspace's row by passing its id.
+        """
+        result = await self.session.execute(
+            self._base_query()
+            .where(EbayConnection.id == connection_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    def _translate_integrity_error(self, exc: IntegrityError) -> Exception:
+        """Name the two constraints a merchant can actually provoke.
+
+        The base class returns "Another record with these values already
+        exists", which is true and useless. These two have specific, actionable
+        meanings — and the cross-tenant one must not disclose anything about the
+        workspace that holds the account.
+        """
+        from app.integrations.ebay.exceptions import EbaySellerAlreadyLinkedError
+
+        message = str(getattr(exc, "orig", exc)).lower()
+        if "uq_ebay_connections_ebay_user_id" in message:
+            return EbaySellerAlreadyLinkedError()
+        if "uq_ebay_connections_tenant_id" in message:
+            return ConflictError("This workspace already has an eBay account connected.")
+        return super()._translate_integrity_error(exc)
+
+
+__all__ = ["EbayComplianceLedgerRepository", "EbayConnectionRepository"]

@@ -553,6 +553,14 @@ jobs:
       SECURITY_RATE_LIMIT_ENABLED: "true"
       SECURITY_RATE_LIMIT_REQUESTS: "1000"
       SECURITY_ENCRYPTION_KEYS: "dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=,dGVzdC1rZXktMi1ORVZFUi1VU0UtSU4tUFJPRC0hISE="
+      # Synthetic eBay application identifiers, so the eBay integration card is
+      # *configured* here and its Playwright coverage actually runs instead of
+      # skipping. Nothing in these tests contacts eBay: `connect` only builds a
+      # consent URL, and the redirect to eBay is aborted by the test. These are
+      # not credentials for any real eBay application and grant nothing.
+      EBAY_CLIENT_ID: DropPilo-CiOnlyNo-PRD-000000000-00000000
+      EBAY_CLIENT_SECRET: PRD-ci-only-not-a-real-ebay-certificate-id
+      EBAY_REDIRECT_URI_NAME: DropPilot-CiOnly-RuName
       CORS_ORIGINS: http://localhost:3000
       LOG_JSON_OUTPUT: "false"
       NEXT_PUBLIC_API_URL: http://localhost:8000

@@ -26,6 +26,8 @@ from app.models.base import (
 )
 from app.models.ebay import (
     EbayComplianceNotification,
+    EbayConnection,
+    EbayConnectionStatus,
     NotificationProcessing,
     NotificationVerification,
 )
@@ -99,6 +101,8 @@ __all__ = [
     "AutomationSchedule",
     "Base",
     "EbayComplianceNotification",
+    "EbayConnection",
+    "EbayConnectionStatus",
     "EmailVerificationToken",
     "FulfillmentStatus",
     "IdentifiedBase",

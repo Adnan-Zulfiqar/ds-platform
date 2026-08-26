@@ -614,11 +614,11 @@ class EbaySettings(_EnvFileSettings):
     the frontend and never returned by an API — there is no response schema in
     this codebase capable of holding one.
 
-    EBAY-C0 uses only ``client_id``/``client_secret`` (for the client-credentials
+    EBAY-C0 used only ``client_id``/``client_secret`` (for the client-credentials
     token that reads notification public keys) and the two marketplace-deletion
-    fields. ``dev_id`` and ``redirect_uri_name`` are declared now because the
-    portal issues all four together and splitting the block across phases
-    invites a half-configured deployment; they are unused until EBAY-C1.
+    fields. EBAY-C1 brings ``redirect_uri_name`` into use as the seller OAuth
+    ``redirect_uri``. ``dev_id`` remains declared but unused — it belongs to the
+    Traditional APIs, which this platform does not call.
     """
 
     model_config = SettingsConfigDict(env_prefix="EBAY_", extra="ignore")
@@ -627,7 +627,34 @@ class EbaySettings(_EnvFileSettings):
     client_id: str = ""
     client_secret: SecretStr | None = None
     dev_id: str = ""
+
+    #: The **RuName**, not a URL.
+    #:
+    #: eBay's authorization-code flow does not take a redirect URL in
+    #: ``redirect_uri``; it takes an opaque "eBay Redirect URL name" that the
+    #: portal issues, and the actual accept/decline URLs are configured against
+    #: that RuName in the portal rather than sent in the request. Passing a URL
+    #: here produces an opaque failure on eBay's own consent page, which is a
+    #: disproportionately confusing thing to debug — hence the naming.
     redirect_uri_name: str = ""
+
+    #: How long a seller has to complete consent before the state is discarded.
+    #: Short by design: the state is a one-time CSRF credential, not a session.
+    oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+
+    #: Refresh this long before the access token actually expires.
+    #:
+    #: eBay's own guidance is to refresh reactively on an "Invalid access token"
+    #: error rather than tracking lifetimes. This platform refreshes slightly
+    #: early instead, because a merchant-facing action failing once so that the
+    #: retry can succeed is a worse experience than one extra token call.
+    token_refresh_margin_seconds: int = Field(default=300, ge=0, le=3600)
+
+    #: Where the seller lands after consent, once the callback has finished.
+    frontend_return_url: str = "http://localhost:3000/settings/integrations"
+
+    request_timeout_seconds: float = Field(default=20.0, gt=0)
+    connect_timeout_seconds: float = Field(default=5.0, gt=0)
 
     #: The exact, byte-for-byte URL registered in the eBay developer portal.
     #: It participates in the challenge hash, so a single character of
@@ -648,6 +675,47 @@ class EbaySettings(_EnvFileSettings):
         if self.environment is EbayEnvironment.SANDBOX:
             return "https://api.sandbox.ebay.com"
         return "https://api.ebay.com"
+
+    @property
+    def oauth_authorize_url(self) -> str:
+        """eBay's consent page. A different host from the API — ``auth.``, not ``api.``."""
+        if self.environment is EbayEnvironment.SANDBOX:
+            return "https://auth.sandbox.ebay.com/oauth2/authorize"
+        return "https://auth.ebay.com/oauth2/authorize"
+
+    @property
+    def oauth_token_url(self) -> str:
+        """The token service, shared by all three grant types."""
+        return f"{self.notification_api_base}/identity/v1/oauth2/token"
+
+    @property
+    def identity_api_base(self) -> str:
+        """The Identity API lives on ``apiz.``, not ``api.``.
+
+        A genuine eBay quirk rather than a typo: ``getUser`` is served from a
+        different host from every other endpoint this platform calls, and
+        pointing it at ``api.`` returns a 404 that reads like a permissions
+        problem.
+        """
+        if self.environment is EbayEnvironment.SANDBOX:
+            return "https://apiz.sandbox.ebay.com"
+        return "https://apiz.ebay.com"
+
+    @property
+    def is_oauth_configured(self) -> bool:
+        """Whether a seller connection can be started at all.
+
+        Fails closed the same way ``is_deletion_configured`` does: without a
+        RuName the consent request would be built with an empty ``redirect_uri``
+        and rejected by eBay with nothing useful in the response.
+        """
+        secret = self.client_secret
+        return bool(
+            self.client_id.strip()
+            and secret is not None
+            and secret.get_secret_value().strip()
+            and self.redirect_uri_name.strip()
+        )
 
     @property
     def is_deletion_configured(self) -> bool:

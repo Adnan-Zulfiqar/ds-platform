@@ -64,10 +64,29 @@ class TestTheContractHolds:
             "EbayStorageDeclaration, or remove the owner if the storage is gone."
         )
 
-    def test_todays_answer_is_nothing_stored_and_nothing_erased(self) -> None:
-        """EBAY-C0's verified zero-match state, asserted from both sides."""
-        assert EBAY_STORAGE_DECLARATIONS == ()
-        assert EbayAccountDeletionProcessor.registered_owners() == ()
+    def test_the_ebay_connection_is_declared_with_a_matching_eraser(self) -> None:
+        """EBAY-C1 made this contract load-bearing.
+
+        Through C0 the honest answer was "nothing stored, nothing erased", and
+        this test asserted both were empty. C1 stores eBay's immutable
+        ``userId`` and the seller's encrypted tokens, so the answer changed —
+        and the guard demanded the declaration before the table could ship,
+        which is exactly what it exists to do.
+
+        Asserted from both sides: the storage is declared, an owner with that
+        name is registered, and neither half is orphaned.
+        """
+        declared = {d.storage: d for d in EBAY_STORAGE_DECLARATIONS}
+        assert "app.models.ebay.EbayConnection" in declared, (
+            "ebay_connections holds eBay personal data and must be declared"
+        )
+
+        declaration = declared["app.models.ebay.EbayConnection"]
+        owner_names = {owner.name for owner in EbayAccountDeletionProcessor.registered_owners()}
+        assert declaration.owner_name in owner_names
+
+        assert EbayAccountDeletionProcessor.unowned_declarations() == ()
+        assert EbayAccountDeletionProcessor.undeclared_owner_names() == ()
 
     def test_the_contract_actually_detects_a_missing_eraser(
         self, monkeypatch: pytest.MonkeyPatch
@@ -185,9 +204,14 @@ class TestStorageSurfaceSweep:
     def test_the_encrypted_credential_columns_are_accounted_for(self) -> None:
         """Encrypted blobs are the classic blind spot.
 
-        Every one that exists today belongs to AliExpress or Shopify, and both
-        are named. If an eBay one appears, it must be declared — an encrypted
-        token is still personal data.
+        An encrypted token is still personal data, so an eBay one is only
+        acceptable when its storage is declared with an eraser. Before C1 there
+        were none and this asserted their absence; now there are, so it asserts
+        the stronger thing — that every eBay credential column belongs to a
+        model the contract covers.
+
+        A new eBay-named encrypted column on an *undeclared* model still fails,
+        which is the case worth catching.
         """
         encrypted: list[str] = []
         for module in sorted(_MODELS.glob("*.py")):
@@ -199,9 +223,18 @@ class TestStorageSurfaceSweep:
                 encrypted.append(f"{module.name}:{match.group(1)}")
 
         assert encrypted, "the sweep found no encrypted columns at all — it is not working"
+
+        declared_modules = {
+            declaration.storage.rsplit(".", 2)[-2] + ".py"
+            for declaration in EBAY_STORAGE_DECLARATIONS
+        }
         for entry in encrypted:
-            assert "ebay" not in entry.lower(), (
-                f"{entry} is an eBay credential column with no declaration"
+            module_name = entry.split(":", 1)[0]
+            if "ebay" not in entry.lower():
+                continue
+            assert module_name in declared_modules, (
+                f"{entry} is an eBay credential column in a module with no "
+                "EbayStorageDeclaration. Declare the storage and register an eraser."
             )
 
     def test_the_sweep_would_actually_catch_something(self, tmp_path: Path) -> None:

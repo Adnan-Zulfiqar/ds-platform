@@ -136,7 +136,7 @@ future stage, not started), *Blocked* (external constraint).
 | Publish a draft to a connected Shopify store | Existing and verified | `docs/SHOPIFY_OAUTH_IMPLEMENTATION.md`; publish creates a `StoreListing`, which is what moves a row from Drafts to Products |
 | Currency-mismatch guard before publish | Existing and verified | Blocks publish when variant/store currency disagree (`docs/ALIEXPRESS_LOCALIZED_PRICING.md`) |
 | Publish to more than one store/channel simultaneously | Existing but incomplete | Data model supports multiple `StoreListing` rows per product; UI publish flow verified for one store at a time only |
-| Publish to non-Shopify channels (Amazon, eBay, TikTok Shop, WooCommerce) | Missing | `app/integrations/ebay/` exists but is **compliance only** (EBAY-C0); publication is EBAY-C3 |
+| Publish to non-Shopify channels (Amazon, eBay, TikTok Shop, WooCommerce) | Missing | eBay is **connected** as of EBAY-C1 (`app/integrations/ebay/connection.py`) but nothing is published to it; eBay publication is EBAY-C3 |
 
 ## 6. Synchronization
 
@@ -235,12 +235,18 @@ validates. This section tracks that requirement and the phases behind it.
 | Public-key retrieval, fixed host, Redis-cached | Existing and verified | `app/integrations/ebay/public_key.py`; SSRF-proof by construction (fixed host + `uuid.UUID` path segment) |
 | Duplicate-delivery idempotency | Existing and verified | UNIQUE `notification_id` in migration `0029`; concurrent-duplicate test on two real connections |
 | Compliance ledger holds no personal data | Existing and verified | `app/models/ebay.py` — no username/userId/eiasToken/payload column exists |
-| Deletion processor (verified zero-match) | Existing and verified | `app/integrations/ebay/deletion.py`; no table stores eBay user data, checked by test on every run |
+| Deletion processor erases a real connection | Existing and verified | `app/integrations/ebay/deletion.py`; `EbayConnectionOwner` physically deletes on eBay's immutable `userId`, cross-tenant, idempotent — `backend/tests/integration/test_ebay_c1_connection.py` |
 | Compliance endpoint body is bounded while streaming | Existing and verified | `app/core/request_body.py`; a 16 MiB body is abandoned after ~64 KiB, asserted on bytes the application actually consumed |
 | Client IP cannot be forged by a forwarding header | Existing and verified | `app/core/client_ip.py`; a header is believed only from a configured `SECURITY_TRUSTED_PROXIES` peer, and the chain is walked from the right |
 | eBay platform credentials configured safely | Existing and verified | `EbaySettings`; `SecretStr`, blank in `.env.example`, no frontend field, never in a response |
 | **Live eBay endpoint validation** | **Missing — not permitted in this pass** | No developer credentials and no registered endpoint; everything is mocked and labelled as such |
-| eBay OAuth connect/reconnect/revoke | Missing — EBAY-C1 | Blocked on registering a deletion data owner first — see the roadmap's release guard |
+| eBay seller OAuth connect / reconnect / disconnect | Existing and verified | `POST/GET/DELETE /api/v1/integrations/ebay/{connect,callback,disconnect}`; deletion owner registered in the same change |
+| Per-tenant eBay tokens encrypted at rest | Existing and verified | `ebay_connections`, Fernet via `app.core.encryption`; asserted against the raw columns |
+| Functional eBay integration card | Existing and verified | `frontend/components/integrations/ebay-card.tsx`; `frontend/tests/e2e/ebay.spec.ts` (chromium + mobile-chrome) |
+| Concurrent token refresh serialised | Existing and verified | `SELECT … FOR UPDATE`; proved against real contention with an unlocked control test |
+| One eBay account per workspace, no existence oracle | Existing and verified | Global unique constraint on `ebay_user_id`; the conflict names no workspace |
+| **Live eBay OAuth round trip** | **Missing — not performed** | No seller has granted consent and no real eBay token has been exchanged; everything is against eBay's published specifications and a mocked transport |
+| eBay seller policies / marketplaces / locations | Missing — EBAY-C2 | The first work that *uses* the access token |
 | eBay listing publication | Missing — EBAY-C3 | |
 | eBay inventory/pricing sync | Missing — EBAY-C4 | |
 | eBay orders and fulfilment | Missing — EBAY-C5 | |

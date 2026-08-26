@@ -279,7 +279,7 @@ in mind. Nothing here is committed to a phase number.
 
 | Area | Notes |
 |---|---|
-| Additional store channels | WooCommerce / eBay / Etsy / TikTok — Shopify shipped in Phase 8 |
+| Additional store channels | WooCommerce / Etsy / TikTok. Shopify shipped in Phase 8; **eBay is connected** as of EBAY-C1 but publishes nothing yet — see [docs/ebay/MASTER_EBAY_ROADMAP.md](docs/ebay/MASTER_EBAY_ROADMAP.md) |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
 | AI optimisation (Phase 9) | Stages 1–3 done — provider, prompts, product versions; generation/editor remaining |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |

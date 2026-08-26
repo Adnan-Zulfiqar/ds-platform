@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.exceptions import AppError, ExternalServiceError, ValidationError
+from app.core.exceptions import AppError, ConflictError, ExternalServiceError, ValidationError
 
 SERVICE_NAME = "ebay"
 
@@ -124,13 +124,86 @@ class EbayKeyUnavailableError(EbayError):
     message = "The eBay notification key service is temporarily unavailable."
 
 
+# --- EBAY-C1: seller OAuth connection ---------------------------------------
+
+
+class EbayOAuthStateError(ValidationError):
+    """The callback's ``state`` was missing, malformed, expired or replayed.
+
+    One error for every one of those, deliberately. Distinguishing "expired"
+    from "never existed" tells an attacker whether a guessed token was ever
+    real, and there is nothing a legitimate seller does differently in response
+    to the two — both mean "start again".
+    """
+
+    code = "ebay_oauth_state_invalid"
+    message = "That eBay authorization request is no longer valid. Please start again."
+
+
+class EbayConsentDeniedError(ValidationError):
+    """The seller declined on eBay's consent page.
+
+    Not a failure of this application, and reported as its own code so the card
+    can say so plainly rather than showing a generic error the merchant will try
+    to debug.
+    """
+
+    code = "ebay_consent_denied"
+    message = "The eBay authorization request was declined, so nothing was connected."
+
+
+class EbayTokenExchangeError(EbayError):
+    """eBay refused a token request for a reason that might not recur."""
+
+    code = "ebay_token_exchange_failed"
+    message = "eBay could not complete the authorization. Please try connecting again."
+
+
+class EbayTokenRevokedError(ValidationError):
+    """The refresh token is no longer usable and consent must be granted again.
+
+    eBay revokes refresh tokens when a seller changes their login name or
+    password, revokes consent, or eBay itself revokes them. None of those is
+    retryable, so this is a distinct type: the connection is marked
+    reconnect-required rather than retried into a loop.
+    """
+
+    code = "ebay_reconnect_required"
+    message = "The eBay authorization has expired or been revoked. Please reconnect."
+
+
+class EbayIdentityUnavailableError(EbayError):
+    """``getUser`` did not return a usable immutable identity."""
+
+    code = "ebay_identity_unavailable"
+    message = "eBay did not return the seller account identity. Please try again."
+
+
+class EbaySellerAlreadyLinkedError(ConflictError):
+    """This eBay seller account is already connected to a different workspace.
+
+    Reported without confirming which workspace, or anything about it. Naming
+    the other tenant — or varying the message depending on whether one exists —
+    would turn this into an oracle for probing which sellers use the platform.
+    """
+
+    code = "ebay_seller_already_linked"
+    message = "That eBay account is already connected to another DropPilot workspace."
+
+
 __all__ = [
     "SERVICE_NAME",
     "EbayChallengeError",
+    "EbayConsentDeniedError",
     "EbayError",
+    "EbayIdentityUnavailableError",
     "EbayKeyUnavailableError",
     "EbayNotConfiguredError",
     "EbayNotificationRejectedError",
+    "EbayOAuthStateError",
     "EbayPayloadTooLargeError",
+    "EbaySellerAlreadyLinkedError",
     "EbaySignatureError",
+    "EbayTokenExchangeError",
+    "EbayTokenRevokedError",
 ]
