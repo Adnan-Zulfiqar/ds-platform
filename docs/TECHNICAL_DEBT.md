@@ -990,6 +990,60 @@ Ranked by value, none currently blocking.
 6. **Secret rotation procedure.** Rotating `SECURITY_SECRET_KEY` currently
    invalidates every session at once, with no documented process.
 
+## Asynchronous execution is not runnable on the current host
+
+Found while gating EBAY-C1 on 27 August 2026. Recorded as a **separate
+infrastructure milestone**; nothing in EBAY-C0.1 or EBAY-C1 depends on it, and
+neither task attempted to fix it.
+
+**There is no working Celery broker on this machine, and no way to make one
+without a system change.**
+
+* **RabbitMQ is not installed** — no service, nothing listening on 5672. The
+  configured default broker is `amqp://…@localhost:5672//`, so no worker has
+  ever consumed here, and production has none running either.
+* **Redis cannot substitute.** Pointing Celery at the local Redis fails with
+  `Cannot connect to redis://…: unknown command 'HELLO'`. The deployed Redis is
+  the abandoned Windows 3.0.504 build; Celery's Redis transport negotiates RESP3
+  and there is no per-connection downgrade through the broker URL. This is the
+  same 3.0.504 limitation that caused the EBAY-C0.1 `GETDEL` defect.
+
+**What it costs today.** Three Playwright tests in
+`frontend/tests/e2e/global-rules-impact.spec.ts` (`:345`, `:377`, `:431`) fail
+rather than skip. Their `test.skip` guard never fires because the outer 30 s test
+timeout beats the inner assertion timeout. They fail identically on
+`origin/develop` at `4df74ef` — the commit currently serving production — so they
+are a baseline condition of this host, not a regression. Anything that genuinely
+needs a worker (rule application, scheduled sweeps, order sync) is likewise
+unexercised end to end here.
+
+**What closing it needs:** install RabbitMQ (or upgrade Redis past 3.0 and use it
+as the broker), then run a worker against the isolated test database in CI and
+locally, and give the three tests a real worker instead of a skip guard that
+cannot win its race.
+
+## End-to-end test helpers hard-code another worktree
+
+`frontend/tests/e2e/helpers/seed.ts` defaults to a specific machine's paths:
+
+* line 24 — interpreter `C:/dspm3av2/backend/.venv/Scripts/python.exe`
+* line 26 — database `postgresql+psycopg://…/droppilot_m3a4b`
+
+`canSeed()` only checks that the interpreter can `import sqlalchemy`. On a
+machine where that worktree happens to exist the guard passes, the helper does
+**not** skip, and it seeds into the wrong database — 58 `ForeignKeyViolation`
+failures that look like application bugs. Setting one of `E2E_PYTHON` /
+`E2E_DATABASE_URL` without the other is worse than setting neither, because it
+converts a clean skip into that failure mode.
+
+Related: `integrations.spec.ts` requires AliExpress to be **configured** while
+`products.spec.ts:208` asserts the behaviour when it is **not**, so a single run
+cannot satisfy both without splitting the suite or stubbing configuration.
+
+Fix by deriving both values from the backend settings already in the
+environment, and by making `canSeed()` verify it can reach the *intended*
+database rather than that some interpreter exists.
+
 ## Scalability considerations
 
 Not yet needed, recorded so seams are built with them in mind.

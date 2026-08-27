@@ -42,6 +42,7 @@ from app.integrations.ebay.public_key import EbayPublicKeyClient
 from app.integrations.ebay.schemas import (
     ChallengeResponse,
     MarketplaceAccountDeletion,
+    is_identity_digest,
     parse_notification,
 )
 from app.integrations.ebay.signature import (
@@ -161,7 +162,7 @@ class EbayComplianceService:
         logger.info("ebay_notification_signature_verified", key_id=str(header.key_id))
 
     async def process(
-        self, *, raw_body: bytes, notification: MarketplaceAccountDeletion
+        self, *, notification: MarketplaceAccountDeletion
     ) -> EbayComplianceNotification:
         """Claim the notification, erase, and record the outcome.
 
@@ -170,13 +171,25 @@ class EbayComplianceService:
         the ledger says "completed" while the deletion was rolled back — which
         would be a permanent, silent compliance failure, since eBay would never
         resend an acknowledged notification.
+
+        Takes the parsed notification and **not** the raw bytes. It used to take
+        both, and hashing the bytes here is exactly what EBAY-C0.1 fixed: the
+        raw body carries eBay's per-attempt fields, so it identifies a
+        *delivery* rather than a notification. The bytes remain the only thing
+        the signature is checked against — see :meth:`verify`, which the caller
+        must still run first — but they have no part in deciding whether two
+        deliveries are the same notification.
         """
-        digest = hashlib.sha256(raw_body).hexdigest()
+        digest = notification.identity_digest
         now = datetime.now(UTC)
 
-        existing = await self.ledger.get_by_notification_id(notification.notification_id)
+        existing = await self.ledger.get_by_notification_id(
+            notification.notification_id, for_update=True
+        )
         if existing is not None:
-            return await self._record_duplicate(existing, now, digest=digest)
+            return await self._record_duplicate(
+                existing, now, notification=notification, digest=digest
+            )
 
         try:
             record = await self.ledger.claim(
@@ -194,11 +207,15 @@ class EbayComplianceService:
             # between that read and this insert there is a window, and this is
             # what closes it.
             await self.session.rollback()
-            duplicate = await self.ledger.get_by_notification_id(notification.notification_id)
+            duplicate = await self.ledger.get_by_notification_id(
+                notification.notification_id, for_update=True
+            )
             if duplicate is None:  # pragma: no cover - only if the row vanished
                 raise
             logger.info("ebay_notification_duplicate", reason="insert_race")
-            return await self._record_duplicate(duplicate, now, digest=digest)
+            return await self._record_duplicate(
+                duplicate, now, notification=notification, digest=digest
+            )
 
         outcome = await EbayAccountDeletionProcessor(self.session).erase(notification.subject)
         await self.ledger.complete(
@@ -213,18 +230,65 @@ class EbayComplianceService:
         )
         return record
 
+    @staticmethod
+    def _legacy_row_matches(
+        record: EbayComplianceNotification, notification: MarketplaceAccountDeletion
+    ) -> bool:
+        """Validate a retry against a pre-EBAY-C0.1 row using its own columns.
+
+        A legacy row's digest covers one delivery's raw bytes, so it can never
+        match a retry — comparing it is useless. But the row does not only hold
+        a digest: ``topic``, ``schema_version`` and ``event_date`` are stored in
+        plaintext beside it, and those are exactly the fields the identity
+        digest covers (``notification_id`` being the key this row was found by).
+
+        So a legacy row can be validated field by field, to **the same strength**
+        as a digest comparison. There is no weaker "trust the id" path and no
+        one-delivery window in which a collision would slip through.
+
+        ``event_date`` is compared as an instant. Both sides are timezone-aware
+        UTC — PostgreSQL returns ``TIMESTAMPTZ`` that way and the parser
+        normalises eBay's ``…Z`` — and a missing date on one side only is a
+        genuine difference in the payload's shape, not something to forgive.
+        """
+        return (
+            record.topic == notification.topic
+            and record.schema_version == notification.schema_version
+            and record.event_date == notification.event_date
+        )
+
     async def _record_duplicate(
-        self, record: EbayComplianceNotification, now: datetime, *, digest: str
+        self,
+        record: EbayComplianceNotification,
+        now: datetime,
+        *,
+        notification: MarketplaceAccountDeletion,
+        digest: str,
     ) -> EbayComplianceNotification:
-        """Acknowledge a genuine repeat; refuse an impostor.
+        """Acknowledge a genuine retry; refuse a genuine impostor.
 
-        A repeat is only a repeat if it is the *same* notification. eBay's id is
-        the idempotency key, so two deliveries sharing one must carry identical
-        bytes — and the stored SHA-256 is exactly the evidence needed to check
-        that without having kept the payload.
+        eBay's ``notificationId`` is *"The unique identifier of the
+        notification"* and is the logical idempotency authority. What the stored
+        digest adds is the ability to tell a retry of that notification from a
+        reuse of its id for different event content — see
+        ``MarketplaceAccountDeletion.identity_digest`` for what "different"
+        means here, and for what it deliberately does not cover.
 
-        When the digests differ, neither available action is safe, so the
-        endpoint refuses instead of choosing:
+        Three outcomes:
+
+        **The identity matches.** A retry. Counted, acknowledged, nothing
+        destructive re-run, and the recorded erasure result left exactly as the
+        delivery that performed it wrote it.
+
+        **The stored digest predates EBAY-C0.1.** It covers raw bytes and cannot
+        match any retry, so the row is validated against its own stored columns
+        instead — see :meth:`_legacy_row_matches`, which checks the same fields
+        the digest covers. A row that validates is acknowledged and its digest
+        rewritten to an identity digest, once, under the row lock; a row that
+        does not is treated as a collision exactly as a comparable row would be.
+
+        **The identity differs.** A true collision, and neither available action
+        is safe, so the endpoint refuses instead of choosing:
 
         * counting it as a repeat would acknowledge a notification that was
           never processed, and eBay never resends an acknowledged one — the
@@ -233,23 +297,34 @@ class EbayComplianceService:
           that has already been settled, and would overwrite the digest that
           says what was actually processed.
 
-        The original record is left exactly as it was: same digest, same
+        The original record is then left exactly as it was: same digest, same
         outcome, same receipt count. Nothing about the conflicting delivery is
         written, and neither payload appears in the error or the log — both are
         unauthenticated input and one carries personal data.
         """
-        if record.payload_digest != digest:
-            logger.warning(
-                "ebay_notification_conflict",
-                notification_id_digest=hashlib.sha256(
-                    record.notification_id.encode("utf-8")
-                ).hexdigest()[:16],
+        if record.payload_digest == digest:
+            logger.info("ebay_notification_duplicate", receipts=record.receipt_count + 1)
+            return await self.ledger.record_repeat(record, received_at=now)
+
+        if not is_identity_digest(record.payload_digest) and self._legacy_row_matches(
+            record, notification
+        ):
+            logger.info(
+                "ebay_notification_digest_upgraded",
+                receipts=record.receipt_count + 1,
                 stored_status=record.processing_status.value,
             )
-            raise EbayNotificationConflictError()
+            return await self.ledger.record_repeat(record, received_at=now, upgraded_digest=digest)
 
-        logger.info("ebay_notification_duplicate", receipts=record.receipt_count + 1)
-        return await self.ledger.record_repeat(record, received_at=now)
+        logger.warning(
+            "ebay_notification_conflict",
+            notification_id_digest=hashlib.sha256(
+                record.notification_id.encode("utf-8")
+            ).hexdigest()[:16],
+            stored_status=record.processing_status.value,
+            legacy_row=not is_identity_digest(record.payload_digest),
+        )
+        raise EbayNotificationConflictError()
 
 
 __all__ = [

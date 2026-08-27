@@ -236,6 +236,54 @@ correct.
 The portal then displays the **RuName**, which is what goes in
 `EBAY_REDIRECT_URI_NAME`. It is not the URL you just typed.
 
+### Production frontend — a hard prerequisite, and it does not exist yet
+
+**Discovered during the EBAY-C0.1 deployment on 27 August 2026, and it blocks any
+C1 rollout.** The production worktree has never had a frontend installed:
+
+```
+C:\dsplive\frontend\.next             ABSENT
+C:\dsplive\frontend\.next\standalone  ABSENT
+C:\dsplive\frontend\node_modules      ABSENT
+C:\dsplive\frontend\.env              ABSENT (only .env.example)
+```
+
+There is also no frontend Scheduled Task, no Startup entry and no registry `Run`
+entry. What currently answers on port 3000 is a **`next dev` server running from
+the primary checkout** `C:\Users\profe\Documents\DS Platform`, bound to `::`.
+It is not deployable evidence of anything, it serves a different branch, and it
+must not be mistaken for production.
+
+C1's deliverable is a merchant-facing card. Until a real production frontend
+exists, C1 cannot be validated in production no matter how green its tests are.
+
+**Rollout sequence, in order:**
+
+1. Deploy the exact accepted C1 SHA to `C:\dsplive`.
+2. Decide and audit the production `NEXT_PUBLIC_API_URL`. It is **inlined at
+   build time**, so it must be correct *before* the build, not after.
+3. Create `C:\dsplive\frontend\.env` with restricted ACL, matching the backend
+   `.env` ownership model. Never commit it.
+4. `npm ci` in `C:\dsplive\frontend` — a clean, lockfile-exact install.
+5. `npm run build`, then confirm `.next/standalone/server.js` exists.
+   `next.config` sets `output: "standalone"`, so **`next start` is wrong** — use
+   `npm run start:e2e` (`node scripts/start-standalone.mjs`). See TECHNICAL_DEBT
+   M13 / audit A-06.
+6. Start bound to **`127.0.0.1:3000` only**, no dev server, no hot reload,
+   logs restricted and outside Git.
+7. Cut over from the existing dev server deliberately: stop it only once the
+   production build is verified and ready to bind, so port 3000 is never served
+   by two processes at once.
+8. Verify local HTTP 200, the public frontend URL, static assets, login render,
+   and that the frontend reaches the production API.
+9. Add a `DropPilot Frontend` Scheduled Task on the same logon-trigger model as
+   `DropPilot Backend`, one instance, restart on failure. **A logon trigger is
+   not a pre-login boot service** — the same limitation the backend task has.
+10. Keep a rollback path to the previous UI service in case cutover fails.
+
+None of this was performed in the C1 synchronization task, and none of it is
+implied by C1's green test suite.
+
 ### Verifying after deployment
 
 1. `GET /api/v1/integrations/ebay/status` as any authenticated user returns

@@ -12,9 +12,10 @@ application stores.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Final
 
 from pydantic import BaseModel, Field
@@ -32,6 +33,51 @@ MARKETPLACE_ACCOUNT_DELETION: Final = "MARKETPLACE_ACCOUNT_DELETION"
 #: Schema versions this parser understands. eBay's contract is 1.0 today; a new
 #: major version is a change to act on, not to absorb silently.
 _SUPPORTED_SCHEMA_VERSIONS: Final = frozenset({"1.0"})
+
+#: Domain separator, mixed into every identity digest.
+#:
+#: Without it, a digest computed here could in principle equal one computed for
+#: some other purpose over the same values. It costs nothing and it means these
+#: digests are only ever comparable with each other. The trailing ``/v2`` is the
+#: algorithm version: change any part of what is covered, or how it is encoded,
+#: and this string must change with it — a digest that silently means something
+#: new is exactly how EBAY-C0.1 happened.
+_IDENTITY_DIGEST_DOMAIN: Final = "droppilot/ebay/marketplace-account-deletion/identity/v2"
+
+#: Marks a stored digest as an identity digest rather than a pre-EBAY-C0.1
+#: raw-body digest.
+#:
+#: The ledger column is ``VARCHAR(64)``, exactly the width of a SHA-256 hex
+#: string, so there is no room for a tag beside a full digest. The truncation is
+#: worth it: a stored value that does not say which algorithm produced it is
+#: precisely what made the C0.1 defect ambiguous to recover from. ``:`` is not a
+#: hex character, so a legacy digest can never be mistaken for one of these.
+#:
+#: 61 hex characters is 244 bits. This digest detects an eBay notification id
+#: being reused for different event content; it is not a security boundary, and
+#: the payload it summarises has already been signature-verified.
+IDENTITY_DIGEST_PREFIX: Final = "v2:"
+_IDENTITY_DIGEST_HEX_LENGTH: Final = 61
+
+
+def _digest_field(value: str | None) -> bytes:
+    """Encode one field so no two different field lists can ever collide.
+
+    Concatenating values with a separator is the obvious approach and is wrong:
+    ``["ab", "c"]`` and ``["a", "bc"]`` collide, and any separator character can
+    appear inside a value that an upstream system controls. Each field is
+    therefore tagged present/absent and length-prefixed, which makes the
+    encoding injective — the original list can be read back out of the bytes, so
+    two different lists cannot produce the same bytes.
+
+    ``None`` is distinct from ``""``: an absent ``eventDate`` and an empty one
+    are different facts, and collapsing them would let one impersonate the
+    other.
+    """
+    if value is None:
+        return b"\x00"
+    encoded = value.encode("utf-8")
+    return b"\x01" + len(encoded).to_bytes(8, "big") + encoded
 
 
 class ChallengeResponse(BaseModel):
@@ -54,7 +100,7 @@ class MarketplaceAccountDeletion:
 
     ``subject`` carries the identifiers for the duration of processing only.
     Nothing on this object is persisted except ``notification_id``, ``topic``,
-    ``schema_version`` and the two timestamps.
+    ``schema_version``, the two timestamps and ``identity_digest``.
     """
 
     notification_id: str
@@ -64,6 +110,85 @@ class MarketplaceAccountDeletion:
     publish_date: datetime | None
     publish_attempt_count: int | None
     subject: DeletionSubject
+
+    @property
+    def identity_digest(self) -> str:
+        """What makes two deliveries the *same* notification.
+
+        **Covers the immutable event, not the delivery.** eBay documents
+        ``publishDate`` as *"A timestamp indicating when the current
+        notification was sent"* and ``publishAttemptCount`` as *"An integer
+        indicating how many times the notification has been sent to this
+        specific callback URL"* — both describe an attempt, and both change when
+        eBay resends. Including them, which a digest of the raw body does, makes
+        every retry look like a different notification. That is the EBAY-C0.1
+        defect: eBay retried, the endpoint answered 409, and eBay retried again.
+
+        **Covers no personal data, deliberately.** The subject identifiers —
+        ``userId``, ``username``, ``eiasToken`` — are *not* in here. An earlier
+        draft of this fix included them, and that was wrong: the ledger row is a
+        permanent compliance receipt that is never erased, so a digest over
+        those values would leave behind a way to confirm, forever, that a named
+        person's account was deleted. There is no keyed hashing authority in
+        this codebase to blunt that, and a low-entropy username under an unkeyed
+        hash is a confirmation oracle. The ledger's whole design is that it
+        cannot hold personal data; this keeps that true.
+
+        What is covered — topic, schema version, ``notificationId`` and
+        ``eventDate`` (*"when the eBay user made the data deletion request"*) —
+        is **already stored in plaintext in the same row**, as
+        ``topic``, ``schema_version``, ``notification_id`` and ``event_date``.
+        So the digest introduces no retention that the row did not already have.
+
+        **What this cannot detect**, stated plainly: a notification id reused for
+        a *different person* with a byte-identical ``eventDate``. Detecting that
+        would require the subject in the digest, at the privacy cost above. The
+        residual risk is small — ``eventDate`` is millisecond-precision, eBay
+        documents ``notificationId`` as unique, and the payload is
+        signature-verified before it reaches here, so a collision would be a
+        provider bug rather than an attack — and it is the right side of that
+        trade.
+
+        Built from **parsed** values, so key ordering, whitespace and equivalent
+        timestamp spellings cannot make one delivery look unlike another, and
+        encoded with :func:`_digest_field` so no two different field lists can
+        collide.
+        """
+        canonical = b"".join(
+            _digest_field(value)
+            for value in (
+                _IDENTITY_DIGEST_DOMAIN,
+                self.topic,
+                self.schema_version,
+                self.notification_id,
+                _utc_isoformat(self.event_date),
+            )
+        )
+        digest = hashlib.sha256(canonical).hexdigest()
+        return f"{IDENTITY_DIGEST_PREFIX}{digest[:_IDENTITY_DIGEST_HEX_LENGTH]}"
+
+
+def is_identity_digest(stored: str) -> bool:
+    """Whether a stored digest came from :attr:`identity_digest`.
+
+    Rows written before EBAY-C0.1 hold a SHA-256 of one delivery's raw bytes
+    and are pure hex, so the tag is unambiguous. Used to tell "this row can be
+    compared" from "this row predates the comparison being meaningful".
+    """
+    return stored.startswith(IDENTITY_DIGEST_PREFIX)
+
+
+def _utc_isoformat(value: datetime | None) -> str | None:
+    """Normalise to UTC before it reaches a digest.
+
+    A naive datetime is read as UTC rather than as local time: eBay sends
+    ``...Z``, and treating a parse that lost the marker as machine-local would
+    make the same instant digest differently on two servers.
+    """
+    if value is None:
+        return None
+    normalised = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return normalised.isoformat()
 
 
 def parse_notification(payload: object) -> MarketplaceAccountDeletion:
@@ -232,11 +357,13 @@ class EbayAuthorizationResponse(CamelCaseModel):
 
 
 __all__ = [
+    "IDENTITY_DIGEST_PREFIX",
     "MARKETPLACE_ACCOUNT_DELETION",
     "ChallengeResponse",
     "EbayAuthorizationResponse",
     "EbayConnectionRead",
     "EbayStatusResponse",
     "MarketplaceAccountDeletion",
+    "is_identity_digest",
     "parse_notification",
 ]

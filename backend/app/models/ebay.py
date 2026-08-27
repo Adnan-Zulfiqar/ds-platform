@@ -10,8 +10,29 @@ those columns exist. A table that cannot hold personal data cannot leak it, and
 cannot itself become something that has to be erased when the next deletion
 request arrives.
 
-What replaces them is ``payload_digest``: a SHA-256 of the exact bytes eBay
-sent. It proves the same notification was seen without retaining what it said.
+What replaces them is ``payload_digest``: a SHA-256 over the notification's
+**immutable identity**, tagged ``v2:``. It proves the same notification was seen
+without retaining what it said.
+
+EBAY-C0.1 changed it twice over, and both changes matter here.
+
+It used to cover the exact bytes eBay sent. Those bytes carry ``publishDate``
+and ``publishAttemptCount`` — fields eBay documents as changing on every
+delivery attempt — so a raw-body digest identifies a *delivery*, and every
+legitimate retry looked like a different notification and was refused with 409
+while eBay kept resending.
+
+And it deliberately covers **no personal data**. The subject identifiers are not
+in it. This row is a permanent compliance receipt that is never erased, so a
+digest over ``username``, ``userId`` or ``eiasToken`` would leave behind a way
+to confirm, forever, that a named person's account was deleted — and there is no
+keyed hashing authority in this codebase to blunt that. What is covered — topic,
+schema version, ``notificationId`` and ``eventDate`` — is already stored in
+plaintext in this same row, so the digest adds no retention the row did not
+already have. See ``MarketplaceAccountDeletion.identity_digest`` for the
+trade-off that follows from this, and
+``EbayComplianceService._legacy_row_matches`` for how rows written under the old
+algorithm are validated against their own columns.
 
 Deliberately **not** ``TenantScopedBase``. An eBay account deletion is an
 instruction from eBay about a person, not about one workspace, and the same
@@ -82,8 +103,13 @@ class EbayComplianceNotification(IdentifiedBase):
     event_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     publish_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    #: SHA-256 of the exact received bytes. Proof of identity without content:
-    #: a digest cannot be reversed into the username it covered.
+    #: Proof of identity without content: a digest cannot be reversed into the
+    #: username it covered.
+    #:
+    #: ``v2:`` + 61 hex characters is an identity digest (EBAY-C0.1 onwards); a
+    #: bare 64-character hex string is a pre-C0.1 raw-body digest, which cannot
+    #: be compared against a retry and is upgraded in place the first time one
+    #: arrives. ``:`` is not a hex character, so the two can never be confused.
     payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
 
     verification_status: Mapped[NotificationVerification] = mapped_column(

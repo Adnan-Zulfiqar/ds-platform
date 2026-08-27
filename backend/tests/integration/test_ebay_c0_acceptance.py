@@ -578,13 +578,44 @@ class TestPublicKeyCacheNamespace:
 # MEDIUM 4 — same notification id, different payload
 # ===========================================================================
 def notification_pair(notification_id: str, username: str) -> tuple[Any, bytes]:
+    """One delivery, distinguished by ``username``.
+
+    ``eventDate`` is derived from ``username`` so that two "different" payloads
+    differ in **event content** and not only in the subject.
+
+    That derivation was added by EBAY-C0.1 and the reason matters. These tests
+    predate it and created a conflict by changing the username alone, which used
+    to work because the digest covered the raw body — every field, personal ones
+    included. C0.1 narrowed the digest to non-personal fields, deliberately: the
+    ledger row is a permanent compliance receipt that is never erased, and a
+    digest over ``username``/``userId``/``eiasToken`` would leave a way to
+    confirm forever that a named person's account was deleted, with no keyed
+    hashing authority in this codebase to blunt it.
+
+    So a subject-only difference is no longer a collision, by design, and
+    ``test_a_different_subject_under_one_id_is_not_detected`` in
+    ``test_ebay_c01_retry_idempotency`` asserts exactly that. What these tests
+    are really about — one notification id must not stand for two different
+    events — is unchanged, and is what the derived ``eventDate`` preserves.
+    """
     from app.integrations.ebay.schemas import parse_notification
 
     payload = json.loads(official_body())
     payload["notification"]["notificationId"] = notification_id
     payload["notification"]["data"]["username"] = username
+    payload["notification"]["eventDate"] = _event_date_for(username)
     raw = json.dumps(payload, separators=(",", ":")).encode()
     return parse_notification(json.loads(raw)), raw
+
+
+def _event_date_for(username: str) -> str:
+    """A stable, distinct request timestamp per subject.
+
+    Stable so that two deliveries naming the same user are the same event;
+    distinct so that two naming different users are not.
+    """
+    offset = sum(username.encode()) % 1000
+    return f"2025-09-19T20:43:{offset // 1000:02d}.{offset:03d}Z"
 
 
 class TestConflictingNotificationIdentity:
@@ -601,9 +632,7 @@ class TestConflictingNotificationIdentity:
         first, first_raw = notification_pair("conflict-1", "user_alpha")
         async with session.begin() if not session.in_transaction() else _noop():
             pass
-        record = await compliance_module.EbayComplianceService(session).process(
-            raw_body=first_raw, notification=first
-        )
+        record = await compliance_module.EbayComplianceService(session).process(notification=first)
         await session.commit()
         original_digest = record.payload_digest
 
@@ -611,9 +640,7 @@ class TestConflictingNotificationIdentity:
         assert second_raw != first_raw
 
         with pytest.raises(EbayNotificationConflictError):
-            await compliance_module.EbayComplianceService(session).process(
-                raw_body=second_raw, notification=second
-            )
+            await compliance_module.EbayComplianceService(session).process(notification=second)
         await session.rollback()
 
         rows = await ledger_rows(session)
@@ -670,14 +697,10 @@ class TestConflictConcurrencyAndCache:
     async def test_the_same_id_with_the_same_digest_is_still_an_idempotent_repeat(
         self, session: AsyncSession
     ) -> None:
-        first, raw = notification_pair("same-1", "user_alpha")
-        await compliance_module.EbayComplianceService(session).process(
-            raw_body=raw, notification=first
-        )
+        first, _raw = notification_pair("same-1", "user_alpha")
+        await compliance_module.EbayComplianceService(session).process(notification=first)
         await session.commit()
-        second = await compliance_module.EbayComplianceService(session).process(
-            raw_body=raw, notification=first
-        )
+        second = await compliance_module.EbayComplianceService(session).process(notification=first)
         await session.commit()
 
         assert second.receipt_count == 2
@@ -703,18 +726,14 @@ class TestConflictConcurrencyAndCache:
 
         monkeypatch.setattr(EbayAccountDeletionProcessor, "erase", counting)
 
-        first, first_raw = notification_pair("conflict-2", "user_alpha")
-        await compliance_module.EbayComplianceService(session).process(
-            raw_body=first_raw, notification=first
-        )
+        first, _first_raw = notification_pair("conflict-2", "user_alpha")
+        await compliance_module.EbayComplianceService(session).process(notification=first)
         await session.commit()
         assert len(runs) == 1
 
-        second, second_raw = notification_pair("conflict-2", "user_beta")
+        second, _second_raw = notification_pair("conflict-2", "user_beta")
         with pytest.raises(EbayNotificationConflictError):
-            await compliance_module.EbayComplianceService(session).process(
-                raw_body=second_raw, notification=second
-            )
+            await compliance_module.EbayComplianceService(session).process(notification=second)
         await session.rollback()
 
         assert len(runs) == 1, "a conflicting delivery re-ran the deletion"
@@ -724,17 +743,13 @@ class TestConflictConcurrencyAndCache:
     ) -> None:
         from app.integrations.ebay.exceptions import EbayNotificationConflictError
 
-        first, first_raw = notification_pair("conflict-3", "user_alpha")
-        await compliance_module.EbayComplianceService(session).process(
-            raw_body=first_raw, notification=first
-        )
+        first, _first_raw = notification_pair("conflict-3", "user_alpha")
+        await compliance_module.EbayComplianceService(session).process(notification=first)
         await session.commit()
 
-        second, second_raw = notification_pair("conflict-3", "user_beta")
+        second, _second_raw = notification_pair("conflict-3", "user_beta")
         with pytest.raises(EbayNotificationConflictError) as raised:
-            await compliance_module.EbayComplianceService(session).process(
-                raw_body=second_raw, notification=second
-            )
+            await compliance_module.EbayComplianceService(session).process(notification=second)
         await session.rollback()
 
         rendered = f"{raised.value.message} {raised.value.details}"
@@ -745,12 +760,12 @@ class TestConflictConcurrencyAndCache:
         """Unchanged by the conflict check: the database still arbitrates."""
         engine = create_async_engine(settings.database.async_dsn, poolclass=None)
         factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
-        parsed, raw = notification_pair("concurrent-same", "user_alpha")
+        parsed, _raw = notification_pair("concurrent-same", "user_alpha")
 
         async def deliver() -> Any:
             async with factory() as active:
                 record = await compliance_module.EbayComplianceService(active).process(
-                    raw_body=raw, notification=parsed
+                    notification=parsed
                 )
                 await active.commit()
                 return record
@@ -784,11 +799,11 @@ class TestConflictConcurrencyAndCache:
         factory = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 
         async def deliver(username: str) -> Any:
-            parsed, raw = notification_pair("concurrent-conflict", username)
+            parsed, _raw = notification_pair("concurrent-conflict", username)
             async with factory() as active:
                 try:
                     record = await compliance_module.EbayComplianceService(active).process(
-                        raw_body=raw, notification=parsed
+                        notification=parsed
                     )
                     await active.commit()
                     return record.payload_digest

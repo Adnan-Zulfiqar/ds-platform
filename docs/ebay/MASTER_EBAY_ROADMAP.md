@@ -12,17 +12,30 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | Phase | Scope | Status |
 |---|---|---|
 | **EBAY-C0** | Compliance challenge, signed deletion notifications, safe configuration | **complete** |
-| **EBAY-C1** | OAuth connect / reconnect / disconnect, encrypted per-tenant tokens, functional integration card | **complete** |
+| **EBAY-C0.1** | Retry idempotency hotfix — identity digest replaces the raw-body digest | **complete, deployed** |
+| **EBAY-C1** | OAuth connect / reconnect / disconnect, encrypted per-tenant tokens, functional integration card | **complete on branch, not deployed** |
 | EBAY-C2 | Seller policies, marketplaces, inventory locations | not started |
 | EBAY-C3 | Draft-to-eBay listing publication | not started |
 | EBAY-C4 | Inventory and pricing synchronisation | not started |
 | EBAY-C5 | Orders, fulfilment, tracking, cancellation | not started |
 | EBAY-C6 | Production growth-check and operational hardening | not started |
 
-EBAY-C0 and EBAY-C1 are complete. See
-[`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) and
-[`EBAY_C1_SELLER_CONNECTION.md`](EBAY_C1_SELLER_CONNECTION.md) for the verified
-contracts, the design decisions and the known limitations of each.
+**EBAY-C0 and EBAY-C0.1 are complete and running in production.** C0.1 was
+verified against genuine eBay retry traffic: a real redelivery returned 204,
+incremented the receipt count, upgraded one legacy digest, did not repeat the
+deletion, and produced no new 409.
+
+**EBAY-C1 is complete on its branch and is *not* deployed.** No seller has
+completed a live eBay consent flow and no real eBay token has been exchanged;
+everything is verified against eBay's published specifications and a mocked
+transport. Production also has no frontend build yet, which is a prerequisite for
+any C1 rollout — see the deployment section of
+[`EBAY_C1_SELLER_CONNECTION.md`](EBAY_C1_SELLER_CONNECTION.md).
+
+See [`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) for the compliance
+contracts and what ``payload_digest`` covers after C0.1, and
+[`EBAY_C1_SELLER_CONNECTION.md`](EBAY_C1_SELLER_CONNECTION.md) for the OAuth
+design, decisions and limitations.
 
 ---
 
@@ -63,6 +76,14 @@ declared and erased in the change that introduces it, or it does not ship.
 ---
 
 ## Carried into later phases
+
+0. **eBay's per-attempt fields are not part of a notification's identity.**
+   ``publishDate`` and ``publishAttemptCount`` change on every resend, by
+   documented design. Anything that decides "have I seen this before" must be
+   built from ``notificationId`` plus immutable event content — never from the
+   raw body, and never from a field whose description mentions the *attempt*.
+   EBAY-C0.1 exists because that distinction was missed once; a future topic
+   with its own retry semantics must not repeat it.
 
 1. **Signature format is SHA-1 ECDSA over the raw body.** eBay's choice,
    verified against their published vector, documented in
