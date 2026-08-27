@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
@@ -178,6 +179,21 @@ export default function IntegrationsPage() {
         title="Integrations"
         description="Connect the suppliers and sales channels this workspace sells through."
       />
+
+      {/* Connecting a channel hands marketplace data to this application, and a
+          connected card displays the seller account it is bound to. The policy
+          describing what is stored and how to remove it belongs where that
+          decision is made, not only on the signed-out pages. */}
+      <p className="text-sm text-muted-foreground">
+        Connecting an account shares data with DropPilot AI. See our{" "}
+        <Link
+          className="font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          href="/privacy"
+        >
+          Privacy Policy
+        </Link>{" "}
+        for what is stored and how to remove it.
+      </p>
 
       <Suspense fallback={null}>
         <CallbackBanner />

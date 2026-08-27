@@ -207,10 +207,25 @@ Set on the backend, never in a UI:
 ```
 EBAY_CLIENT_ID=<App ID (Client ID) from the eBay portal>
 EBAY_CLIENT_SECRET=<Cert ID (Client Secret)>
-EBAY_REDIRECT_URI_NAME=<the RuName, not a URL>
+EBAY_REDIRECT_URI_NAME=Auto_Pilot          # the RuName, not a URL
 EBAY_FRONTEND_RETURN_URL=https://app.whiteto.com/settings/integrations
+CORS_ORIGINS=<must include https://app.whiteto.com>
 SECURITY_ENCRYPTION_KEYS=<at least one Fernet key>
 ```
+
+And the frontend must be **built** with:
+
+```
+NEXT_PUBLIC_API_URL=https://api.whiteto.com
+```
+
+`NEXT_PUBLIC_*` values are inlined at build time. A build made against a
+loopback URL produces a bundle that calls the developer's own machine from every
+visitor's browser, and no amount of runtime configuration fixes it afterwards.
+
+`EBAY_REDIRECT_URI_NAME` is not a secret — it is an opaque public identifier
+eBay resolves to the URLs above — but it is environment-specific, so it stays in
+configuration and never in OAuth code.
 
 `SECURITY_ENCRYPTION_KEYS` is a hard requirement, not hardening. `connect`
 refuses to start a consent flow without it, deliberately: discovering the
@@ -224,9 +239,18 @@ Your Application → Your eBay Redirect URL (RuName)**, register:
 
 | Field | Value |
 |---|---|
+| Display title | `DropPilot AI` |
+| RuName (production) | `Auto_Pilot` |
 | Auth accepted URL | `https://api.whiteto.com/api/v1/integrations/ebay/callback` |
 | Auth declined URL | `https://api.whiteto.com/api/v1/integrations/ebay/callback` |
-| Privacy policy URL | `https://whiteto.com/privacy` |
+| Privacy policy URL | `https://app.whiteto.com/privacy` |
+| Frontend return URL | `https://app.whiteto.com/settings/integrations` |
+
+**The privacy policy is served by this application** at `/privacy`, as a public
+route excluded from the middleware's auth gate. It is therefore on the app host,
+not the root domain — `whiteto.com` serves a different application and must not
+be repurposed for it. eBay fetches this URL with no session, so a policy behind a
+login would fail RuName validation.
 
 Accepted and declined point at the same endpoint on purpose. The handler
 distinguishes them by what eBay sends — `code` versus `error` — and a second

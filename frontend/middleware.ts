@@ -34,6 +34,10 @@ const PUBLIC_ROUTES = [
   "/register",
   "/forgot-password",
   "/unauthorized",
+  // The privacy policy has to be readable by someone with no account — eBay
+  // fetches it to validate the RuName, and a policy behind a login is not a
+  // published policy.
+  "/privacy",
 ] as const;
 
 function isPublicRoute(pathname: string): boolean {

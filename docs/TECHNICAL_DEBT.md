@@ -1008,14 +1008,22 @@ without a system change.**
   and there is no per-connection downgrade through the broker URL. This is the
   same 3.0.504 limitation that caused the EBAY-C0.1 `GETDEL` defect.
 
-**What it costs today.** Three Playwright tests in
-`frontend/tests/e2e/global-rules-impact.spec.ts` (`:345`, `:377`, `:431`) fail
-rather than skip. Their `test.skip` guard never fires because the outer 30 s test
-timeout beats the inner assertion timeout. They fail identically on
+**What it costs today.** Four Playwright tests in
+`frontend/tests/e2e/global-rules-impact.spec.ts` (`:250`, `:345`, `:377`, `:431`)
+fail rather than skip. Their `test.skip` guard never fires because the outer 30 s
+test timeout beats the inner assertion timeout. They fail identically on
 `origin/develop` at `4df74ef` — the commit currently serving production — so they
 are a baseline condition of this host, not a regression. Anything that genuinely
 needs a worker (rule application, scheduled sweeps, order sync) is likewise
 unexercised end to end here.
+
+> **Correction (EBAY-C1.1).** This section originally said *three* and omitted
+> `:250`, "no request reaches any third party". That test clicks through to
+> `confirm-apply` and then waits for `application-progress`, so it depends on the
+> worker exactly as the other three do. Worth noting for whoever fixes this: its
+> actual subject — that applying a rule contacts no third party — is never
+> reached, because the visibility assertion fails first. It is not a weaker test
+> than the others; it is an unexercised one.
 
 **What closing it needs:** install RabbitMQ (or upgrade Redis past 3.0 and use it
 as the broker), then run a worker against the isolated test database in CI and
