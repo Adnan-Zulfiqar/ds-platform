@@ -10,6 +10,111 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **EBAY-C0.1 — every legitimate eBay retry was being rejected with 409.** Found
+  in production logs, not in review: **7 logical notifications** had been
+  redelivered and **every one of the 20 redeliveries was refused**. Not one clean
+  idempotent acknowledgement had ever been issued.
+
+  **Root cause (confirmed).** Idempotency compared `sha256(raw_body)`. eBay's
+  body carries two fields it documents as belonging to the *delivery attempt*
+  rather than the event:
+
+  * `notification.publishDate` — *"A timestamp indicating when the current
+    notification was sent."*
+  * `notification.publishAttemptCount` — *"An integer indicating how many times
+    the notification has been sent to this specific callback URL."*
+
+  Both change on every resend, so a retry's bytes can never match the stored
+  digest. The endpoint read that as "this id already exists with different
+  content" and refused. eBay *"will resend … until it is acknowledged"*; after 24
+  hours of unacknowledged notifications the callback URL is marked down, and the
+  developer is marked non-compliant 30 days later.
+
+  **No deletion instruction was lost.** All 7 ledger rows are `completed` with
+  `erased_record_count = 0` and `outcome_code = no_matching_data` — the correct
+  verified zero-match result. `receipt_count = 1` on all 7 is the proof that no
+  retry was ever counted.
+
+  **The fix.** `notificationId` remains the logical idempotency authority, as
+  eBay documents it. The stored digest now covers the notification's *identity*:
+  topic, schema version, `notificationId` and `eventDate`.
+
+  **It covers no personal data, deliberately.** `username`, `userId` and
+  `eiasToken` are excluded. The ledger row is a permanent compliance receipt that
+  is never erased, so a digest over the subject would leave a way to confirm,
+  forever, that a named person's account was deleted — and an unkeyed hash of a
+  low-entropy username is a weak oracle at that. There is no keyed,
+  domain-separated hashing authority in this codebase, and an urgent compliance
+  hotfix is the wrong place to design one. Every covered field is already a
+  plaintext column on the same row, so the digest adds no retention the ledger
+  did not already have.
+
+  The cost is stated rather than hidden: a notification id reused for a
+  *different person* with a byte-identical `eventDate` is no longer detected.
+  `test_a_different_subject_under_one_id_is_not_detected` asserts it so nobody
+  finds out by accident.
+
+  **Serialisation is injective.** Fixed field order alone is not enough —
+  separator-joined concatenation collides, and any separator can appear inside an
+  upstream-controlled value. Fields are presence-tagged and length-prefixed, with
+  a domain separator mixed in, and collision control tests cover
+  boundary-shifting, separator impersonation, absent-versus-empty and the domain
+  marker.
+
+  **True collisions are still refused.** Differing immutable event content under
+  one id still returns 409, because neither alternative is safe: acknowledging
+  would discard a real deletion instruction eBay will never resend, and
+  re-erasing would repeat destructive work under a settled identity.
+
+  **Existing production rows keep working, with no weaker path.** A legacy row's
+  raw-body digest cannot match a retry, so the row is validated field by field
+  against its own stored `topic`, `schema_version` and `event_date` columns —
+  the same fields the digest covers. A row that validates is acknowledged and its
+  digest upgraded once under the row lock; a row that does not is refused exactly
+  as a comparable row would be.
+
+  **No migration.** The `v2:` tag fits inside the existing `VARCHAR(64)`. Alembic
+  head remains `0029`.
+
+  **Unchanged, deliberately:** the signature is still verified over the exact raw
+  bytes before anything is parsed, so an unverified delivery cannot reach the
+  ledger; erasure still runs at most once per notification; the ledger still
+  stores no payload and no eBay identifier; and no log line gained one.
+
+  `EbayComplianceService.process` no longer takes `raw_body` — it was used for
+  nothing but the digest, and keeping it would imply the bytes still decide what
+  counts as the same notification.
+
+### Changed
+
+- **The redelivery path now takes a row lock.** Two retries arriving together
+  would both read `receipt_count = 1` and both write `2` — a lost update that
+  made the repeat accounting quietly wrong, which matters because that count is
+  the only evidence of how hard eBay had to try. It also serialises the legacy
+  digest upgrade, so exactly one deliverer performs it.
+
+- **EBAY-C0 tests that built a collision from a username change were rewritten.**
+  They predate the privacy narrowing and would otherwise have asserted that a
+  subject-only difference is a collision, which is no longer true by design.
+  They now differ in event content, which is what they were always about. One
+  ledger test that pinned the digest to `sha256(raw_body)` was rewritten the same
+  way, with an added assertion that the digest is *not* the raw-body hash so the
+  defect cannot return quietly.
+
+### Known follow-up
+
+- **Why eBay retried these 7 at all is not established.** All 7 first deliveries
+  returned **204**. Six were slow (2.2 s–4.9 s) but one answered in **23.75 ms**,
+  which contradicts a simple latency explanation, and the request log does not
+  carry the notification id so timestamp matching is ambiguous where deliveries
+  cluster. Recorded as an open question, not a diagnosis.
+
+- **Endpoint response latency deserves its own investigation** — 5 responses in a
+  single log exceeded 3 s. Out of scope for C0.1, and after this fix a slow first
+  response is harmless: the retry returns 204 straight from the ledger.
+
 ### Security
 
 - **EBAY-C0 proxy-boundary hardening — the application resolver is now the only

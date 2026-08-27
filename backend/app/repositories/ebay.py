@@ -42,13 +42,26 @@ class EbayComplianceLedgerRepository(BaseRepository[EbayComplianceNotification])
         super().__init__(session, EbayComplianceNotification)
 
     async def get_by_notification_id(
-        self, notification_id: str
+        self, notification_id: str, *, for_update: bool = False
     ) -> EbayComplianceNotification | None:
-        result = await self.session.execute(
-            select(EbayComplianceNotification)
-            .where(EbayComplianceNotification.notification_id == notification_id)
-            .execution_options(populate_existing=True)
+        """Find a receipt by eBay's notification id.
+
+        ``for_update`` takes a row lock, and the redelivery path uses it. eBay
+        can deliver the same notification to this endpoint more than once at a
+        time, and two unlocked readers would both see ``receipt_count = 1`` and
+        both write ``2`` — a lost update that makes the repeat accounting quietly
+        wrong. It also serialises the legacy-digest upgrade below, so only one
+        deliverer rewrites the stored digest.
+
+        A row that does not exist locks nothing, so this does not close the
+        first-insert race. That is the unique constraint's job, in ``claim``.
+        """
+        query = select(EbayComplianceNotification).where(
+            EbayComplianceNotification.notification_id == notification_id
         )
+        if for_update:
+            query = query.with_for_update()
+        result = await self.session.execute(query.execution_options(populate_existing=True))
         return result.scalar_one_or_none()
 
     async def claim(
@@ -102,11 +115,29 @@ class EbayComplianceLedgerRepository(BaseRepository[EbayComplianceNotification])
         return record
 
     async def record_repeat(
-        self, record: EbayComplianceNotification, *, received_at: datetime
+        self,
+        record: EbayComplianceNotification,
+        *,
+        received_at: datetime,
+        upgraded_digest: str | None = None,
     ) -> EbayComplianceNotification:
-        """Count a redelivery without re-running anything destructive."""
+        """Count a redelivery without re-running anything destructive.
+
+        The erasure result is untouched on purpose — ``processing_status``,
+        ``erased_record_count`` and ``outcome_code`` still describe what was
+        actually done, on the delivery that did it. ``publish_date`` is left at
+        the first delivery's value for the same reason: it records the
+        notification as received and processed, and rewriting it with each
+        retry's timestamp would erase that.
+
+        ``upgraded_digest`` rewrites a pre-EBAY-C0.1 raw-body digest to an
+        identity digest, once, on the first retry that reaches a legacy row. See
+        ``EbayComplianceService._record_duplicate`` for why that is safe.
+        """
         record.receipt_count += 1
         record.last_received_at = received_at
+        if upgraded_digest is not None:
+            record.payload_digest = upgraded_digest
         await self.session.flush()
         return record
 

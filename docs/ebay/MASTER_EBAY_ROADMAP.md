@@ -12,6 +12,7 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | Phase | Scope | Status |
 |---|---|---|
 | **EBAY-C0** | Compliance challenge, signed deletion notifications, safe configuration | **complete** |
+| **EBAY-C0.1** | Retry idempotency hotfix — identity digest replaces the raw-body digest | **complete** |
 | EBAY-C1 | OAuth connect / reconnect / revoke, encrypted per-tenant tokens | not started |
 | EBAY-C2 | Seller policies, marketplaces, inventory locations | not started |
 | EBAY-C3 | Draft-to-eBay listing publication | not started |
@@ -19,9 +20,10 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | EBAY-C5 | Orders, fulfilment, tracking, cancellation | not started |
 | EBAY-C6 | Production growth-check and operational hardening | not started |
 
-Only EBAY-C0 is complete. See
-[`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) for the verified contracts,
-the design decisions and the known limitations.
+EBAY-C0 is complete, with the EBAY-C0.1 retry-idempotency hotfix applied on
+top. See [`EBAY_C0_COMPLIANCE.md`](EBAY_C0_COMPLIANCE.md) for the verified
+contracts, the design decisions, the known limitations, and what
+``payload_digest`` covers after C0.1.
 
 ---
 
@@ -56,6 +58,14 @@ whatever else works.
 ---
 
 ## Carried into later phases
+
+0. **eBay's per-attempt fields are not part of a notification's identity.**
+   ``publishDate`` and ``publishAttemptCount`` change on every resend, by
+   documented design. Anything that decides "have I seen this before" must be
+   built from ``notificationId`` plus immutable event content — never from the
+   raw body, and never from a field whose description mentions the *attempt*.
+   EBAY-C0.1 exists because that distinction was missed once; a future topic
+   with its own retry semantics must not repeat it.
 
 1. **Signature format is SHA-1 ECDSA over the raw body.** eBay's choice,
    verified against their published vector, documented in

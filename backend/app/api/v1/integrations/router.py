@@ -551,7 +551,7 @@ async def ebay_marketplace_account_deletion_notification(
         raise EbayNotificationRejectedError(details={"reason": "malformed_json"}) from exc
 
     notification = parse_notification(payload)
-    await service.process(raw_body=raw, notification=notification)
+    await service.process(notification=notification)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

@@ -456,68 +456,103 @@ connections.
 
 **No migration was needed** — `payload_digest` already existed.
 
-### MEDIUM — the official curve
+### EBAY-C0.1 — what `payload_digest` covers now
 
-The verifier accepted any EC key. eBay's published fixture is `secp256r1`
-(P-256) and the `getPublicKey` reference describes no other curve, so P-384 —
-a perfectly good curve — is not one eBay would ever have signed with here. It is
-now required, and RSA, Ed25519, other curves and malformed keys are all refused
-with 412 and zero writes.
+`payload_digest` was a SHA-256 of the exact bytes eBay sent. Production proved
+that wrong: **7 logical notifications** were retried and **every retry was
+answered 409** (20 conflict events across the retained logs), because eBay's body
+carries two fields it documents as per-attempt —
 
-SHA-1 stays. It is what eBay's key metadata returns, and "upgrading" it would
-reject every real notification. That is provider-mandated compatibility, not an
-oversight — see the module docstring.
+* `notification.publishDate` — *"A timestamp indicating when the current
+  notification was sent."*
+* `notification.publishAttemptCount` — *"An integer indicating how many times the
+  notification has been sent to this specific callback URL."*
 
-### MEDIUM — pinned authority and independent reproduction
+— so a retry's bytes never match the stored digest. eBay *"will resend the
+notification to the callback URL until it is acknowledged"*, and after 24 hours
+of unacknowledged notifications the callback URL is marked down, with the
+developer marked non-compliant 30 days later.
 
-| | |
-|---|---|
-| Repository | `github.com/eBay/event-notification-nodejs-sdk` |
-| Commit | `feaf3378ca263a81432cf5b8c8a6fd8cb3d3e2f3` |
-| Tag | `1.0.3` (same commit) |
-| Fixture | `test/test.json`, blob `092dabc78180a410fdaf90f8afcc14d3cd73dd97`, 5344 bytes |
-| Retrieved | 23 August 2026 |
+**No deletion instruction was lost.** All 7 ledger rows read
+`processing_status = completed`, `erased_record_count = 0`,
+`outcome_code = no_matching_data` — the correct verified zero-match result, since
+nothing on this branch stores eBay user data. `receipt_count = 1` on all 7 is the
+proof that no retry was ever counted.
 
-Reproduced twice, independently:
+#### What the digest covers, and what it deliberately does not
 
-| | Node | Python |
-|---|---|---|
-| runtime | v24.18.0 | 3.13.14 |
-| command | `node verify.mjs` (scratch) | `pytest tests/unit/test_ebay_c0_signature.py` |
-| alg / digest | `ecdsa` / `SHA1` | `ECDSA` / `SHA1` |
-| curve | — | `secp256r1` (256-bit) |
-| message | 434 bytes | 434 bytes |
-| message SHA-256 | `4fc046be55cdfb1a9cf42cfd7b8d4934361b82484c74b7d73c4786fa9af73aec` | `4fc046be55cdfb1a9cf42cfd7b8d4934361b82484c74b7d73c4786fa9af73aec` |
-| result | **verified** | **verified** |
+Covered: topic, schema version, `notificationId`, and `eventDate` (*"when the
+eBay user made the data deletion request"*).
 
-The identical message digest is the point: both implementations verified the
-same 434 bytes, so the byte-level contract is confirmed rather than assumed. The
-Node check ran in a scratch directory; no eBay SDK was added as a dependency and
-no frontend package file was touched.
+**Not covered: `username`, `userId`, `eiasToken`.** An earlier draft of this fix
+included them and that was wrong. This row is a permanent compliance receipt that
+is never erased, so a digest over the subject would leave a way to confirm,
+forever, that a named person's account was deleted — a confirmation oracle, and a
+low-entropy username under an *unkeyed* hash is a weak one at that. There is no
+keyed, domain-separated hashing authority in this codebase to blunt it, and
+introducing one inside an urgent compliance hotfix would be the wrong place to
+design a new security primitive.
 
-Everything in the fixture is public: a public key, a signature eBay published,
-and eBay's own test identifiers. No private key exists in this repository.
+Every covered field is **already a plaintext column on the same row**
+(`topic`, `schema_version`, `notification_id`, `event_date`), so the digest
+introduces no retention the ledger did not already have. That restores the
+ledger's founding invariant — a table that cannot hold personal data cannot leak
+it, and cannot itself become something that must be erased.
 
-### MEDIUM — deletion-owner governance
+**The cost, stated plainly:** a notification id reused for a *different person*
+with a byte-identical `eventDate` is no longer detected as a collision. That is
+bounded — `eventDate` is millisecond-precision, eBay documents `notificationId`
+as unique, and the payload is signature-verified before it reaches the digest, so
+reaching that state would be a provider bug rather than an attack. It is asserted
+rather than left implicit, by
+`test_a_different_subject_under_one_id_is_not_detected`. If it ever needs
+detecting, the fix is a keyed HMAC authority — not an unkeyed hash of a username.
 
-The old guard was a regex over column names. It catches `ebay_user_id` and
-misses an identifier inside a `JSONB` bag, an encrypted column named
-`credentials`, a field called `external_reference`, or an audit row quoting a
-payload. **A guard that looks thorough and is not is worse than an honest one.**
+#### Serialisation
 
-So the contract is inverted. `EBAY_STORAGE_DECLARATIONS` is an explicit
-registration: a change that persists eBay personal data declares the storage and
-names the owner that erases it, and the tests fail when the two disagree —
-declared storage with no eraser is a release blocker, and an eraser with no
-declaration is flagged as a probable leftover. A test declares storage with no
-owner and requires the failure to appear, so the guard is provably live.
+Fixed field order alone is not enough: separator-joined concatenation collides
+(`["ab","c"]` and `["a","bc"]`), and any separator can appear inside a value an
+upstream system controls. Each field is therefore **presence-tagged and
+length-prefixed**, which makes the encoding injective, and a **domain separator**
+(`droppilot/ebay/marketplace-account-deletion/identity/v2`) is mixed in so these
+digests are only ever comparable with each other. `TestTheDigestSerialisationIsUnambiguous`
+covers boundary-shifting, separator impersonation, absent-versus-empty, and the
+domain marker.
 
-The column sweep remains as a backstop and is broadened across ten model
-surfaces, generic `JSON`/`JSONB`/`Text` columns and every encrypted credential
-column. Its limits are stated in the module rather than implied away.
+#### Legacy rows
 
-Today both mechanisms agree: nothing stores eBay personal data, nothing is
-declared, nothing is erased, and the zero-match result is unchanged.
+Values are tagged `v2:` so the algorithm behind a stored digest is
+self-describing — which is exactly what the original untagged value was missing.
+
+A pre-C0.1 row's digest covers raw bytes and can never match a retry. But the row
+holds more than a digest: `topic`, `schema_version` and `event_date` sit beside
+it in plaintext, and those are precisely the fields the identity digest covers
+(`notification_id` being the key the row was found by). So a legacy row is
+validated **field by field against its own columns**, to the same strength as a
+digest comparison — there is no weaker "trust the id" path and no one-delivery
+window in which a collision could slip through. A row that validates is
+acknowledged and its digest rewritten once, under the row lock; a row that does
+not is refused exactly as a comparable row would be.
+
+**Still no migration.** The tag fits inside the existing `VARCHAR(64)`, and
+nothing about the schema changed. Alembic head remains `0029`.
+
+The signature is unaffected: still verified over the exact raw bytes, before
+anything is parsed.
+
+#### Follow-up, deliberately out of scope
+
+Why eBay retried these 7 at all is **not** established. All 7 first deliveries
+returned **204**. Six of the seven were slow (2.2 s–4.9 s) and one answered in
+**23.75 ms**, which is a direct counter-example to a simple latency explanation;
+the request log does not carry the notification id, so timestamp matching is
+ambiguous where deliveries cluster. First retry lands ~3 minutes after the first
+delivery, subsequent retries ~6 minutes apart.
+
+Response latency on this endpoint is worth its own investigation — 5 responses in
+one log exceeded 3 s — but it is a separate issue and C0.1 does not touch it.
+After this fix a slow first response is harmless: the retry returns 204 straight
+from the ledger.
 
 ---
 

@@ -75,9 +75,9 @@ def notification(notification_id: str | None = None) -> Any:
 
 async def deliver(factory: Any, notification_id: str | None = None) -> Any:
     """One full processing pass in its own committed transaction."""
-    parsed, raw = notification(notification_id)
+    parsed, _raw = notification(notification_id)
     async with factory() as session:
-        record = await EbayComplianceService(session).process(raw_body=raw, notification=parsed)
+        record = await EbayComplianceService(session).process(notification=parsed)
         await session.commit()
         return record
 
@@ -101,12 +101,29 @@ class TestFirstDelivery:
         assert len(await rows(sessions)) == 1
 
     async def test_the_payload_digest_identifies_without_retaining(self, sessions: Any) -> None:
-        """A SHA-256 proves "same notification" without keeping what it said."""
+        """A SHA-256 proves "same notification" without keeping what it said.
+
+        Rewritten in EBAY-C0.1. This used to assert the digest equalled
+        ``sha256(raw_body)``, which pinned the exact defect that shipped: the
+        raw body carries eBay's per-attempt ``publishDate`` and
+        ``publishAttemptCount``, so it identifies a *delivery* and every
+        legitimate retry looked like a different notification. The claim worth
+        keeping is the one in the docstring — proof of identity without
+        retention — and it now rests on the identity digest.
+        """
         import hashlib
 
+        parsed, raw = notification()
         record = await deliver(sessions)
-        assert record.payload_digest == hashlib.sha256(official_body()).hexdigest()
+
+        assert record.payload_digest == parsed.identity_digest
+        # Still fits the ``VARCHAR(64)`` column, tag included.
         assert len(record.payload_digest) == 64
+        # Still one-way: nothing about the payload is recoverable from it.
+        assert "official_user" not in record.payload_digest
+        assert record.payload_digest != hashlib.sha256(raw).hexdigest(), (
+            "the digest is over the raw bytes again — retries would be refused"
+        )
 
     async def test_ebays_timestamps_are_kept_but_no_identifier_is(self, sessions: Any) -> None:
         record = await deliver(sessions)
@@ -196,10 +213,10 @@ class TestIdempotency:
 
         monkeypatch.setattr(EbayAccountDeletionProcessor, "erase", explode)
 
-        parsed, raw = notification()
+        parsed, _raw = notification()
         async with sessions() as session:
             with pytest.raises(RuntimeError):
-                await EbayComplianceService(session).process(raw_body=raw, notification=parsed)
+                await EbayComplianceService(session).process(notification=parsed)
             await session.rollback()
 
         assert await rows(sessions) == []
