@@ -18,8 +18,11 @@ import Link from "next/link";
  * decisions an operator still has to make before this is published.
  */
 
-const LAST_UPDATED = "27 August 2026";
+const LAST_UPDATED = "28 August 2026";
 const CONTACT = "privacy@whiteto.com";
+const CONTROLLER = "DESIRLY LIMITED";
+const COMPANY_NUMBER = "16381500";
+const REGISTERED_OFFICE = "200 Eton Road Eton Road, Ilford, England, IG1 2UN";
 
 export const metadata: Metadata = {
   // The root layout appends " | DropPilot AI", so the operator name is already
@@ -68,22 +71,40 @@ export default function PrivacyPage() {
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6 sm:py-14">
         <header className="space-y-3 border-b border-border pb-8">
-          <p className="text-sm font-medium text-muted-foreground">DropPilot AI</p>
+          <p className="text-sm font-medium text-muted-foreground">
+            {CONTROLLER} &mdash; trading as DropPilot AI
+          </p>
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
             Privacy Policy
           </h1>
           <p className="text-sm text-muted-foreground">
-            Last updated: <time dateTime="2026-08-27">{LAST_UPDATED}</time>
+            Last updated: <time dateTime="2026-08-28">{LAST_UPDATED}</time>
           </p>
         </header>
 
         <div className="mt-10 space-y-10">
           <Section id="scope" heading="1. Who this policy covers">
             <p>
-              This policy explains how <strong>DropPilot AI</strong> (&ldquo;we&rdquo;,
-              &ldquo;the service&rdquo;) handles personal data in the DropPilot AI
+              <strong>{CONTROLLER}</strong>, a company registered in England and Wales
+              (company number {COMPANY_NUMBER}) and trading as{" "}
+              <strong>DropPilot AI</strong>, is the data controller for this service.
+              Our registered office is {REGISTERED_OFFICE}. In this policy
+              &ldquo;we&rdquo; means {CONTROLLER}.
+            </p>
+            <p>
+              This policy explains how we handle personal data in the DropPilot AI
               dropshipping automation platform, including the web application and its
               API.
+            </p>
+            <p>
+              <strong>Where we are the controller, and where we are not.</strong> We are
+              the controller for your account, your workspace, authentication, security
+              and the running of the service. Where you connect a sales channel and we
+              synchronise your orders, the personal details of{" "}
+              <em>your customers</em> remain yours: you decide why they are held and
+              what happens to them, and we handle them on your instructions. If one of
+              your customers wants their data erased, they should ask you, and we will
+              act on your instruction.
             </p>
             <p>
               It covers three groups of people: the people who create and use a
@@ -226,32 +247,35 @@ export default function PrivacyPage() {
 
           <Section id="lawful-basis" heading="6. Lawful bases">
             <p>
-              Where UK or EU data protection law applies, we expect the following
-              categories of lawful basis to be relevant:
+              Under UK data protection law we rely on the following bases:
             </p>
             <ul className="list-disc space-y-2 pl-5">
               <li>
-                <strong>Performance of a contract</strong> — providing the service you
-                signed up for.
+                <strong>Performance of a contract</strong> — creating and running your
+                account and workspace, keeping you signed in, connecting the sales
+                channels you ask us to connect, and holding your catalogue and orders so
+                the service works.
               </li>
               <li>
-                <strong>Legitimate interests</strong> — keeping the service secure,
-                preventing abuse and diagnosing faults.
+                <strong>Legitimate interests</strong> — keeping the service available
+                and accounts unbreached: rate limiting, sign-in throttling, request
+                logging and diagnosing faults. Our interest is running a service that is
+                not trivially abused; we use the least data that achieves it.
               </li>
               <li>
-                <strong>Legal obligation</strong> — meeting requirements such as
-                responding to marketplace account deletion notifications.
+                <strong>Consent</strong> — authorising a marketplace connection. You
+                give this at eBay, Shopify or AliExpress, and you can withdraw it at any
+                time (section 13). We do not use consent as a basis for anything else.
               </li>
               <li>
-                <strong>Consent</strong> — where we ask for it explicitly, such as
-                authorising a marketplace connection.
+                <strong>Legal obligation</strong> — responding to a data protection
+                rights request, and anything else the law specifically requires of us.
               </li>
             </ul>
             <p>
-              Which basis applies to a specific processing activity depends on
-              circumstances we cannot determine from the software alone. If you need a
-              definitive statement for your own compliance records, contact us at the
-              address in section 17.
+              Where you connect a sales channel and we hold your customers&rsquo; order
+              details, we act on your instructions rather than on a basis of our own —
+              the basis for that processing is the one you rely on with your customer.
             </p>
           </Section>
 
@@ -278,8 +302,14 @@ export default function PrivacyPage() {
                 currency codes are exchanged; no personal data is sent.
               </li>
               <li>
-                <strong>Infrastructure</strong> — the hosting, database and cache
-                services the deployment runs on.
+                <strong>Cloudflare</strong> — our network provider. Every request to the
+                service passes through Cloudflare, which handles the secure connection
+                and sees request metadata including your IP address.
+              </li>
+              <li>
+                <strong>Our own server</strong> — the application, database and cache
+                run on a server we operate in the United Kingdom. No other hosting
+                provider holds your data.
               </li>
               <li>
                 <strong>Legal requirements</strong> — where we are required by law to
@@ -287,61 +317,87 @@ export default function PrivacyPage() {
               </li>
             </ul>
             <p>
-              At the time of writing, the service implements no analytics, advertising,
-              tracking or third-party error-reporting integrations.
+              The AI and exchange-rate providers above are <strong>switched off</strong>
+              {" "}today. We do not use an email provider, a payment processor, or any
+              analytics, advertising, tracking or third-party error-reporting service —
+              none is built into the application at all.
             </p>
           </Section>
 
           <Section id="transfers" heading="8. International transfers">
             <p>
-              The marketplaces and any optional providers described in section 7 operate
-              internationally, so connecting an account may involve your data being
-              processed outside the United Kingdom or the European Economic Area under
-              those providers&rsquo; own terms and safeguards.
+              <strong>The service runs on a server in the United Kingdom.</strong> Your
+              account, workspace, catalogue and order data are stored there.
             </p>
             <p>
-              The hosting location of a particular DropPilot AI deployment is a
-              deployment decision and is not fixed by the software. If you need to know
-              where your workspace&rsquo;s data is stored, ask us at the address in
-              section 17 and we will tell you.
+              Two things reach outside that. Our network provider, Cloudflare, operates
+              a global network and handles requests at whichever of its locations is
+              nearest to you, which means request metadata including your IP address is
+              processed outside the UK. And the marketplaces you choose to connect —
+              eBay, Shopify and AliExpress — operate internationally and process data
+              under their own terms as independent controllers.
+            </p>
+            <p>
+              We have not yet completed our own transfer assessments for these
+              providers, and we are not going to claim safeguards we have not put in
+              place. If that matters to your own compliance position, ask us at the
+              address in section 17 and we will tell you exactly where things stand
+              rather than give you a form of words.
             </p>
           </Section>
 
           <Section id="retention" heading="9. Retention and deletion">
             <ul className="list-disc space-y-2 pl-5">
               <li>
-                <strong>Account and workspace data</strong> is retained while your
-                account is open.
+                <strong>Account and workspace data</strong> is kept while your account
+                is open, and erased when you ask us to close it.
               </li>
               <li>
-                <strong>Marketplace connections</strong> are retained until you
-                disconnect them. Disconnecting eBay deletes the connection and its
-                encrypted tokens permanently.
+                <strong>Sign-in sessions.</strong> The short-lived token your browser
+                uses expires after 15 minutes. The longer-lived session token is stored
+                only as a hash, expires after 30 days, is replaced every time it is
+                used, and is revoked when you sign out.
               </li>
               <li>
-                <strong>Session-refresh tokens</strong> are stored only as hashes and
-                expire automatically; signing out revokes them.
+                <strong>Email verification links</strong> expire after 24 hours.
+              </li>
+              <li>
+                <strong>Marketplace connections</strong> are kept until you disconnect
+                them. Disconnecting deletes the connection and its encrypted tokens
+                outright — for eBay, Shopify and AliExpress alike.
+              </li>
+              <li>
+                <strong>Security counters</strong> — rate limiting and sign-in
+                throttling — expire automatically within minutes.
               </li>
               <li>
                 <strong>Marketplace account deletion notifications</strong> trigger
-                permanent deletion of the matching seller connection. The non-personal
-                record that the notification was handled is retained as compliance
-                evidence.
+                permanent deletion of the matching seller connection. We keep a record
+                that the notification was handled, indefinitely, as evidence that we met
+                the obligation. That record contains no name, no identifier and no
+                payload.
               </li>
               <li>
                 <strong>Operational logs</strong> record the request method, path,
                 response status, duration, requesting IP address, user agent and a
                 request identifier. They do not record request bodies, credentials or
-                tokens.
+                tokens. <strong>Our servers do not currently write these logs to
+                disk</strong> — they exist only in the running process and are gone when
+                it restarts. If we start storing them, we will keep them for no more
+                than 30 days. Cloudflare, our network provider, keeps its own records
+                under its own retention policy, which we do not control.
               </li>
             </ul>
             <p>
-              We have not yet fixed a published retention period for every category of
-              data. Where no specific period is stated, we keep information only for as
-              long as it is needed for the purposes in section 5, or for as long as the
-              law requires. You can ask us to delete your account and its data at any
-              time using the contact address in section 17; deletion is currently handled
-              on request rather than through a self-service control in the application.
+              <strong>Backups.</strong> We do not currently keep backup copies of the
+              production database. Deleting data therefore removes it from the only copy
+              we hold. We intend to introduce encrypted backups before we operate
+              commercially, and we will update this policy when we do — including how
+              deletion is applied to them.
+            </p>
+            <p>
+              Where no specific period is given above, we keep information for as long
+              as your account is open, or for as long as the law requires.
             </p>
           </Section>
 
@@ -400,29 +456,40 @@ export default function PrivacyPage() {
 
           <Section id="rights" heading="12. Your rights">
             <p>
-              If you are in the United Kingdom or the European Economic Area, you have
-              the right to:
+              Under UK data protection law you have the right to access a copy of your
+              personal data, to have inaccurate data corrected, to have your data
+              erased, to restrict or object to how we use it, and to receive it in a
+              portable form.
             </p>
-            <ul className="list-disc space-y-2 pl-5">
-              <li>access the personal data we hold about you;</li>
-              <li>have inaccurate data corrected;</li>
-              <li>have your data erased;</li>
-              <li>restrict how we process it;</li>
-              <li>object to processing carried out on the basis of legitimate interests;</li>
-              <li>
-                receive the data you provided in a portable format, where that right
-                applies.
-              </li>
-            </ul>
             <p>
-              To exercise any of these, contact us at{" "}
+              <strong>How to exercise them.</strong> Email{" "}
               <a
                 className="font-medium text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 href={`mailto:${CONTACT}`}
               >
                 {CONTACT}
               </a>
-              . We may need to verify your identity before acting.
+              . We will acknowledge your request and complete it within one month, as
+              the law requires. We may need to verify your identity first — usually by
+              confirming you control the address on the account — because acting on an
+              unverified request would expose your data to whoever asked.
+            </p>
+            <p>
+              <strong>What erasure does.</strong> There is no self-service delete button
+              in the application yet; we carry it out for you. We delete your sign-in
+              credentials, your marketplace connections and their stored tokens, your
+              notifications and your permission grants; we remove your name, email
+              address and password from your account record and deactivate it; and we
+              clear buyer and recipient details from your orders while keeping the
+              commercial figures your business records depend on. We will tell you what
+              was removed and what was kept.
+            </p>
+            <p>
+              <strong>Automated decision-making.</strong> We do not make decisions about
+              you by automated means that produce legal or similarly significant
+              effects, and we do not profile you. The service automates work on your
+              catalogue and prices at your instruction; it does not make decisions about
+              people.
             </p>
           </Section>
 
@@ -489,7 +556,13 @@ export default function PrivacyPage() {
               12, contact:
             </p>
             <p>
-              <strong className="text-foreground">DropPilot AI</strong>
+              <strong className="text-foreground">{CONTROLLER}</strong>
+              <br />
+              trading as DropPilot AI
+              <br />
+              Registered in England and Wales, company number {COMPANY_NUMBER}
+              <br />
+              {REGISTERED_OFFICE}
               <br />
               <a
                 className="font-medium text-foreground underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -497,6 +570,12 @@ export default function PrivacyPage() {
               >
                 {CONTACT}
               </a>
+            </p>
+            <p>
+              Privacy requests are handled by our privacy operations, overseen by our
+              director Adnan Zulfiqar. {CONTROLLER} is the data controller; please
+              address requests to the company at the email above rather than to an
+              individual, so nothing is missed while someone is away.
             </p>
           </Section>
         </div>

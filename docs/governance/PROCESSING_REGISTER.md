@@ -1,0 +1,237 @@
+# Processing register
+
+Every purpose the software actually serves, with the data it touches and the
+evidence for each claim. Lawful bases are **proposed** — an engineer can
+establish what the code does, not which basis a controller relies on.
+
+Two rules were applied throughout, because both are common ways a register
+becomes fiction:
+
+* **"Legal obligation" is not used for a contractual requirement.** eBay
+  requires subscribers to handle marketplace account deletion notifications;
+  that is a contract with eBay, not a statutory duty on DESIRLY LIMITED. It is
+  marked as legitimate interests with the contractual driver named, and flagged
+  for legal confirmation.
+* **Consent is not used as a catch-all.** It appears once, for the act of
+  authorising a marketplace connection, because that is a genuine, revocable,
+  specific choice the merchant makes. Everything else that could lazily be
+  called consent is contract or legitimate interests.
+
+---
+
+## Controller and processor roles
+
+| Situation | Role | Basis for the classification |
+|---|---|---|
+| Platform accounts, authentication, sessions, security | **Controller** | DESIRLY LIMITED decides the purposes and means; the merchant has no say in how sessions or password hashing work |
+| Workspace and subscription administration | **Controller** | Same |
+| Merchant's catalogue, drafts, pricing rules, store connections | **Controller** for the account relationship; the content is the merchant's business data | The merchant supplies it and directs its use |
+| **Buyer / order data synced from a merchant's sales channel** | **Processor**, acting on the merchant's instructions | The buyer's relationship is with the merchant. DESIRLY LIMITED stores and displays it so the merchant can fulfil orders, and does nothing else with it. **Requires an Article 28 DPA — see blocker 3.** |
+| eBay marketplace account deletion notifications | **Controller** for the compliance record | The obligation attaches to DESIRLY LIMITED as the eBay application subscriber, and the record exists to evidence its own compliance |
+
+**Not settled by the software.** The processor classification for buyer data is
+supported by how the code behaves — order fields are stored, displayed and
+deleted with the workspace, never aggregated, profiled or reused. It is *not*
+supported by a contract, because no DPA is offered yet. Until one exists, the
+classification is a description of behaviour rather than an agreed legal
+position.
+
+---
+
+## Purposes
+
+Each row: what is processed, where it comes from, why, the role, the proposed
+basis, who receives it, how long it lasts, what erasure does, and the evidence.
+
+### 1. Account registration and authentication
+
+* **Data** — email address, first and last name, Argon2id password hash, active
+  and verified flags, last sign-in time.
+* **Source** — the person registering.
+* **Purpose** — create and secure an account.
+* **Role** — controller. **Proposed basis** — performance of a contract.
+* **Recipients** — none outside the production server.
+* **Retention** — for the life of the account. Sessions expire independently.
+* **Erasure** — identifying fields replaced, password hash cleared, account
+  deactivated. The row survives so orders and audit references stay intact.
+* **Evidence** — `app/models/user.py`, `app/core/password.py`,
+  `app/services/data_subject_erasure.py`.
+
+### 2. Session management
+
+* **Data** — refresh tokens stored as SHA-256 hashes with expiry and revocation
+  state; access tokens held only in the browser's memory.
+* **Source** — generated at sign-in.
+* **Purpose** — keep a person signed in without re-entering a password.
+* **Role** — controller. **Proposed basis** — performance of a contract.
+* **Retention** — access token 15 minutes; refresh token 30 days, revoked on
+  sign-out and rotated on every use with reuse detection.
+* **Erasure** — rows deleted outright.
+* **Evidence** — `SecuritySettings.access_token_ttl_minutes`,
+  `refresh_token_ttl_days`, `app/models/refresh_token.py`,
+  `frontend/lib/auth/token-store.ts`.
+
+### 3. Email verification
+
+* **Data** — hashed verification token, expiry, the user it belongs to.
+* **Retention** — 24 hours (`security.email_verification_ttl_hours`).
+* **Erasure** — deleted.
+* **Evidence** — `app/models/email_verification.py`, `app/core/config.py:456`.
+* **Note** — there is **no password-reset flow server-side**. The
+  `/forgot-password` page exists in the frontend; no API route or reset-token
+  store backs it, so no reset tokens are held.
+
+### 4. Workspace and tenant administration
+
+* **Data** — workspace name, slug, status, timezone, default currency, role
+  assignments.
+* **Role** — controller. **Proposed basis** — performance of a contract.
+* **Retention** — life of the workspace.
+* **Erasure** — role grants are **physically deleted**, never soft-deleted: a
+  soft-deleted grant still grants.
+* **Evidence** — `app/models/tenant.py`, `app/models/role.py`.
+
+### 5. Marketplace OAuth connections (eBay, Shopify, AliExpress)
+
+* **Data** — provider account identifier, display name, marketplace/shop
+  identifiers, granted scopes, connection status, and **encrypted** access and
+  refresh tokens.
+* **Source** — the provider, after the merchant authorises.
+* **Purpose** — act on the merchant's behalf against their sales channel.
+* **Role** — controller for the connection record.
+* **Proposed basis** — performance of a contract for holding the connection;
+  **consent** for the authorisation step itself, which the merchant grants at the
+  provider and can withdraw at any time.
+* **Recipients** — the marketplace concerned, and only when connected.
+* **Retention** — until disconnected.
+* **Erasure** — **hard delete of the row including the ciphertext**, for all
+  three providers. Verified: `EbayConnectionService.disconnect` →
+  `connections.hard_delete`; `AliExpressService.disconnect` →
+  `connections.hard_delete`; `ShopifyService.release_shop` →
+  `session.delete(connection)` plus best-effort remote revocation.
+* **Evidence** — `app/integrations/{ebay,shopify,aliexpress}/`,
+  `app/models/{ebay,shopify,integration}.py`, `app/core/encryption.py`.
+
+### 6. Product, draft and store operations
+
+* **Data** — supplier catalogue data, pricing, shipping, SEO and AI fields,
+  plus `requested_by_user_id` / `created_by_user_id` / `connected_by_user_id`.
+* **Role** — controller for the account link; the catalogue itself is the
+  merchant's business data.
+* **Proposed basis** — performance of a contract.
+* **Retention** — life of the workspace.
+* **Erasure** — user references cleared; catalogue retained as the workspace's
+  business record.
+* **Evidence** — `app/models/product.py`, `app/models/store.py`.
+
+### 7. Order and buyer information
+
+* **Data** — `buyer_name`, `recipient_name`, `recipient_phone`, city, province,
+  postal code, country code, line items, amounts, shipments.
+* **Source** — the merchant's connected sales channel. **The buyer never
+  interacts with DropPilot AI.**
+* **Purpose** — let the merchant see and fulfil their own orders.
+* **Role** — **processor**, on the merchant's instructions.
+* **Proposed basis** — the merchant's basis, not ours. DESIRLY LIMITED needs an
+  Article 28 agreement rather than a basis of its own.
+* **Retention** — life of the workspace; no separate schedule exists.
+* **Erasure** — the personal fields are cleared and the commercial figures kept,
+  so the merchant's accounts survive.
+* **Evidence** — `app/models/order.py` lines 277–287,
+  `data_subject_erasure.py`.
+* **Populated only when order sync runs.**
+
+### 8. Security, rate limiting and abuse prevention
+
+* **Data** — client IP address, request metadata, login attempt counters,
+  lockout state.
+* **Role** — controller. **Proposed basis** — legitimate interests (keeping the
+  service available and accounts unbreached). **A balancing test still needs to
+  be recorded.**
+* **Retention** — rate-limit counters expire on a 60-second window; login
+  throttling uses a 300-second window and a 900-second lockout; cache entries
+  default to 300 seconds. All in Redis, all expiring automatically.
+* **Evidence** — `security.rate_limit_window_seconds`,
+  `login_attempt_window_seconds`, `login_lockout_seconds`,
+  `redis.default_ttl_seconds`, `app/core/client_ip.py`.
+
+### 9. Application and HTTP logs
+
+* **Data** — method, path, status, duration, **client IP address**, user agent,
+  request id. No request bodies, no credentials, no tokens — the logger redacts
+  on a broad substring allowlist.
+* **Role** — controller. **Proposed basis** — legitimate interests.
+* **Retention** — **the application writes to standard output and opens no
+  file.** The current production deployment does not redirect that stream to
+  disk, so no application log is persisted. Where a deployment does persist it,
+  `LOG_RETENTION_DAYS` caps rotated files at 30 days.
+* **Evidence** — `app/core/logging.py` (`StreamHandler(sys.stdout)`),
+  `app/middleware/request_context.py`, `app/core/log_retention.py`. See
+  [LOG_RETENTION.md](LOG_RETENTION.md).
+
+### 10. eBay marketplace account deletion compliance
+
+* **Data** — eBay's notification reference, topic, schema version, event and
+  publish timestamps, a non-personal identity digest, outcome counters.
+* **Purpose** — evidence that a deletion notification was received and acted on.
+* **Role** — controller for this record.
+* **Proposed basis** — **legitimate interests**, driven by the eBay Developers
+  Program agreement. Deliberately *not* "legal obligation": the requirement
+  comes from a contract with eBay, and whether a statutory duty also applies is
+  a question for legal review, not for this document.
+* **Retention** — **indefinite, by design.** The record is the proof of
+  compliance; deleting it would defeat its purpose. It contains no username, no
+  user identifier and no payload.
+* **Evidence** — `app/models/ebay.py`, `app/integrations/ebay/compliance.py`,
+  `app/integrations/ebay/schemas.py` (the digest covers only topic, schema
+  version, notification id and event date).
+
+### 11. Support and privacy requests
+
+* **Data** — whatever the person includes in their email.
+* **Purpose** — answer them; carry out rights requests.
+* **Role** — controller. **Proposed basis** — legal obligation for statutory
+  rights requests (this one genuinely is), legitimate interests otherwise.
+* **Retention** — in the `privacy@whiteto.com` mailbox. **No retention schedule
+  exists for the mailbox** — an open operator decision.
+* **Evidence** — [RETENTION_AND_ERASURE.md](RETENTION_AND_ERASURE.md) runbook.
+
+### 12. Optional AI and currency features
+
+* **AI** — defaults to `STUB`, which generates locally and **sends nothing
+  anywhere**. If an operator configures an external provider, the text submitted
+  for optimisation is sent to it. Listing text is not normally personal data,
+  but nothing stops a merchant typing something personal into it.
+* **FX** — defaults to `unavailable`. If enabled, **only currency codes** are
+  exchanged; no personal data.
+* **Object storage** — S3 settings exist (`S3_` prefix, `S3_REGION` default
+  `eu-west-1`) but **no application code uses them**.
+* **Status** — all three are **disabled** in production today.
+* **Evidence** — `app/core/config.py` (`AISettings`, `FxSettings`,
+  `StorageSettings`), `app/ai/`.
+
+### 13. Cookies and browser storage
+
+* **Cookies** — exactly one: `droppilot_refresh`. `HttpOnly`, `SameSite=Lax`,
+  `Secure` in deployed environments, scoped to the authentication path, max-age
+  matching the 30-day refresh lifetime. **Strictly necessary**; no consent
+  banner is required for it and none is shown.
+* **Browser storage** — one functional key, the last selected ship-to country.
+  It stays in the browser and is never sent as personal data. The access token
+  lives in a JavaScript variable only.
+* **Analytics, advertising, tracking, third-party error reporting** — **none
+  implemented.** Verified by repository search: no SDK in `package.json`; the
+  only "Sentry" reference is a comment in `frontend/app/error.tsx` marking where
+  one would go.
+* **Evidence** — `app/api/v1/auth/router.py:63`, `app/core/config.py:406–409`,
+  `frontend/lib/countries.ts`, `frontend/lib/auth/token-store.ts`.
+
+---
+
+## Still requiring approval
+
+1. The definitive purpose-to-basis mapping above.
+2. A recorded legitimate-interests balancing test for rows 8, 9 and 10.
+3. The Article 28 DPA for row 7.
+4. Whether row 10's driver is contractual only, or also statutory.
+5. A retention schedule for the privacy mailbox (row 11).

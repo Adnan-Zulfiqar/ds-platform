@@ -1,5 +1,19 @@
 # Privacy policy — unresolved operator decisions
 
+> **Superseded in part by EBAY-C1.2.** This document is kept as the C1.1 audit
+> record. The current position lives in [`docs/governance/`](../governance/),
+> which supersedes every row below.
+>
+> **Correction.** Row 4 originally named `AWS_REGION`. The setting uses the
+> `S3_` prefix, so the variable is `S3_REGION`. The substance — a region default
+> of `eu-west-1` on a storage integration that no code uses — was correct;
+> the variable name was not. Found by independent review, corrected here.
+>
+> Resolved in C1.2: rows 1, 2, 4 (controller identity, address, hosting
+> country), and the log-retention and backup positions. Rows 3, 5, 6, 8, 9, 10
+> and 11 remain open and are tracked in
+> [`docs/governance/README.md`](../governance/README.md#blockers-before-public-launch).
+
 The published policy at `/privacy` was written from the implementation. Every
 factual claim in it is traceable to code. This document lists what the code
 **cannot** answer, so nobody mistakes an accurate technical description for a
@@ -21,7 +35,7 @@ from whoever controls the deployment.
 | 1 | **Legal / controller identity** | Not encoded anywhere. `PROJECT_NAME=DropPilot AI` is a display string | Identifies only the trading name "DropPilot AI" | Registered legal entity, company number, and whether it is controller or processor for each data category |
 | 2 | **Business / service address** | Absent | No postal address at all | A real registered address. UK GDPR Art. 13 requires controller identity and contact details |
 | 3 | **ICO registration** | Absent | Not mentioned | Registration number, or a documented reason none is required |
-| 4 | **Hosting country / region** | Not fixed by the software. `AWS_REGION` defaults to `eu-west-1` but **no code uses S3** | "a deployment decision and is not fixed by the software" | The actual country for this deployment |
+| 4 | **Hosting country / region** | Not fixed by the software. `StorageSettings` uses the `S3_` prefix, so the region variable is **`S3_REGION`** (default `eu-west-1`) — and **no code uses S3** | "a deployment decision and is not fixed by the software" | **RESOLVED in C1.2: United Kingdom.** Now stated in the notice |
 | 5 | **International-transfer safeguards** | None implemented — no transfer mechanism exists in code | Describes marketplaces operating internationally under those providers' own terms | Whether an SCC, IDTA or adequacy route is relied on, and for which recipient |
 | 6 | **Lawful basis per purpose** | Not determinable from software | Lists four *candidate* bases, then defers the mapping | A definitive purpose-to-basis mapping (table below) |
 | 7 | **Retention period per category** | Only two enforceable periods exist: `access_token_ttl_minutes=15`, `refresh_token_ttl_days=30` | "We have not yet fixed a published retention period for every category of data" | A period or an enforceable criterion per category (table below) |

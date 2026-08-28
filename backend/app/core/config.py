@@ -980,6 +980,31 @@ class ObservabilitySettings(_EnvFileSettings):
     )
     slow_request_ms: int = Field(default=1000, ge=1)
 
+    # --- Retention (EBAY-C1.2) ---------------------------------------------
+    #
+    # Request logs carry client IP addresses, which are personal data, so how
+    # long they survive is a privacy commitment rather than an operational
+    # preference.
+    #
+    # The application logs to stdout and opens no file of its own. `directory`
+    # is therefore **opt-in**: it names the one place a deployment has chosen to
+    # persist that stream, and the pruner refuses to run until it is set. There
+    # is deliberately no default path — a retention tool that guesses where the
+    # logs might be is a tool that deletes something else.
+    retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        description="Maximum age of a persisted log file before pruning removes it.",
+    )
+    directory: Path | None = Field(
+        default=None,
+        description=(
+            "Absolute path of the log directory to prune. Unset means the "
+            "deployment persists nothing and pruning is not applicable."
+        ),
+    )
+
 
 class StorageSettings(_EnvFileSettings):
     """Object storage (AWS S3) configuration."""

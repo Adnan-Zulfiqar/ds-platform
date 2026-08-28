@@ -223,6 +223,132 @@ test.describe("Privacy policy — required content", () => {
   });
 });
 
+test.describe("Privacy policy — controller identity and governance (C1.2)", () => {
+  test("names the legal controller, not just the trading name", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    // UK GDPR Art. 13 wants the controller's identity, not a brand.
+    expect(text).toContain("DESIRLY LIMITED");
+    expect(text).toContain("16381500");
+    expect(text).toContain("200 Eton Road Eton Road, Ilford, England, IG1 2UN");
+    expect(text).toMatch(/trading as DropPilot AI/i);
+  });
+
+  test("distinguishes where it is controller from where it is not", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/is the data controller/i);
+    // The merchant's customers are the merchant's, not ours.
+    expect(text).toMatch(/on your instructions/i);
+    expect(text).toMatch(/they should ask you/i);
+  });
+
+  test("makes no ICO registration claim", async ({ page }) => {
+    await page.goto("/privacy");
+    const html = await page.content();
+
+    // Not registered yet. A number here would be false and publicly checkable.
+    expect(html).not.toMatch(/registered with the (UK )?Information Commissioner/i);
+    expect(html).not.toMatch(/ICO registration number/i);
+    expect(html).not.toMatch(/Z[0-9]{6,}/); // the ICO's registration format
+    // The complaint route must still be there.
+    expect(html).toMatch(/ico\.org\.uk/);
+  });
+
+  test("states the hosting country rather than offering to disclose it", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/server in the United Kingdom/i);
+    expect(text).not.toMatch(/is a deployment decision/i);
+  });
+
+  test("claims no transfer safeguard it has not established", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    // Inventing an SCC/IDTA would be the easiest and worst thing to write here.
+    expect(text).not.toMatch(/standard contractual clauses/i);
+    expect(text).not.toMatch(/international data transfer agreement/i);
+    expect(text).not.toMatch(/adequacy (decision|regulations)/i);
+    expect(text).toMatch(/have not yet completed our own transfer assessments/i);
+  });
+
+  test("is honest about backups instead of promising deletion from them", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/do not currently keep backup copies/i);
+    // The claim that would be unverifiable today.
+    expect(text).not.toMatch(/deleted from (all )?backups/i);
+    expect(text).not.toMatch(/including from our backups/i);
+  });
+
+  test("states retention that matches the implemented configuration", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    // These are the numbers in app/core/config.py. If a setting changes without
+    // the notice changing, this fails — which is the point.
+    expect(text).toMatch(/15 minutes/);
+    expect(text).toMatch(/30 days/);
+    expect(text).toMatch(/24 hours/);
+  });
+
+  test("does not claim to retain logs it never writes to disk", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/do not currently write these logs to disk/i);
+    // Cloudflare's own records are disclosed rather than silently implied.
+    expect(text).toMatch(/Cloudflare/);
+  });
+
+  test("names a deletion process with an owner and a deadline", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/within one month/i);
+    expect(text).toMatch(/privacy@whiteto.com/);
+    expect(text).toMatch(/no self-service delete button/i);
+  });
+
+  test("addresses automated decision-making", async ({ page }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/Automated decision-making/i);
+    expect(text).toMatch(/do not make decisions about you by automated means/i);
+  });
+
+  test("still leaks no configuration after the rewrite", async ({ page }) => {
+    await page.goto("/privacy");
+    const html = await page.content();
+
+    for (const leak of [
+      "127.0.0.1",
+      "localhost",
+      "C:\\",
+      "dsplive",
+      "EBAY_CLIENT",
+      "SECURITY_ENCRYPTION_KEYS",
+      "Auto_Pilot",
+      "gAAAAA",
+      "droppilot_c12",
+    ]) {
+      expect(html).not.toContain(leak);
+    }
+  });
+});
+
 test.describe("Privacy policy — presentation", () => {
   test("renders in dark mode", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "dark" });
