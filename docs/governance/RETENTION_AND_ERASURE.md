@@ -65,89 +65,38 @@ rather than implying we revoke it upstream.
 
 ---
 
-## Data-subject request runbook
+## Data-subject requests
 
-Owner: **DESIRLY LIMITED privacy operations**, via `privacy@whiteto.com`.
-Operational contact: Adnan Zulfiqar.
+The runbook moved to its own document: **[DATA_SUBJECT_REQUESTS.md](DATA_SUBJECT_REQUESTS.md)**.
+It covers identity verification, the three subject scopes, the database identity
+check, rollback, the one-month deadline and what to record.
 
-**Targets.** Acknowledge promptly; complete within **one month** of receipt, as
-UK GDPR requires. Record the received and completed dates for every request.
+The essentials, so this document is not misleading on its own:
 
-### 1. Verify who is asking
+| Scope | Identified by | Effect |
+|---|---|---|
+| `platform-user` | tenant **and** user | That person's credentials, grants and notifications deleted; all seventeen columns referencing them deleted or cleared; account anonymised. **Colleagues, orders and marketplace credentials untouched.** |
+| `workspace` | tenant | Every member erased, plus the workspace's Shopify, AliExpress and **eBay** connections deleted with their encrypted credentials |
+| marketplace buyer | — | **Not implemented.** Referred to the merchant; a launch blocker |
 
-Do not act on an unverified request. An erasure carried out for an impersonator
-is a data breach with extra steps. Confirm the request comes from the address on
-the account, or verify by another route already associated with it. Record how
-verification was done.
+Dry run is the default, `--expect-database` is mandatory and verified against
+`SELECT current_database()`, confirmation is typed, everything runs in one
+transaction, and the operation is idempotent.
 
-### 2. Rehearse
+### What it cannot do
 
-```bash
-cd backend
-python scripts/erase_data_subject.py --email person@example.com
-```
-
-Reads and counts only. Prints the declared categories and the row counts each
-would touch. **Nothing is written.** If the address does not resolve, the script
-says so and exits 1 — check for a typo before concluding there is no account.
-
-### 3. Review the plan
-
-Confirm the counts look like one person's account and not, say, a thousand
-orders belonging to a workspace you did not expect. If anything is surprising,
-stop and investigate rather than proceeding.
-
-### 4. Execute
-
-```bash
-python scripts/erase_data_subject.py --email person@example.com --apply
-```
-
-Requires typing the subject's address to confirm. What happens:
-
-| Category | Action |
-|---|---|
-| Refresh tokens | Deleted |
-| Email verification tokens | Deleted |
-| Role assignments | Deleted (physically — a soft-deleted grant still grants) |
-| Notifications | Deleted |
-| Shopify / AliExpress / eBay connections | Deleted, including encrypted credentials |
-| Stores | `connected_by_user_id` cleared |
-| Orders | Buyer and recipient fields cleared; commercial figures kept |
-| User row | Email replaced with `erased-<id>@erased.invalid`, names and password hash cleared, account deactivated |
-
-The user row survives because orders, products and audit rows reference it. A
-cascade would destroy a merchant's business records to satisfy a request about
-one person. Erasure is achieved by removing what identifies them.
-
-**Idempotent** — a repeat run reports zeroes rather than failing, so an
-interrupted run can simply be re-run.
-
-### 5. Record and respond
-
-Record the subject id, the dates, and the counts the script printed. **Do not
-paste the person's address into the application log** — the script deliberately
-never does, and a request record that reintroduces the address defeats the
-erasure.
-
-Tell the person what was erased and what was kept, and why. The honest list is
-the table above.
-
-### What this runbook cannot do
-
-* **It does not reach backups**, because there are none. See
-  [BACKUPS.md](BACKUPS.md). When backups exist this section must be rewritten
-  before it is relied on.
-* **It does not erase a shopper.** A buyer whose details arrived through a
-  merchant's order sync should be directed to that merchant, who is the
-  controller. DESIRLY LIMITED acts on the merchant's instructions.
-* **It does not touch the eBay compliance ledger**, which holds no personal
-  data.
+* **It does not reach backups**, because there are none ([BACKUPS.md](BACKUPS.md)).
+* **It does not erase a shopper.** `orders` holds no buyer identifier, so exact
+  matching is impossible; approximating it destroyed uninvolved customers'
+  records in an earlier version and is now forbidden and tested against.
+* **It does not touch the eBay compliance ledger**, which holds no personal data.
 * **It does not cover the privacy mailbox**, which is manual.
 
 ### Tests
 
-`backend/tests/integration/test_data_subject_erasure.py` covers resolution,
-dry-run purity, anonymisation, idempotency, the declaration's completeness, that
-the subject string carries no personal data, and — the one that matters most —
-that erasing one tenant leaves another untouched.
+`backend/tests/integration/test_data_subject_erasure.py` — 26 tests covering
+declaration completeness against the live schema, per-tenant resolution, foreign
+tenant isolation, single-user erasure in a multi-member workspace, survival of
+shared connections and order data, workspace closure including eBay, the
+database guard, transaction rollback after an injected failure, idempotency,
+Redis key exactness, and that no address reaches a log line.

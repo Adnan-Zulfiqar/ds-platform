@@ -155,7 +155,7 @@ test.describe("Privacy policy — required content", () => {
     "Security",
     "Cookies and browser storage",
     "Your rights",
-    "Withdrawing consent",
+    "Disconnecting a marketplace",
     "Complaints",
     "Children",
     "Changes to this policy",
@@ -346,6 +346,53 @@ test.describe("Privacy policy — controller identity and governance (C1.2)", ()
     ]) {
       expect(html).not.toContain(leak);
     }
+  });
+});
+
+test.describe("Privacy policy — erasure scope and lawful basis (C1.2-R1)", () => {
+  test("does not claim GDPR consent for a marketplace authorisation", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    // Clicking "Authorise" at eBay is a technical permission to eBay, not
+    // Article 6(1)(a) consent to us — and we do not implement what consent
+    // would require.
+    expect(text).toMatch(/covered by contract, not consent/i);
+    expect(text).not.toMatch(/we rely on your consent/i);
+    expect(text).not.toMatch(/withdrawing consent/i);
+  });
+
+  test("describes erasure as scoped to the person, not the workspace", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/colleagues['’] accounts, your workspace['’]s data and its marketplace connections are\s+not affected/i);
+    // The claim the code no longer makes true.
+    expect(text).not.toMatch(/clear buyer and recipient details from your orders/i);
+  });
+
+  test("refers a shopper to the merchant instead of promising buyer erasure", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/ask the merchant you bought from/i);
+    expect(text).toMatch(/no separate customer identifier/i);
+  });
+
+  test("names workspace closure as the separate destructive request", async ({
+    page,
+  }) => {
+    await page.goto("/privacy");
+    const text = await main(page).innerText();
+
+    expect(text).toMatch(/Closing a whole workspace/i);
+    expect(text).toMatch(/eBay, Shopify and\s+AliExpress connections together with their stored credentials/i);
   });
 });
 

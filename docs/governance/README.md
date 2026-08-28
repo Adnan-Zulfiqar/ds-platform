@@ -12,7 +12,8 @@ responsible for the legal position has accurate facts to work from.
 | Document | What it covers |
 |---|---|
 | [PROCESSING_REGISTER.md](PROCESSING_REGISTER.md) | Every processing purpose, the data it touches, the proposed lawful basis, recipients and evidence |
-| [RETENTION_AND_ERASURE.md](RETENTION_AND_ERASURE.md) | What is actually enforced in code, and the data-subject request runbook |
+| [RETENTION_AND_ERASURE.md](RETENTION_AND_ERASURE.md) | What is actually enforced in code |
+| [DATA_SUBJECT_REQUESTS.md](DATA_SUBJECT_REQUESTS.md) | The runbook: scopes, verification, database guard, rollback, deadline |
 | [LOG_RETENTION.md](LOG_RETENTION.md) | The log pruning authority, its limits, and why it currently refuses to run |
 | [BACKUPS.md](BACKUPS.md) | The backup position — which is that there are none |
 | [SUBPROCESSORS.md](SUBPROCESSORS.md) | Active recipients, their locations and transfer position |
@@ -47,7 +48,8 @@ requirement or a claim the software currently cannot support.
 | 3 | **No Data Processing Agreement** offered to merchants | Where a merchant syncs orders, DESIRLY LIMITED processes their customers' data on their instructions. UK GDPR Article 28 requires that in writing | Legal review |
 | 4 | **Log persistence undecided** | Nothing is written to disk today, so nothing is retained — but also nothing is available for security investigation. Whichever way this goes, the privacy notice must match | DESIRLY LIMITED |
 | 5 | **`app.whiteto.com` does not resolve** | The privacy URL, the OAuth return URL and the application itself all depend on it (carried over from EBAY-C1) | DESIRLY LIMITED |
-| 6 | **Legal review of the public notice** | These documents are an engineering audit, not a legal opinion | Legal review |
+| 6 | **No exact buyer erasure** | `orders` carries no buyer identifier, so a merchant's customer cannot be matched reliably. Shopper requests are referred to the merchant. Needs a stable identifier on `orders` | Engineering |
+| 7 | **Legal review of the public notice** | These documents are an engineering audit, not a legal opinion | Legal review |
 
-Items 1–4 are new in EBAY-C1.2. Item 5 is unchanged from
+Items 1–4 are new in EBAY-C1.2 and item 6 in EBAY-C1.2-R1. Item 5 is unchanged from
 [EBAY_C1_PUBLIC_PREREQUISITES.md](../ebay/EBAY_C1_PUBLIC_PREREQUISITES.md).

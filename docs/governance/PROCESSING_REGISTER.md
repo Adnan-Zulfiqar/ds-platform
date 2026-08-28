@@ -12,10 +12,15 @@ becomes fiction:
   that is a contract with eBay, not a statutory duty on DESIRLY LIMITED. It is
   marked as legitimate interests with the contractual driver named, and flagged
   for legal confirmation.
-* **Consent is not used as a catch-all.** It appears once, for the act of
-  authorising a marketplace connection, because that is a genuine, revocable,
-  specific choice the merchant makes. Everything else that could lazily be
-  called consent is contract or legitimate interests.
+* **Consent is not claimed at all.** An earlier draft called the marketplace
+  OAuth authorisation "consent". Review corrected that, rightly: clicking
+  *Authorise* at eBay is a **technical permission grant to that provider**, not
+  UK GDPR Article 6(1)(a) consent to DESIRLY LIMITED. Real consent has
+  requirements this product does not implement — a freely given choice that can
+  be refused without losing the service, a withdrawal that stops the processing
+  it authorised, and a record of what was consented to and when. Connecting a
+  sales channel is *necessary to provide the service the merchant asked for*, so
+  the basis is **contract**, subject to final legal review.
 
 ---
 
@@ -52,8 +57,10 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Role** — controller. **Proposed basis** — performance of a contract.
 * **Recipients** — none outside the production server.
 * **Retention** — for the life of the account. Sessions expire independently.
-* **Erasure** — identifying fields replaced, password hash cleared, account
-  deactivated. The row survives so orders and audit references stay intact.
+* **Erasure** — `platform-user` scope: identifying fields replaced, password
+  hash cleared, account deactivated, and **all seventeen columns referencing the
+  user** either deleted or cleared. The row survives so orders and audit
+  references stay intact. Colleagues and workspace data are untouched.
 * **Evidence** — `app/models/user.py`, `app/core/password.py`,
   `app/services/data_subject_erasure.py`.
 
@@ -99,16 +106,24 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Source** — the provider, after the merchant authorises.
 * **Purpose** — act on the merchant's behalf against their sales channel.
 * **Role** — controller for the connection record.
-* **Proposed basis** — performance of a contract for holding the connection;
-  **consent** for the authorisation step itself, which the merchant grants at the
-  provider and can withdraw at any time.
+* **Proposed basis** — **performance of a contract**. Connecting the sales
+  channel is what the merchant signed up for; without it the service does
+  nothing. The OAuth authorisation is a technical permission granted to the
+  marketplace, not GDPR consent to us — see the note at the top of this
+  document.
 * **Recipients** — the marketplace concerned, and only when connected.
 * **Retention** — until disconnected.
-* **Erasure** — **hard delete of the row including the ciphertext**, for all
-  three providers. Verified: `EbayConnectionService.disconnect` →
-  `connections.hard_delete`; `AliExpressService.disconnect` →
-  `connections.hard_delete`; `ShopifyService.release_shop` →
-  `session.delete(connection)` plus best-effort remote revocation.
+* **Erasure** — two distinct paths, deliberately:
+  * **Disconnect** (merchant-initiated, in the UI) — hard delete of the row
+    including the ciphertext, for all three providers. Verified:
+    `EbayConnectionService.disconnect` → `connections.hard_delete`;
+    `AliExpressService.disconnect` → `connections.hard_delete`;
+    `ShopifyService.release_shop` → `session.delete(connection)` plus
+    best-effort remote revocation.
+  * **Workspace closure** — deletes all three, eBay included.
+  * **Platform-user erasure does _not_ delete these.** The connection belongs to
+    the workspace, not to whoever clicked Connect; only the `user_id` reference
+    is cleared.
 * **Evidence** — `app/integrations/{ebay,shopify,aliexpress}/`,
   `app/models/{ebay,shopify,integration}.py`, `app/core/encryption.py`.
 
@@ -135,8 +150,13 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Proposed basis** — the merchant's basis, not ours. DESIRLY LIMITED needs an
   Article 28 agreement rather than a basis of its own.
 * **Retention** — life of the workspace; no separate schedule exists.
-* **Erasure** — the personal fields are cleared and the commercial figures kept,
-  so the merchant's accounts survive.
+* **Erasure** — **not implemented, and deliberately not approximated.** `orders`
+  carries no buyer identifier — no email, no external buyer id — so a buyer can
+  only be matched on a low-entropy name. An earlier version cleared the buyer
+  fields on *every* order in the tenant to compensate, destroying uninvolved
+  customers' records; that is now forbidden and tested against. A shopper's
+  request is referred to the merchant. Exact buyer erasure is a launch blocker
+  requiring a stable identifier on `orders` first.
 * **Evidence** — `app/models/order.py` lines 277–287,
   `data_subject_erasure.py`.
 * **Populated only when order sync runs.**

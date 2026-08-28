@@ -263,15 +263,17 @@ export default function PrivacyPage() {
                 not trivially abused; we use the least data that achieves it.
               </li>
               <li>
-                <strong>Consent</strong> — authorising a marketplace connection. You
-                give this at eBay, Shopify or AliExpress, and you can withdraw it at any
-                time (section 13). We do not use consent as a basis for anything else.
-              </li>
-              <li>
                 <strong>Legal obligation</strong> — responding to a data protection
                 rights request, and anything else the law specifically requires of us.
               </li>
             </ul>
+            <p>
+              <strong>Connecting a marketplace is covered by contract, not consent.</strong>{" "}
+              When you authorise DropPilot AI at eBay, Shopify or AliExpress, you are
+              granting a technical permission to that marketplace. Holding the resulting
+              connection is necessary to provide the service you asked for, so we rely on
+              contract for it. You can disconnect at any time (section 13).
+            </p>
             <p>
               Where you connect a sales channel and we hold your customers&rsquo; order
               details, we act on your instructions rather than on a basis of our own —
@@ -477,12 +479,25 @@ export default function PrivacyPage() {
             <p>
               <strong>What erasure does.</strong> There is no self-service delete button
               in the application yet; we carry it out for you. We delete your sign-in
-              credentials, your marketplace connections and their stored tokens, your
-              notifications and your permission grants; we remove your name, email
-              address and password from your account record and deactivate it; and we
-              clear buyer and recipient details from your orders while keeping the
-              commercial figures your business records depend on. We will tell you what
-              was removed and what was kept.
+              credentials, your notifications and your permission grants; we remove your
+              name, email address and password from your account record and deactivate
+              it; and we remove your name from every record that referenced you, such as
+              who imported a product or connected a store. Your colleagues&rsquo;
+              accounts, your workspace&rsquo;s data and its marketplace connections are
+              not affected. We will tell you what was removed and what was kept.
+            </p>
+            <p>
+              <strong>Closing a whole workspace</strong> is a separate request. That
+              erases every member and deletes the workspace&rsquo;s eBay, Shopify and
+              AliExpress connections together with their stored credentials.
+            </p>
+            <p>
+              <strong>If you bought something from one of our merchants</strong> and want
+              your details removed, please ask the merchant you bought from. They decide
+              what happens to their customers&rsquo; data and we act on their
+              instructions. We hold no separate customer identifier that would let us
+              find you reliably, and guessing from a name risks erasing a different
+              person&rsquo;s order.
             </p>
             <p>
               <strong>Automated decision-making.</strong> We do not make decisions about
@@ -493,14 +508,17 @@ export default function PrivacyPage() {
             </p>
           </Section>
 
-          <Section id="consent" heading="13. Withdrawing consent">
+          <Section id="consent" heading="13. Disconnecting a marketplace">
             <p>
-              Where we rely on your consent — most visibly when you authorise a
-              marketplace connection — you can withdraw it at any time. Disconnect the
-              marketplace from the integrations page, which deletes the stored
-              credentials for that connection. You can also revoke the authorisation
-              directly with the marketplace. Withdrawing consent does not affect
-              processing carried out before you withdrew it.
+              You can disconnect a marketplace at any time from the integrations page.
+              Doing so deletes that connection and its stored credentials outright — for
+              eBay, Shopify and AliExpress alike.
+            </p>
+            <p>
+              The permission you granted lives with the marketplace, so to withdraw that
+              as well, remove DropPilot AI from your account settings at eBay, Shopify or
+              AliExpress. Disconnecting does not undo processing already carried out
+              while the connection existed.
             </p>
           </Section>
 
