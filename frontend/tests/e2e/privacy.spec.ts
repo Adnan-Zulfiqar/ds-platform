@@ -44,32 +44,100 @@ test.describe("Privacy policy — public reachability", () => {
     expect(text.length).toBeGreaterThan(3000);
   });
 
-  test("mutates nothing of its own while rendering", async ({ page }) => {
+  test("performs no authentication bootstrap and no API mutation", async ({
+    page,
+  }) => {
     /**
-     * The page itself must write nothing. It does not, and this proves it.
+     * The whole point of the route, and the reason `AuthProvider` was moved out
+     * of the root layout.
      *
-     * One request is excluded deliberately: the application shell's
-     * `POST /api/v1/auth/refresh`. `AuthProvider` lives in the root layout and
-     * attempts a session handshake on *every* route — `/login` and `/register`
-     * issue exactly the same call with no session. Asserting an empty list
-     * would therefore be asserting something about the shell, not the policy,
-     * and would fail for a reason that has nothing to do with this page.
-     *
-     * Everything else is still forbidden, which is what would catch a privacy
-     * page that started recording visits.
+     * There is no exemption here on purpose. An earlier version of this test
+     * allowed `POST /auth/refresh` on the grounds that the application shell
+     * issued it on every route — which was true, and was the defect. A page
+     * anyone may read without an account must not call an authenticated
+     * endpoint at all.
      */
+    const authCalls: string[] = [];
     const mutations: string[] = [];
+
     page.on("request", (r) => {
-      if (!["POST", "PUT", "PATCH", "DELETE"].includes(r.method())) return;
       const path = new URL(r.url()).pathname;
-      if (path === "/api/v1/auth/refresh") return;
-      mutations.push(`${r.method()} ${path}`);
+      if (path.includes("/auth/")) authCalls.push(`${r.method()} ${path}`);
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(r.method())) {
+        mutations.push(`${r.method()} ${path}`);
+      }
     });
 
     await page.goto("/privacy");
-    await page.waitForTimeout(1200);
+    await expect(
+      page.getByRole("heading", { name: "Privacy Policy", level: 1 }),
+    ).toBeVisible();
+    // Give any mount effect a chance to fire before asserting it did not.
+    await page.waitForTimeout(1500);
 
+    expect(authCalls).toEqual([]);
     expect(mutations).toEqual([]);
+  });
+
+  test("writes no DropPilot cookie", async ({ page, context }) => {
+    await page.goto("/privacy");
+    await page.waitForTimeout(1000);
+
+    const ours = (await context.cookies()).filter((c) =>
+      c.name.startsWith("droppilot"),
+    );
+    expect(ours).toEqual([]);
+  });
+
+  test("renders completely with the API unreachable", async ({ page }) => {
+    // No CORS dependency and no API availability dependency: every call to the
+    // backend origin is aborted, and the page must still be whole.
+    const apiBase = new URL(
+      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8099",
+    );
+    await page.route(`${apiBase.origin}/**`, (route) => route.abort());
+
+    await page.goto("/privacy");
+
+    await expect(
+      page.getByRole("heading", { name: "Privacy Policy", level: 1 }),
+    ).toBeVisible();
+    expect(await page.getByRole("heading", { level: 2 }).count()).toBeGreaterThanOrEqual(17);
+    expect((await main(page).innerText()).length).toBeGreaterThan(3000);
+  });
+
+  test("is complete with JavaScript disabled", async ({ browser }) => {
+    // Server-rendered content, not a client-side shell. eBay's fetch of this
+    // URL runs no JavaScript either.
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const noJs = await context.newPage();
+
+    const response = await noJs.goto("/privacy");
+    expect(response?.status()).toBe(200);
+
+    await expect(
+      noJs.getByRole("heading", { name: "Privacy Policy", level: 1 }),
+    ).toBeVisible();
+    expect(await noJs.getByRole("heading", { level: 2 }).count()).toBeGreaterThanOrEqual(17);
+    expect((await noJs.getByRole("main").innerText()).length).toBeGreaterThan(3000);
+    await expect(
+      noJs.getByRole("link", { name: "privacy@whiteto.com" }).first(),
+    ).toBeVisible();
+
+    await context.close();
+  });
+
+  test("logs no console or hydration error", async ({ page }) => {
+    const problems: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "error") problems.push(m.text());
+    });
+    page.on("pageerror", (e) => problems.push(String(e)));
+
+    await page.goto("/privacy");
+    await page.waitForTimeout(1500);
+
+    expect(problems).toEqual([]);
   });
 });
 

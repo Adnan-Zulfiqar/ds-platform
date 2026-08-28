@@ -90,6 +90,50 @@ Linked from the shared auth layout — so sign-in, register and forgot-password 
 carry it — and from the integrations page, which is where a merchant decides to
 hand marketplace data over.
 
+### It renders outside the authentication provider
+
+The first version of this milestone put `/privacy` outside the *auth gate* but
+left it inside `AuthProvider`, which lives in the root layout and issues
+`POST /auth/refresh` from a mount effect. The public policy page therefore
+performed an authentication bootstrap on every visit. A test exempted that call;
+the exemption was the wrong answer, and a reviewer rejected it.
+
+`AuthProvider` now mounts in `app/(app)/layout.tsx`, a group wrapping both
+`(auth)` and `(protected)`. Route groups do not appear in URLs, so every path is
+unchanged. `/privacy`, `/unauthorized`, `/`, and the root error and not-found
+boundaries sit outside that group and mount no session provider at all.
+
+**Why a shared parent rather than the provider in each group.** Mounting it in
+`(auth)` and again in `(protected)` looked like the smaller change and passed the
+privacy tests, but it broke sign-in. Sibling route groups do not share a layout
+instance, so crossing from the sign-in form to the dashboard remounted the
+provider and fired a second session restore. `router.replace` then navigated away
+while that request was in flight. Refresh tokens rotate on use with reuse
+detection, so the server had already issued a replacement whose `Set-Cookie` the
+aborted response never delivered — the browser kept a spent token and the next
+request returned 401, dropping the user back on the login page. It reproduced
+four times out of four. A common ancestor keeps one provider instance across that
+navigation, which is what the root layout used to provide.
+
+The acceptance contract for the page is now: no `/auth/*` request, no mutating
+API request, no DropPilot cookie, no dependency on the API being reachable, and
+complete server-rendered content with JavaScript disabled. Each of those is a
+test in `frontend/tests/e2e/privacy.spec.ts`, and
+`frontend/tests/e2e/auth-provider-boundary.spec.ts` holds the other half of the
+boundary — that sign-in, registration, protected routes, session restore and
+logout all still work.
+
+### Canonical metadata is deliberately absent
+
+The page sets `title` and `robots`. It sets **no canonical URL**, and none was
+added. A canonical has to name the public origin, and that origin
+(`https://app.whiteto.com`) does not resolve yet — it is one of the outstanding
+deployment blockers below. Emitting a canonical pointing at a host that does not
+exist is worse than emitting none. The repository has no `metadataBase` or
+site-URL convention to derive it from either, so adding one would mean inventing
+configuration. It should be added in the same change that makes the public host
+real.
+
 ### It is the only indexable route in the application
 
 The root layout sets `robots: { index: false, follow: false }`, with a comment
