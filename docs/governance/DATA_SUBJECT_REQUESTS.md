@@ -105,10 +105,13 @@ You will be asked to type `<scope> <tenant-id> <database>` exactly. A production
 database name additionally requires `--i-understand-production`; without it the
 tool refuses regardless of `--apply`.
 
-Everything happens in **one transaction**. Any exception rolls the whole thing
-back, so a failure part way through leaves nothing behind — proven by
+The database work happens in **one transaction**. Any exception rolls the whole
+thing back, so a failure part way through leaves nothing behind — proven by
 `test_a_failure_part_way_through_leaves_nothing_behind`, which injects a failure
 after the fourth statement and checks every earlier mutation is restored.
+
+Exit codes: **0** done, **1** subject not resolved, **2** refused or rolled
+back, **3** database erasure complete but cache cleanup pending (see section 6).
 
 ### What `platform-user` does
 
@@ -137,17 +140,52 @@ This is the only scope permitted to destroy credentials.
 
 ## 6. Redis
 
-The tool prints what applies.
+The tool performs the cleanup itself, **after** the database transaction has
+committed, and prints what it did. Nothing here needs to be run by hand.
 
-| Key | Action |
-|---|---|
-| `login:email:<sha256(address)[:32]>` | **Exactly addressable** — delete it. The throttle hashes the address, so no scan or pattern is needed |
-| `ratelimit:ip:<address>` | **Cannot be attributed** to a subject; it is keyed by client IP. Expires within 60 seconds, so it self-resolves |
-| `t:<tenant>:*` | Workspace cache namespace, cleared by the existing tenant invalidation on closure |
+### The real key inventory
 
-Never use `FLUSHDB`, and never a pattern that is not already tenant-scoped. The
-deployed Redis is 3.0.504, so anything newer than that vintage is unavailable
-anyway.
+| Key | Database | TTL | Erasure |
+|---|---|---|---|
+| `login:email:{sha256(normalised_address)[:32]}` | RATE\_LIMIT | 300 s, extended to 900 s once the attempt limit is reached | **Deleted** on `platform-user`, when the subject was resolved by address |
+| `login:ip:{sha256(client_ip)[:32]}` | RATE\_LIMIT | 300 s / 900 s, as above | **Not deleted** — see below |
+| `ratelimit:ip:{client_ip}` | RATE\_LIMIT | 60 s window | **Not deleted** — same reason |
+| `t:{tenant}:*` | CACHE | 300 s default per entry | **Cleared** on `workspace`, via `CacheClient.invalidate_tenant` |
+| `*:oauth:state:*` | CACHE | 600 s | Not deleted; expires, and holds no personal data |
+
+**Why the IP keys are left alone.** An address is not a person. It is shared by
+everyone behind a NAT, reassigned by ISPs, and one subject may have signed in
+from many. Deleting "their" IP counter would mean guessing which addresses were
+theirs and lifting throttling for whoever else is behind them. They also need no
+erasure step, because they expire within 900 seconds at the outside.
+
+> **Correction.** An earlier version of this runbook described the IP counter as
+> `ratelimit:ip:<address>` and did not mention `login:ip:{hash}` at all. Both
+> exist, both are hashed, and both are in the table above. The address itself
+> never appears in a key.
+
+### Ordering, and what happens when Redis is down
+
+PostgreSQL and Redis cannot commit together, so the tool sequences them and says
+so rather than pretending otherwise:
+
+1. The erasure runs and **the database transaction commits**.
+2. Only then is Redis touched. If the database failed, Redis is never called —
+   there is nothing to invalidate.
+3. If Redis then fails, **the erasure still happened and is still correct.** The
+   tool prints `database erasure complete; cache cleanup pending` and exits
+   **3**, so nobody records the request as finished.
+
+**Retrying is the fix, and it is safe.** Re-run the identical command: the
+database work is idempotent and will report zero counts, and the cache step runs
+again regardless of those counts. That last part is deliberate — skipping the
+cache when nothing was deleted would leave a stale namespace forever after an
+outage.
+
+Nothing uses `FLUSHDB`, which would destroy every tenant's cache to clean up
+one. `invalidate_tenant` walks the namespace with `SCAN`, not `KEYS`, which
+blocks Redis for a full keyspace walk. Both are available on the deployed Redis
+3.0.504, and the tests run against that exact version.
 
 ## 7. If it fails
 

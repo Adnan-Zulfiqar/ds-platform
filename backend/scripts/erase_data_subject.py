@@ -45,7 +45,8 @@ entirely when the request already identifies the account.
 against the server that would receive the writes. Configuration is not identity:
 the URL is the same string that was already wrong.
 
-Exit codes: 0 done, 1 could not resolve the subject, 2 refused.
+Exit codes: 0 done, 1 could not resolve the subject, 2 refused or rolled back,
+3 database erasure complete but cache cleanup pending — re-run to retry.
 """
 
 from __future__ import annotations
@@ -66,21 +67,33 @@ from app.services.data_subject_erasure import (
     PlatformUserErasureService,
     SubjectResolutionError,
     WorkspaceClosureService,
-    login_throttle_keys,
+    execute_platform_user_erasure,
+    execute_workspace_closure,
 )
 
 
-async def _redis_note(email: str | None) -> None:
-    """What Redis holds, and what can be addressed exactly."""
+def _redis_note(scope: ErasureScope, have_email: bool) -> None:
+    """The real key inventory. Deliberately prints no key and no address.
+
+    A key is a hash of the value it came from, and printing hashes of
+    low-entropy values is how somebody builds a lookup table for them.
+    """
     print("\nRedis:")
-    if email:
-        for key in login_throttle_keys(email):
-            print(f"  exact key to delete: {key}")
-        print("    (the login throttle hashes the address, so this is exact)")
-    print("  ratelimit:ip:<address> — derived from the client IP, not from the")
-    print("    subject; cannot be attributed safely. Expires within 60 seconds.")
-    print("  t:<tenant>:* — workspace cache namespace; cleared by the existing")
-    print("    tenant invalidation on workspace closure.")
+    if scope is ErasureScope.PLATFORM_USER:
+        if have_email:
+            print("  login:email:{sha256(normalised_address)[:32]}  — deleted after commit")
+        else:
+            print("  login:email:{sha256(normalised_address)[:32]}  — not deleted: the")
+            print("      subject was resolved by user id, so no address is available.")
+            print("      It expires on its own; see the TTLs below.")
+    else:
+        print("  t:{tenant}:*  — workspace cache namespace, cleared after the commit")
+        print("      via CacheClient.invalidate_tenant (SCAN, never KEYS, never FLUSHDB)")
+    print("  login:ip:{sha256(client_ip)[:32]}  — NOT erased. An address is not a")
+    print("      person: shared behind NAT, reassigned by ISPs, and a subject may have")
+    print("      signed in from many. Expires after 300s, or 900s once the attempt")
+    print("      limit is reached.")
+    print("  ratelimit:ip:{client_ip}  — request throttling, 60s window. Same reason.")
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -129,7 +142,7 @@ async def run(args: argparse.Namespace) -> int:
         print(f"\n{plan.describe()}")
 
         if not args.apply:
-            await _redis_note(email)
+            _redis_note(scope, email is not None)
             print("\nDry run. Nothing was changed. Re-run with --apply to erase.")
             return 0
 
@@ -150,21 +163,37 @@ async def run(args: argparse.Namespace) -> int:
             print("Confirmation did not match. Nothing was changed.")
             return 2
 
-        # --- the write, in one transaction ----------------------------------
+        # --- the write: one transaction, then Redis strictly afterwards -----
         try:
             if scope is ErasureScope.PLATFORM_USER:
                 assert subject is not None
-                outcome = await users.erase(subject)
+                execution = await execute_platform_user_erasure(session, subject, email=email)
             else:
-                outcome = await WorkspaceClosureService(session).erase(tenant_id)
-            await session.commit()
+                execution = await execute_workspace_closure(session, tenant_id)
         except Exception as error:
+            # Only the database work can raise here. The cache step runs after
+            # the commit and reports rather than raises, so on this path Redis
+            # was never touched and there is nothing to undo.
             await session.rollback()
             print(f"\nFAILED and rolled back. Nothing was erased. {type(error).__name__}: {error}")
             return 2
 
-        print(f"\n{outcome.describe()}")
-        await _redis_note(email)
+        print(f"\n{execution.describe()}")
+        _redis_note(scope, email is not None)
+
+        if execution.cache.pending:
+            # The erasure is committed and correct. Calling the whole operation
+            # failed would be false and would have someone re-open a finished
+            # request; saying nothing would leave stale cache behind unnoticed.
+            print(
+                "\nThe database erasure is COMPLETE and committed. Only the cache "
+                "cleanup did not finish."
+                "\nRe-run this exact command to retry it: the operation is idempotent, "
+                "the database counts will come back zero, and the cache step runs "
+                "again regardless."
+            )
+            return 3
+
         print(
             "\nRecord in the request log: scope, tenant id, user id, the dates, "
             "and the counts above. Do not record the address itself."

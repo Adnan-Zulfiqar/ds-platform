@@ -80,8 +80,17 @@ The essentials, so this document is not misleading on its own:
 | marketplace buyer | — | **Not implemented.** Referred to the merchant; a launch blocker |
 
 Dry run is the default, `--expect-database` is mandatory and verified against
-`SELECT current_database()`, confirmation is typed, everything runs in one
-transaction, and the operation is idempotent.
+`SELECT current_database()`, confirmation is typed, the database work runs in
+one transaction, and the operation is idempotent.
+
+**Redis is cleared after the commit, never during it.** Workspace closure clears
+`t:{tenant}:*` through `CacheClient.invalidate_tenant`; platform-user erasure
+deletes the exact `login:email:{hash}` counter. If Redis fails after the database
+has committed, the tool reports `database erasure complete; cache cleanup
+pending` and exits 3 — the erasure is real, and a re-run finishes the cache work
+even though the database counts come back zero. The IP-derived counters are not
+erased: an address is not a person, and they expire within 900 seconds. Full
+inventory in [DATA_SUBJECT_REQUESTS.md](DATA_SUBJECT_REQUESTS.md#6-redis).
 
 ### What it cannot do
 
@@ -100,3 +109,12 @@ tenant isolation, single-user erasure in a multi-member workspace, survival of
 shared connections and order data, workspace closure including eBay, the
 database guard, transaction rollback after an injected failure, idempotency,
 Redis key exactness, and that no address reaches a log line.
+
+`backend/tests/integration/test_erasure_cache_cleanup.py` — 17 tests covering
+commit-before-Redis ordering, no Redis call after a rollback, honest reporting of
+a post-commit Redis failure, retry completion, the zero-count retry still
+invalidating, tenant prefix isolation (including the `t:{a}:*` versus
+`t:{ab}:...` case), exact normalised email-key deletion, the IP counter being
+left alone, no `FLUSHDB`/`FLUSHALL`/`KEYS` call on any erasure path, Redis
+3.0.504 command compatibility, and that neither an address nor a key appears in
+any result or log. They run against a real Redis 3.0.504.

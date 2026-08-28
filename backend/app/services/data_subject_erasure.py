@@ -48,10 +48,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final, cast
 
+from redis.exceptions import RedisError
 from sqlalchemy import CursorResult, Executable, Select, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.core.redis import CacheClient, CacheError, RedisPurpose, get_redis
 from app.models.ai_prompt import AIPrompt, PromptExecution
 from app.models.ebay import EbayConnection
 from app.models.email_verification import EmailVerificationToken
@@ -72,13 +74,19 @@ logger = get_logger(__name__)
 
 __all__ = [
     "USER_REFERENCES",
+    "CacheCleanupResult",
+    "ErasureCacheCleanup",
+    "ErasureExecution",
     "ErasureOutcome",
     "ErasureScope",
     "PlatformUserErasureService",
     "SubjectRef",
     "SubjectResolutionError",
     "WorkspaceClosureService",
-    "login_throttle_keys",
+    "execute_platform_user_erasure",
+    "execute_workspace_closure",
+    "login_email_key",
+    "login_ip_key",
 ]
 
 _ANONYMISED_EMAIL_DOMAIN: Final[str] = "erased.invalid"
@@ -248,14 +256,137 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
 )
 
 
-def login_throttle_keys(email: str) -> tuple[str, ...]:
-    """Redis keys the login throttle holds for one address.
+def _throttle_digest(value: str) -> str:
+    """The digest `app/services/login_throttle.py` builds its keys from."""
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:32]
 
-    `app/services/login_throttle.py` hashes the address, so these are exactly
-    addressable without scanning and without a pattern that could cross tenants.
+
+def login_email_key(email: str) -> str:
+    """`login:email:{sha256(normalised_email)[:32]}` — exactly addressable.
+
+    The throttle hashes the address before using it as a key, so an erasure can
+    target the subject's counter precisely without a scan, a pattern, or an
+    address anywhere in the key space.
     """
-    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()[:32]
-    return (f"login:email:{digest}",)
+    return f"login:email:{_throttle_digest(email)}"
+
+
+def login_ip_key(client_ip: str) -> str:
+    """`login:ip:{sha256(client_ip)[:32]}` — documented, never erased.
+
+    The throttle keeps a second counter per source address. It is **not**
+    deleted during erasure and deliberately so: an address is not a person. It
+    is shared by everyone behind a NAT, reassigned by ISPs, and a subject may
+    have signed in from many. Deleting "their" IP counter would mean guessing
+    which addresses were theirs and clearing throttling for whoever else is
+    behind them.
+
+    It needs no erasure step because it expires on its own: 300 seconds
+    (`login_attempt_window_seconds`), extended to 900 (`login_lockout_seconds`)
+    once the attempt limit is reached. This function exists so the inventory is
+    complete and testable, not because anything calls it to delete.
+    """
+    return f"login:ip:{_throttle_digest(client_ip)}"
+
+
+@dataclass(frozen=True, slots=True)
+class CacheCleanupResult:
+    """What the post-commit Redis step managed to do.
+
+    Separate from `ErasureOutcome` on purpose. The database erasure either
+    committed or it did not; the cache cleanup is a second, independent store
+    with no shared transaction, and conflating the two would let a Redis outage
+    be reported as a failed erasure — or, worse, let a failed erasure be
+    reported as done because the cache cleared.
+    """
+
+    attempted: bool
+    succeeded: bool
+    keys_deleted: int
+    detail: str
+
+    @property
+    def pending(self) -> bool:
+        return self.attempted and not self.succeeded
+
+
+class ErasureCacheCleanup:
+    """Redis cleanup, run **only after** the database transaction has committed.
+
+    **There is no cross-store atomicity here and the code does not pretend
+    otherwise.** PostgreSQL and Redis cannot commit together. Calling Redis
+    inside the database transaction would mean a rolled-back erasure had already
+    cleared the cache; calling it before the commit would mean the same. So it
+    runs afterwards, once the database outcome is known and durable.
+
+    If Redis then fails, the erasure has still happened and is still correct.
+    The caller reports `database erasure complete; cache cleanup pending` and
+    exits non-zero, and a retry finishes the job — the operations are idempotent
+    and a second run deletes whatever the first could not.
+
+    Cached values are copies of data that has just been deleted, all carrying a
+    300-second default TTL, so the exposure from a delayed cleanup is bounded
+    even before the retry.
+    """
+
+    def __init__(
+        self, cache: CacheClient | None = None, throttle_client: Any | None = None
+    ) -> None:
+        self._cache = cache or CacheClient()
+        # `login:*` and `ratelimit:*` live in the RATE_LIMIT database; the tenant
+        # namespace lives in CACHE. Deleting from the wrong index silently
+        # succeeds and removes nothing.
+        self._throttle = throttle_client if throttle_client is not None else None
+
+    def _throttle_or_default(self) -> Any:
+        return self._throttle if self._throttle is not None else get_redis(RedisPurpose.RATE_LIMIT)
+
+    async def invalidate_workspace(self, tenant_id: uuid.UUID) -> CacheCleanupResult:
+        """Clear `t:{tenant}:*`, and only that tenant's keys.
+
+        Delegates to the existing `CacheClient.invalidate_tenant`, which walks
+        the namespace with `SCAN` rather than `KEYS` — `KEYS` blocks Redis for a
+        full keyspace walk. `SCAN` with `MATCH` has been available since Redis
+        2.8, so this works on the deployed 3.0.504. Nothing here uses `FLUSHDB`,
+        which would destroy every tenant's cache to clean up one.
+        """
+        try:
+            deleted = await self._cache.invalidate_tenant(str(tenant_id))
+        except (CacheError, RedisError) as exc:
+            logger.warning("workspace_cache_invalidate_failed", tenant_id=str(tenant_id))
+            return CacheCleanupResult(
+                attempted=True,
+                succeeded=False,
+                keys_deleted=0,
+                detail=f"tenant cache invalidation failed: {type(exc).__name__}",
+            )
+        logger.info("workspace_cache_invalidated", tenant_id=str(tenant_id), keys=deleted)
+        return CacheCleanupResult(
+            attempted=True, succeeded=True, keys_deleted=deleted, detail="tenant cache cleared"
+        )
+
+    async def forget_login_attempts(self, email: str) -> CacheCleanupResult:
+        """Delete the subject's exact `login:email:` counter. Nothing else.
+
+        The address never reaches a log line, and neither does the key — a key
+        is a hash of the address, and publishing hashes of low-entropy values is
+        how you build a lookup table for them.
+        """
+        key = login_email_key(email)
+        try:
+            deleted = int(await self._throttle_or_default().delete(key))
+        except RedisError as exc:
+            logger.warning("login_counter_delete_failed", error=type(exc).__name__)
+            return CacheCleanupResult(
+                attempted=True,
+                succeeded=False,
+                keys_deleted=0,
+                detail=f"login counter delete failed: {type(exc).__name__}",
+            )
+        logger.info("login_counter_deleted", keys=deleted)
+        return CacheCleanupResult(
+            attempted=True, succeeded=True, keys_deleted=deleted, detail="login counter cleared"
+        )
 
 
 class _CountingService:
@@ -451,3 +582,90 @@ class WorkspaceClosureService(_CountingService):
 
         logger.info("workspace_closed", tenant_id=str(tenant_id), rows=outcome.total)
         return outcome
+
+
+@dataclass(frozen=True, slots=True)
+class ErasureExecution:
+    """The two-store result: what the database did, and what Redis then did."""
+
+    outcome: ErasureOutcome
+    cache: CacheCleanupResult
+
+    @property
+    def fully_complete(self) -> bool:
+        return not self.cache.pending
+
+    def describe(self) -> str:
+        if self.cache.pending:
+            return (
+                f"{self.outcome.describe()}\n"
+                "database erasure complete; cache cleanup pending — "
+                f"{self.cache.detail}"
+            )
+        return f"{self.outcome.describe()}\n{self.cache.detail} ({self.cache.keys_deleted} key(s))"
+
+
+async def execute_workspace_closure(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    cleanup: ErasureCacheCleanup | None = None,
+) -> ErasureExecution:
+    """Close a workspace: erase, **commit**, and only then clear the cache.
+
+    The ordering is the whole point of this function existing rather than the
+    caller doing it inline.
+
+    * Redis is never touched while the transaction is open. A rolled-back
+      erasure that had already cleared the cache would be a silent
+      inconsistency in the direction that matters least, but the reverse — a
+      committed erasure whose cache still serves the deleted rows — is the one
+      that leaks data, and neither is acceptable.
+    * If the database fails, the transaction rolls back and **Redis is not
+      called at all**. There is nothing to clean up.
+    * If Redis fails after the commit, the erasure stands. The result says so
+      plainly, and the caller exits non-zero so nobody records the request as
+      finished.
+
+    The cache step runs **unconditionally** once the commit succeeds, including
+    when the erasure deleted nothing. A retry after a Redis outage is exactly
+    that case: the database work is already done, the counts are all zero, and
+    the cache still needs clearing.
+    """
+    outcome = await WorkspaceClosureService(session).erase(tenant_id)
+    await session.commit()
+
+    # Past this line the database work is durable. Nothing below may change it.
+    cache = await (cleanup or ErasureCacheCleanup()).invalidate_workspace(tenant_id)
+    return ErasureExecution(outcome=outcome, cache=cache)
+
+
+async def execute_platform_user_erasure(
+    session: AsyncSession,
+    subject: SubjectRef,
+    *,
+    email: str | None = None,
+    cleanup: ErasureCacheCleanup | None = None,
+) -> ErasureExecution:
+    """Erase one user, commit, then delete their exact login counter.
+
+    Same ordering rule as workspace closure. When the subject was resolved by id
+    rather than by address there is no address to derive the key from, so the
+    cache step is skipped and reported as not attempted — the counter expires on
+    its own within 900 seconds.
+    """
+    outcome = await PlatformUserErasureService(session).erase(subject)
+    await session.commit()
+
+    if email is None:
+        return ErasureExecution(
+            outcome=outcome,
+            cache=CacheCleanupResult(
+                attempted=False,
+                succeeded=True,
+                keys_deleted=0,
+                detail="no address supplied; login counter left to expire",
+            ),
+        )
+    cache = await (cleanup or ErasureCacheCleanup()).forget_login_attempts(email)
+    return ErasureExecution(outcome=outcome, cache=cache)

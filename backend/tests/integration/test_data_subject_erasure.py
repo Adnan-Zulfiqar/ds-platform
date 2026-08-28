@@ -31,7 +31,7 @@ from app.services.data_subject_erasure import (
     PlatformUserErasureService,
     SubjectResolutionError,
     WorkspaceClosureService,
-    login_throttle_keys,
+    login_email_key,
 )
 from tests.integration.conftest import registration_payload
 
@@ -528,22 +528,21 @@ class TestTransactionSafety:
 
 
 class TestRedisKeys:
-    def test_the_login_throttle_key_is_exact_and_carries_no_address(self) -> None:
-        keys = login_throttle_keys("Person@Example.COM ")
+    def test_the_login_email_key_is_exact_and_carries_no_address(self) -> None:
+        key = login_email_key("Person@Example.COM ")
 
-        assert len(keys) == 1
-        assert keys[0].startswith("login:email:")
+        assert key.startswith("login:email:")
         # Hashed, so the key space holds no addresses even in MONITOR output.
-        assert "person@example.com" not in keys[0].lower()
-        assert "@" not in keys[0]
+        assert "person@example.com" not in key.lower()
+        assert "@" not in key
 
     def test_it_normalises_case_and_padding_like_the_throttle_does(self) -> None:
-        assert login_throttle_keys("  A@b.com ") == login_throttle_keys("a@b.com")
+        assert login_email_key("  A@b.com ") == login_email_key("a@b.com")
 
-    def test_no_key_is_a_pattern(self) -> None:
+    def test_the_key_is_never_a_pattern(self) -> None:
         # A wildcard here would be a cross-tenant deletion waiting to happen.
-        for key in login_throttle_keys("a@b.com"):
-            assert "*" not in key and "?" not in key
+        key = login_email_key("a@b.com")
+        assert "*" not in key and "?" not in key
 
 
 class TestLogging:

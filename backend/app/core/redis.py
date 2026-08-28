@@ -171,6 +171,9 @@ class CacheClient:
 
 __all__ = [
     "CacheClient",
+    # Exported so callers that must react to a cache failure rather than
+    # degrade — erasure is one — can catch it by name.
+    "CacheError",
     "RedisPurpose",
     "check_redis_health",
     "close_redis_clients",

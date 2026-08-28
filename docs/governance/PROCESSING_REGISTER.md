@@ -168,9 +168,16 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Role** — controller. **Proposed basis** — legitimate interests (keeping the
   service available and accounts unbreached). **A balancing test still needs to
   be recorded.**
-* **Retention** — rate-limit counters expire on a 60-second window; login
-  throttling uses a 300-second window and a 900-second lockout; cache entries
-  default to 300 seconds. All in Redis, all expiring automatically.
+* **Retention** — rate-limit counters (`ratelimit:ip:{client_ip}`) expire on a
+  60-second window; login throttling keeps two counters,
+  `login:email:{sha256(address)[:32]}` and `login:ip:{sha256(client_ip)[:32]}`,
+  on a 300-second window extended to a 900-second lockout; cache entries
+  (`t:{tenant}:*`) default to 300 seconds. All in Redis, all expiring
+  automatically. **The address and the IP are hashed before use as keys**, so the
+  key space holds neither even in `MONITOR` output.
+* **Erasure** — the email counter is deleted during platform-user erasure. The
+  IP-derived counters are not: an address is not a person, it is shared behind
+  NAT and reassigned by ISPs, and they expire within 900 seconds regardless.
 * **Evidence** — `security.rate_limit_window_seconds`,
   `login_attempt_window_seconds`, `login_lockout_seconds`,
   `redis.default_ttl_seconds`, `app/core/client_ip.py`.
