@@ -41,6 +41,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Final
 
+from redis.exceptions import WatchError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -188,13 +189,20 @@ class PasswordResetService:
             logger.info("password_reset_requested_unknown_address")
             return challenge, None
 
+        # Reserve the cooldown atomically. The previous version did GET then
+        # SET, so twenty concurrent requests all saw "no cooldown" and all sent
+        # a code. SET NX EX is one round trip and exactly one caller wins; the
+        # losers get the same generic response as everybody else.
         cooldown_key = f"{_COOLDOWN_PREFIX}{user.id}"
-        if await self._redis.get(cooldown_key) is not None:
+        reserved = await self._redis.set(
+            cooldown_key, challenge_id, nx=True, ex=self._config.resend_cooldown_seconds
+        )
+        if not reserved:
             logger.info("password_reset_cooldown_active", user_id=str(user.id))
             return challenge, None
 
-        # One active challenge per account: minting a new one retires the old,
-        # so an attacker cannot accumulate parallel guessing surfaces.
+        # One active challenge per account, so guessing surfaces cannot stack.
+        # Safe to do after reserving, because only the winner reaches here.
         account_key = f"{_ACCOUNT_PREFIX}{user.id}"
         previous = await self._redis.get(account_key)
         if previous:
@@ -212,7 +220,6 @@ class PasswordResetService:
             json.dumps(record),
         )
         await self._redis.setex(account_key, self._config.otp_ttl_seconds, challenge_id)
-        await self._redis.setex(cooldown_key, self._config.resend_cooldown_seconds, "1")
 
         logger.info("password_reset_challenge_issued", user_id=str(user.id))
         return challenge, code
@@ -220,52 +227,103 @@ class PasswordResetService:
     async def discard(self, challenge_id: str) -> None:
         """Drop a challenge whose email never went out.
 
-        A challenge the user cannot possibly satisfy is worse than none: they
-        would sit waiting for a code that was never sent.
+        A challenge nobody can satisfy is worse than none: the person waits for
+        a code that was never sent.
+
+        Only ever removes its own. The account pointer and the cooldown are
+        cleared only while they still name *this* challenge, so a slow failing
+        request cannot delete the challenge a newer, successful one just made.
         """
-        record = await self._consume(f"{_CHALLENGE_PREFIX}{challenge_id}")
-        if record:
-            try:
-                user_id = json.loads(record)["user_id"]
-            except (ValueError, KeyError):
-                return
-            await self._redis.delete(f"{_ACCOUNT_PREFIX}{user_id}", f"{_COOLDOWN_PREFIX}{user_id}")
+        raw = await self._consume(f"{_CHALLENGE_PREFIX}{challenge_id}")
+        if raw is None:
+            return
+        try:
+            user_id = json.loads(raw)["user_id"]
+        except (ValueError, KeyError):
+            return
+
+        account_key = f"{_ACCOUNT_PREFIX}{user_id}"
+        if await self._redis.get(account_key) == challenge_id:
+            await self._redis.delete(account_key)
+
+        cooldown_key = f"{_COOLDOWN_PREFIX}{user_id}"
+        if await self._redis.get(cooldown_key) == challenge_id:
+            # Release it, so somebody whose message failed can ask again at once
+            # rather than waiting out a cooldown for mail that never arrived.
+            await self._redis.delete(cooldown_key)
 
     # ----------------------------------------------------------------- verify
 
     async def verify(self, *, challenge_id: str, code: str) -> ResetOutcome | None:
-        """Exchange a correct code for a single-use ticket. `None` on failure."""
+        """Exchange a correct code for a single-use ticket. None on failure.
+
+        Attempt accounting is optimistic-locked. The previous version read the
+        record, incremented in Python and wrote it back, so twenty concurrent
+        wrong guesses all read attempts=0 and the counter finished at 1 — the
+        five-attempt ceiling was effectively unlimited. WATCH on the challenge
+        key makes any increment that raced fail and retry, so every attempt is
+        counted exactly once. WATCH is Redis 2.2, so it works on the deployed
+        3.0.504.
+
+        Redis failure fails closed: the exception propagates rather than being
+        mistaken for a passing check.
+        """
         key = f"{_CHALLENGE_PREFIX}{challenge_id}"
-        raw = await self._redis.get(key)
-        if raw is None:
-            return None
+        user_id = ""
 
-        try:
-            record: dict[str, Any] = json.loads(raw)
-        except ValueError:
-            await self._redis.delete(key)
-            return None
+        while True:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    if raw is None:
+                        return None
 
-        attempts = int(record.get("attempts", 0)) + 1
-        if attempts > self._config.max_verification_attempts:
-            # Burn the challenge rather than let it be ground down.
-            await self._redis.delete(key)
-            logger.warning("password_reset_attempts_exhausted")
-            return None
+                    try:
+                        record: dict[str, Any] = json.loads(raw)
+                    except ValueError:
+                        pipe.multi()
+                        pipe.delete(key)
+                        await pipe.execute()
+                        return None
 
-        if not hmac.compare_digest(str(record.get("otp", "")), _digest(_OTP_DOMAIN, code)):
-            record["attempts"] = attempts
-            ttl = await self._redis.ttl(key)
-            await self._redis.setex(key, max(int(ttl), 1), json.dumps(record))
-            return None
+                    attempts = int(record.get("attempts", 0)) + 1
+                    correct = hmac.compare_digest(
+                        str(record.get("otp", "")), _digest(_OTP_DOMAIN, code)
+                    )
 
-        # Correct. Consume atomically so two concurrent verifications of the
-        # same code cannot both mint a ticket.
-        if await self._consume(key) is None:
-            return None
+                    if attempts > self._config.max_verification_attempts:
+                        # Burn it rather than let it be ground down. A correct
+                        # code arriving after the ceiling does not rescue it.
+                        pipe.multi()
+                        pipe.delete(key)
+                        await pipe.execute()
+                        logger.warning("password_reset_attempts_exhausted")
+                        return None
 
-        user_id = str(record["user_id"])
-        await self._redis.delete(f"{_ACCOUNT_PREFIX}{user_id}")
+                    if not correct:
+                        record["attempts"] = attempts
+                        ttl = await pipe.ttl(key)
+                        pipe.multi()
+                        pipe.setex(key, max(int(ttl), 1), json.dumps(record))
+                        await pipe.execute()
+                        return None
+
+                    # Correct. Consumed inside the same transaction, so two
+                    # simultaneous correct submissions cannot both mint a
+                    # ticket: the second EXEC fails its watch and the retry
+                    # finds the key already gone.
+                    user_id = str(record["user_id"])
+                    pipe.multi()
+                    pipe.delete(key)
+                    pipe.delete(f"{_ACCOUNT_PREFIX}{user_id}")
+                    await pipe.execute()
+                    break
+
+                except WatchError:
+                    # Somebody else touched the record. Re-read and retry; this
+                    # is what makes every attempt count exactly once.
+                    continue
 
         ticket = secrets.token_urlsafe(32)
         await self._redis.setex(

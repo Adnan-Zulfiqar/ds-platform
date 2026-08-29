@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { acceptLegal } from "./helpers/auth";
+
 /**
  * Authentication UI tests.
  *
@@ -86,6 +88,9 @@ test.describe("Registration page", () => {
     await page.getByLabel("Work email").fill("owner@acme.example");
     await page.getByLabel("Password", { exact: true }).fill("weak");
     await page.getByLabel("Confirm password").fill("weak");
+    // Acceptance now gates the submit control, so the test does what a
+    // person must do before the button is usable.
+    await acceptLegal(page);
     await page.getByRole("button", { name: "Create account" }).click();
 
     await expect(page.getByText(/at least 12 characters/i).first()).toBeVisible();
@@ -98,6 +103,9 @@ test.describe("Registration page", () => {
     await page.getByLabel("Work email").fill("owner@acme.example");
     await page.getByLabel("Password", { exact: true }).fill("Correct-Horse-Battery9");
     await page.getByLabel("Confirm password").fill("Different-Horse-Battery9");
+    // Acceptance now gates the submit control, so the test does what a
+    // person must do before the button is usable.
+    await acceptLegal(page);
     await page.getByRole("button", { name: "Create account" }).click();
 
     await expect(page.getByText("Passwords do not match")).toBeVisible();
@@ -114,6 +122,9 @@ test.describe("Registration page", () => {
   });
 
   test("requires a company name", async ({ page }) => {
+    // Acceptance now gates the submit control, so the test does what a
+    // person must do before the button is usable.
+    await acceptLegal(page);
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(page.getByText("Company name is required")).toBeVisible();
   });

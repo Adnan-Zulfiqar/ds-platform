@@ -32,6 +32,11 @@ from app.core.exceptions import (
     InvalidCredentialsError,
     ValidationError,
 )
+from app.core.legal import (
+    PRIVACY_NOTICE_VERSION,
+    TERMS_VERSION,
+    LegalAcceptanceError,
+)
 from app.core.password import (
     hash_password,
     needs_rehash,
@@ -79,6 +84,44 @@ class TokenPair:
 
 
 @dataclass(frozen=True, slots=True)
+class LegalAcceptance:
+    """Proof that a registration acknowledged the published documents.
+
+    A value object rather than loose booleans on the signature, so both signup
+    paths — password and Google — take the identical thing and a caller cannot
+    transpose the arguments. The Google path bypassing acceptance entirely was
+    an independent-review finding.
+    """
+
+    terms_accepted: bool
+    privacy_accepted: bool
+    terms_version: str
+    privacy_version: str
+
+    def require_valid(self) -> None:
+        """Reject anything that is not explicit acceptance of the current text.
+
+        A frontend checkbox is a hint, not evidence — the request can be made
+        without one, and the review found exactly that gap. This is where it has
+        to hold.
+        """
+        if not self.terms_accepted or not self.privacy_accepted:
+            raise LegalAcceptanceError(
+                "You must accept the Terms and acknowledge the Privacy Notice to create an account."
+            )
+        if self.privacy_version != PRIVACY_NOTICE_VERSION:
+            # A stale page submitting an old version means the person agreed to
+            # wording that is no longer what we publish.
+            raise LegalAcceptanceError(
+                "The Privacy Notice has been updated. Reload the page and read it again."
+            )
+        if self.terms_version != TERMS_VERSION:
+            raise LegalAcceptanceError(
+                "The Terms have been updated. Reload the page and read them again."
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class AuthResult:
     """Outcome of a successful registration or sign-in."""
 
@@ -107,6 +150,7 @@ class AuthService(BaseService):
         company_name: str,
         email: str,
         password: str,
+        acceptance: LegalAcceptance,
         first_name: str | None = None,
         last_name: str | None = None,
     ) -> AuthResult:
@@ -117,6 +161,10 @@ class AuthService(BaseService):
         sign in to and nobody can clean up, so partial success is not allowed.
         """
         normalised_email = normalise_email(email)
+
+        # Before anything else, and before the expensive hash: an account must
+        # not be created at all without acceptance.
+        acceptance.require_valid()
 
         # Validate before hashing: Argon2 is deliberately expensive, and there
         # is no reason to spend that on a password that is about to be rejected.
@@ -145,6 +193,10 @@ class AuthService(BaseService):
             last_name=last_name,
             password_hash=hash_password(password),
             is_active=True,
+            terms_accepted_at=datetime.now(UTC),
+            terms_version=acceptance.terms_version,
+            privacy_accepted_at=datetime.now(UTC),
+            privacy_version=acceptance.privacy_version,
             # True because no mail delivery exists yet to verify against. When
             # the verification flow lands this becomes False and registration
             # sends a confirmation.
@@ -302,6 +354,7 @@ class AuthService(BaseService):
         *,
         company_name: str,
         email: str,
+        acceptance: LegalAcceptance,
         first_name: str | None = None,
         last_name: str | None = None,
     ) -> AuthResult:
@@ -321,6 +374,10 @@ class AuthService(BaseService):
         """
         normalised_email = normalise_email(email)
 
+        # Identical rule to the password path. Signing up with Google is still
+        # signing up, and used to skip this entirely.
+        acceptance.require_valid()
+
         existing = await self.auth_users.find_by_email(normalised_email)
         if existing:
             # The caller checks this first and returns a specific, actionable
@@ -338,6 +395,10 @@ class AuthService(BaseService):
             password_hash=None,
             is_active=True,
             is_verified=True,
+            terms_accepted_at=datetime.now(UTC),
+            terms_version=acceptance.terms_version,
+            privacy_accepted_at=datetime.now(UTC),
+            privacy_version=acceptance.privacy_version,
         )
 
         await self.roles.assign_by_name(user_id=user.id, name=RoleName.OWNER)

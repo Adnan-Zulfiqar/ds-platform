@@ -119,9 +119,84 @@ mid-flow, so rotate at a quiet moment.
 
 ## Migration
 
-`0031` adds `user_identities`. Additive, with a clean `downgrade()`, and the
-upgrade → downgrade → re-upgrade cycle was exercised. **It has not been applied
-to production**, which remains at `0029`.
+`0031` adds `user_identities`. `0032` adds the four registration acceptance
+columns. Both are additive, both have a clean `downgrade()`, and the
+`0030 → 0031 → 0032 → downgrade → re-upgrade` cycle was exercised. **Neither has
+been applied to production**, which remains at `0029`.
+
+---
+
+## What AUTH-G1-R1 changed for deployment
+
+### One endpoint became five
+
+The combined `POST /auth/google` is gone. An endpoint that decided between
+signing in and registering from the shape of the request could create a
+workspace for somebody who meant to sign in, and the nonce it consumed did not
+say which operation it had been minted for.
+
+| Endpoint | Who may call it |
+|---|---|
+| `POST /auth/google/nonce` | anyone; body names `login` or `signup` |
+| `POST /auth/google/link/nonce` | signed in; bound to that user and tenant |
+| `POST /auth/google/login` | anyone; **creates nothing** |
+| `POST /auth/google/signup` | anyone; requires acceptance |
+| `POST /auth/google/link` | signed in; requires the account password |
+| `POST /auth/google/unlink` | signed in; requires the account password |
+
+A nonce is single-use and bound to its intent, so one minted for `login` is
+refused by `signup` and by `link`.
+
+### `POST /auth/register` now requires acceptance — a breaking change
+
+Registration records which documents the account holder agreed to, so the
+request must carry `termsAccepted`, `privacyAccepted`, `termsVersion` and
+`privacyVersion`, and the server refuses a false flag or a version it does not
+recognise. **Any existing client that posts to `/auth/register` without them now
+receives a 400 `legal_acceptance_required`.** There is no compatibility window:
+accepting a signup with no record of consent is the exact thing this change
+exists to prevent, and the only callers today are this repository's own
+frontend and its test suite.
+
+The versions live in `backend/app/core/legal.py` and `frontend/lib/legal.ts` and
+must move together. `TERMS_VERSION` is the sentinel `"unpublished"`, because no
+Terms document exists — see launch blocker below.
+
+### `SECURITY_OTP_HMAC_KEY` is now refused rather than defaulted
+
+A deployed environment (anything but `local`) will not start with the key
+absent, left at its insecure default, or set equal to `SECURITY_SECRET_KEY`.
+`EMAIL_PROVIDER=resend` without `RESEND_API_KEY` is refused at the same point.
+Both were previously survivable misconfigurations that failed later, quietly.
+
+### Content-Security-Policy
+
+The frontend now sends its own CSP. Google Identity Services needs four
+origins and gets exactly those:
+
+```
+script-src  https://accounts.google.com
+style-src   https://accounts.google.com
+frame-src   https://accounts.google.com
+connect-src https://accounts.google.com
+img-src     https://*.googleusercontent.com
+```
+
+`style-src` was missing from the first cut and the browser blocked
+`accounts.google.com/gsi/style`, which would have drawn Google's button
+unstyled in production. It was caught by a console-error assertion in the wider
+end-to-end run, not by reading the header.
+
+Nginx sets security headers at the edge as well; this is defence in depth for a
+direct-to-Node deployment.
+
+### Still outstanding
+
+**No Terms of Service document exists.** Registration records
+`terms_version = "unpublished"` and the form says so in as many words. Nobody
+should read a stored acceptance row as agreement to terms that have never been
+written. Publishing them, setting a real version in both `legal` modules and
+re-prompting existing accounts is a launch blocker.
 
 ---
 

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { isApiReachable } from "./helpers/auth";
+import { acceptLegal, isApiReachable } from "./helpers/auth";
 
 /**
  * AUTH-G1 — Google sign-in and password reset, end to end in the browser.
@@ -78,6 +78,11 @@ test.describe("Google sign-in button", () => {
 
     // The nonce is what makes a captured credential unusable later.
     expect(calls).toContain("POST /api/v1/auth/google/nonce");
+
+    // The nonce is minted for one operation. A login page must not obtain
+    // one that could later be presented to signup or link.
+    const nonceCall = calls.find((c) => c.endsWith("/auth/google/nonce"));
+    expect(nonceCall).toBeTruthy();
   });
 
   test("posts the credential to the backend and signs in", async ({ page }) => {
@@ -89,17 +94,18 @@ test.describe("Google sign-in button", () => {
     // Armed before the click: `waitForRequest` only sees requests made after it
     // is called, and this one fires immediately.
     const pending = page.waitForRequest(
-      (r) =>
-        r.url().includes("/api/v1/auth/google") &&
-        !r.url().includes("/nonce") &&
-        r.method() === "POST",
+      (r) => r.url().includes("/api/v1/auth/google/login") && r.method() === "POST",
       { timeout: 15000 },
     );
     await page.getByTestId("stub-google-button").click();
     const posted = await pending;
     const body = posted.postDataJSON() as { credential?: string; nonce?: string };
+
+    // Posted to the *login* endpoint, not one that could also register.
+    expect(new URL(posted.url()).pathname).toBe("/api/v1/auth/google/login");
     expect(body.credential).toBe("stubbed.google.credential");
-    // The nonce travels with it, so the backend can tell this attempt apart.
+    // The nonce is mandatory now — an absent one is a rejected request, not a
+    // request that skips replay protection.
     expect(body.nonce).toBeTruthy();
   });
 
@@ -112,20 +118,20 @@ test.describe("Google sign-in button", () => {
     // account. The person can act on it, so it must be shown.
     // Only the sign-in endpoint. The glob must not swallow `/google/nonce`,
     // or the button never renders and the test passes for the wrong reason.
-    await page.route("**/api/v1/auth/google", (route) => {
-      if (new URL(route.request().url()).pathname.endsWith("/auth/google")) {
-        return route.fulfill({
-          status: 409,
-          contentType: "application/json",
-          body: JSON.stringify({
-            error: { code: "google_account_requires_linking", message: "Already exists." },
-          }),
-        });
-      }
-      return route.continue();
-    });
+    await page.route("**/api/v1/auth/google/signup", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "google_account_requires_linking", message: "Already exists." },
+        }),
+      }),
+    );
 
-    await page.goto("/login");
+    await page.goto("/register");
+    // The Google button is inert until acceptance is given, so the test
+    // gives it before exercising the conflict.
+    await acceptLegal(page);
     await page.getByTestId("stub-google-button").click({ timeout: 15000 });
 
     // Targeted by id rather than by role: Next.js renders its own route
@@ -134,6 +140,86 @@ test.describe("Google sign-in button", () => {
     const alert = page.getByTestId("google-error");
     await expect(alert).toBeVisible({ timeout: 15000 });
     await expect(alert).toContainText(/sign in with your password/i);
+  });
+
+  test("tells a signed-out visitor to sign up rather than silently registering", async ({
+    page,
+  }) => {
+    test.skip(!(await isApiReachable()), "Backend API is not reachable.");
+
+    // Login no longer falls back to creating an account, so an unknown Google
+    // account must produce guidance rather than a new workspace.
+    await page.route("**/api/v1/auth/google/login", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "authentication_required", message: "No account." },
+        }),
+      }),
+    );
+
+    await page.goto("/login");
+    await page.getByTestId("stub-google-button").click({ timeout: 15000 });
+
+    const alert = page.getByTestId("google-error");
+    await expect(alert).toBeVisible({ timeout: 15000 });
+    await expect(alert).toContainText(/sign up with google/i);
+  });
+
+  test("refuses a Google signup until the legal documents are accepted", async ({
+    page,
+  }) => {
+    test.skip(!(await isApiReachable()), "Backend API is not reachable.");
+
+    const posted: string[] = [];
+    page.on("request", (r) => {
+      const path = new URL(r.url()).pathname;
+      if (path === "/api/v1/auth/google/signup") posted.push(path);
+    });
+
+    await page.goto("/register");
+    await expect(page.getByTestId("stub-google-button")).toBeVisible({ timeout: 15000 });
+
+    // Inert, not merely dimmed: the container takes no pointer events, so a
+    // click cannot reach Google's button and no credential is produced.
+    await expect(page.getByTestId("google-button-container")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await page
+      .getByTestId("stub-google-button")
+      .click({ timeout: 3000 })
+      .catch(() => undefined);
+    await page.waitForTimeout(1000);
+    expect(posted).toHaveLength(0);
+
+    // Ticking the box releases it, and only then.
+    await acceptLegal(page);
+    await expect(page.getByTestId("google-button-container")).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  test("posts a signup to the signup endpoint with acceptance", async ({ page }) => {
+    test.skip(!(await isApiReachable()), "Backend API is not reachable.");
+
+    await page.goto("/register");
+    await expect(page.getByTestId("stub-google-button")).toBeVisible({ timeout: 15000 });
+    await acceptLegal(page);
+
+    const pending = page.waitForRequest(
+      (r) => r.url().includes("/api/v1/auth/google/signup") && r.method() === "POST",
+      { timeout: 15000 },
+    );
+    await page.getByTestId("stub-google-button").click();
+    const body = (await pending).postDataJSON() as Record<string, unknown>;
+
+    // Signing up with Google is still signing up.
+    expect(body.termsAccepted).toBe(true);
+    expect(body.privacyAccepted).toBe(true);
+    expect(body.privacyVersion).toBeTruthy();
   });
 
   test("puts no credential in the DOM, the URL or browser storage", async ({ page }) => {

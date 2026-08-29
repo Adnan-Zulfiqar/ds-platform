@@ -23,10 +23,11 @@ from fastapi import APIRouter, Request, Response, status
 from app.api.deps import CurrentPrincipal, CurrentTenant, CurrentUser, DbSession, RoleRepo
 from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, PermissionDeniedError
 from app.integrations.email import EmailDeliveryError, send_password_reset_code
 from app.integrations.google import (
     GoogleIdentity,
+    GoogleIntent,
     GoogleNonceStore,
     GoogleTokenError,
     GoogleTokenVerifier,
@@ -36,8 +37,11 @@ from app.schemas.auth import (
     AuthResponse,
     GoogleIdentityRead,
     GoogleLinkRequest,
+    GoogleLoginRequest,
+    GoogleNonceRequest,
     GoogleNonceResponse,
-    GoogleSignInRequest,
+    GoogleSignupRequest,
+    GoogleUnlinkRequest,
     LoginRequest,
     LogoutRequest,
     PasswordResetChallengeResponse,
@@ -53,7 +57,7 @@ from app.schemas.auth import (
 )
 from app.schemas.common import MessageResponse
 from app.schemas.user import UserRead
-from app.services.auth import AuthResult, AuthService
+from app.services.auth import AuthResult, AuthService, LegalAcceptance
 from app.services.email_verification import EmailVerificationService
 from app.services.google_auth import GoogleAuthService
 from app.services.password_reset import PasswordResetService
@@ -130,27 +134,57 @@ def _build_auth_response(result: AuthResult, *, include_refresh_in_body: bool) -
     )
 
 
-async def _verified_google_identity(credential: str, nonce: str | None) -> GoogleIdentity:
-    """Verify a credential, and consume the nonce that came with it.
+async def _verified_google_identity(
+    credential: str, nonce: str, *, intent: GoogleIntent
+) -> tuple[GoogleIdentity, object]:
+    """Verify a credential against a nonce issued for exactly this operation.
 
-    One place, used by both sign-in and linking, so the two cannot drift into
-    checking different things. Every failure becomes the same 401: telling the
-    caller *which* check failed would let them iterate towards a token that
-    passes.
+    One place, used by all three Google endpoints, so they cannot drift into
+    checking different things.
+
+    The nonce is consumed **first**. A credential presented with a nonce that
+    was already spent, never issued, or issued for a different operation is a
+    replay or a redirect, and must fail before anything else is considered.
+    Every failure becomes the same 401: naming the failed check would let a
+    caller iterate towards one that passes.
     """
     verifier = GoogleTokenVerifier()
     if not verifier.configured:
         raise AuthenticationError("Google sign-in is not available.")
 
-    # Consume first. A credential presented with a nonce that was already spent
-    # is a replay, and must fail before anything else is considered.
-    if nonce is not None and not await GoogleNonceStore().consume(nonce):
-        raise AuthenticationError("This sign-in attempt has expired. Try again.")
+    record = await GoogleNonceStore().consume(nonce, expected=intent)
+    if record is None:
+        raise AuthenticationError("This sign-in attempt has expired. Start again.")
 
     try:
-        return await verifier.verify(credential, expected_nonce=nonce)
+        identity = await verifier.verify(credential, expected_nonce=nonce)
     except GoogleTokenError as exc:
         raise AuthenticationError("Google sign-in could not be verified.") from exc
+
+    return identity, record
+
+
+async def _require_step_up(user: object, password: str, session: object) -> None:
+    """Prove the person at the keyboard is the account holder, not just a session.
+
+    Linking or unlinking a sign-in method changes *how the account can be
+    entered*, so a long-lived access token is not enough authority — a stolen
+    one would otherwise be enough to attach an attacker's Google account
+    silently and keep access after the password is changed.
+
+    Password verification is the step-up rather than a client-supplied
+    `recent=true` flag or a token-age check, because both of those are asserted
+    by the caller and neither proves anything.
+    """
+    from app.core.password import verify_password
+
+    hashed = getattr(user, "password_hash", None)
+    if hashed is None:
+        # Nothing to step up with. Better an explicit refusal than a sensitive
+        # operation guarded by a session alone.
+        raise PermissionDeniedError("Set a password before changing how you sign in.")
+    if not verify_password(password, hashed):
+        raise AuthenticationError("That password is not correct.")
 
 
 @router.post(
@@ -172,6 +206,12 @@ async def register(
         company_name=payload.company_name,
         email=payload.email,
         password=payload.password.get_secret_value(),
+        acceptance=LegalAcceptance(
+            terms_accepted=payload.terms_accepted,
+            privacy_accepted=payload.privacy_accepted,
+            terms_version=payload.terms_version,
+            privacy_version=payload.privacy_version,
+        ),
         first_name=payload.first_name,
         last_name=payload.last_name,
     )
@@ -345,62 +385,109 @@ async def confirm_email_verification(
 
 
 # ---------------------------------------------------------------------------
-# Google sign-in (AUTH-G1)
+# Google sign-in (AUTH-G1, hardened in AUTH-G1-R1)
 # ---------------------------------------------------------------------------
 #
-# The browser gets a signed credential from Google's official button and posts
-# it here. Everything the browser says *about* that credential is ignored; only
-# what survives `GoogleTokenVerifier` is believed.
+# Three explicit operations. The single `/google` endpoint that decided between
+# signing in and registering has been removed: a request meant as a sign-in
+# could silently create a workspace, and a signup could silently succeed as a
+# login and so reveal that an account existed.
 
 
 @router.post(
     "/google/nonce",
     response_model=GoogleNonceResponse,
-    summary="Issue a one-time nonce for a Google sign-in attempt",
+    summary="Issue a one-time nonce for a Google login or signup",
 )
-async def google_nonce() -> GoogleNonceResponse:
-    """Mint a nonce the browser passes to Google.
+async def google_nonce(payload: GoogleNonceRequest) -> GoogleNonceResponse:
+    """Mint a nonce bound to one unauthenticated operation.
 
-    Google embeds it in the signed credential, so a token minted for a different
-    attempt — or captured and replayed later — fails verification here. It is
-    stored server-side and consumed on use, which is what makes it one-time
-    rather than merely unpredictable.
+    Only `login` and `signup` are available here. A `link` nonce is issued by
+    the authenticated endpoint below, because it has to record *whose* account
+    the credential may be attached to.
     """
-    nonce = await GoogleNonceStore().issue()
+    intent = GoogleIntent(payload.intent)
+    nonce = await GoogleNonceStore().issue(intent)
     return GoogleNonceResponse(
         nonce=nonce, expires_in_seconds=settings.google_oauth.nonce_ttl_seconds
     )
 
 
 @router.post(
-    "/google",
-    response_model=AuthResponse,
-    summary="Sign in or sign up with Google",
+    "/google/link/nonce",
+    response_model=GoogleNonceResponse,
+    summary="Issue a link nonce bound to the signed-in user",
 )
-async def google_sign_in(
-    payload: GoogleSignInRequest, session: DbSession, response: Response
-) -> AuthResponse:
-    """Exchange a verified Google credential for a DropPilot session.
+async def google_link_nonce(user: CurrentUser, tenant: CurrentTenant) -> GoogleNonceResponse:
+    """A nonce that can only be used to link, and only to this account.
 
-    A first-time Google user gets a tenant, an owner role and a session — the
-    same registration path a password signup takes, minus the password.
-
-    An address that already has a **local** account is refused with a specific,
-    actionable code rather than linked automatically: an email match proves the
-    person controls the address today, not that they are the account holder.
+    Bound server-side to the user and tenant from the session. The later
+    request cannot claim a different one, because the stored record decides.
     """
-    identity = await _verified_google_identity(payload.credential, payload.nonce)
+    nonce = await GoogleNonceStore().issue(GoogleIntent.LINK, user_id=user.id, tenant_id=tenant.id)
+    return GoogleNonceResponse(
+        nonce=nonce, expires_in_seconds=settings.google_oauth.nonce_ttl_seconds
+    )
 
-    result = await GoogleAuthService(session).sign_in(identity, company_name=payload.company_name)
+
+@router.post("/google/login", response_model=AuthResponse, summary="Sign in with Google")
+async def google_login(
+    payload: GoogleLoginRequest, session: DbSession, response: Response
+) -> AuthResponse:
+    """Authenticate an already-linked Google account.
+
+    **Creates nothing** — no user, no tenant, no identity. An unknown Google
+    account is refused with the same message whether or not a local account
+    shares the address.
+    """
+    identity, _ = await _verified_google_identity(
+        payload.credential, payload.nonce, intent=GoogleIntent.LOGIN
+    )
+    result = await GoogleAuthService(session).login(identity)
 
     _set_refresh_cookie(
         response,
-        result.auth.tokens.refresh_token,
+        result.tokens.refresh_token,
         settings.security.refresh_token_ttl_days * 86_400,
     )
-    if result.created:
-        response.status_code = status.HTTP_201_CREATED
-    return _build_auth_response(result.auth, include_refresh_in_body=False)
+    return _build_auth_response(result, include_refresh_in_body=False)
+
+
+@router.post(
+    "/google/signup",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an account with Google",
+)
+async def google_signup(
+    payload: GoogleSignupRequest, session: DbSession, response: Response
+) -> AuthResponse:
+    """Register a new workspace, with the same acceptance a password signup needs.
+
+    Signing up with Google is still signing up: the Terms and Privacy Notice
+    have to be accepted here too, and the backend rather than a checkbox is what
+    enforces it.
+    """
+    identity, _ = await _verified_google_identity(
+        payload.credential, payload.nonce, intent=GoogleIntent.SIGNUP
+    )
+    result = await GoogleAuthService(session).signup(
+        identity,
+        acceptance=LegalAcceptance(
+            terms_accepted=payload.terms_accepted,
+            privacy_accepted=payload.privacy_accepted,
+            terms_version=payload.terms_version,
+            privacy_version=payload.privacy_version,
+        ),
+        company_name=payload.company_name,
+    )
+
+    _set_refresh_cookie(
+        response,
+        result.tokens.refresh_token,
+        settings.security.refresh_token_ttl_days * 86_400,
+    )
+    return _build_auth_response(result, include_refresh_in_body=False)
 
 
 @router.post(
@@ -412,12 +499,21 @@ async def google_sign_in(
 async def link_google(
     payload: GoogleLinkRequest, user: CurrentUser, session: DbSession
 ) -> GoogleIdentityRead:
-    """Attach Google to an existing account.
+    """Attach Google to an existing account, behind a step-up.
 
-    Requires an active session, which is the proof of continuity an email match
-    cannot give: whoever does this already holds the account.
+    Two independent checks: the password proves the account holder is present,
+    and the nonce proves this credential was obtained for *this* account.
     """
-    identity = await _verified_google_identity(payload.credential, payload.nonce)
+    await _require_step_up(user, payload.password.get_secret_value(), session)
+
+    identity, record = await _verified_google_identity(
+        payload.credential, payload.nonce, intent=GoogleIntent.LINK
+    )
+    # The nonce was bound to a user at issue time. If it names somebody else,
+    # this credential is being redirected onto another account.
+    if getattr(record, "user_id", None) != user.id:
+        raise AuthenticationError("This sign-in attempt has expired. Start again.")
+
     link = await GoogleAuthService(session).link(user_id=user.id, identity=identity)
     return GoogleIdentityRead(
         provider=link.provider,
@@ -427,18 +523,21 @@ async def link_google(
     )
 
 
-@router.delete(
-    "/google/link",
+@router.post(
+    "/google/unlink",
     response_model=MessageResponse,
     summary="Disconnect Google from the signed-in user",
 )
-async def unlink_google(user: CurrentUser, session: DbSession) -> MessageResponse:
-    """Detach Google, refusing to leave the account with no way in.
+async def unlink_google(
+    payload: GoogleUnlinkRequest, user: CurrentUser, session: DbSession
+) -> MessageResponse:
+    """Detach Google, behind the same step-up, refusing to lock the account out.
 
-    There is no self-service recovery for an account with neither a password nor
-    a provider, so the refusal is the difference between an inconvenience and a
-    permanently unreachable workspace.
+    A `POST` rather than a `DELETE` because it carries a body: the step-up
+    password has no business in a query string or a URL.
     """
+    await _require_step_up(user, payload.password.get_secret_value(), session)
+
     removed = await GoogleAuthService(session).unlink(user_id=user.id)
     return MessageResponse(
         message="Google disconnected." if removed else "No Google account was linked."

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import EmailStr, Field, SecretStr, field_validator
 
@@ -28,7 +29,24 @@ class TenantRead(CamelCaseModel):
     default_currency: str
 
 
-class RegisterRequest(CamelCaseModel):
+class LegalAcceptanceFields(CamelCaseModel):
+    """Explicit acceptance, sent with every signup.
+
+    The versions travel with the booleans so a page that has been open since
+    before a wording change cannot record agreement to text the person never
+    saw. The backend compares them with the published values and refuses a
+    mismatch rather than accepting whatever arrives.
+    """
+
+    terms_accepted: bool = Field(
+        description="Must be true. A checkbox in the browser is not evidence on its own."
+    )
+    privacy_accepted: bool
+    terms_version: str = Field(min_length=1, max_length=64)
+    privacy_version: str = Field(min_length=1, max_length=64)
+
+
+class RegisterRequest(LegalAcceptanceFields):
     """Payload for creating a new tenant and its first user.
 
     Deliberately does **not** accept a role. The first user of a tenant is
@@ -140,6 +158,16 @@ __all__ = [
 ]
 
 
+class GoogleNonceRequest(CamelCaseModel):
+    """Which operation the nonce is being minted for.
+
+    Stated by the caller but *recorded server-side*: the later credential
+    request cannot claim a different intent, because the stored record decides.
+    """
+
+    intent: Literal["login", "signup"]
+
+
 class GoogleNonceResponse(CamelCaseModel):
     """A one-time value the browser hands to Google and we later check.
 
@@ -151,23 +179,52 @@ class GoogleNonceResponse(CamelCaseModel):
     expires_in_seconds: int
 
 
-class GoogleSignInRequest(CamelCaseModel):
-    """The complete credential from Google's button, plus our nonce.
+class GoogleLoginRequest(CamelCaseModel):
+    """Sign in with an already-linked Google account.
 
-    `credential` is the raw JWT exactly as Google issued it. It is never decoded
-    in the browser for any purpose the backend then trusts.
+    `credential` is the raw JWT exactly as Google issued it; nothing in the
+    browser decodes it for any purpose the backend then trusts.
+
+    `nonce` is **required**. It was optional, which meant a caller could decline
+    replay protection by omitting it.
     """
 
     credential: str = Field(min_length=1, max_length=8192)
-    nonce: str | None = Field(default=None, max_length=256)
+    nonce: str = Field(min_length=1, max_length=256)
+
+
+class GoogleSignupRequest(LegalAcceptanceFields):
+    """Create a new workspace from a Google credential.
+
+    Separate from login on purpose: the combined endpoint could silently
+    register somebody who meant to sign in. It also carries the same acceptance
+    fields as a password signup, because signing up with Google is still
+    signing up.
+    """
+
+    credential: str = Field(min_length=1, max_length=8192)
+    nonce: str = Field(min_length=1, max_length=256)
     company_name: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class GoogleLinkRequest(CamelCaseModel):
-    """Attach a Google account to the signed-in user."""
+    """Attach a Google account to the signed-in user.
+
+    `password` is the step-up: an ordinary access token is not enough authority
+    to change how an account can be signed into. Users with no local password
+    cannot reach this endpoint, because they have nothing to step up with and
+    linking a second provider is not yet supported.
+    """
 
     credential: str = Field(min_length=1, max_length=8192)
-    nonce: str | None = Field(default=None, max_length=256)
+    nonce: str = Field(min_length=1, max_length=256)
+    password: SecretStr = Field(min_length=1, max_length=1024)
+
+
+class GoogleUnlinkRequest(CamelCaseModel):
+    """Disconnect Google. Also step-up protected."""
+
+    password: SecretStr = Field(min_length=1, max_length=1024)
 
 
 class GoogleIdentityRead(CamelCaseModel):

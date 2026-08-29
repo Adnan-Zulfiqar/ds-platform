@@ -73,6 +73,25 @@ class User(IdentifiedBase, SoftDeleteMixin):
 
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- Legal acceptance at registration (AUTH-G1-R1) ---------------------
+    #
+    # Nullable because users who registered before this existed accepted
+    # nothing that was recorded. Back-filling a timestamp would be inventing
+    # evidence of agreement; `NULL` is the honest representation of "not
+    # captured".
+    #
+    # The version is stored alongside the timestamp so the record points at a
+    # document somebody can look up, rather than at "whatever the wording said
+    # that day".
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    privacy_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    privacy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     __table_args__ = (
         # Scoped to the tenant, for the reason in the class docstring.
         # Soft-deleted users still occupy their email within the tenant; freeing

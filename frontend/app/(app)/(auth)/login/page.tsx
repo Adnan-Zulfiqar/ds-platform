@@ -183,6 +183,7 @@ function LoginForm() {
 
             <div className="w-full">
               <GoogleSignInButton
+                intent="login"
                 onSuccess={() => router.replace(searchParams.get("next") ?? "/dashboard")}
                 text="signin_with"
               />

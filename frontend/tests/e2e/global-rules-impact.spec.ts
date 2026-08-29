@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_URL, buildAccount, isApiReachable } from "./helpers/auth";
+import {
+  API_URL,
+  buildAccount,
+  isApiReachable,
+  LEGAL_ACCEPTANCE_BODY,
+} from "./helpers/auth";
 import { canSeed, seedDrafts as seedIntoDatabase } from "./helpers/seed";
 
 /**
@@ -33,6 +38,7 @@ async function signIn(page: Page): Promise<Session> {
       password: account.password,
       firstName: "E2E",
       lastName: "Impact",
+      ...LEGAL_ACCEPTANCE_BODY,
     },
   });
   expect(response.ok(), await response.text()).toBeTruthy();

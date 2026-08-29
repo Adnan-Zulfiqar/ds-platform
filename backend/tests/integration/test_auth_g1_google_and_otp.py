@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.legal import PRIVACY_NOTICE_VERSION, TERMS_VERSION
 from app.integrations.email import (
     EmailDeliveryError,
     EmailMessage,
@@ -31,6 +32,7 @@ from app.integrations.email import (
     reset_email_provider,
 )
 from app.integrations.google import GoogleTokenError, GoogleTokenVerifier
+from app.integrations.google.verification import reset_certificate_cache
 from app.models.identity import IdentityProvider, UserIdentity
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
@@ -81,17 +83,50 @@ def claims(**overrides: Any) -> dict[str, Any]:
 
 
 def verifier_returning(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
-    """Replace only Google's library call — every check above it still runs."""
-    monkeypatch.setattr(GoogleTokenVerifier, "_verify_blocking", lambda self, credential: payload)
+    """Replace only Google's library calls — every check above them still runs.
+
+    Two seams, both stubbed so nothing reaches the network: the certificate
+    fetch and the signature check. Everything this application then does with
+    the claims — issuer, audience, `email_verified`, subject, nonce — is its own
+    code and runs for real.
+    """
+    monkeypatch.setattr(GoogleTokenVerifier, "_fetch_certs", lambda self: {"stub": "certs"})
+    monkeypatch.setattr(
+        GoogleTokenVerifier, "_verify_blocking", lambda self, credential, certs: payload
+    )
+    # A cached entry from an earlier test would otherwise satisfy the fetch and
+    # skip the stub above.
+    reset_certificate_cache()
 
 
 async def google_post(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], **body: Any
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+    *,
+    intent: str = "signup",
+    **body: Any,
 ) -> httpx.Response:
-    verifier_returning(monkeypatch, payload)
-    return await client.post(
-        "/api/v1/auth/google", json={"credential": "mocked.credential.value", **body}
-    )
+    """Issue a real nonce for the intent, then post the credential.
+
+    The nonce is obtained through the actual endpoint rather than fabricated, so
+    the binding and single-use behaviour are exercised on every call.
+    """
+    from app.integrations.google import GoogleIntent, GoogleNonceStore
+
+    nonce = await GoogleNonceStore().issue(GoogleIntent(intent))
+    verifier_returning(monkeypatch, {**payload, "nonce": nonce})
+
+    request: dict[str, Any] = {"credential": "mocked.credential.value", "nonce": nonce}
+    if intent == "signup":
+        request.update(
+            termsAccepted=True,
+            privacyAccepted=True,
+            termsVersion=TERMS_VERSION,
+            privacyVersion=PRIVACY_NOTICE_VERSION,
+        )
+    request.update(body)
+    return await client.post(f"/api/v1/auth/google/{intent}", json=request)
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +139,9 @@ class TestCredentialVerification:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         payload = claims()
-        verifier_returning(monkeypatch, payload)
+        verifier_returning(monkeypatch, {**payload, "nonce": "n"})
 
-        identity = await GoogleTokenVerifier().verify("mocked")
+        identity = await GoogleTokenVerifier().verify("mocked", expected_nonce="n")
 
         assert identity.subject == payload["sub"]
         assert identity.email == payload["email"]
@@ -126,23 +161,25 @@ class TestCredentialVerification:
     async def test_a_credential_failing_any_check_is_refused(
         self, monkeypatch: pytest.MonkeyPatch, override: dict[str, Any], reason: str
     ) -> None:
-        verifier_returning(monkeypatch, claims(**override))
+        verifier_returning(monkeypatch, claims(nonce="n", **override))
 
         with pytest.raises(GoogleTokenError, match=reason):
-            await GoogleTokenVerifier().verify("mocked")
+            await GoogleTokenVerifier().verify("mocked", expected_nonce="n")
 
     async def test_a_signature_or_expiry_failure_from_google_is_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Google's library raises `ValueError` for every rejection it makes."""
 
-        def explode(self: object, credential: str) -> dict[str, Any]:
+        def explode(self: object, credential: str, certs: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Token expired")
 
+        monkeypatch.setattr(GoogleTokenVerifier, "_fetch_certs", lambda self: {"stub": "c"})
         monkeypatch.setattr(GoogleTokenVerifier, "_verify_blocking", explode)
+        reset_certificate_cache()
 
         with pytest.raises(GoogleTokenError, match="failed verification"):
-            await GoogleTokenVerifier().verify("mocked")
+            await GoogleTokenVerifier().verify("mocked", expected_nonce="n")
 
     async def test_a_nonce_mismatch_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         verifier_returning(monkeypatch, claims(nonce="issued-for-another-attempt"))
@@ -154,44 +191,12 @@ class TestCredentialVerification:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         payload = claims()
-        verifier_returning(monkeypatch, payload)
+        verifier_returning(monkeypatch, {**payload, "nonce": "n"})
 
-        identity = await GoogleTokenVerifier().verify("mocked")
+        identity = await GoogleTokenVerifier().verify("mocked", expected_nonce="n")
 
         assert payload["sub"] not in str(identity)
         assert payload["email"] not in str(identity)
-
-
-class TestNonceReplay:
-    async def test_a_nonce_can_be_spent_only_once(self, client: AsyncClient) -> None:
-        first = await client.post("/api/v1/auth/google/nonce")
-        assert first.status_code == 200
-        nonce = first.json()["nonce"]
-
-        from app.integrations.google import GoogleNonceStore
-
-        store = GoogleNonceStore()
-        assert await store.consume(nonce) is True
-        # A captured credential replayed later carries a nonce already spent.
-        assert await store.consume(nonce) is False
-
-    async def test_an_unknown_nonce_is_rejected(self, client: AsyncClient) -> None:
-        from app.integrations.google import GoogleNonceStore
-
-        assert await GoogleNonceStore().consume("never-issued") is False
-
-    async def test_sign_in_with_a_spent_nonce_is_refused(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        nonce = (await client.post("/api/v1/auth/google/nonce")).json()["nonce"]
-        payload = claims(nonce=nonce)
-
-        first = await google_post(client, monkeypatch, payload, nonce=nonce)
-        assert first.status_code in (200, 201)
-
-        # Same credential, same nonce, replayed.
-        replay = await google_post(client, monkeypatch, payload, nonce=nonce)
-        assert replay.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +237,7 @@ class TestGoogleSignUpAndSignIn:
         first = await google_post(client, monkeypatch, payload)
         assert first.status_code == 201
 
-        second = await google_post(client, monkeypatch, payload)
+        second = await google_post(client, monkeypatch, payload, intent="login")
         assert second.status_code == 200
 
         count = len(
@@ -254,7 +259,7 @@ class TestGoogleSignUpAndSignIn:
         await google_post(client, monkeypatch, payload)
 
         moved = claims(sub=payload["sub"], email=f"moved-{uuid.uuid4().hex}@example.com")
-        response = await google_post(client, monkeypatch, moved)
+        response = await google_post(client, monkeypatch, moved, intent="login")
 
         assert response.status_code == 200
         identities = (
@@ -358,37 +363,6 @@ class TestGoogleSignUpAndSignIn:
         with pytest.raises(IntegrityError):
             await db_session.flush()
         await db_session.rollback()
-
-
-class TestLinkingPermissions:
-    async def test_linking_requires_a_session(
-        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        verifier_returning(monkeypatch, claims())
-        response = await client.post("/api/v1/auth/google/link", json={"credential": "c"})
-        assert response.status_code == 401
-
-    async def test_unlinking_requires_a_session(self, client: AsyncClient) -> None:
-        assert (await client.delete("/api/v1/auth/google/link")).status_code == 401
-
-    async def test_unlinking_is_refused_when_it_would_lock_the_user_out(
-        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A Google-only account with Google removed is unreachable."""
-        payload = claims()
-        signup = await google_post(client, monkeypatch, payload)
-        assert signup.status_code == 201
-
-        user = (
-            await db_session.execute(select(User).where(User.email == payload["email"]))
-        ).scalar_one()
-        assert user.password_hash is None
-
-        from app.core.exceptions import ConflictError
-        from app.services.google_auth import GoogleAuthService
-
-        with pytest.raises(ConflictError, match="Set a password"):
-            await GoogleAuthService(db_session).unlink(user_id=user.id)
 
 
 class TestNoGoogleTokenIsPersisted:

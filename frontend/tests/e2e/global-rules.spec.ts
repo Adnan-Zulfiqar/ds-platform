@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_URL, buildAccount, isApiReachable } from "./helpers/auth";
+import {
+  API_URL,
+  buildAccount,
+  isApiReachable,
+  LEGAL_ACCEPTANCE_BODY,
+} from "./helpers/auth";
 
 /**
  * M3A-4A — Settings → Global Rules.
@@ -45,6 +50,7 @@ async function signIn(page: Page): Promise<void> {
       password: account.password,
       firstName: "E2E",
       lastName: "Operator",
+      ...LEGAL_ACCEPTANCE_BODY,
     },
   });
   expect(response.ok(), await response.text()).toBeTruthy();

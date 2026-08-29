@@ -1,6 +1,12 @@
 import type { APIRequestContext } from "@playwright/test";
 
-import { API_URL, TEST_PASSWORD, type TestAccount, buildAccount } from "./auth";
+import {
+  API_URL,
+  LEGAL_ACCEPTANCE_BODY,
+  TEST_PASSWORD,
+  type TestAccount,
+  buildAccount,
+} from "./auth";
 
 /** Product id from the captured AliExpress fixture used in backend integration tests. */
 export const FIXTURE_PRODUCT_ID = "3256806389000685";
@@ -41,6 +47,7 @@ export async function registerViaApi(
         password: account.password,
         firstName: "E2E",
         lastName: "Operator",
+        ...LEGAL_ACCEPTANCE_BODY,
       },
     });
 

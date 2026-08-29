@@ -337,7 +337,11 @@ class SecuritySettings(_EnvFileSettings):
     #: a stored digest is brute-forceable in milliseconds unless it is keyed.
     #: Sharing the JWT signing key would mean one leak compromised both, and
     #: rotating either for the other's sake.
-    otp_hmac_key: SecretStr = SecretStr("insecure-local-otp-key-change-me")
+    #: Published in this repository, so it is safe only where nothing real is
+    #: at stake. Deployed environments refuse to start with it.
+    INSECURE_OTP_KEY_DEFAULT: ClassVar[str] = "insecure-local-otp-key-change-me"
+
+    otp_hmac_key: SecretStr = SecretStr(INSECURE_OTP_KEY_DEFAULT)
 
     access_token_ttl_minutes: int = Field(default=15, ge=1)
     refresh_token_ttl_days: int = Field(default=30, ge=1)
@@ -1031,6 +1035,11 @@ class GoogleOAuthSettings(_EnvFileSettings):
     allowed_issuers: tuple[str, ...] = ("accounts.google.com", "https://accounts.google.com")
     #: Tolerance for clock drift between this host and Google, in seconds.
     clock_skew_seconds: int = Field(default=10, ge=0, le=60)
+    #: Bounds on the certificate fetch. A worker thread does not bound a socket:
+    #: without these, a black-holed Google endpoint accumulates one stuck thread
+    #: per sign-in until the executor is exhausted.
+    connect_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    read_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     #: How long a browser-issued nonce stays valid before the credential must be
     #: obtained again. Short: it is a one-time anti-replay value, not a session.
     nonce_ttl_seconds: int = Field(default=300, ge=60, le=900)
@@ -1283,6 +1292,7 @@ class Settings(_EnvFileSettings):
         self._verify_ebay_deletion_endpoint()
 
         self._validate_deployed_encryption()
+        self._validate_deployed_auth_providers()
 
         if not self.security.cookie_secure:
             # The refresh cookie is the longest-lived credential the browser
@@ -1329,6 +1339,61 @@ class Settings(_EnvFileSettings):
                 "EBAY_MARKETPLACE_DELETION_ENDPOINT must not be an internal IP address in "
                 f"{self.environment}; eBay must be able to reach it."
             )
+
+    def _validate_deployed_auth_providers(self) -> None:
+        """Refuse to deploy sign-in or email in a state that only fails later.
+
+        Each of these has the same shape as the encryption-key problem: the
+        application starts, reports healthy, and breaks at the moment a real
+        person tries to use it.
+
+        The OTP key is the sharpest of them. A six-digit code keyed with a
+        published development value is a code an attacker can brute-force
+        offline from a stolen Redis snapshot, and sharing the JWT signing key
+        means one leak compromises both — so both are refused rather than
+        warned about.
+        """
+        otp_key = self.security.otp_hmac_key.get_secret_value()
+
+        if not otp_key:
+            raise ValueError(
+                f"SECURITY_OTP_HMAC_KEY is empty in {self.environment}. Password-reset "
+                "codes would be keyed with nothing."
+            )
+        if otp_key == SecuritySettings.INSECURE_OTP_KEY_DEFAULT:
+            raise ValueError(
+                f"SECURITY_OTP_HMAC_KEY is still the development default in "
+                f"{self.environment}. It is published in this repository, so stored "
+                "reset codes would be brute-forceable offline."
+            )
+        if otp_key == self.security.secret_key.get_secret_value():
+            raise ValueError(
+                f"SECURITY_OTP_HMAC_KEY equals SECURITY_SECRET_KEY in {self.environment}. "
+                "Separate keys mean one leak does not compromise both, and either can "
+                "be rotated without the other."
+            )
+
+        if self.google_oauth.client_id == "" and self.email.provider == "resend":
+            # Not fatal on its own; the specific checks below are.
+            pass
+
+        # Google: enabled means the frontend is offering the button.
+        if self.google_oauth.client_id and len(self.google_oauth.client_id) < 10:
+            raise ValueError(f"GOOGLE_OAUTH_CLIENT_ID looks malformed in {self.environment}.")
+
+        # Resend: turning delivery on without a key means the first password
+        # reset fails, for a person who is already locked out.
+        if self.email.sends_real_email:
+            if self.resend.api_key is None or not self.resend.api_key.get_secret_value():
+                raise ValueError(
+                    f"EMAIL_PROVIDER is 'resend' in {self.environment} but "
+                    "RESEND_API_KEY is not set. Password-reset email would fail at "
+                    "the first send."
+                )
+            if not self.email.from_address.strip():
+                raise ValueError(
+                    f"EMAIL_FROM is empty in {self.environment} while Resend is enabled."
+                )
 
     def _validate_deployed_encryption(self) -> None:
         """Refuse to deploy with unusable or publicly-known encryption keys.

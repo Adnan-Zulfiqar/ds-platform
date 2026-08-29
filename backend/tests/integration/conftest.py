@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core.config import settings
 from app.core.context import clear_context
+from app.core.legal import PRIVACY_NOTICE_VERSION, TERMS_VERSION
 from app.integrations.aliexpress import service as aliexpress_service_module
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -195,6 +196,12 @@ def registration_payload(**overrides: object) -> dict[str, object]:
         "password": STRONG_PASSWORD,
         "firstName": "Ada",
         "lastName": "Lovelace",
+        # Registration now requires explicit acceptance, so the shared helper
+        # supplies it. A test that wants to prove the refusal pops these.
+        "termsAccepted": True,
+        "privacyAccepted": True,
+        "termsVersion": TERMS_VERSION,
+        "privacyVersion": PRIVACY_NOTICE_VERSION,
     }
     payload.update(overrides)
     return payload

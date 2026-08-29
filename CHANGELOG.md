@@ -10,7 +10,81 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **AUTH-G1 — Google sign-in and password reset by one-time code.** Sign in with
+  Google's own rendered button, and reset a forgotten password with a six-digit
+  emailed code. Identities live in a provider-neutral `user_identities` table
+  (migration `0031`); no Google ID, access or refresh token is ever stored, and
+  the flow uses no client secret because it exchanges no authorization code. A
+  Google sign-in whose address already has a local account is refused with
+  actionable guidance rather than linked automatically — Google proves who
+  controls an address today, not who registered it here.
+
+  Not proven and not claimed: **no live Google sign-in has been performed and no
+  real email has been sent.** See
+  [docs/auth/AUTH_G1_DEPLOYMENT_HANDOFF.md](docs/auth/AUTH_G1_DEPLOYMENT_HANDOFF.md).
+
+### Changed
+
+- **BREAKING — `POST /auth/register` requires legal acceptance.** The request
+  must carry `termsAccepted`, `privacyAccepted`, `termsVersion` and
+  `privacyVersion`; a false flag or an unrecognised version is refused with
+  `400 legal_acceptance_required`, and the accepted versions are stored on the
+  user (migration `0032`). No compatibility window: a signup recorded with no
+  evidence of consent is precisely what this prevents. Every caller in this
+  repository moved with it.
+
+  There is still **no Terms of Service document**, so the recorded version is
+  the sentinel `"unpublished"` and the form says so. A stored row is not
+  agreement to terms nobody has written.
+
+- **BREAKING — `POST /auth/google` is replaced by five explicit endpoints**
+  (`/google/nonce`, `/google/link/nonce`, `/google/login`, `/google/signup`,
+  `/google/link`). One endpoint that inferred sign-in from sign-up could create
+  a workspace for somebody who meant to sign in. Nonces are now single-use and
+  bound to their intent, so one minted for a login cannot be presented to a
+  signup or a link.
+
 ### Fixed
+
+- **AUTH-G1-R1 — the acceptance gate was on the wrong control.** The
+  registration form disabled its *Company name* input until the acceptance box
+  was ticked, leaving the first field of the form dead on arrival, while the
+  submit button was not gated at all. Worse, the client sent `termsAccepted:
+  true` as a hard-coded constant regardless of what the person had ticked — so
+  an account could be recorded as having accepted documents nobody agreed to,
+  which is worse than recording nothing. The gate now sits on the actions that
+  record acceptance, and the value sent is the value given.
+
+  Found by running the whole browser suite rather than the milestone's own
+  tests: 200 of 351 failed on the disabled field, and every one of those was
+  invisible to the 36 tests written for the milestone.
+
+- **AUTH-G1-R1 — the Google button stacked duplicates on re-render.** Its effect
+  depended on callbacks passed as inline arrows, so any parent state change
+  re-ran it, fetched a second nonce and appended a second Google button to the
+  same container. The callbacks and the acceptance flag are now read through
+  refs, and the container is cleared before Google draws into it.
+
+- **AUTH-G1-R1 — the CSP blocked Google's own stylesheet.** `style-src` omitted
+  `accounts.google.com`, so `gsi/style` was refused and the real button would
+  have rendered unstyled in production.
+
+- **AUTH-G1-R1 — the browser suite was contacting `accounts.google.com`.**
+  Because `/login` and `/register` mount the Google button, every test that
+  signed in through the UI made a live request to Google and got a 403 back
+  from the synthetic test client id. Sign-in helpers now abort that request; the
+  specs that are *about* the button stub it instead.
+
+- **AUTH-G1-R1 — several security controls were advisory rather than enforced.**
+  The Google nonce could be omitted to skip replay protection entirely; the OTP
+  cooldown and attempt counter were read-then-write and admitted a burst; the
+  credential verification transport had no timeout, so a slow Google endpoint
+  accumulated one stuck worker thread per sign-in; linking and unlinking Google
+  needed no password. Each is now enforced — mandatory nonce, atomic Redis
+  operations, a bounded transport with a cached certificate set, and a password
+  step-up.
 
 - **EBAY-C0.1 — every legitimate eBay retry was being rejected with 409.** Found
   in production logs, not in review: **7 logical notifications** had been

@@ -51,6 +51,7 @@ export default function RegisterPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const router = useRouter();
+  const [accepted, setAccepted] = useState(false);
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     // Validate as the user types, but only after the first blur. Validating on
@@ -79,6 +80,8 @@ export default function RegisterPage() {
         password: values.password,
         firstName: values.firstName || undefined,
         lastName: values.lastName || undefined,
+        // What was ticked, not what we would like to have been ticked.
+        acceptedLegal: accepted,
       });
     } catch (error) {
       if (error instanceof ApiError) {
@@ -270,14 +273,53 @@ export default function RegisterPage() {
                 </FormItem>
               )}
             />
+
+            {/* Acceptance is captured here and enforced on the server. The
+                checkbox alone proves nothing — the request can be made without
+                it — so `services/auth.ts` sends the versions and the backend
+                refuses a mismatch or a false flag.
+
+                The Terms are not yet published, and this says so rather than
+                linking to a page that does not exist. */}
+            <label
+              className="flex items-start gap-2 text-sm text-muted-foreground"
+              htmlFor="accept-legal"
+            >
+              <input
+                id="accept-legal"
+                data-testid="accept-legal"
+                type="checkbox"
+                required
+                checked={accepted}
+                onChange={(e) => setAccepted(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-input"
+              />
+              <span>
+                I have read the{" "}
+                <Link href="/privacy" className="text-primary hover:underline">
+                  Privacy Notice
+                </Link>{" "}
+                and accept the Terms of Service. Our Terms are not yet published;
+                we will ask you to review them when they are.
+              </span>
+            </label>
           </CardContent>
 
           <CardFooter className="flex-col gap-4">
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {/* The acceptance gate belongs here, on the action that records
+                it — not on an input, where it made the first field of the form
+                unusable until the box was ticked. `noValidate` is set on the
+                form, so the checkbox's own `required` attribute is inert and
+                this is the only client-side gate; the server enforces the real
+                one. */}
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={isSubmitting || !accepted}
+            >
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {isSubmitting ? "Creating account..." : "Create account"}
             </Button>
-
 
             {/* Google's own button renders below. The divider is ours; the
                 button is not, because a look-alike is the pattern phishing
@@ -290,6 +332,8 @@ export default function RegisterPage() {
 
             <div className="w-full">
               <GoogleSignInButton
+                intent="signup"
+                legalAccepted={accepted}
                 onSuccess={() => router.replace("/dashboard")}
                 text="signup_with"
               />

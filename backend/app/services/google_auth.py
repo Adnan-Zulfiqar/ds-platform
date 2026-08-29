@@ -33,26 +33,25 @@ only — nothing matches on it.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, PermissionDeniedError
+from app.core.exceptions import AuthenticationError, ConflictError, PermissionDeniedError
 from app.core.logging import get_logger
 from app.integrations.google import GoogleIdentity
 from app.models.identity import IdentityProvider, UserIdentity
 from app.models.user import User
 from app.repositories.user import normalise_email
-from app.services.auth import AuthResult, AuthService
+from app.services.auth import AuthResult, AuthService, LegalAcceptance
 
 logger = get_logger(__name__)
 
 __all__ = [
     "GoogleAccountConflictError",
     "GoogleAuthService",
-    "GoogleSignInResult",
+    "GoogleSignInUnavailableError",
 ]
 
 
@@ -67,12 +66,8 @@ class GoogleAccountConflictError(ConflictError):
     code = "google_account_requires_linking"
 
 
-@dataclass(frozen=True, slots=True)
-class GoogleSignInResult:
-    """A completed Google sign-in."""
-
-    auth: AuthResult
-    created: bool
+class GoogleSignInUnavailableError(AuthenticationError):
+    """No linked identity. Deliberately indistinguishable from other failures."""
 
 
 class GoogleAuthService:
@@ -111,54 +106,76 @@ class GoogleAuthService:
         ).scalar_one_or_none()
 
     # ------------------------------------------------------------- sign-in
+    #
+    # Login and signup are separate operations, not one endpoint that guesses.
+    # The combined version meant a request intended as a sign-in could silently
+    # create an account and a tenant — so a typo, or a credential for an address
+    # nobody here had ever seen, provisioned a workspace. Each now refuses to do
+    # the other's job.
 
-    async def sign_in(
-        self, identity: GoogleIdentity, *, company_name: str | None = None
-    ) -> GoogleSignInResult:
-        """Authenticate or register, from an already-verified credential.
+    async def login(self, identity: GoogleIdentity) -> AuthResult:
+        """Authenticate an already-linked Google account.
 
-        The credential must have been through `GoogleTokenVerifier`; this method
-        trusts its argument and nothing else does.
+        **Creates nothing.** No user, no tenant, no identity. An unknown subject
+        is refused, whether or not a local account happens to share the address.
         """
         existing = await self._identity_for(identity.subject)
+        if existing is None:
+            # Identical refusal whether the address is unknown or belongs to a
+            # local account: distinguishing them is an existence oracle.
+            raise GoogleSignInUnavailableError(
+                "No DropPilot account is connected to that Google account."
+            )
 
-        if existing is not None:
-            # Known identity. The address may have changed at Google since the
-            # link was made — that is fine and must not create a second account,
-            # because the subject is what identifies them.
-            user = (
-                await self._session.execute(select(User).where(User.id == existing.user_id))
-            ).scalar_one()
+        user = (
+            await self._session.execute(select(User).where(User.id == existing.user_id))
+        ).scalar_one()
+        if not user.is_active or user.deleted_at is not None:
+            raise PermissionDeniedError("This account is not available.")
 
-            if not user.is_active or user.deleted_at is not None:
-                # Same message a disabled local account gets.
-                raise PermissionDeniedError("This account is not available.")
+        existing.last_authenticated_at = func.now()
+        # The address at Google may have changed since linking. That is fine and
+        # must not create a second account — the subject identifies the person.
+        if identity.email != (existing.provider_email or ""):
+            existing.provider_email = identity.email
+        await self._session.flush()
 
-            existing.last_authenticated_at = func.now()
-            if identity.email != (existing.provider_email or ""):
-                existing.provider_email = identity.email
-            await self._session.flush()
+        auth = await self._auth.authenticate_verified_user(user)
+        logger.info("google_login", user_id=str(user.id))
+        return auth
 
-            auth = await self._auth.authenticate_verified_user(user)
-            logger.info("google_sign_in", user_id=str(user.id))
-            return GoogleSignInResult(auth=auth, created=False)
+    async def signup(
+        self,
+        identity: GoogleIdentity,
+        *,
+        acceptance: LegalAcceptance,
+        company_name: str | None = None,
+    ) -> AuthResult:
+        """Register a new workspace from a verified Google credential.
 
-        # No identity yet. Does a local account already own this address?
+        **Never behaves as login.** A subject that already has an identity is
+        refused rather than quietly signed in, so a signup request cannot be
+        used to probe which accounts exist by observing that it "worked".
+        """
+        if await self._identity_for(identity.subject) is not None:
+            raise ConflictError(
+                "That Google account is already connected to a DropPilot account. Sign in instead."
+            )
+
         normalised = normalise_email(identity.email)
         if await self._local_user_for(normalised) is not None:
-            logger.info("google_sign_in_requires_linking")
+            logger.info("google_signup_requires_linking")
             raise GoogleAccountConflictError(
                 "An account already exists for this email address. Sign in with your "
                 "password and connect Google from your account settings."
             )
 
-        # Genuinely new. Reuse the ordinary registration path so a Google signup
-        # gets the same tenant, the same owner role and the same rules.
         auth = await self._auth.register_federated_user(
             company_name=company_name or self._default_company_name(identity),
             email=normalised,
             first_name=self._first_name(identity),
             last_name=self._last_name(identity),
+            acceptance=acceptance,
         )
 
         self._session.add(
@@ -173,15 +190,15 @@ class GoogleAuthService:
         try:
             await self._session.flush()
         except IntegrityError as exc:
-            # Two concurrent first sign-ins for the same subject. The unique
-            # constraint is the arbiter; one of them loses here rather than a
-            # duplicate account being created.
+            # Two concurrent first signups for one subject. The unique
+            # constraint decides; one loses here rather than a duplicate
+            # account being created.
             await self._session.rollback()
             logger.warning("google_signup_raced")
-            raise ConflictError("Sign-in could not be completed. Please try again.") from exc
+            raise ConflictError("Sign-up could not be completed. Please try again.") from exc
 
         logger.info("google_signup", user_id=str(auth.user.id), tenant_id=str(auth.tenant.id))
-        return GoogleSignInResult(auth=auth, created=True)
+        return auth
 
     # ------------------------------------------------------- link / unlink
 

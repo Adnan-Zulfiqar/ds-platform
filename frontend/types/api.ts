@@ -274,6 +274,12 @@ export interface RegisterPayload {
   password: string;
   firstName?: string;
   lastName?: string;
+  /**
+   * Whether the person accepted the Privacy Notice and Terms. Carried
+   * explicitly so the value sent is the value they gave; the server refuses a
+   * signup that does not carry a true one.
+   */
+  acceptedLegal: boolean;
 }
 
 /** Query parameters accepted by every list endpoint. */

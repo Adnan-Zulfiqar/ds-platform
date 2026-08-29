@@ -5,7 +5,12 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ApiError } from "@/lib/api-client";
 import { env } from "@/lib/env";
-import { requestGoogleNonce, signInWithGoogle } from "@/services/auth";
+import {
+  loginWithGoogle,
+  requestGoogleNonce,
+  signUpWithGoogle,
+  type GoogleIntent,
+} from "@/services/auth";
 
 /**
  * Google's official sign-in button.
@@ -64,6 +69,22 @@ function loadGsiScript(): Promise<void> {
 }
 
 export interface GoogleSignInButtonProps {
+  /**
+   * Which operation this button performs. Stated explicitly rather than
+   * inferred from the page: the endpoint that guessed between signing in and
+   * registering could silently create a workspace for somebody who meant to
+   * sign in.
+   */
+  intent: GoogleIntent;
+  /**
+   * For `signup` only: whether the person has accepted the legal documents.
+   *
+   * Signing up with Google is still signing up, so it carries the same
+   * acceptance a password signup does. Until it is given the button is inert
+   * and any credential that arrives anyway is refused — the inert styling is a
+   * hint to the person, not the control.
+   */
+  legalAccepted?: boolean;
   /** Where to send the browser once a session exists. */
   onSuccess: () => void;
   /** Shown above the button; `null` clears it. */
@@ -72,6 +93,8 @@ export interface GoogleSignInButtonProps {
 }
 
 export function GoogleSignInButton({
+  intent,
+  legalAccepted = false,
   onSuccess,
   onConflict,
   text = "continue_with",
@@ -85,13 +108,51 @@ export function GoogleSignInButton({
 
   const clientId = env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 
+  const blocked = intent === "signup" && !legalAccepted;
+
+  /**
+   * Read through a ref, not the closure.
+   *
+   * Google is handed a callback once, at `initialize`. If `handleCredential`
+   * changed identity whenever acceptance changed, the effect below would have
+   * to re-run to hand Google the new one — fetching a second nonce and
+   * redrawing the button on every tick of the checkbox, and leaving a window
+   * where Google still holds the previous closure and refuses a signup the
+   * person has just accepted. A ref keeps one stable callback that always sees
+   * the current value.
+   */
+  const legalAcceptedRef = useRef(legalAccepted);
+  legalAcceptedRef.current = legalAccepted;
+
+  // Same reason, for the callbacks. Both arrive as inline arrows from the page,
+  // so they are a new identity on every render. Held in the effect's dependency
+  // list they made it re-run on any parent state change — which fetched a fresh
+  // nonce and appended a *second* Google button to the container each time.
+  const onSuccessRef = useRef(onSuccess);
+  onSuccessRef.current = onSuccess;
+  const onConflictRef = useRef(onConflict);
+  onConflictRef.current = onConflict;
+
   const handleCredential = useCallback(
     async (credential: string, nonce: string) => {
+      const accepted = legalAcceptedRef.current;
+      if (intent === "signup" && !accepted) {
+        // Reached only if a credential arrives past the inert styling. The
+        // acceptance is a precondition, so refuse rather than send a flag the
+        // person did not set.
+        setError("Please accept the Privacy Notice and Terms before continuing.");
+        return;
+      }
+
       setStatus("working");
       setError(null);
       try {
-        await signInWithGoogle({ credential, nonce });
-        onSuccess();
+        if (intent === "signup") {
+          await signUpWithGoogle({ credential, nonce, acceptedLegal: accepted });
+        } else {
+          await loginWithGoogle({ credential, nonce });
+        }
+        onSuccessRef.current();
       } catch (caught) {
         // 409 is the deliberate refusal to auto-link an existing local account.
         // It needs its own guidance because the person can act on it, unlike a
@@ -105,14 +166,24 @@ export function GoogleSignInButton({
             "An account already exists for that email address. Sign in with your " +
             "password, then connect Google from your account settings.";
           setError(message);
-          onConflict?.(message);
+          onConflictRef.current?.(message);
+        } else if (caught instanceof ApiError && caught.status === 401 && intent === "login") {
+          // Login deliberately does not fall back to creating an account. The
+          // person is told what to do instead.
+          setError(
+            "No DropPilot account is connected to that Google account. " +
+              "Use Sign up with Google to create one.",
+          );
         } else {
           setError("Google sign-in could not be completed. Please try again.");
         }
         setStatus("idle");
       }
     },
-    [onConflict, onSuccess],
+    // Deliberately empty of the callbacks and of `legalAccepted`: they are all
+    // read through refs, so this identity is stable and the effect below runs
+    // once per mount rather than once per parent render.
+    [intent],
   );
 
   useEffect(() => {
@@ -129,7 +200,9 @@ export function GoogleSignInButton({
         // The nonce is fetched before the script so the button is never drawn
         // in a state where clicking it would produce a credential we cannot
         // check.
-        const { nonce } = await requestGoogleNonce();
+        // Bound server-side to this intent, so it cannot be replayed against
+        // a different operation.
+        const { nonce } = await requestGoogleNonce(intent);
         await loadGsiScript();
         if (cancelled || !container.current) return;
 
@@ -150,6 +223,11 @@ export function GoogleSignInButton({
           cancel_on_tap_outside: true,
         });
 
+        // Google appends into the container. If this effect ever runs twice —
+        // a Fast Refresh, a StrictMode double-invoke, an `intent` change — the
+        // previous button must go, or two identical buttons stack up.
+        container.current.replaceChildren();
+
         id.renderButton(container.current, {
           type: "standard",
           theme: "outline",
@@ -168,7 +246,7 @@ export function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [clientId, handleCredential, text]);
+  }, [clientId, handleCredential, intent, text]);
 
   if (status === "unavailable") {
     return null;
@@ -186,7 +264,12 @@ export function GoogleSignInButton({
       <div
         ref={container}
         aria-labelledby={headingId}
-        className="flex min-h-[44px] justify-center"
+        aria-disabled={blocked || undefined}
+        className={
+          blocked
+            ? "pointer-events-none flex min-h-[44px] justify-center opacity-50"
+            : "flex min-h-[44px] justify-center"
+        }
         data-testid="google-button-container"
       />
       <span id={headingId} className="sr-only">

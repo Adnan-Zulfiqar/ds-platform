@@ -7,7 +7,7 @@ no Google access or refresh token is ever requested or stored.
 
 from __future__ import annotations
 
-from app.integrations.google.nonce import GoogleNonceStore
+from app.integrations.google.nonce import GoogleIntent, GoogleNonceStore, NonceRecord
 from app.integrations.google.verification import (
     GOOGLE_SCOPES,
     GoogleIdentity,
@@ -18,7 +18,9 @@ from app.integrations.google.verification import (
 __all__ = [
     "GOOGLE_SCOPES",
     "GoogleIdentity",
+    "GoogleIntent",
     "GoogleNonceStore",
     "GoogleTokenError",
     "GoogleTokenVerifier",
+    "NonceRecord",
 ]

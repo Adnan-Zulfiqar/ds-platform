@@ -3,6 +3,7 @@ import axios from "axios";
 import { apiClient } from "@/lib/api-client";
 import { setAccessToken } from "@/lib/auth/token-store";
 import { env } from "@/lib/env";
+import { legalAcceptance } from "@/lib/legal";
 import type {
   AuthenticatedIdentity,
   AuthResponse,
@@ -24,7 +25,14 @@ export const authKeys = {
 };
 
 export async function register(payload: RegisterPayload): Promise<AuthResponse> {
-  const { data } = await apiClient.post<AuthResponse>("/auth/register", payload);
+  // Acceptance travels with every signup, as the value the person actually
+  // gave. The backend refuses a false or mismatched one, so a caller that
+  // forgets gets a clear failure rather than a silent bypass.
+  const { acceptedLegal, ...account } = payload;
+  const { data } = await apiClient.post<AuthResponse>("/auth/register", {
+    ...account,
+    ...legalAcceptance(acceptedLegal),
+  });
   setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
   return data;
 }
@@ -89,30 +97,71 @@ export interface GoogleNonce {
   expiresInSeconds: number;
 }
 
+export type GoogleIntent = "login" | "signup";
+
 /**
- * Ask the server for a one-time nonce.
+ * Ask the server for a one-time nonce, bound to one operation.
  *
  * Google embeds it in the credential it signs, which is what lets the backend
- * tell a fresh sign-in from a replayed one.
+ * tell a fresh attempt from a replayed one. The intent is recorded server-side,
+ * so a nonce obtained for signing in cannot later be presented to signup or
+ * link.
  */
-export async function requestGoogleNonce(): Promise<GoogleNonce> {
-  const { data } = await apiClient.post<GoogleNonce>("/auth/google/nonce", {});
+export async function requestGoogleNonce(intent: GoogleIntent): Promise<GoogleNonce> {
+  const { data } = await apiClient.post<GoogleNonce>("/auth/google/nonce", { intent });
   return data;
 }
 
 /**
- * Exchange a Google credential for a DropPilot session.
+ * Sign in with an already-linked Google account.
  *
- * The credential is passed through untouched. Nothing decodes it here: what the
- * browser thinks it says is irrelevant, and only the backend's verification of
- * the signature counts.
+ * The credential is passed through untouched — nothing decodes it here, because
+ * what the browser thinks it says is irrelevant and only the backend's
+ * signature check counts.
+ *
+ * **Creates nothing.** If the Google account is not linked, this fails; it does
+ * not quietly register a workspace, which the previous combined endpoint did.
  */
-export async function signInWithGoogle(payload: {
+export async function loginWithGoogle(payload: {
   credential: string;
-  nonce?: string;
+  nonce: string;
 }): Promise<AuthResponse> {
-  const { data } = await apiClient.post<AuthResponse>("/auth/google", payload);
+  const { data } = await apiClient.post<AuthResponse>("/auth/google/login", payload);
   setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+  return data;
+}
+
+/**
+ * Create an account with Google, carrying the same acceptance a password
+ * signup needs. The backend enforces it; this only transports it.
+ */
+export async function signUpWithGoogle(payload: {
+  credential: string;
+  nonce: string;
+  companyName?: string;
+  acceptedLegal: boolean;
+}): Promise<AuthResponse> {
+  const { acceptedLegal, ...rest } = payload;
+  const { data } = await apiClient.post<AuthResponse>("/auth/google/signup", {
+    ...rest,
+    ...legalAcceptance(acceptedLegal),
+  });
+  setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+  return data;
+}
+
+/** Link Google to the signed-in account. Requires the account password. */
+export async function linkGoogle(payload: {
+  credential: string;
+  nonce: string;
+  password: string;
+}): Promise<void> {
+  await apiClient.post("/auth/google/link", payload);
+}
+
+/** A link nonce, bound server-side to the signed-in user. */
+export async function requestGoogleLinkNonce(): Promise<GoogleNonce> {
+  const { data } = await apiClient.post<GoogleNonce>("/auth/google/link/nonce", {});
   return data;
 }
 
