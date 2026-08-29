@@ -16,6 +16,8 @@ noted as *published terms, not accepted* until someone confirms acceptance.
 | **Cloudflare** | Tunnel and TLS termination via `cloudflared` (PID confirmed running) | Request metadata and **client IP addresses** at the edge; traffic content in transit | Global anycast network | Cloudflare's published terms and DPA — **acceptance not yet confirmed** | Cloudflare publishes SCC/UK-addendum based terms. **Not verified for this account.** | **Active** |
 | **eBay** | Seller OAuth, listing and order APIs; marketplace account deletion notifications | Seller account identifier, display name, scopes, tokens; whatever the seller authorises | eBay's own infrastructure, international | eBay Developers Program agreement — accepted to obtain credentials | eBay is an independent controller for its own platform data. Transfers occur under eBay's terms | **Active** (connection only; no listing or order import yet) |
 | **Shopify** | Merchant store connection, product and order APIs | Shop domain and id, access token, catalogue and order data | Shopify infrastructure, international | Shopify Partner Program terms | Shopify's own DPA and transfer terms apply to data it processes | Active when a merchant connects |
+| **Google** (Identity Services) | Sign-in. The browser obtains a signed ID token; we verify it | The address, name and Google's immutable subject identifier. **No Google token is stored** | Google infrastructure, international | Google Terms of Service; the OAuth client is registered to `https://app.whiteto.com` | Google is an independent controller for its own account data. **No DPA or transfer assessment completed by DESIRLY LIMITED** | **Active once enabled** — Google app is still in Testing mode |
+| **Resend** | Transactional email: password-reset codes only | Recipient address, subject, message body | **Ireland (`eu-west-1`)** — sending domain `auth.whiteto.com` verified there | Resend's published terms | Sending region is in the EEA. **No DPA signed or transfer assessment completed** | **Configured, not enabled** — no API key exists yet |
 | **AliExpress / Alibaba** | Supplier catalogue and ordering | App credentials, product data, order placement details | Alibaba infrastructure, **including outside the UK/EEA** | AliExpress Open Platform terms | **No transfer mechanism established by DESIRLY LIMITED.** Requires review before order placement handles buyer addresses | Active when a merchant connects |
 
 ## Configured but disabled
@@ -28,10 +30,13 @@ noted as *published terms, not accepted* until someone confirms acceptance.
 
 ## Not present
 
-* **No email provider.** Outbound email is not implemented — no SMTP, no
-  transactional email service. Verification tokens are generated and stored but
-  nothing sends them. This also means **no provider receives customer email
-  addresses**.
+* **No marketing email.** Resend carries transactional messages only — one
+  message type, the password-reset code. There is no mailing list, no campaign
+  tooling and no marketing scope. Email verification tokens are still generated
+  and stored but nothing sends them.
+* **No Firebase.** Google sign-in uses Identity Services directly. Firebase
+  Authentication was not adopted: it would put a second identity store and a
+  second session authority beside the one this platform already has.
 * **No analytics, advertising or tracking provider.** Verified by repository
   search: nothing in `package.json`, and the only "Sentry" reference is a
   comment in `frontend/app/error.tsx` marking where a reporter would go.

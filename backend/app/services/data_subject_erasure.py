@@ -57,6 +57,7 @@ from app.core.redis import CacheClient, CacheError, RedisPurpose, get_redis
 from app.models.ai_prompt import AIPrompt, PromptExecution
 from app.models.ebay import EbayConnection
 from app.models.email_verification import EmailVerificationToken
+from app.models.identity import UserIdentity
 from app.models.integration import AliExpressConnection
 from app.models.inventory import InventorySyncRun
 from app.models.notification import Notification
@@ -172,6 +173,10 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
     UserReference(
         "notifications", Notification, Notification.user_id, "delete", Notification.tenant_id
     ),
+    # A federated identity exists only so one person can sign in. Leaving it
+    # behind would keep a Google subject pointing at an erased account — and
+    # would let that Google account sign back into it.
+    UserReference("user_identities", UserIdentity, UserIdentity.user_id, "delete", None),
     # Workspace-owned rows that merely name who acted.
     # `ai_prompts` carries no tenant column — the user id is the only scope
     # available, and a user belongs to exactly one tenant, so it is sufficient.

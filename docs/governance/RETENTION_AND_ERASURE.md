@@ -26,6 +26,11 @@ anyone remembering to act.
 | Login attempt counters | 300 s window | Redis TTL | `security.login_attempt_window_seconds` |
 | Login lockout | 900 s | Redis TTL | `security.login_lockout_seconds` |
 | Cache entries | 300 s default | Redis TTL | `redis.default_ttl_seconds` |
+| Password-reset code | 600 s | Redis TTL; stored as a keyed HMAC, never in the clear | `password_reset.otp_ttl_seconds` |
+| Password-reset ticket | 600 s | Redis TTL; keyed HMAC, single-use | `password_reset.ticket_ttl_seconds` |
+| Reset resend cooldown | 60 s | Redis TTL | `password_reset.resend_cooldown_seconds` |
+| Reset request counters | 3600 s | Redis TTL, keyed on hashed address and IP | `password_reset.requests_per_*_per_hour` |
+| Google sign-in nonce | 300 s | Redis TTL, consumed on use | `google_oauth.nonce_ttl_seconds` |
 | Marketplace credentials | Until disconnect | **Hard delete** of the row and its ciphertext | see below |
 | eBay connection on account deletion | On notification | Hard delete across every workspace | `app/integrations/ebay/deletion.py` |
 | Rotated log files | 30 days | `scripts/prune_logs.py`, **only where logs are persisted** | [LOG_RETENTION.md](LOG_RETENTION.md) |

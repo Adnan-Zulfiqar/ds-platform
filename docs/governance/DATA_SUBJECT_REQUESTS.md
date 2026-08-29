@@ -120,6 +120,7 @@ back, **3** database erasure complete but cache cleanup pending (see section 6).
 | refresh tokens | ai_prompts, prompt_executions |
 | email verification tokens | inventory_sync_runs, order_sync_runs |
 | role grants (physically — a soft-deleted grant still grants) | price_changes, global_rule_versions |
+| **Google/provider identities** | — |
 | notifications | product_imports, product_versions, rule_applications |
 | | stores, shopify/aliexpress/**ebay** connections |
 

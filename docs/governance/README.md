@@ -49,7 +49,9 @@ requirement or a claim the software currently cannot support.
 | 4 | **Log persistence undecided** | Nothing is written to disk today, so nothing is retained — but also nothing is available for security investigation. Whichever way this goes, the privacy notice must match | DESIRLY LIMITED |
 | 5 | **`app.whiteto.com` does not resolve** | The privacy URL, the OAuth return URL and the application itself all depend on it (carried over from EBAY-C1) | DESIRLY LIMITED |
 | 6 | **No exact buyer erasure** | `orders` carries no buyer identifier, so a merchant's customer cannot be matched reliably. Shopper requests are referred to the merchant. Needs a stable identifier on `orders` | Engineering |
-| 7 | **Legal review of the public notice** | These documents are an engineering audit, not a legal opinion | Legal review |
+| 7 | **Google app is in Testing mode** | Only listed test users can sign in. Publishing requires Google's verification, which reviews the consent screen and the privacy policy URL | DESIRLY LIMITED |
+| 8 | **No Resend DPA or API key** | The key does not exist yet, and no processing agreement has been signed with Resend | DESIRLY LIMITED |
+| 9 | **Legal review of the public notice** | These documents are an engineering audit, not a legal opinion | Legal review |
 
-Items 1–4 are new in EBAY-C1.2 and item 6 in EBAY-C1.2-R1. Item 5 is unchanged from
+Items 1–4 are new in EBAY-C1.2, item 6 in EBAY-C1.2-R1, and items 7–8 in AUTH-G1. Item 5 is unchanged from
 [EBAY_C1_PUBLIC_PREREQUISITES.md](../ebay/EBAY_C1_PUBLIC_PREREQUISITES.md).

@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 
+import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -169,6 +170,23 @@ function LoginForm() {
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
+
+
+            {/* Google's own button renders below. The divider is ours; the
+                button is not, because a look-alike is the pattern phishing
+                pages use. */}
+            <div className="flex w-full items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-xs uppercase text-muted-foreground">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+
+            <div className="w-full">
+              <GoogleSignInButton
+                onSuccess={() => router.replace(searchParams.get("next") ?? "/dashboard")}
+                text="signin_with"
+              />
+            </div>
 
             <p className="text-center text-sm text-muted-foreground">
               Don&apos;t have an account?{" "}

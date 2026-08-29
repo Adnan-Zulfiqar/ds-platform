@@ -138,3 +138,82 @@ __all__ = [
     "TokenResponse",
     "VerifyEmailConfirmRequest",
 ]
+
+
+class GoogleNonceResponse(CamelCaseModel):
+    """A one-time value the browser hands to Google and we later check.
+
+    Google embeds it in the signed credential, so a token minted for a different
+    sign-in attempt — or captured and replayed — fails verification here.
+    """
+
+    nonce: str
+    expires_in_seconds: int
+
+
+class GoogleSignInRequest(CamelCaseModel):
+    """The complete credential from Google's button, plus our nonce.
+
+    `credential` is the raw JWT exactly as Google issued it. It is never decoded
+    in the browser for any purpose the backend then trusts.
+    """
+
+    credential: str = Field(min_length=1, max_length=8192)
+    nonce: str | None = Field(default=None, max_length=256)
+    company_name: str | None = Field(default=None, min_length=1, max_length=255)
+
+
+class GoogleLinkRequest(CamelCaseModel):
+    """Attach a Google account to the signed-in user."""
+
+    credential: str = Field(min_length=1, max_length=8192)
+    nonce: str | None = Field(default=None, max_length=256)
+
+
+class GoogleIdentityRead(CamelCaseModel):
+    """A linked provider identity, as the account page shows it.
+
+    **The provider subject is deliberately absent.** It is Google's stable
+    identifier for a person and the client has no use for it; putting it in a
+    response would create another place it has to be erased from.
+    """
+
+    provider: str
+    provider_email: str | None
+    linked_at: datetime
+    last_authenticated_at: datetime | None
+
+
+class PasswordResetRequestRequest(CamelCaseModel):
+    """Ask for a code. The response is identical whether or not you exist."""
+
+    email: EmailStr
+
+
+class PasswordResetChallengeResponse(CamelCaseModel):
+    """Deliberately says nothing about whether an account was found."""
+
+    challenge_id: str
+    expires_in_seconds: int
+    message: str
+
+
+class PasswordResetVerifyRequest(CamelCaseModel):
+    """Six digits against a challenge."""
+
+    challenge_id: str = Field(min_length=1, max_length=256)
+    code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
+
+
+class PasswordResetTicketResponse(CamelCaseModel):
+    """Short-lived, single-use authority to set a password."""
+
+    reset_ticket: str
+    expires_in_seconds: int
+
+
+class PasswordResetCompleteRequest(CamelCaseModel):
+    """Spend the ticket and set the new password."""
+
+    reset_ticket: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=1024)

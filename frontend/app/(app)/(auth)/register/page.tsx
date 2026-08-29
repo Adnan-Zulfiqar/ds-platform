@@ -6,6 +6,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 
+import { useRouter } from "next/navigation";
+
+import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +50,7 @@ export default function RegisterPage() {
   const { register: registerAccount } = useAuth();
   const [formError, setFormError] = useState<string | null>(null);
 
+  const router = useRouter();
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     // Validate as the user types, but only after the first blur. Validating on
@@ -273,6 +277,23 @@ export default function RegisterPage() {
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {isSubmitting ? "Creating account..." : "Create account"}
             </Button>
+
+
+            {/* Google's own button renders below. The divider is ours; the
+                button is not, because a look-alike is the pattern phishing
+                pages use. */}
+            <div className="flex w-full items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-xs uppercase text-muted-foreground">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+
+            <div className="w-full">
+              <GoogleSignInButton
+                onSuccess={() => router.replace("/dashboard")}
+                text="signup_with"
+              />
+            </div>
 
             <p className="text-center text-sm text-muted-foreground">
               Already have an account?{" "}

@@ -32,6 +32,7 @@ from app.models.ebay import (
     NotificationVerification,
 )
 from app.models.email_verification import EmailVerificationToken
+from app.models.identity import IdentityProvider, UserIdentity
 from app.models.integration import AliExpressConnection, IntegrationStatus
 from app.models.inventory import (
     InventoryChange,
@@ -106,6 +107,7 @@ __all__ = [
     "EmailVerificationToken",
     "FulfillmentStatus",
     "IdentifiedBase",
+    "IdentityProvider",
     "ImportStatus",
     "IntegrationStatus",
     "InventoryChange",
@@ -160,5 +162,6 @@ __all__ = [
     "TrackingEvent",
     "UUIDPrimaryKeyMixin",
     "User",
+    "UserIdentity",
     "UserRole",
 ]

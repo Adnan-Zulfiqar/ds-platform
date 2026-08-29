@@ -332,6 +332,13 @@ class SecuritySettings(_EnvFileSettings):
     # Short-lived by design. An access token cannot be revoked before it
     # expires — revocation happens on the refresh token — so its lifetime is
     # the window during which a stolen token remains usable.
+    #: Keys one-way codes at rest, and **only** that. Separate from
+    #: `secret_key` on purpose: a six-digit code has a million possibilities, so
+    #: a stored digest is brute-forceable in milliseconds unless it is keyed.
+    #: Sharing the JWT signing key would mean one leak compromised both, and
+    #: rotating either for the other's sake.
+    otp_hmac_key: SecretStr = SecretStr("insecure-local-otp-key-change-me")
+
     access_token_ttl_minutes: int = Field(default=15, ge=1)
     refresh_token_ttl_days: int = Field(default=30, ge=1)
 
@@ -1006,6 +1013,95 @@ class ObservabilitySettings(_EnvFileSettings):
     )
 
 
+class GoogleOAuthSettings(_EnvFileSettings):
+    """Google Identity Services sign-in.
+
+    **There is no client secret here, and that is not an omission.** The browser
+    receives a signed ID token from Google and posts it to this backend, which
+    verifies the signature against Google's published keys. No authorization
+    code is exchanged, so no confidential credential is involved. Adding one
+    would mean storing a secret this flow never uses.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="GOOGLE_OAUTH_", extra="ignore")
+
+    client_id: str = ""
+    #: Accepted issuers. Google publishes both spellings and rotates between
+    #: them; rejecting one would fail a fraction of legitimate sign-ins.
+    allowed_issuers: tuple[str, ...] = ("accounts.google.com", "https://accounts.google.com")
+    #: Tolerance for clock drift between this host and Google, in seconds.
+    clock_skew_seconds: int = Field(default=10, ge=0, le=60)
+    #: How long a browser-issued nonce stays valid before the credential must be
+    #: obtained again. Short: it is a one-time anti-replay value, not a session.
+    nonce_ttl_seconds: int = Field(default=300, ge=60, le=900)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.client_id)
+
+
+class EmailSettings(_EnvFileSettings):
+    """Transactional email. Resend in deployment, a stub everywhere else.
+
+    `provider` defaults to `stub` so a test run, a developer machine or a
+    misconfigured deployment sends nothing rather than silently mailing real
+    people. Enabling delivery is a deliberate act.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="EMAIL_", extra="ignore")
+
+    provider: Literal["stub", "resend"] = "stub"
+    from_address: str = Field(
+        default="DropPilot AI <security@auth.whiteto.com>", alias="EMAIL_FROM"
+    )
+    reply_to: str | None = None
+    #: Bounded. A hung provider must not hold a request open.
+    timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    #: Application-side send budget. The provider has its own quota; this stops
+    #: a loop or an abuse burst reaching it silently, and fails closed.
+    max_sends_per_hour: int = Field(default=200, ge=1)
+    #: Consecutive failures before the breaker opens.
+    breaker_failure_threshold: int = Field(default=5, ge=1)
+    breaker_cooldown_seconds: int = Field(default=300, ge=1)
+
+    @property
+    def sends_real_email(self) -> bool:
+        return self.provider != "stub"
+
+
+class ResendSettings(_EnvFileSettings):
+    """Resend credentials. The key is never returned, logged or echoed."""
+
+    model_config = SettingsConfigDict(env_prefix="RESEND_", extra="ignore")
+
+    api_key: SecretStr | None = None
+    #: The only host this integration may contact. Anything else is a bug or a
+    #: redirect, and both should fail rather than send customer data onward.
+    api_base_url: str = "https://api.resend.com"
+
+
+class PasswordResetSettings(_EnvFileSettings):
+    """One-time codes for password reset.
+
+    Six digits is a million possibilities — small enough that the controls
+    around it, not the code itself, are what make it safe. Hence the short
+    expiry, the attempt ceiling, the single active challenge, and storage as a
+    keyed HMAC rather than a bare hash.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PASSWORD_RESET_", extra="ignore")
+
+    otp_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    max_verification_attempts: int = Field(default=5, ge=1, le=10)
+    resend_cooldown_seconds: int = Field(default=60, ge=15, le=600)
+    #: The ticket handed out after a correct code. Short and single-use: it is
+    #: the authority to set a password, so it should outlive the code by as
+    #: little as possible.
+    ticket_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    requests_per_email_per_hour: int = Field(default=5, ge=1)
+    requests_per_ip_per_hour: int = Field(default=20, ge=1)
+
+
 class StorageSettings(_EnvFileSettings):
     """Object storage (AWS S3) configuration."""
 
@@ -1107,6 +1203,10 @@ class Settings(_EnvFileSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    google_oauth: GoogleOAuthSettings = Field(default_factory=GoogleOAuthSettings)
+    email: EmailSettings = Field(default_factory=EmailSettings)
+    resend: ResendSettings = Field(default_factory=ResendSettings)
+    password_reset: PasswordResetSettings = Field(default_factory=PasswordResetSettings)
     fx: FxSettings = Field(default_factory=FxSettings)
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)

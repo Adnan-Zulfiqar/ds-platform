@@ -75,3 +75,90 @@ export async function restoreSession(): Promise<AuthResponse | null> {
     return null;
   }
 }
+
+/**
+ * Google sign-in and password reset (AUTH-G1).
+ *
+ * Every one of these goes through this module rather than being called from a
+ * component, so the endpoint, the payload shape and the response type stay
+ * defined in one place.
+ */
+
+export interface GoogleNonce {
+  nonce: string;
+  expiresInSeconds: number;
+}
+
+/**
+ * Ask the server for a one-time nonce.
+ *
+ * Google embeds it in the credential it signs, which is what lets the backend
+ * tell a fresh sign-in from a replayed one.
+ */
+export async function requestGoogleNonce(): Promise<GoogleNonce> {
+  const { data } = await apiClient.post<GoogleNonce>("/auth/google/nonce", {});
+  return data;
+}
+
+/**
+ * Exchange a Google credential for a DropPilot session.
+ *
+ * The credential is passed through untouched. Nothing decodes it here: what the
+ * browser thinks it says is irrelevant, and only the backend's verification of
+ * the signature counts.
+ */
+export async function signInWithGoogle(payload: {
+  credential: string;
+  nonce?: string;
+}): Promise<AuthResponse> {
+  const { data } = await apiClient.post<AuthResponse>("/auth/google", payload);
+  setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+  return data;
+}
+
+export interface PasswordResetChallenge {
+  challengeId: string;
+  expiresInSeconds: number;
+  message: string;
+}
+
+/**
+ * Request a reset code.
+ *
+ * The response is identical whether or not the address has an account, so
+ * nothing the caller does with it may imply otherwise.
+ */
+export async function requestPasswordReset(email: string): Promise<PasswordResetChallenge> {
+  const { data } = await apiClient.post<PasswordResetChallenge>(
+    "/auth/password-reset/request",
+    { email },
+  );
+  return data;
+}
+
+export interface PasswordResetTicket {
+  resetTicket: string;
+  expiresInSeconds: number;
+}
+
+export async function verifyPasswordResetCode(payload: {
+  challengeId: string;
+  code: string;
+}): Promise<PasswordResetTicket> {
+  const { data } = await apiClient.post<PasswordResetTicket>(
+    "/auth/password-reset/verify",
+    payload,
+  );
+  return data;
+}
+
+export async function completePasswordReset(payload: {
+  resetTicket: string;
+  newPassword: string;
+}): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(
+    "/auth/password-reset/complete",
+    payload,
+  );
+  return data;
+}

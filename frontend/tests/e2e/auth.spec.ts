@@ -120,18 +120,24 @@ test.describe("Registration page", () => {
 });
 
 test.describe("Forgot password page", () => {
-  test("states plainly that reset is not yet available", async ({ page }) => {
-    /**
-     * The page must not fake a confirmation email. A locked-out user who is
-     * told to check their inbox will wait instead of contacting support.
-     */
+  /**
+   * This used to assert the page said reset was unavailable, which was the
+   * honest thing to show while no backend existed. AUTH-G1 implemented it, so
+   * the assertion was correctly invalidated and is replaced by the property
+   * that still matters: the page must never fake a confirmation.
+   *
+   * The full three-step flow is covered in `auth-g1.spec.ts`.
+   */
+  test("asks for an address and claims nothing before the backend answers", async ({
+    page,
+  }) => {
     await page.goto("/forgot-password");
 
-    await page.getByLabel("Email").fill("user@example.com");
-    await page.getByRole("button", { name: "Continue" }).click();
-
-    await expect(page.getByRole("heading", { name: "Not available yet" })).toBeVisible();
-    await expect(page.getByText(/No email has been sent/i)).toBeVisible();
+    await expect(page.getByTestId("reset-email")).toBeVisible();
+    // Nothing about a sent email until a request has actually been made.
+    await expect(page.getByTestId("reset-notice")).toHaveCount(0);
+    await expect(page.getByTestId("reset-done")).toHaveCount(0);
+    await expect(page.getByText(/Not available yet/i)).toHaveCount(0);
   });
 });
 

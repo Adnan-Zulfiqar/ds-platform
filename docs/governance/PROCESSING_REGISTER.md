@@ -213,6 +213,52 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
   `app/integrations/ebay/schemas.py` (the digest covers only topic, schema
   version, notification id and event date).
 
+### 10a. Federated sign-in (Google)
+
+* **Data** — Google's immutable subject identifier, the verified email address,
+  and the display name. `provider_email` is kept for display only; nothing
+  matches on it.
+* **Source** — a signed ID token from Google, verified server-side against
+  Google's published keys.
+* **Purpose** — let a person sign in without a password.
+* **Role** — controller. **Proposed basis** — performance of a contract.
+* **Recipients** — Google, which is an independent controller for its own
+  account data.
+* **Retention** — until the identity is unlinked or the account is erased.
+* **Erasure** — `user_identities` rows are **deleted** during platform-user
+  erasure. Leaving one behind would let the Google account sign back into an
+  erased user, so it is declared in `USER_REFERENCES` and the completeness guard
+  fails if a future table is not.
+* **Never stored** — no Google ID token, access token or refresh token. Scopes
+  are limited to `openid email profile`; no Gmail, Drive or contacts access is
+  requested.
+* **Evidence** — `app/models/identity.py`, `app/integrations/google/`,
+  `app/services/google_auth.py`, migration `0031`.
+
+### 10b. Password reset by one-time code
+
+* **Data** — the address the code is sent to; a keyed HMAC of the six-digit
+  code; a keyed HMAC of the reset ticket; an attempt counter. Hashed forms of
+  the address and client IP as rate-limit key names.
+* **Purpose** — let somebody who has lost access regain it.
+* **Role** — controller. **Proposed basis** — performance of a contract, with a
+  legitimate interest in the surrounding abuse controls.
+* **Recipients** — Resend, which delivers the message.
+* **Retention** — the challenge expires after **10 minutes**, the ticket after
+  **10 minutes**, the resend cooldown after **60 seconds**, and the hourly
+  request counters after **1 hour**. All in Redis, all expiring automatically.
+  Nothing is written to the database except the resulting password hash.
+* **Never stored** — the code itself, in any form that could be reversed. It is
+  kept as a domain-separated HMAC under a dedicated secret
+  (`SECURITY_OTP_HMAC_KEY`), because a bare SHA-256 of six digits is a table
+  lookup.
+* **Decision recorded: a Google-only user may set a password this way.** Losing
+  access to a Google account should not mean losing the workspace, and the code
+  goes to the address Google itself verified. Refusing would also be an
+  account-existence oracle.
+* **Evidence** — `app/services/password_reset.py`,
+  `app/integrations/email/`, `app/api/v1/auth/router.py`.
+
 ### 11. Support and privacy requests
 
 * **Data** — whatever the person includes in their email.

@@ -260,6 +260,100 @@ class AuthService(BaseService):
         self.logger.info("login_succeeded", user_id=str(user.id), tenant_id=str(tenant.id))
         return AuthResult(user=user, tenant=tenant, roles=role_names, tokens=tokens)
 
+    async def authenticate_verified_user(self, user: User) -> AuthResult:
+        """Issue a session for a user whose identity is already established.
+
+        Used by federated sign-in, where Google has verified who this is and
+        there is no password to check. Everything *after* that point is
+        identical to a password login — same tenant checks, same tokens, same
+        principal binding — because there should be exactly one definition of
+        what a DropPilot session is.
+
+        Deliberately takes a `User` rather than an address: the caller has
+        already resolved the account through a provider subject, and re-deriving
+        it from a mutable email here would reintroduce the very lookup federated
+        sign-in exists to avoid.
+        """
+        tenant = await self.tenants.get_by_id(user.tenant_id)
+        if tenant is None or not tenant.is_active:
+            self.logger.warning(
+                "federated_login_rejected_inactive_tenant",
+                user_id=str(user.id),
+                tenant_id=str(user.tenant_id),
+            )
+            raise InvalidCredentialsError("This account is not available.")
+
+        set_tenant_id(tenant.id)
+        role_names = await self.roles.list_role_names_for_user(user.id)
+
+        user.last_login_at = datetime.now(UTC)
+        await self.session.flush()
+
+        tokens = await self._issue_tokens(user=user, roles=role_names)
+        self._bind_principal(user=user, roles=role_names)
+
+        self.logger.info(
+            "federated_login_succeeded", user_id=str(user.id), tenant_id=str(tenant.id)
+        )
+        return AuthResult(user=user, tenant=tenant, roles=role_names, tokens=tokens)
+
+    async def register_federated_user(
+        self,
+        *,
+        company_name: str,
+        email: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> AuthResult:
+        """Register a user who has no password and will sign in via a provider.
+
+        The same transaction, tenant creation and owner-role assignment as
+        `register`. The one difference is `password_hash`, which stays `None`.
+
+        **No placeholder password is generated.** Inventing a random one to
+        satisfy a column would create a credential nobody knows, that cannot be
+        rotated, and that makes `has_local_password` a lie — the column is
+        nullable precisely so this case can be represented honestly.
+
+        `is_verified` is `True` unconditionally here, unlike the password path:
+        the provider asserted a verified address, which is a stronger check than
+        the email round-trip this platform would otherwise perform.
+        """
+        normalised_email = normalise_email(email)
+
+        existing = await self.auth_users.find_by_email(normalised_email)
+        if existing:
+            # The caller checks this first and returns a specific, actionable
+            # message. Reaching here means a race, so fail rather than link.
+            raise ConflictError("An account with this email address already exists.")
+
+        tenant = await self._create_tenant(company_name)
+
+        set_tenant_id(tenant.id)
+        users = UserRepository(self.session)
+        user = await users.create(
+            email=normalised_email,
+            first_name=first_name,
+            last_name=last_name,
+            password_hash=None,
+            is_active=True,
+            is_verified=True,
+        )
+
+        await self.roles.assign_by_name(user_id=user.id, name=RoleName.OWNER)
+        role_names = frozenset({RoleName.OWNER.value})
+
+        tokens = await self._issue_tokens(user=user, roles=role_names)
+        self._bind_principal(user=user, roles=role_names)
+
+        self.logger.info(
+            "federated_tenant_registered",
+            tenant_id=str(tenant.id),
+            tenant_slug=tenant.slug,
+            user_id=str(user.id),
+        )
+        return AuthResult(user=user, tenant=tenant, roles=role_names, tokens=tokens)
+
     async def _authenticate(self, normalised_email: str, password: str) -> User | None:
         """Return the user whose credentials match, or ``None``.
 

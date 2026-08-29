@@ -24,11 +24,27 @@ from app.api.deps import CurrentPrincipal, CurrentTenant, CurrentUser, DbSession
 from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError
+from app.integrations.email import EmailDeliveryError, send_password_reset_code
+from app.integrations.google import (
+    GoogleIdentity,
+    GoogleNonceStore,
+    GoogleTokenError,
+    GoogleTokenVerifier,
+)
 from app.schemas.auth import (
     AuthenticatedIdentity,
     AuthResponse,
+    GoogleIdentityRead,
+    GoogleLinkRequest,
+    GoogleNonceResponse,
+    GoogleSignInRequest,
     LoginRequest,
     LogoutRequest,
+    PasswordResetChallengeResponse,
+    PasswordResetCompleteRequest,
+    PasswordResetRequestRequest,
+    PasswordResetTicketResponse,
+    PasswordResetVerifyRequest,
     RefreshRequest,
     RegisterRequest,
     TenantRead,
@@ -39,6 +55,8 @@ from app.schemas.common import MessageResponse
 from app.schemas.user import UserRead
 from app.services.auth import AuthResult, AuthService
 from app.services.email_verification import EmailVerificationService
+from app.services.google_auth import GoogleAuthService
+from app.services.password_reset import PasswordResetService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -110,6 +128,29 @@ def _build_auth_response(result: AuthResult, *, include_refresh_in_body: bool) -
             refresh_expires_at=result.tokens.refresh_expires_at,
         ),
     )
+
+
+async def _verified_google_identity(credential: str, nonce: str | None) -> GoogleIdentity:
+    """Verify a credential, and consume the nonce that came with it.
+
+    One place, used by both sign-in and linking, so the two cannot drift into
+    checking different things. Every failure becomes the same 401: telling the
+    caller *which* check failed would let them iterate towards a token that
+    passes.
+    """
+    verifier = GoogleTokenVerifier()
+    if not verifier.configured:
+        raise AuthenticationError("Google sign-in is not available.")
+
+    # Consume first. A credential presented with a nonce that was already spent
+    # is a replay, and must fail before anything else is considered.
+    if nonce is not None and not await GoogleNonceStore().consume(nonce):
+        raise AuthenticationError("This sign-in attempt has expired. Try again.")
+
+    try:
+        return await verifier.verify(credential, expected_nonce=nonce)
+    except GoogleTokenError as exc:
+        raise AuthenticationError("Google sign-in could not be verified.") from exc
 
 
 @router.post(
@@ -301,3 +342,195 @@ async def confirm_email_verification(
         user=user,
     )
     return MessageResponse(message="Email address verified.")
+
+
+# ---------------------------------------------------------------------------
+# Google sign-in (AUTH-G1)
+# ---------------------------------------------------------------------------
+#
+# The browser gets a signed credential from Google's official button and posts
+# it here. Everything the browser says *about* that credential is ignored; only
+# what survives `GoogleTokenVerifier` is believed.
+
+
+@router.post(
+    "/google/nonce",
+    response_model=GoogleNonceResponse,
+    summary="Issue a one-time nonce for a Google sign-in attempt",
+)
+async def google_nonce() -> GoogleNonceResponse:
+    """Mint a nonce the browser passes to Google.
+
+    Google embeds it in the signed credential, so a token minted for a different
+    attempt — or captured and replayed later — fails verification here. It is
+    stored server-side and consumed on use, which is what makes it one-time
+    rather than merely unpredictable.
+    """
+    nonce = await GoogleNonceStore().issue()
+    return GoogleNonceResponse(
+        nonce=nonce, expires_in_seconds=settings.google_oauth.nonce_ttl_seconds
+    )
+
+
+@router.post(
+    "/google",
+    response_model=AuthResponse,
+    summary="Sign in or sign up with Google",
+)
+async def google_sign_in(
+    payload: GoogleSignInRequest, session: DbSession, response: Response
+) -> AuthResponse:
+    """Exchange a verified Google credential for a DropPilot session.
+
+    A first-time Google user gets a tenant, an owner role and a session — the
+    same registration path a password signup takes, minus the password.
+
+    An address that already has a **local** account is refused with a specific,
+    actionable code rather than linked automatically: an email match proves the
+    person controls the address today, not that they are the account holder.
+    """
+    identity = await _verified_google_identity(payload.credential, payload.nonce)
+
+    result = await GoogleAuthService(session).sign_in(identity, company_name=payload.company_name)
+
+    _set_refresh_cookie(
+        response,
+        result.auth.tokens.refresh_token,
+        settings.security.refresh_token_ttl_days * 86_400,
+    )
+    if result.created:
+        response.status_code = status.HTTP_201_CREATED
+    return _build_auth_response(result.auth, include_refresh_in_body=False)
+
+
+@router.post(
+    "/google/link",
+    response_model=GoogleIdentityRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Link a Google account to the signed-in user",
+)
+async def link_google(
+    payload: GoogleLinkRequest, user: CurrentUser, session: DbSession
+) -> GoogleIdentityRead:
+    """Attach Google to an existing account.
+
+    Requires an active session, which is the proof of continuity an email match
+    cannot give: whoever does this already holds the account.
+    """
+    identity = await _verified_google_identity(payload.credential, payload.nonce)
+    link = await GoogleAuthService(session).link(user_id=user.id, identity=identity)
+    return GoogleIdentityRead(
+        provider=link.provider,
+        provider_email=link.provider_email,
+        linked_at=link.created_at,
+        last_authenticated_at=link.last_authenticated_at,
+    )
+
+
+@router.delete(
+    "/google/link",
+    response_model=MessageResponse,
+    summary="Disconnect Google from the signed-in user",
+)
+async def unlink_google(user: CurrentUser, session: DbSession) -> MessageResponse:
+    """Detach Google, refusing to leave the account with no way in.
+
+    There is no self-service recovery for an account with neither a password nor
+    a provider, so the refusal is the difference between an inconvenience and a
+    permanently unreachable workspace.
+    """
+    removed = await GoogleAuthService(session).unlink(user_id=user.id)
+    return MessageResponse(
+        message="Google disconnected." if removed else "No Google account was linked."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Password reset by one-time code (AUTH-G1)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/password-reset/request",
+    response_model=PasswordResetChallengeResponse,
+    summary="Request a password-reset code",
+)
+async def request_password_reset(
+    payload: PasswordResetRequestRequest, request: Request, session: DbSession
+) -> PasswordResetChallengeResponse:
+    """Start a reset.
+
+    **The response is identical for every address** — registered, unregistered,
+    password-holding or Google-only. A challenge id is minted either way; one
+    for an unknown address simply never verifies. Anything else would make this
+    endpoint a list of who has an account here.
+    """
+    service = PasswordResetService(session)
+    challenge, code = await service.request(email=payload.email, client_ip=_client_ip(request))
+
+    if code is not None:
+        try:
+            await send_password_reset_code(email=payload.email, code=code)
+        except EmailDeliveryError:
+            # Do not leave a challenge the person cannot possibly satisfy: they
+            # would sit waiting for a code that was never sent. The response
+            # stays generic — a delivery failure is not their business and
+            # reporting it would also confirm the address exists.
+            await service.discard(challenge.challenge_id)
+
+    return PasswordResetChallengeResponse(
+        challenge_id=challenge.challenge_id,
+        expires_in_seconds=challenge.expires_in_seconds,
+        message=(
+            "If that address has an account, a six-digit code is on its way. "
+            "It expires in 10 minutes."
+        ),
+    )
+
+
+@router.post(
+    "/password-reset/verify",
+    response_model=PasswordResetTicketResponse,
+    summary="Exchange a code for a reset ticket",
+)
+async def verify_password_reset(
+    payload: PasswordResetVerifyRequest, session: DbSession
+) -> PasswordResetTicketResponse:
+    """Check the code and hand back a single-use ticket.
+
+    Expiry, a wrong code and an exhausted attempt count are one response, for
+    the same reason every login failure is: distinguishing them tells an
+    attacker which lever to pull next.
+    """
+    outcome = await PasswordResetService(session).verify(
+        challenge_id=payload.challenge_id, code=payload.code
+    )
+    if outcome is None:
+        raise AuthenticationError("That code is not valid. Request a new one.")
+    return PasswordResetTicketResponse(
+        reset_ticket=outcome.reset_ticket, expires_in_seconds=outcome.expires_in_seconds
+    )
+
+
+@router.post(
+    "/password-reset/complete",
+    response_model=MessageResponse,
+    summary="Set a new password with a reset ticket",
+)
+async def complete_password_reset(
+    payload: PasswordResetCompleteRequest, session: DbSession
+) -> MessageResponse:
+    """Spend the ticket, set the password, and end every existing session.
+
+    Revoking sessions is the point of the last step rather than a nicety: a
+    reset usually means the account may have been compromised, and leaving the
+    intruder's refresh token alive would make the reset cosmetic.
+    """
+    user_id = await PasswordResetService(session).complete(
+        reset_ticket=payload.reset_ticket, new_password=payload.new_password
+    )
+    if user_id is None:
+        raise AuthenticationError("That reset link is no longer valid. Start again.")
+
+    await AuthService(session).logout_all_sessions(user_id)
+    return MessageResponse(message="Password updated. Sign in with your new password.")

@@ -43,12 +43,26 @@ def _source() -> str:
 
 
 class TestRevisionGraph:
-    def test_the_history_has_one_head_and_0030_is_it(self) -> None:
-        """A second head is a merge nobody resolved, and stops ``upgrade head``."""
+    def test_the_history_has_exactly_one_head(self) -> None:
+        """A second head is a merge nobody resolved, and stops ``upgrade head``.
+
+        Asserts the property, not the current revision number. Pinning the head
+        to a literal meant every later migration had to edit an EBAY-C1 test —
+        AUTH-G1's `0031` did exactly that — which is churn that buys no extra
+        safety. That `0030` exists and sits where EBAY-C1 put it is covered by
+        `test_it_declares_0029_as_its_parent`.
+        """
         from alembic.script import ScriptDirectory
 
         heads = ScriptDirectory.from_config(_config()).get_heads()
-        assert list(heads) == ["0030"], f"expected the single head 0030, got {heads}"
+        assert len(heads) == 1, f"expected a single head, got {heads}"
+
+    def test_0030_is_still_in_the_history(self) -> None:
+        """EBAY-C1's migration must not have been removed or renumbered."""
+        from alembic.script import ScriptDirectory
+
+        revisions = {r.revision for r in ScriptDirectory.from_config(_config()).walk_revisions()}
+        assert "0030" in revisions
 
     def test_it_declares_0029_as_its_parent(self) -> None:
         source = _source()

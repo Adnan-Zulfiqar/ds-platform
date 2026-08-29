@@ -26,6 +26,18 @@ const clientEnvSchema = z.object({
 
   NEXT_PUBLIC_APP_NAME: z.string().min(1).default("DropPilot AI"),
 
+  /**
+   * Google's OAuth *client id*. Public by design — it appears in the sign-in
+   * request the browser makes, and Google's own documentation puts it in page
+   * source. There is deliberately no client secret counterpart: this flow
+   * exchanges no authorization code, so no confidential credential exists to
+   * leak into the bundle.
+   *
+   * Empty means Google sign-in is simply not offered, rather than offered and
+   * broken.
+   */
+  NEXT_PUBLIC_GOOGLE_CLIENT_ID: z.string().default(""),
+
   NEXT_PUBLIC_ENVIRONMENT: z
     .enum(["local", "test", "staging", "production"])
     .default("local"),
@@ -40,6 +52,7 @@ const parsed = clientEnvSchema.safeParse({
   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
   NEXT_PUBLIC_API_TIMEOUT_MS: process.env.NEXT_PUBLIC_API_TIMEOUT_MS,
   NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
+  NEXT_PUBLIC_GOOGLE_CLIENT_ID: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
   NEXT_PUBLIC_ENVIRONMENT: process.env.NEXT_PUBLIC_ENVIRONMENT,
 });
 

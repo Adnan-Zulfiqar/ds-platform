@@ -23,6 +23,14 @@ dependencies = [
     "structlog>=24.4.0",
     "python-json-logger>=2.0.7",
     "httpx>=0.28.0",
+    # Google's own ID-token verification. Used rather than hand-rolling JWT
+    # checks: the signature, the key rotation and the `aud`/`exp` handling are
+    # exactly the parts that are dangerous to get subtly wrong.
+    "google-auth>=2.35.0",
+    # `google.auth.transport.requests` is the transport the official example
+    # uses. It is synchronous, so every call runs in a worker thread rather than
+    # on the event loop.
+    "requests>=2.32.0",
     "boto3>=1.35.0",
     "tenacity>=9.0.0",
     # Argon2id password hashing. Chosen over bcrypt: it is memory-hard, so a
