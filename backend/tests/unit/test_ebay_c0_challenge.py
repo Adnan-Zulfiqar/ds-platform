@@ -26,6 +26,7 @@ from app.integrations.ebay.compliance import (
     challenge_response,
 )
 from app.integrations.ebay.exceptions import EbayChallengeError, EbayNotConfiguredError
+from tests.environment import TEST_OTP_HMAC_KEY
 
 pytestmark = pytest.mark.unit
 
@@ -269,6 +270,10 @@ class TestDeployedEndpointRules:
         "ALLOWED_HOSTS": "api.whiteto.com",
         "SECURITY_SECRET_KEY": "a" * 48,
         "SECURITY_ENCRYPTION_KEYS": "c2VjdXJlLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmcheA==",
+        # A deployed environment refuses to start without a distinct OTP key.
+        # Without it these tests assert an eBay endpoint rule but are stopped by
+        # an authentication one, which is a green suite proving nothing.
+        "SECURITY_OTP_HMAC_KEY": TEST_OTP_HMAC_KEY,
         "LOG_INCLUDE_REQUEST_BODY": "false",
         "SECURITY_COOKIE_SECURE": "true",
     }

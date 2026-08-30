@@ -46,7 +46,50 @@ production release.
   bound to their intent, so one minted for a login cannot be presented to a
   signup or a link.
 
+### Security
+
+- **AUTH-G1-R2 — `script-src` no longer permits inline script.** The policy
+  carried `'unsafe-inline'`, which allows exactly what an XSS payload needs and
+  made the directive decorative. It is replaced by a 128-bit nonce minted per
+  response in `middleware.ts`; Next.js stamps it onto every script tag it
+  renders, and `next-themes` is handed the same value for its own bootstrap
+  script. Verified in a browser rather than by reading the header: an injected
+  inline script does not run, a guessed nonce does not run, hydration and the
+  theme script do, and every script tag in the delivered HTML carries the
+  response's nonce.
+
+  **This makes every page render per request.** A build-time prerender has its
+  script tags written before the nonce exists. Stated in full in
+  [the deployment handoff](docs/auth/AUTH_G1_DEPLOYMENT_HANDOFF.md), including
+  the requirement that no shared cache stores these HTML responses.
+
+- **AUTH-G1-R2 — the Google link/unlink password step-up had no rate limit.** A
+  stolen session was an unlimited password oracle against the one operation that
+  grants a permanent second way into an account. Both operations now share a
+  single counter, keyed per user and per address, reserved *before* the hash is
+  checked so twenty concurrent guesses cannot all read a counter of zero.
+  Alternating between linking and unlinking does not double the allowance, a
+  correct password does not lift an active lockout, and Redis being unavailable
+  refuses rather than waves the attempt through — the opposite of the login
+  throttle, and for a stated reason.
+
 ### Fixed
+
+- **AUTH-G1-R2 — the password-reset retry loop was unbounded.** `while True`
+  around an optimistic lock terminates only because conflicts happen to be rare.
+  Under a burst it was a request that never returned while holding a connection
+  and an event-loop slot. It now retries eight times with jittered backoff and
+  then raises `503 password_reset_busy`: nothing written, no attempt spent, no
+  ticket issued, and the challenge left usable. Deliberately not reported as a
+  wrong code, which would burn a guess the person never made.
+
+- **AUTH-G1-R2 — the production-configuration tests depended on the developer's
+  shell.** No `DEPLOYED` fixture carried an OTP HMAC key, so on a clean machine
+  four of them failed and the rest asserted a guard they never reached — the
+  boot stopped on the missing OTP key first. The key is fixed by the harness in
+  `tests/environment.py`, every deployed fixture names it, and new tests pin
+  each of the four ways the key can be worthless as well as the fact that the
+  encryption, cookie and Resend guards are each reachable.
 
 - **AUTH-G1-R1 — the acceptance gate was on the wrong control.** The
   registration form disabled its *Company name* input until the acceptance box
@@ -76,6 +119,15 @@ production release.
   signed in through the UI made a live request to Google and got a 403 back
   from the synthetic test client id. Sign-in helpers now abort that request; the
   specs that are *about* the button stub it instead.
+
+- **AUTH-G1-R2 — the Google credential checks were asserted, not exercised.**
+  The suite mocked the library call, so the signature, audience and expiry
+  checks never ran. Thirteen controls now sign real RS256 tokens with a
+  throwaway in-process key against a fake certificate set, and prove refusal of
+  `alg=none`, a forged signature, a tampered payload, HS256 algorithm confusion
+  using the public certificate as the secret, an unknown `kid`, a wrong
+  audience, an expired token, a wrong issuer, an unverified email, and a
+  missing, wrong or declined nonce. No request reaches Google.
 
 - **AUTH-G1-R1 — several security controls were advisory rather than enforced.**
   The Google nonce could be omitted to skip replay protection entirely; the OTP

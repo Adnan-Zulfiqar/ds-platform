@@ -24,6 +24,7 @@ from app.core.config import (
     StorageSettings,
     _EnvFileSettings,
 )
+from tests.environment import TEST_OTP_HMAC_KEY
 
 pytestmark = pytest.mark.unit
 
@@ -170,6 +171,9 @@ class TestDeployedEnvironmentGuards:
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("SECURITY_SECRET_KEY", "insecure-local-development-key-change-me")
         monkeypatch.setenv("ALLOWED_HOSTS", "app.droppilot.ai")
+        # Pinned so this asserts the placeholder rule rather than whichever
+        # deployed guard the shell's environment happens to trip first.
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", TEST_OTP_HMAC_KEY)
 
         with pytest.raises(ValueError, match="placeholder"):
             Settings()
@@ -179,6 +183,7 @@ class TestDeployedEnvironmentGuards:
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("SECURITY_SECRET_KEY", "a" * 48)
         monkeypatch.setenv("ALLOWED_HOSTS", "*")
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", TEST_OTP_HMAC_KEY)
 
         with pytest.raises(ValueError, match="wildcard"):
             Settings()

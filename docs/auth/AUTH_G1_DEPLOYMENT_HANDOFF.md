@@ -171,24 +171,88 @@ Both were previously survivable misconfigurations that failed later, quietly.
 
 ### Content-Security-Policy
 
-The frontend now sends its own CSP. Google Identity Services needs four
-origins and gets exactly those:
+The frontend sends its own CSP, built per request in `middleware.ts` from
+`lib/csp.ts`. Google Identity Services needs four origins and gets exactly
+those, with no wildcard on `google.com`:
 
 ```
-script-src  https://accounts.google.com
-style-src   https://accounts.google.com
-frame-src   https://accounts.google.com
-connect-src https://accounts.google.com
-img-src     https://*.googleusercontent.com
+script-src  'self' 'nonce-<per response>' https://accounts.google.com
+style-src   'self' 'unsafe-inline'        https://accounts.google.com
+frame-src                                 https://accounts.google.com
+connect-src 'self' <API origin>           https://accounts.google.com
+img-src     'self' data:                  https://*.googleusercontent.com
 ```
 
 `style-src` was missing from the first cut and the browser blocked
 `accounts.google.com/gsi/style`, which would have drawn Google's button
-unstyled in production. It was caught by a console-error assertion in the wider
-end-to-end run, not by reading the header.
+unstyled. It was caught by a console-error assertion in the wider end-to-end
+run, not by reading the header.
 
-Nginx sets security headers at the edge as well; this is defence in depth for a
-direct-to-Node deployment.
+**`script-src` carries no `'unsafe-inline'`.** That keyword permits every inline
+script on the page, which is exactly the capability an XSS payload needs — it
+makes the strongest directive in the policy a no-op. A fresh 128-bit nonce is
+minted from Web Crypto for each response instead; Next.js reads the policy from
+the *request* header, finds the `'nonce-…'` token and stamps it onto every
+script tag it renders. `next-themes` is handed the same nonce explicitly,
+because Next.js cannot reach into a library's own inline script.
+
+`'unsafe-inline'` remains on **styles**. Next.js injects critical CSS inline and
+offers no nonce for it. Inline CSS is not script execution, and the exchange is
+a narrow style risk for the removal of the script one.
+
+#### What the nonce costs
+
+**Every page now renders per request.** A page prerendered at build time has its
+script tags written long before the nonce exists, so they would arrive without
+one and be refused. `app/layout.tsx` reads a request header, which opts the
+whole tree into dynamic rendering; the build output shows every route as `ƒ`
+rather than `○`.
+
+The bill is small here and is stated rather than discovered later: every route
+below `/` is an authenticated, user-specific dashboard that was already dynamic,
+and the three public pages (`/login`, `/register`, `/privacy`) are static markup
+with no data fetching. Downstream HTTP caching is unchanged — protected routes
+already send `no-store`, public ones are untouched — but **a shared cache must
+never store these responses keyed without the header**, because two visitors
+would then share one nonce. Nginx must not add caching for HTML on this origin.
+
+Nginx sets the other security headers at the edge as well; this is defence in
+depth for a direct-to-Node deployment.
+
+### Step-up throttling
+
+Linking and unlinking Google require the account password. That step-up is now
+rate limited, sharing one counter across both operations — separate counters
+would mean twice the guesses for anybody willing to alternate.
+
+```
+SECURITY_STEP_UP_MAX_ATTEMPTS=3            # per user and per address
+SECURITY_STEP_UP_ATTEMPT_WINDOW_SECONDS=300
+SECURITY_STEP_UP_LOCKOUT_SECONDS=900
+```
+
+Two things differ from the login throttle deliberately:
+
+* The attempt is **counted before** the password is checked, not after. Reading
+  a counter, verifying, then recording a failure lets twenty simultaneous
+  requests all read zero — twenty guesses inside a limit of three.
+* Redis being unavailable **refuses** the operation rather than allowing it.
+  Login fails open, because locking every customer out of the product is worse
+  than a window of unthrottled sign-in attempts. That trade does not carry over
+  to an operation that attaches a permanent second way into an account.
+
+Counters are keyed on a hash of tenant-and-user and a hash of the address —
+never an email — so a Redis dump is not a customer list.
+
+### Password reset under contention
+
+`verify` uses optimistic locking, and its retry is bounded at eight attempts
+with jittered backoff. An unbounded loop terminates only because conflicts are
+rare, which is an observation about typical load rather than a property of the
+algorithm. On exhaustion the caller gets `503 password_reset_busy`: no attempt
+was spent, no ticket was issued, and the challenge is untouched, so a later try
+still works. It is deliberately *not* reported as a wrong code — that would burn
+a guess the person never made.
 
 ### Still outstanding
 

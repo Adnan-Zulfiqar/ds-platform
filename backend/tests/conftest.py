@@ -14,6 +14,8 @@ from collections.abc import Generator
 
 import pytest
 
+from tests.environment import TEST_OTP_HMAC_KEY
+
 # --- Must run before application imports -----------------------------------
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("POSTGRES_HOST", "localhost")
@@ -38,6 +40,9 @@ os.environ.setdefault(
     "SECURITY_ENCRYPTION_KEYS",
     "dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=,dGVzdC1rZXktMi1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
 )
+# The OTP key is fixed by the harness rather than inherited from the shell —
+# see `tests.environment` for why that mattered.
+os.environ.setdefault("SECURITY_OTP_HMAC_KEY", TEST_OTP_HMAC_KEY)
 # Prompt mutation is off by default (audit A-03). The suite exercises create /
 # version / activate, so tests opt in explicitly without weakening production.
 os.environ.setdefault("AI_ALLOW_PROMPT_MUTATION", "true")

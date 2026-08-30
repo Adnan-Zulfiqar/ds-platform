@@ -1,0 +1,77 @@
+/**
+ * The Content-Security-Policy, and the nonce that makes it work without
+ * `'unsafe-inline'`.
+ *
+ * **Why a nonce at all.** `script-src 'unsafe-inline'` permits every inline
+ * script on the page, which is precisely the capability an XSS payload needs —
+ * it turns the strongest directive in the policy into a no-op. Next.js does
+ * emit inline scripts (the hydration bootstrap and the streamed RSC payload),
+ * so they cannot simply be banned. A per-response nonce is the supported way
+ * out: Next.js reads the policy from the *request* header, finds the
+ * `'nonce-…'` token in `script-src`, and stamps that value onto every script
+ * tag it renders. Anything an attacker injects has no nonce and does not run.
+ *
+ * **Why the nonce is generated per response and never reused.** A fixed nonce
+ * is worse than none: it is published in the HTML of every page, so an attacker
+ * reads it once and attaches it to their own injected script forever. It is
+ * minted in `middleware.ts` from the Web Crypto RNG on each request, appears
+ * only in the response header and the script tags of that one response, and is
+ * never written to a URL, a log, a cookie or browser storage.
+ *
+ * **Origins.** Each one is here for a single reason, and none is a wildcard on
+ * `google.com` — that would cover user-content hosts:
+ *
+ *   script-src   accounts.google.com     — the GIS client library
+ *   style-src    accounts.google.com     — the stylesheet that library loads
+ *   frame-src    accounts.google.com     — the account chooser it opens
+ *   connect-src  accounts.google.com     — the calls GIS makes while signing in
+ *   img-src      *.googleusercontent.com — avatars on the account chooser
+ *
+ * `'unsafe-inline'` remains on **styles** only. Next.js injects critical CSS
+ * inline and offers no nonce for it; inline CSS is not script execution, and
+ * the exchange is a narrow style risk for the removal of the script one.
+ *
+ * **Cost, stated plainly.** A per-request nonce means the HTML cannot be
+ * prerendered at build time, so every page renders dynamically. See
+ * `app/layout.tsx`.
+ */
+
+/** Bytes of entropy behind each nonce. 128 bits, the CSP3 recommendation. */
+const NONCE_BYTES = 16;
+
+/**
+ * A fresh nonce. Web Crypto, which the Edge runtime provides — `Math.random()`
+ * is predictable and would hand an attacker the value.
+ */
+export function createNonce(): string {
+  const bytes = new Uint8Array(NONCE_BYTES);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** The API the browser is allowed to talk to. Inlined at build time. */
+export const API_ORIGIN = new URL(
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000",
+).origin;
+
+export const GOOGLE_IDENTITY_ORIGIN = "https://accounts.google.com";
+
+/** The full policy for one response. */
+export function buildContentSecurityPolicy(nonce: string): string {
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    // No 'unsafe-inline'. The nonce is what lets Next.js hydrate.
+    `script-src 'self' 'nonce-${nonce}' ${GOOGLE_IDENTITY_ORIGIN}`,
+    `style-src 'self' 'unsafe-inline' ${GOOGLE_IDENTITY_ORIGIN}`,
+    "img-src 'self' data: https://*.googleusercontent.com",
+    "font-src 'self' data:",
+    `connect-src 'self' ${API_ORIGIN} ${GOOGLE_IDENTITY_ORIGIN}`,
+    `frame-src ${GOOGLE_IDENTITY_ORIGIN}`,
+  ].join("; ");
+}

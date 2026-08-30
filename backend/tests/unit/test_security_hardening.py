@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from app.core.config import SecuritySettings, Settings
+from tests.environment import TEST_OTP_HMAC_KEY
 
 pytestmark = pytest.mark.unit
 
@@ -33,6 +34,12 @@ DEPLOYED: dict[str, str] = {
     "ALLOWED_HOSTS": "app.droppilot.ai",
     "SECURITY_SECRET_KEY": VALID_SIGNING_KEY,
     "SECURITY_ENCRYPTION_KEYS": VALID_FERNET,
+    # Named explicitly rather than inherited. A deployed environment refuses to
+    # start without a distinct OTP key, so a fixture that leaves it out is not a
+    # valid production configuration — and every test below that breaks *one*
+    # thing would instead be stopped by this one, passing or failing on a
+    # message it never meant to assert.
+    "SECURITY_OTP_HMAC_KEY": TEST_OTP_HMAC_KEY,
     "LOG_INCLUDE_REQUEST_BODY": "false",
     "SECURITY_COOKIE_SECURE": "true",
 }
@@ -129,6 +136,119 @@ class TestDeployedCookieSecurity:
         monkeypatch.setenv("SECURITY_COOKIE_SECURE", "false")
 
         with pytest.raises(ValueError, match="SECURITY_COOKIE_SECURE"):
+            Settings()
+
+
+class TestDeployedOtpKey:
+    """The key that stands between a stolen Redis snapshot and every reset code.
+
+    A six-digit code is a million possibilities — offline, that is seconds. What
+    makes the stored digest worth anything is that it is an HMAC under a key the
+    attacker does not have. So each of the four ways that key can be worthless
+    refuses the boot rather than warning about it, and each is pinned here.
+
+    These are also the tests that keep the *other* deployed guards honest. When
+    the fixture omitted this key, an unset value fell back to the development
+    default and every deployed test in this module stopped on the OTP error
+    instead of the rule it was written for.
+    """
+
+    def test_a_missing_key_refuses_to_start(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unset is not neutral: the field falls back to the published default."""
+        monkeypatch.delenv("SECURITY_OTP_HMAC_KEY", raising=False)
+
+        with pytest.raises(ValueError, match="SECURITY_OTP_HMAC_KEY"):
+            Settings()
+
+    def test_an_empty_key_refuses_to_start(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty key is an unkeyed digest — a rainbow table with extra steps."""
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", "")
+
+        with pytest.raises(ValueError, match="SECURITY_OTP_HMAC_KEY is empty"):
+            Settings()
+
+    def test_the_development_default_refuses_to_start(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It is printed in this repository, so it is public."""
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", SecuritySettings.INSECURE_OTP_KEY_DEFAULT)
+
+        with pytest.raises(ValueError, match="development default"):
+            Settings()
+
+    def test_reusing_the_signing_key_refuses_to_start(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One value would mean one leak compromises both.
+
+        It would also block rotation: revoking a suspected signing key would
+        invalidate every stored reset digest at the same moment.
+        """
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", VALID_SIGNING_KEY)
+
+        with pytest.raises(ValueError, match="equals SECURITY_SECRET_KEY"):
+            Settings()
+
+    def test_a_distinct_key_lets_a_valid_production_configuration_start(
+        self, deployed: None
+    ) -> None:
+        """The guard must not block a correct deployment.
+
+        Asserted separately from the module's other happy-path test so a
+        regression names the OTP rule rather than the encryption one.
+        """
+        assert Settings().security.otp_hmac_key.get_secret_value() == TEST_OTP_HMAC_KEY
+
+    def test_the_fixture_key_is_not_one_the_guard_rejects(self) -> None:
+        """The fixture value itself must satisfy every rule it stands in for.
+
+        Without this, a future edit could set the fixture to something the guard
+        refuses and every deployed test in this module would fail on the OTP
+        message again — the exact failure this class exists to prevent.
+        """
+        assert TEST_OTP_HMAC_KEY
+        assert TEST_OTP_HMAC_KEY != SecuritySettings.INSECURE_OTP_KEY_DEFAULT
+        assert TEST_OTP_HMAC_KEY != VALID_SIGNING_KEY
+
+
+class TestDeployedGuardsAreNotMaskedByOtpConfiguration:
+    """Each deployed guard must be reachable, not shadowed by the one before it.
+
+    A guard that never runs because an earlier one always fires first is a guard
+    nobody is testing. These assert the *specific* message, so a reordering that
+    hid one of them would fail here rather than silently pass everywhere.
+    """
+
+    def test_the_encryption_guard_is_reached(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SECURITY_ENCRYPTION_KEYS", "")
+
+        with pytest.raises(ValueError, match="SECURITY_ENCRYPTION_KEYS is empty"):
+            Settings()
+
+    def test_the_cookie_guard_is_reached(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This one sits *after* the OTP check, so it is the one that broke."""
+        monkeypatch.setenv("SECURITY_COOKIE_SECURE", "false")
+
+        with pytest.raises(ValueError, match="SECURITY_COOKIE_SECURE"):
+            Settings()
+
+    def test_the_resend_guard_is_reached(
+        self, deployed: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Delivery switched on with no key fails at the first send — for
+        somebody who is already locked out of their account."""
+        monkeypatch.setenv("EMAIL_PROVIDER", "resend")
+        monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+        with pytest.raises(ValueError, match="RESEND_API_KEY is not set"):
             Settings()
 
 

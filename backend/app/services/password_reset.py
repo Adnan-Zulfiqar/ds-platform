@@ -33,6 +33,7 @@ recorded in `docs/governance/PROCESSING_REGISTER.md`.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -46,6 +47,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.exceptions import InfrastructureError
 from app.core.logging import get_logger
 from app.core.password import hash_password, validate_password_strength
 from app.core.redis import RedisPurpose, get_redis
@@ -54,10 +56,27 @@ from app.models.user import User
 logger = get_logger(__name__)
 
 __all__ = [
+    "PasswordResetBusyError",
     "PasswordResetService",
     "ResetChallenge",
     "ResetOutcome",
 ]
+
+
+class PasswordResetBusyError(InfrastructureError):
+    """Verification could not be completed because of contention, not because
+    the code was wrong.
+
+    A distinct error rather than a `None` return. `None` means "that code is not
+    valid", and saying that about an attempt which was never actually evaluated
+    would burn a guess the person did not spend and tell them something untrue.
+
+    It carries no information an attacker can use: it says the server was busy,
+    never whether the code was right. 503 with a retry-later message.
+    """
+
+    code = "password_reset_busy"
+
 
 #: Domain separation. An OTP digest and a ticket digest are both HMACs under the
 #: same key; without distinct domains a value valid as one could be presented as
@@ -71,6 +90,36 @@ _COOLDOWN_PREFIX: Final[str] = "pwreset:cooldown:"
 _TICKET_PREFIX: Final[str] = "pwreset:ticket:"
 _RATE_EMAIL_PREFIX: Final[str] = "pwreset:rl:email:"
 _RATE_IP_PREFIX: Final[str] = "pwreset:rl:ip:"
+
+#: How many times a contended verification re-reads and retries before refusing.
+#:
+#: The loop was previously `while True`. Optimistic locking only terminates
+#: because conflicts are rare; it makes no promise that they will be, and a hot
+#: challenge under a burst — or a client retrying in a tight loop — is a request
+#: that never returns while holding a connection and an event-loop slot. Eight
+#: is well above what twenty-way contention needs in practice (the concurrency
+#: tests settle in one or two) and still bounds the worst case at a fraction of
+#: a second.
+_MAX_VERIFY_CONTENTION_RETRIES: Final[int] = 8
+
+#: Full-jitter exponential backoff between those retries.
+#:
+#: Without a pause, every loser of a WATCH race re-reads immediately and they
+#: collide again — a livelock that burns CPU and makes the conflict *more*
+#: likely. Jitter is what breaks the lockstep: a fixed delay would simply move
+#: the whole herd forward together.
+_VERIFY_RETRY_BASE_SECONDS: Final[float] = 0.002
+_VERIFY_RETRY_MAX_SECONDS: Final[float] = 0.05
+
+
+def _contention_backoff_seconds(retry: int) -> float:
+    """Exponential with full jitter, capped — bounded above by the cap."""
+    # `2.0**retry`, not `2**retry`: mypy types `int.__pow__` as `Any`.
+    ceiling = min(_VERIFY_RETRY_MAX_SECONDS, _VERIFY_RETRY_BASE_SECONDS * (2.0**retry))
+    # `secrets` is already the module's source of randomness; jitter is not
+    # security-sensitive, but a second RNG would be one more thing to reason
+    # about.
+    return ceiling * (secrets.randbelow(1000) + 1) / 1000
 
 
 def _digest(domain: bytes, value: str) -> str:
@@ -265,13 +314,22 @@ class PasswordResetService:
         counted exactly once. WATCH is Redis 2.2, so it works on the deployed
         3.0.504.
 
+        **The retry is bounded.** Optimistic locking terminates only because
+        conflicts are rare, which is an observation about typical load rather
+        than a guarantee — so an unbounded loop is a request that can spin for
+        as long as a burst lasts, holding a connection and an event-loop slot.
+        After `_MAX_VERIFY_CONTENTION_RETRIES` lost races this raises
+        `PasswordResetBusyError`: nothing was written, no attempt was spent, no
+        ticket exists, and the caller is told the server was busy rather than
+        told their code was wrong.
+
         Redis failure fails closed: the exception propagates rather than being
         mistaken for a passing check.
         """
         key = f"{_CHALLENGE_PREFIX}{challenge_id}"
         user_id = ""
 
-        while True:
+        for retry in range(_MAX_VERIFY_CONTENTION_RETRIES):
             async with self._redis.pipeline(transaction=True) as pipe:
                 try:
                     await pipe.watch(key)
@@ -321,9 +379,23 @@ class PasswordResetService:
                     break
 
                 except WatchError:
-                    # Somebody else touched the record. Re-read and retry; this
-                    # is what makes every attempt count exactly once.
+                    # Somebody else touched the record. Nothing of ours was
+                    # written — EXEC aborted — so the challenge is exactly as it
+                    # was and this attempt has not been spent. Back off, re-read
+                    # and retry; that is what makes every attempt count exactly
+                    # once instead of twenty guesses all reading `attempts=0`.
+                    await asyncio.sleep(_contention_backoff_seconds(retry))
                     continue
+        else:
+            # Every retry lost its race. Deliberately not `return None`, which
+            # means "wrong code": this attempt was never evaluated at all, and
+            # saying otherwise would spend a guess the person never made.
+            logger.warning(
+                "password_reset_verify_contended", retries=_MAX_VERIFY_CONTENTION_RETRIES
+            )
+            raise PasswordResetBusyError(
+                "That request could not be completed just now. Please try again."
+            )
 
         ticket = secrets.token_urlsafe(32)
         await self._redis.setex(

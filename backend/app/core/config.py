@@ -384,6 +384,21 @@ class SecuritySettings(_EnvFileSettings):
     login_attempt_window_seconds: int = Field(default=300, ge=1)
     login_lockout_seconds: int = Field(default=900, ge=1)
 
+    # --- Step-up (re-authentication) throttling ---------------------------
+    #
+    # Separate numbers from login, because the situation is different. A
+    # step-up caller is already signed in, so this is not credential stuffing
+    # against unknown accounts — it is somebody holding a session trying to
+    # guess the password behind it, which is what protects linking a Google
+    # account to somebody else's workspace.
+    #
+    # Stricter than login on purpose: a legitimate person re-entering their own
+    # password mid-session should not need five tries, and there is no shared
+    # NAT argument for a per-user counter.
+    step_up_max_attempts: int = Field(default=3, ge=1)
+    step_up_attempt_window_seconds: int = Field(default=300, ge=1)
+    step_up_lockout_seconds: int = Field(default=900, ge=1)
+
     # --- Credential encryption --------------------------------------------
     #
     # Separate from `secret_key`, which signs tokens. Two reasons they must not

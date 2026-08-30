@@ -31,12 +31,28 @@ import { ThemeProvider } from "@/providers/theme-provider";
  * groups — `/privacy`, `/unauthorized`, `/`, and the root error and not-found
  * boundaries — consume no session and now mount none.
  */
-export function AppProviders({ children }: { children: ReactNode }) {
+export function AppProviders({
+  children,
+  nonce,
+}: {
+  children: ReactNode;
+  /**
+   * The CSP nonce for this response, read from the request in the root layout.
+   *
+   * `next-themes` writes its own inline `<script>` to set the theme class
+   * before React hydrates — that is the whole point of it, and it is why the
+   * page does not flash white on a dark-mode reload. Next.js stamps its own
+   * script tags with the nonce but has no way to reach into a library's, so
+   * without this the browser refuses to run it and every reload flashes.
+   */
+  nonce?: string;
+}) {
   return (
     <ThemeProvider
       attribute="class"
       defaultTheme="system"
       enableSystem
+      nonce={nonce}
       // Suppress the CSS transition that would otherwise animate every colour
       // on the page during a theme switch, which looks like a rendering glitch.
       disableTransitionOnChange

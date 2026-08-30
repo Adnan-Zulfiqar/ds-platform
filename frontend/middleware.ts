@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { buildContentSecurityPolicy, createNonce } from "@/lib/csp";
+
 /**
  * Edge middleware — the first routing gate.
  *
@@ -46,17 +48,38 @@ function isPublicRoute(pathname: string): boolean {
   );
 }
 
+/**
+ * Mint a nonce, hand it to Next.js, and put the policy on the way out.
+ *
+ * The policy goes on the **request** headers as well as the response. That is
+ * not belt and braces: it is the documented mechanism by which Next.js finds
+ * the nonce and stamps it onto the script tags it renders. Without the request
+ * header the response header would be a policy that blocks the application's
+ * own hydration.
+ */
+function withCsp(request: NextRequest): NextResponse {
+  const nonce = createNonce();
+  const policy = buildContentSecurityPolicy(nonce);
+
+  const requestHeaders = new Headers(request.headers);
+  // Never trust an inbound value: a client that sent its own `x-nonce` or CSP
+  // header would otherwise choose the nonce for its own injected script.
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("content-security-policy", policy);
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("Content-Security-Policy", policy);
+  return response;
+}
+
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
+  const response = withCsp(request);
 
   // `/` is a redirect stub with nothing to protect; sending it to the guard
   // would cost a render before the redirect it was always going to perform.
-  if (pathname === "/") {
-    return NextResponse.next();
-  }
-
-  if (isPublicRoute(pathname)) {
-    return NextResponse.next();
+  if (pathname === "/" || isPublicRoute(pathname)) {
+    return response;
   }
 
   // Everything else is protected. The page renders its own loading state while
@@ -64,8 +87,7 @@ export function middleware(request: NextRequest): NextResponse {
   // redirects to sign-in. Redirecting here instead would bounce every
   // authenticated user to the login page on each hard navigation, because the
   // session cookie is invisible at this layer.
-  const response = NextResponse.next();
-
+  //
   // Protected pages are user-specific and must never be cached by a shared
   // proxy or served from the browser's back-forward cache after sign-out.
   response.headers.set("Cache-Control", "no-store, must-revalidate");

@@ -32,6 +32,7 @@ from app.integrations.google import (
     GoogleTokenError,
     GoogleTokenVerifier,
 )
+from app.models.user import User
 from app.schemas.auth import (
     AuthenticatedIdentity,
     AuthResponse,
@@ -60,6 +61,7 @@ from app.schemas.user import UserRead
 from app.services.auth import AuthResult, AuthService, LegalAcceptance
 from app.services.email_verification import EmailVerificationService
 from app.services.google_auth import GoogleAuthService
+from app.services.login_throttle import StepUpThrottle
 from app.services.password_reset import PasswordResetService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -164,7 +166,7 @@ async def _verified_google_identity(
     return identity, record
 
 
-async def _require_step_up(user: object, password: str, session: object) -> None:
+async def _require_step_up(user: User, password: str, *, client_ip: str | None) -> None:
     """Prove the person at the keyboard is the account holder, not just a session.
 
     Linking or unlinking a sign-in method changes *how the account can be
@@ -175,16 +177,31 @@ async def _require_step_up(user: object, password: str, session: object) -> None
     Password verification is the step-up rather than a client-supplied
     `recent=true` flag or a token-age check, because both of those are asserted
     by the caller and neither proves anything.
+
+    **The limit is reserved here, before the hash is checked**, so it cannot be
+    bypassed by alternating between linking and unlinking and it cannot be
+    outrun by firing requests in parallel. Both callers go through this one
+    function precisely so neither can be written without it; see
+    `StepUpThrottle` for what the counters are keyed on and why Redis being
+    unavailable refuses rather than waves the operation through.
     """
     from app.core.password import verify_password
 
-    hashed = getattr(user, "password_hash", None)
+    throttle = StepUpThrottle()
+    await throttle.reserve(user_id=user.id, tenant_id=user.tenant_id, client_ip=client_ip)
+
+    hashed = user.password_hash
     if hashed is None:
         # Nothing to step up with. Better an explicit refusal than a sensitive
-        # operation guarded by a session alone.
+        # operation guarded by a session alone. The attempt still counts: a
+        # passwordless account must not be a free probe.
         raise PermissionDeniedError("Set a password before changing how you sign in.")
     if not verify_password(password, hashed):
         raise AuthenticationError("That password is not correct.")
+
+    # Correct. Someone who mistypes once and then succeeds should not carry that
+    # failure toward a lockout for the rest of the window.
+    await throttle.clear(user_id=user.id, tenant_id=user.tenant_id, client_ip=client_ip)
 
 
 @router.post(
@@ -497,14 +514,14 @@ async def google_signup(
     summary="Link a Google account to the signed-in user",
 )
 async def link_google(
-    payload: GoogleLinkRequest, user: CurrentUser, session: DbSession
+    payload: GoogleLinkRequest, user: CurrentUser, request: Request, session: DbSession
 ) -> GoogleIdentityRead:
     """Attach Google to an existing account, behind a step-up.
 
     Two independent checks: the password proves the account holder is present,
     and the nonce proves this credential was obtained for *this* account.
     """
-    await _require_step_up(user, payload.password.get_secret_value(), session)
+    await _require_step_up(user, payload.password.get_secret_value(), client_ip=_client_ip(request))
 
     identity, record = await _verified_google_identity(
         payload.credential, payload.nonce, intent=GoogleIntent.LINK
@@ -529,14 +546,17 @@ async def link_google(
     summary="Disconnect Google from the signed-in user",
 )
 async def unlink_google(
-    payload: GoogleUnlinkRequest, user: CurrentUser, session: DbSession
+    payload: GoogleUnlinkRequest, user: CurrentUser, request: Request, session: DbSession
 ) -> MessageResponse:
     """Detach Google, behind the same step-up, refusing to lock the account out.
 
     A `POST` rather than a `DELETE` because it carries a body: the step-up
     password has no business in a query string or a URL.
+
+    The same throttle counter as linking, deliberately. Two counters would be
+    two sets of guesses for anyone willing to alternate between them.
     """
-    await _require_step_up(user, payload.password.get_secret_value(), session)
+    await _require_step_up(user, payload.password.get_secret_value(), client_ip=_client_ip(request))
 
     removed = await GoogleAuthService(session).unlink(user_id=user.id)
     return MessageResponse(
@@ -600,6 +620,11 @@ async def verify_password_reset(
     Expiry, a wrong code and an exhausted attempt count are one response, for
     the same reason every login failure is: distinguishing them tells an
     attacker which lever to pull next.
+
+    Contention is the one thing that is *not* folded into that response.
+    `PasswordResetBusyError` travels on its own as a 503, because the attempt
+    was never evaluated: reporting it as a bad code would spend a guess the
+    person did not make. It still says nothing about the code itself.
     """
     outcome = await PasswordResetService(session).verify(
         challenge_id=payload.challenge_id, code=payload.code
