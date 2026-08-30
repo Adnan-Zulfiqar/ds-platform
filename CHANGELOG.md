@@ -48,6 +48,22 @@ production release.
 
 ### Security
 
+- **AUTH-G1-R3 — a successful step-up no longer erases shared abuse history.**
+  Cleanup deleted the per-address counter as well as the per-user one, so any
+  account behind an address could wipe every other account's failed attempts
+  simply by succeeding on its own: guess twice against a victim, succeed once on
+  your own account, repeat. `clear()` is replaced by `clear_user_attempts()`,
+  which has no parameter that could reach the shared counter — the split is
+  structural rather than a convention a future caller must remember. The address
+  counter now drains only through its own bounded TTL.
+
+  The consequence is stated rather than left to be discovered: a successful
+  step-up still consumes part of the address budget, so a shared office or CGNAT
+  address spends it through ordinary use. `SECURITY_STEP_UP_MAX_ATTEMPTS_PER_IP`
+  (default 10) is introduced so the aggregate control can be loosened without
+  weakening the per-account ceiling of 3, which is what actually bounds password
+  guessing against any one account.
+
 - **AUTH-G1-R2 — `script-src` no longer permits inline script.** The policy
   carried `'unsafe-inline'`, which allows exactly what an XSS payload needs and
   made the directive decorative. It is replaced by a 128-bit nonce minted per
@@ -74,6 +90,25 @@ production release.
   throttle, and for a stated reason.
 
 ### Fixed
+
+- **AUTH-G1-R3 — the step-up counter could be created without an expiry.**
+  `INCR` and `EXPIRE` were separate round trips, so an interruption between them
+  left an immortal key: an account permanently unable to link or unlink a
+  sign-in method until somebody found and deleted the key by hand. Both
+  dimensions are now counted by a single Lua script, so the counter and its
+  expiry exist together or not at all, and any key found without an expiry is
+  repaired on first use — counters left behind by the previous version heal
+  themselves.
+
+  Measured rather than argued: under identical cancellation fault injection
+  against real Redis 3.0.504, the old two-round-trip pattern left **199 immortal
+  keys in 200 rounds**; the script left **0**.
+
+  The same change fixes a second-order defect. The lockout expiry was re-applied
+  on *every* attempt past the ceiling, so an attacker holding a stolen session
+  could keep the real account holder locked out indefinitely by continuing to
+  guess. It is now assigned once, on the attempt that crosses the ceiling, and
+  the window below the ceiling is fixed rather than sliding.
 
 - **AUTH-G1-R2 — the password-reset retry loop was unbounded.** `while True`
   around an optimistic lock terminates only because conflicts happen to be rare.

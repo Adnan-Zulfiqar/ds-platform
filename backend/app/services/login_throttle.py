@@ -143,10 +143,58 @@ class StepUpUnavailableError(InfrastructureError):
     code = "step_up_unavailable"
 
 
+#: One attempt, counted and bounded, in a single round trip.
+#:
+#: The three commands have to be indivisible. The previous version sent `INCR`
+#: and then `EXPIRE` as separate calls, so a process or network failure between
+#: them left a counter with no expiry — an immortal key that locks a user out of
+#: linking or unlinking until somebody deletes it by hand. A script runs as one
+#: unit inside Redis: either the counter and its expiry both exist afterwards,
+#: or neither does.
+#:
+#: `EVAL` is Redis 2.6 and works on the deployed 3.0.504 (verified against a
+#: real 3.0.504 instance, not assumed). The script touches one key, so it is
+#: also safe under a future cluster.
+#:
+#: Two deliberate properties, both of which the arithmetic has to get right:
+#:
+#: * **The expiry is only ever assigned when there is none, or once at the
+#:   moment the ceiling is crossed.** It is never refreshed on later attempts.
+#:   Refreshing would mean an attacker holding a stolen session could keep a
+#:   lockout open indefinitely by continuing to guess — a denial of service
+#:   against the real account holder, handed over by the control meant to
+#:   protect them.
+#: * **A key found without an expiry is repaired**, which is what heals a
+#:   counter left behind by the previous non-atomic version.
+_RESERVE_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+local window = tonumber(ARGV[1])
+local lockout = tonumber(ARGV[2])
+local maximum = tonumber(ARGV[3])
+
+if ttl < 0 then
+  -- A fresh counter, or one left without an expiry by an older version.
+  redis.call('EXPIRE', KEYS[1], window)
+  ttl = window
+end
+
+if count == maximum + 1 then
+  -- The single attempt that crosses the ceiling extends the key to the lockout
+  -- duration. Later attempts deliberately do not, so the lockout is bounded at
+  -- exactly that long from the moment it was earned.
+  redis.call('EXPIRE', KEYS[1], lockout)
+  ttl = lockout
+end
+
+return {count, ttl}
+"""
+
+
 class StepUpThrottle:
     """Limits password re-entry for linking and unlinking an identity.
 
-    **One counter for both operations.** Keying on the operation would let an
+    **One authority for both operations.** Keying on the operation would let an
     attacker alternate link, unlink, link, unlink and get twice the guesses, so
     the key names the *user*, never what they were trying to do.
 
@@ -154,45 +202,66 @@ class StepUpThrottle:
     reads a counter, verifies, then records a failure. That is right there and
     would not be enough here: twenty simultaneous requests all read the counter
     before any of them wrote, so twenty guesses would fit inside a limit of
-    three. Reserving the attempt with `INCR` first makes the ceiling hard under
-    concurrency, and it has the same useful side effect the login throttle has
-    — a locked-out caller never reaches Argon2, so the limit protects CPU too.
+    three. Reserving the attempt first makes the ceiling hard under concurrency,
+    and it has the same useful side effect the login throttle has — a
+    locked-out caller never reaches Argon2, so the limit protects CPU too.
 
-    **Two dimensions, both incremented, either sufficient to refuse.** Per user,
-    so a stolen session cannot grind one account's password; per address, so one
-    client cannot work through many accounts. Both are hashed: Redis keys turn
-    up in `MONITOR`, in slow-log entries and in support dumps, and an address
-    sitting in a key space is a personal-data leak waiting to be exported.
+    **Two dimensions, counted and bounded independently.**
+
+    * *Per user*, scoped by tenant: this is the control that bounds password
+      guessing against any one account, and nothing another account does can
+      reset it.
+    * *Per address*: the aggregate-abuse control, so one client cannot work
+      through many accounts. Its ceiling is deliberately looser
+      (`step_up_max_attempts_per_ip`), because it is genuinely shared — see
+      `clear_user_attempts` for what that costs and why it is the right trade.
+
+    Both are hashed. Redis keys turn up in `MONITOR`, in slow-log entries and in
+    support dumps, and an address sitting in a key space is a personal-data leak
+    waiting to be exported. Nothing here logs a raw address, user or tenant
+    either.
 
     **Nothing here is an enumeration oracle.** A refusal reads the same whether
-    the password was right, wrong, or never examined, and the user dimension is
-    keyed by tenant and id rather than by email, so watching it tells a caller
-    nothing about any other workspace.
+    the password was right, wrong, or never examined.
 
-    `INCR`, `EXPIRE`, `TTL` and `DEL` are all long-standing Redis commands;
-    nothing here needs anything the deployed 3.0.504 lacks.
+    `INCR`, `EXPIRE`, `TTL`, `DEL` and `EVAL` are all long-standing Redis
+    commands; nothing here needs anything the deployed 3.0.504 lacks, and
+    nothing here uses `GETDEL`, `UNLINK`, `KEYS`, `FLUSHDB` or `FLUSHALL`.
     """
 
     def __init__(self) -> None:
         self._security = settings.security
 
-    def _keys(
-        self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None, client_ip: str | None
-    ) -> list[str]:
-        """The dimensions this attempt counts against.
+    def user_key(self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None) -> str:
+        """The per-account dimension.
 
-        The tenant is folded into the user digest rather than given a dimension
-        of its own. A per-tenant counter would let one member of a workspace
-        lock out every colleague — a denial of service dressed as a control.
-        Including it in the hash makes the scoping explicit and collision-proof
-        without creating that shared fate.
+        The tenant is folded into the digest rather than given a dimension of
+        its own. A per-tenant counter would let one member of a workspace lock
+        out every colleague — a denial of service dressed as a control.
         """
         scope = f"{tenant_id or 'none'}:{user_id}"
-        keys = [f"stepup:user:{hashlib.sha256(scope.encode('utf-8')).hexdigest()[:32]}"]
+        return f"stepup:user:{hashlib.sha256(scope.encode('utf-8')).hexdigest()[:32]}"
+
+    def address_key(self, client_ip: str) -> str:
+        """The shared dimension. Hashed, so a Redis dump is not a visitor log."""
+        return f"stepup:ip:{hashlib.sha256(client_ip.strip().encode('utf-8')).hexdigest()[:32]}"
+
+    def _dimensions(
+        self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None, client_ip: str | None
+    ) -> list[tuple[str, str, int]]:
+        """`(label, key, ceiling)` for each dimension this attempt counts against."""
+        dimensions = [
+            (
+                "user",
+                self.user_key(user_id=user_id, tenant_id=tenant_id),
+                self._security.step_up_max_attempts,
+            )
+        ]
         if client_ip:
-            digest = hashlib.sha256(client_ip.strip().encode("utf-8")).hexdigest()[:32]
-            keys.append(f"stepup:ip:{digest}")
-        return keys
+            dimensions.append(
+                ("ip", self.address_key(client_ip), self._security.step_up_max_attempts_per_ip)
+            )
+        return dimensions
 
     async def reserve(
         self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None, client_ip: str | None
@@ -203,7 +272,7 @@ class StepUpThrottle:
         :class:`RateLimitExceededError` when a ceiling is reached and
         :class:`StepUpUnavailableError` when Redis cannot be reached.
 
-        Every dimension is incremented before any is judged, so an attempt that
+        Every dimension is counted before any is judged, so an attempt that
         trips the per-user ceiling still counts against the address it came
         from. Otherwise an attacker learns which accounts are already locked and
         moves to the next one for free.
@@ -211,24 +280,23 @@ class StepUpThrottle:
         if not self._security.rate_limit_enabled:
             return
 
-        keys = self._keys(user_id=user_id, tenant_id=tenant_id, client_ip=client_ip)
-        maximum = self._security.step_up_max_attempts
+        dimensions = self._dimensions(user_id=user_id, tenant_id=tenant_id, client_ip=client_ip)
 
         try:
             client = get_redis(RedisPurpose.RATE_LIMIT)
-
-            counts: list[int] = []
-            for key in keys:
-                count = int(await client.incr(key))
-                if count == 1:
-                    await client.expire(key, self._security.step_up_attempt_window_seconds)
-                elif count > maximum:
-                    # Extended on every further attempt, so a lockout cannot be
-                    # waited out at the rate it was earned.
-                    await client.expire(key, self._security.step_up_lockout_seconds)
-                counts.append(count)
-
-            exhausted = [key for key, count in zip(keys, counts, strict=True) if count > maximum]
+            counted: list[tuple[str, int, int, int]] = []
+            for label, key, ceiling in dimensions:
+                # `redis.asyncio` ships no annotation for `eval`, so the call
+                # reads as untyped here rather than anywhere in this module.
+                count, ttl = await client.eval(  # type: ignore[no-untyped-call]
+                    _RESERVE_SCRIPT,
+                    1,
+                    key,
+                    self._security.step_up_attempt_window_seconds,
+                    self._security.step_up_lockout_seconds,
+                    ceiling,
+                )
+                counted.append((label, int(count), int(ttl), ceiling))
         except RedisError as exc:
             # Fails closed — see `StepUpUnavailableError`.
             logger.error("step_up_throttle_backend_unavailable", error=str(exc))
@@ -236,37 +304,45 @@ class StepUpThrottle:
                 "That request could not be completed just now. Please try again."
             ) from exc
 
-        if exhausted:
-            key = exhausted[0]
-            try:
-                ttl = int(await get_redis(RedisPurpose.RATE_LIMIT).ttl(key))
-            except RedisError:
-                ttl = 0
-            logger.warning("step_up_throttled", dimension=key.split(":")[1])
-            raise RateLimitExceededError(
-                "Too many attempts. Please try again later.",
-                retry_after_seconds=(ttl if ttl > 0 else self._security.step_up_lockout_seconds),
-            )
+        for label, count, ttl, ceiling in counted:
+            if count > ceiling:
+                logger.warning("step_up_throttled", dimension=label)
+                raise RateLimitExceededError(
+                    "Too many attempts. Please try again later.",
+                    retry_after_seconds=(
+                        ttl if ttl > 0 else self._security.step_up_lockout_seconds
+                    ),
+                )
 
-    async def clear(
-        self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None, client_ip: str | None
-    ) -> None:
-        """Reset both counters after a correct password.
+    async def clear_user_attempts(self, *, user_id: uuid.UUID, tenant_id: uuid.UUID | None) -> None:
+        """Reset **only this account's** counter, after a correct password.
 
-        Someone who mistypes once and then gets it right starts fresh rather
-        than carrying that failure toward a lockout for the next fifteen
-        minutes. A clear that cannot reach Redis is logged and ignored: the
-        counters expire on their own, and failing the operation *after* the
-        password was accepted would punish the person who got it right.
+        Named for the one dimension it touches, and deliberately given no way to
+        reach the other. The previous `clear()` deleted both, which meant a
+        successful step-up by any account behind an address wiped the failed
+        attempts of every other account behind it: an attacker holding one
+        ordinary account could reset the shared budget at will simply by
+        succeeding on their own.
+
+        **The address counter is never cleared by anybody.** It drains only
+        through its own bounded TTL. That is the secure behaviour, and it has a
+        cost worth stating plainly: a successful step-up still counts against
+        the address budget, so a shared office or CGNAT address consumes it
+        through ordinary use as well as through abuse. `step_up_max_attempts_per_ip`
+        is set well above the per-user ceiling for exactly that reason.
+
+        Someone who mistypes once and then gets it right starts fresh on their
+        own counter rather than carrying that failure toward a lockout. A clear
+        that cannot reach Redis is logged and ignored: the counter expires on
+        its own, and failing the operation *after* the password was accepted
+        would punish the person who got it right.
         """
         if not self._security.rate_limit_enabled:
             return
 
         try:
             client = get_redis(RedisPurpose.RATE_LIMIT)
-            await client.delete(
-                *self._keys(user_id=user_id, tenant_id=tenant_id, client_ip=client_ip)
-            )
+            await client.delete(self.user_key(user_id=user_id, tenant_id=tenant_id))
         except RedisError as exc:
             logger.error("step_up_throttle_clear_failed", error=str(exc))
 

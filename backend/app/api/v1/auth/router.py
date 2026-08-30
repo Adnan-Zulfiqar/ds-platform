@@ -201,7 +201,11 @@ async def _require_step_up(user: User, password: str, *, client_ip: str | None) 
 
     # Correct. Someone who mistypes once and then succeeds should not carry that
     # failure toward a lockout for the rest of the window.
-    await throttle.clear(user_id=user.id, tenant_id=user.tenant_id, client_ip=client_ip)
+    #
+    # Only their own counter. The shared address budget is deliberately left
+    # alone: clearing it would let anybody with one ordinary account wipe the
+    # failed attempts of every other account behind the same address.
+    await throttle.clear_user_attempts(user_id=user.id, tenant_id=user.tenant_id)
 
 
 @router.post(

@@ -473,11 +473,22 @@ class TestStepUpRateLimit:
         one machine and never trip a limit. The cost is that a genuinely shared
         address is limited collectively — the same trade the login throttle
         makes, and the reason both dimensions exist rather than one.
+
+        Since R3 the address ceiling is deliberately looser than the per-user
+        one, so exhausting it takes more than one account's worth of guessing.
+        This walks it down with fresh accounts rather than assuming the two
+        ceilings coincide.
         """
         shared = _fresh_ip()
-        async with _signed_in(app, shared) as (first, first_auth):
-            for _ in range(settings.security.step_up_max_attempts + 1):
-                await _wrong_unlink(first, first_auth)
+        budget = settings.security.step_up_max_attempts_per_ip
+        spent = 0
+        while spent <= budget:
+            async with _signed_in(app, shared) as (client, auth):
+                for _ in range(settings.security.step_up_max_attempts):
+                    await _wrong_unlink(client, auth)
+                    spent += 1
+                    if spent > budget:
+                        break
 
         async with _signed_in(app, shared) as (second, second_auth):
             response = await second.post(
@@ -496,7 +507,10 @@ class TestStepUpRateLimit:
         user_id, tenant_id = uuid.uuid4(), uuid.uuid4()
         ip = _fresh_ip()
 
-        keys = throttle._keys(user_id=user_id, tenant_id=tenant_id, client_ip=ip)
+        keys = [
+            throttle.user_key(user_id=user_id, tenant_id=tenant_id),
+            throttle.address_key(ip),
+        ]
 
         joined = " ".join(keys)
         assert ip not in joined
@@ -539,7 +553,7 @@ class TestStepUpRateLimit:
 
         await throttle.reserve(user_id=user_id, tenant_id=tenant_id, client_ip=None)
         await throttle.reserve(user_id=user_id, tenant_id=tenant_id, client_ip=None)
-        await throttle.clear(user_id=user_id, tenant_id=tenant_id, client_ip=None)
+        await throttle.clear_user_attempts(user_id=user_id, tenant_id=tenant_id)
 
         # A full fresh allowance, not one remaining attempt.
         for _ in range(settings.security.step_up_max_attempts):
@@ -569,7 +583,10 @@ class TestStepUpRateLimit:
     async def test_ordinary_login_limits_are_untouched(self, throttling_enabled: None) -> None:
         """Separate key namespaces, so one cannot exhaust the other."""
         throttle = StepUpThrottle()
-        keys = throttle._keys(user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), client_ip=_fresh_ip())
+        keys = [
+            throttle.user_key(user_id=uuid.uuid4(), tenant_id=uuid.uuid4()),
+            throttle.address_key(_fresh_ip()),
+        ]
 
         assert all(key.startswith("stepup:") for key in keys)
         assert not any(key.startswith("login:") for key in keys)

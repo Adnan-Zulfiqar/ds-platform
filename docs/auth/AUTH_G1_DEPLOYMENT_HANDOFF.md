@@ -221,17 +221,18 @@ depth for a direct-to-Node deployment.
 
 ### Step-up throttling
 
-Linking and unlinking Google require the account password. That step-up is now
-rate limited, sharing one counter across both operations — separate counters
-would mean twice the guesses for anybody willing to alternate.
+Linking and unlinking Google require the account password. That step-up is rate
+limited, sharing one authority across both operations — separate counters would
+mean twice the guesses for anybody willing to alternate.
 
 ```
-SECURITY_STEP_UP_MAX_ATTEMPTS=3            # per user and per address
+SECURITY_STEP_UP_MAX_ATTEMPTS=3             # per user, per tenant
+SECURITY_STEP_UP_MAX_ATTEMPTS_PER_IP=10     # shared, per client address
 SECURITY_STEP_UP_ATTEMPT_WINDOW_SECONDS=300
 SECURITY_STEP_UP_LOCKOUT_SECONDS=900
 ```
 
-Two things differ from the login throttle deliberately:
+Three things differ from the login throttle deliberately:
 
 * The attempt is **counted before** the password is checked, not after. Reading
   a counter, verifying, then recording a failure lets twenty simultaneous
@@ -240,9 +241,54 @@ Two things differ from the login throttle deliberately:
   Login fails open, because locking every customer out of the product is worse
   than a window of unthrottled sign-in attempts. That trade does not carry over
   to an operation that attaches a permanent second way into an account.
+* **The address ceiling is looser than the per-user one**, for the reason in
+  the next section.
 
 Counters are keyed on a hash of tenant-and-user and a hash of the address —
-never an email — so a Redis dump is not a customer list.
+never an email — so a Redis dump is not a customer list. The address comes from
+`app.core.client_ip`, which believes a forwarding header only when the immediate
+peer is a configured trusted proxy.
+
+#### What a success clears, and what it does not
+
+A correct password clears **only that account's own counter**. The shared
+address counter is never cleared by anyone; it drains solely through its own
+bounded TTL.
+
+That is a deliberate change of behaviour, and it has a cost worth stating
+plainly: **a successful step-up still consumes part of the address budget.** An
+office or CGNAT address shared by many people spends that budget through
+ordinary use as well as through abuse, and once it is spent everybody behind
+that address waits for the window. `SECURITY_STEP_UP_MAX_ATTEMPTS_PER_IP` is set
+well above the per-user ceiling for exactly that reason, and is the number to
+raise if a large shared deployment reports spurious refusals.
+
+The alternative — clearing the address counter on success, which is what the
+first version did — is worse: an attacker needs only one ordinary account of
+their own to reset the shared budget at will, by guessing twice against a victim
+and then succeeding once on their own account. The aggregate control then stops
+existing.
+
+#### Timing, and why the lockout is not extended
+
+Both dimensions are counted by a single Lua script, so the counter and its
+expiry are created together or not at all. Previously they were two round trips:
+an interruption between them left a counter with **no expiry**, which is not a
+slightly-wrong count but an account permanently unable to link or unlink until
+somebody found and deleted the key by hand. The script also repairs any key it
+finds without an expiry, so counters left behind by the previous version heal on
+first use rather than needing a migration or a manual sweep.
+
+The window is fixed, not sliding: attempts below the ceiling do not push the
+expiry out. The attempt that *crosses* the ceiling extends the key to
+`SECURITY_STEP_UP_LOCKOUT_SECONDS`, once. Later attempts deliberately do not
+extend it again — otherwise somebody holding a stolen session could keep the
+real account holder locked out of their own settings indefinitely simply by
+continuing to guess, turning the protection into a denial of service against the
+person it protects.
+
+`EVAL` is Redis 2.6 and was verified against a real 3.0.504 instance. The script
+touches one key, so it is cluster-safe.
 
 ### Password reset under contention
 

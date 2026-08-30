@@ -396,6 +396,17 @@ class SecuritySettings(_EnvFileSettings):
     # password mid-session should not need five tries, and there is no shared
     # NAT argument for a per-user counter.
     step_up_max_attempts: int = Field(default=3, ge=1)
+
+    #: The address ceiling, deliberately looser than the per-user one.
+    #:
+    #: A success no longer clears the address counter — that reset let one
+    #: account wipe the failures of everybody behind the same address. Keeping
+    #: the history means the address budget is now shared in earnest, and a
+    #: shared office or CGNAT address would hit a ceiling of three within
+    #: minutes of ordinary use. This number is the aggregate-abuse control; the
+    #: per-user one above is what bounds guessing against any single account.
+    step_up_max_attempts_per_ip: int = Field(default=10, ge=1)
+
     step_up_attempt_window_seconds: int = Field(default=300, ge=1)
     step_up_lockout_seconds: int = Field(default=900, ge=1)
 
