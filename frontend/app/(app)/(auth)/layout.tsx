@@ -1,4 +1,10 @@
 import Link from "next/link";
+
+import {
+  COMPANY_NUMBER,
+  LEGAL_ENTITY,
+  REGISTERED_OFFICE,
+} from "@/components/legal/company-disclosure";
 import type { ReactNode } from "react";
 
 /**
@@ -24,13 +30,28 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
           before they do. */}
       <footer className="pb-6 text-center text-sm text-muted-foreground">
         <p>DropPilot AI</p>
-        <p className="mt-1">
+        {/* Both legal documents, and the statutory company disclosures that
+            regulation 25 of the 2015 Trading Disclosures Regulations and
+            regulation 6 of the E-Commerce Regulations require to be available.
+            This footer is on every sign-in and registration page, which is
+            where somebody decides whether to contract with us. */}
+        <p className="mt-1 flex flex-wrap justify-center gap-4">
+          <Link
+            className="underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            href="/terms"
+          >
+            Terms of Service
+          </Link>
           <Link
             className="underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             href="/privacy"
           >
             Privacy Policy
           </Link>
+        </p>
+        <p className="mx-auto mt-3 max-w-md text-xs leading-relaxed">
+          {LEGAL_ENTITY} · Registered in England and Wales, company number{" "}
+          {COMPANY_NUMBER} · Registered office: {REGISTERED_OFFICE}
         </p>
       </footer>
     </div>

@@ -279,8 +279,13 @@ export default function RegisterPage() {
                 it — so `services/auth.ts` sends the versions and the backend
                 refuses a mismatch or a false flag.
 
-                The Terms are not yet published, and this says so rather than
-                linking to a page that does not exist. */}
+                Both documents are now linked, because asking somebody to accept
+                a document they cannot open is not asking them anything. The
+                Terms are still a draft and the page says so on its own face —
+                the label here does not have to carry that, and a deployed
+                environment refuses registration entirely while they are.
+
+                Deliberately not pre-ticked. */}
             <label
               className="flex items-start gap-2 text-sm text-muted-foreground"
               htmlFor="accept-legal"
@@ -295,12 +300,15 @@ export default function RegisterPage() {
                 className="mt-1 h-4 w-4 rounded border-input"
               />
               <span>
-                I have read the{" "}
+                I accept the{" "}
+                <Link href="/terms" className="text-primary hover:underline">
+                  Terms of Service
+                </Link>{" "}
+                and have read the{" "}
                 <Link href="/privacy" className="text-primary hover:underline">
                   Privacy Notice
-                </Link>{" "}
-                and accept the Terms of Service. Our Terms are not yet published;
-                we will ask you to review them when they are.
+                </Link>
+                .
               </span>
             </label>
           </CardContent>

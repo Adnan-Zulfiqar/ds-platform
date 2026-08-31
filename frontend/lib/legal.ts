@@ -6,15 +6,19 @@
  * wording change cannot record agreement to text nobody saw — this file is the
  * convenience copy, never the authority.
  *
- * There is currently **no Terms of Service document**. `/privacy` exists and is
- * versioned; a Terms page does not. The acceptance flag is still required so
- * the mechanism cannot be bypassed once the document lands, but the version is
- * a sentinel and the wording below says plainly that the Terms are not yet
- * published. Inventing a link to a page that does not exist would be worse.
+ * The Terms exist at `/terms` as a **draft awaiting solicitor review**. The
+ * `draft-` prefix is deliberate: a bare date would read as a published version
+ * to anybody looking up a stored acceptance later, and what they would be
+ * looking up is a draft.
+ *
+ * `TERMS_PUBLISHED` is false, and the backend acts on it — a deployed
+ * environment refuses registration outright rather than recording agreement to
+ * unapproved text. This copy exists so the page can label itself honestly, not
+ * so the client can decide anything.
  */
 
 export const PRIVACY_NOTICE_VERSION = "2026-08-28";
-export const TERMS_VERSION = "unpublished";
+export const TERMS_VERSION = "draft-2026-08-31";
 export const TERMS_PUBLISHED = false;
 
 /**

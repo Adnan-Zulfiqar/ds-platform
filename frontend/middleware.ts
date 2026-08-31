@@ -40,6 +40,9 @@ const PUBLIC_ROUTES = [
   // fetches it to validate the RuName, and a policy behind a login is not a
   // published policy.
   "/privacy",
+  // The same reasoning: a contract nobody can read before signing up is not a
+  // published contract, and the registration page links to it.
+  "/terms",
 ] as const;
 
 function isPublicRoute(pathname: string): boolean {

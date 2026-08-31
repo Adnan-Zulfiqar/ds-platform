@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { LegalNav } from "@/components/legal/company-disclosure";
+
 /**
  * Public privacy policy.
  *
@@ -80,6 +82,7 @@ export default function PrivacyPage() {
           <p className="text-sm text-muted-foreground">
             Last updated: <time dateTime="2026-08-28">{LAST_UPDATED}</time>
           </p>
+          <LegalNav current="privacy" />
         </header>
 
         <div className="mt-10 space-y-10">

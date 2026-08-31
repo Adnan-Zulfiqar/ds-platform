@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import { PRIVACY_NOTICE_VERSION, TERMS_VERSION } from "@/lib/legal";
+
 /**
  * Helpers for tests that need a signed-in session.
  *
@@ -21,17 +23,23 @@ export const TEST_PASSWORD = "Correct-Horse-Battery9";
 /**
  * The acceptance a signup must carry.
  *
- * Registration records which documents the account holder agreed to, so the
- * API refuses a request without them. Tests that create accounts through the
- * API send the same thing the form sends — the versions mirror
- * `frontend/lib/legal.ts` and `backend/app/core/legal.py`, and a stale value
- * here is meant to fail loudly rather than be tolerated.
+ * Registration records which documents the account holder agreed to, so the API
+ * refuses a request without them, and refuses one quoting a version that is not
+ * the server's current one.
+ *
+ * **Imported rather than transcribed.** These were literals here until the
+ * Terms version changed from `"unpublished"` to a draft identifier, at which
+ * point every API-created account in the suite was refused — correctly, by a
+ * server doing exactly what it is supposed to do, against a helper nobody had
+ * remembered to update. Reading `lib/legal.ts` means the copy cannot drift
+ * again; the backend remains the authority, and a mismatch between the two
+ * still fails loudly.
  */
 export const LEGAL_ACCEPTANCE_BODY = {
   termsAccepted: true,
   privacyAccepted: true,
-  termsVersion: "unpublished",
-  privacyVersion: "2026-08-28",
+  termsVersion: TERMS_VERSION,
+  privacyVersion: PRIVACY_NOTICE_VERSION,
 } as const;
 
 export interface TestAccount {

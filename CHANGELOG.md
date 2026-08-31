@@ -12,6 +12,37 @@ production release.
 
 ### Added
 
+- **LEGAL-T1 — a draft Terms of Service and a public `/terms` route.** A B2B
+  contract for DESIRLY LIMITED trading as DropPilot AI: 34 sections covering
+  identity, business-only eligibility, formation, integrations, merchant
+  responsibility for marketplace compliance and tax, plans and cancellation,
+  acceptable use, liability and governing law. Served like `/privacy` — no
+  session, no `AuthProvider`, no API call, and it renders with JavaScript
+  disabled.
+
+  **It is a draft and says so.** `TERMS_PUBLISHED` stays `False`, the version is
+  `draft-2026-08-31`, the page carries a "pending legal review" banner and is
+  `noindex`. No solicitor has seen it. `docs/legal/TERMS_LEGAL_REVIEW.md`
+  records the primary sources consulted, the drafting decisions and twelve
+  questions a solicitor has to answer.
+
+  **The draft state is now enforced rather than declared.** `TERMS_PUBLISHED`
+  previously existed and was read by nothing. A deployed environment now refuses
+  registration outright with `422 terms_not_published`, before any other check —
+  a stored row saying somebody agreed to unapproved text is worse than no row.
+  Local and test environments are exempt so the flow stays buildable, and
+  existing users are unaffected and can still sign in.
+
+  Every commercial statement was checked against the code, and the absences are
+  stated rather than omitted: there is no billing system, no backups, no data
+  export, no self-service cancellation, no SLA, no free trial and no TikTok
+  integration, so none of those appears as a promise. The mapping is in
+  `docs/legal/TERMS_PRODUCT_AUDIT.md`.
+
+  The statutory company disclosures required by regulation 25 of the Trading
+  Disclosures Regulations 2015 and regulation 6 of the E-Commerce Regulations
+  2002 now appear on `/terms`, on `/privacy` and in the sign-in footer.
+
 - **AUTH-G1 — Google sign-in and password reset by one-time code.** Sign in with
   Google's own rendered button, and reset a forgotten password with a six-digit
   emailed code. Identities live in a provider-neutral `user_identities` table

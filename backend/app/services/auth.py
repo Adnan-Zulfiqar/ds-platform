@@ -34,8 +34,10 @@ from app.core.exceptions import (
 )
 from app.core.legal import (
     PRIVACY_NOTICE_VERSION,
+    TERMS_PUBLISHED,
     TERMS_VERSION,
     LegalAcceptanceError,
+    TermsNotPublishedError,
 )
 from app.core.password import (
     hash_password,
@@ -104,7 +106,19 @@ class LegalAcceptance:
         A frontend checkbox is a hint, not evidence — the request can be made
         without one, and the review found exactly that gap. This is where it has
         to hold.
+
+        **The publication gate comes first.** While the Terms are a draft, a
+        deployed environment must not form a contract on them at all: a stored
+        row saying somebody agreed to `draft-2026-08-31` on a given date is a
+        record of agreement to text no solicitor has approved, which is worse
+        than having no record at all. Local and test environments are exempt so
+        the flow can be built and exercised, which is why the guard is on
+        `Environment.is_deployed` like every other production guard.
         """
+        if not TERMS_PUBLISHED and settings.environment.is_deployed:
+            raise TermsNotPublishedError(
+                "New accounts are not being accepted yet. Our Terms of Service are being finalised."
+            )
         if not self.terms_accepted or not self.privacy_accepted:
             raise LegalAcceptanceError(
                 "You must accept the Terms and acknowledge the Privacy Notice to create an account."

@@ -27,6 +27,7 @@ __all__ = [
     "TERMS_PUBLISHED",
     "TERMS_VERSION",
     "LegalAcceptanceError",
+    "TermsNotPublishedError",
 ]
 
 #: Matches `LAST_UPDATED` on `frontend/app/privacy/page.tsx`. If that page is
@@ -34,11 +35,40 @@ __all__ = [
 #: version they never saw.
 PRIVACY_NOTICE_VERSION: Final[str] = "2026-08-28"
 
-#: No Terms document exists. This sentinel is deliberately not a date: a date
-#: would look like a real version and hide the gap.
-TERMS_VERSION: Final[str] = "unpublished"
+#: The Terms exist as a **draft** awaiting solicitor review.
+#:
+#: The `draft-` prefix is load-bearing, not decoration. A bare date would look
+#: like a published version to anybody reading a stored acceptance row a year
+#: from now, and the whole point of recording a version is that somebody can
+#: later look up exactly what was agreed. Until a solicitor has approved the
+#: wording, what would be looked up is a draft, and the identifier says so.
+#:
+#: Replacing this with a published identifier is a deliberate act that belongs
+#: with `TERMS_PUBLISHED`, not an incidental edit — see
+#: `docs/legal/TERMS_PUBLICATION_CHECKLIST.md`.
+TERMS_VERSION: Final[str] = "draft-2026-08-31"
 
+#: Whether the Terms may be presented as a binding contract.
+#:
+#: `False` means no deployed environment may form a contract on them. It is not
+#: advisory: `LegalAcceptance.require_valid` refuses registration outright while
+#: this is false and the environment is deployed, so a production signup cannot
+#: record agreement to text nobody has approved. Local and test environments are
+#: exempt so the flow can be built and exercised.
 TERMS_PUBLISHED: Final[bool] = False
+
+
+class TermsNotPublishedError(ValidationError):
+    """Registration was attempted before the Terms were approved for publication.
+
+    Separate from `LegalAcceptanceError` because it is not the caller's fault
+    and there is nothing they can do about it. It says the service is not open
+    for new contracts, not that the request was malformed — and a distinct code
+    means a client can say something true rather than asking the person to tick
+    a box again.
+    """
+
+    code = "terms_not_published"
 
 
 class LegalAcceptanceError(ValidationError):
