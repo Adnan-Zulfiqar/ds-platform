@@ -1333,6 +1333,29 @@ class Settings(_EnvFileSettings):
                 "the refresh cookie would otherwise travel over plain HTTP."
             )
 
+        # --- Shared-table backstop ------------------------------------------
+        #
+        # Every rule the production-readiness table marks as enforced at startup
+        # is checked again here. The guards above keep their own wording, so the
+        # messages an operator has seen for months do not change, and this runs
+        # after them as a floor: if one of those guards is ever deleted, the
+        # table still refuses the boot.
+        #
+        # It also settles the question the operator CLI would otherwise raise —
+        # whether `verify_production_config.py` and the application could ever
+        # disagree about whether a configuration is fit to start. They read one
+        # list. `tests/unit/test_prod_h1_readiness.py` walks that list and
+        # asserts each entry both fails the evaluator and refuses the boot.
+        #
+        # Imported here rather than at module scope: `production_readiness`
+        # reads `SecuritySettings` for the published defaults, so a top-level
+        # import would be circular.
+        from app.core.production_readiness import startup_failure
+
+        message = startup_failure(self)
+        if message is not None:
+            raise ValueError(message)
+
     def _verify_ebay_deletion_endpoint(self) -> None:
         """Deployed-environment rules for the eBay compliance endpoint.
 

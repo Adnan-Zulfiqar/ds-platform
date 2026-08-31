@@ -269,7 +269,7 @@ class TestDeployedEndpointRules:
         "ENVIRONMENT": "production",
         "ALLOWED_HOSTS": "api.whiteto.com",
         "SECURITY_SECRET_KEY": "a" * 48,
-        "SECURITY_ENCRYPTION_KEYS": "c2VjdXJlLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmcheA==",
+        "SECURITY_ENCRYPTION_KEYS": "ZHJvcHBpbG90LXRlc3QtZmVybmV0LWtleS0zMmJ5dGU=",
         # A deployed environment refuses to start without a distinct OTP key.
         # Without it these tests assert an eBay endpoint rule but are stopped by
         # an authentication one, which is a green suite proving nothing.

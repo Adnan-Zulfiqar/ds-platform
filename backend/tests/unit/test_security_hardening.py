@@ -24,7 +24,14 @@ from tests.environment import TEST_OTP_HMAC_KEY
 pytestmark = pytest.mark.unit
 
 #: A valid Fernet key, generated for these tests and used nowhere else.
-VALID_FERNET = "c2VjdXJlLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmcheA=="
+#:
+#: The previous value decoded to **34** bytes, and `Fernet()` rejects anything
+#: but 32 — so a "valid production configuration" fixture held a key that could
+#: not encrypt. Nothing here ever encrypted with it, so nothing failed. PROD-H1
+#: found it, because the readiness rules check the key's shape and the deployed
+#: boot guard now does too: a malformed key is caught at startup instead of the
+#: first time a merchant connects a supplier.
+VALID_FERNET = "ZHJvcHBpbG90LXRlc3QtZmVybmV0LWtleS0zMmJ5dGU="
 VALID_SIGNING_KEY = "a" * 48
 
 #: A deployed environment with nothing wrong with it. Each test breaks exactly
