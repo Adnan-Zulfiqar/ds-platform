@@ -22,7 +22,8 @@ import { expect, test } from "@playwright/test";
 const COMPANY = "DESIRLY LIMITED";
 const COMPANY_NUMBER = "16381500";
 const REGISTERED_OFFICE = "200 Eton Road Eton Road, Ilford, England, IG1 2UN";
-const LEGAL_CONTACT = "privacy@whiteto.com";
+const SUPPORT_CONTACT = "support@whiteto.com";
+const PRIVACY_CONTACT = "privacy@whiteto.com";
 
 test.describe("Terms page — reachability and isolation", () => {
   test("is served with no account and no redirect", async ({ page }) => {
@@ -131,7 +132,8 @@ test.describe("Terms page — statutory disclosures", () => {
     expect(body).toContain(REGISTERED_OFFICE);
     expect(body).toContain("England and Wales");
     expect(body).toContain("private limited company");
-    expect(body).toContain(LEGAL_CONTACT);
+    expect(body).toContain(SUPPORT_CONTACT);
+    expect(body).toContain(PRIVACY_CONTACT);
   });
 
   test("keeps the registered office exactly as Companies House holds it", async ({ page }) => {
@@ -160,6 +162,107 @@ test.describe("Terms page — statutory disclosures", () => {
     await expect(page).toHaveURL(/\/privacy$/);
     await page.getByRole("link", { name: "Terms of Service" }).first().click();
     await expect(page).toHaveURL(/\/terms$/);
+  });
+});
+
+test.describe("Terms page — contact separation", () => {
+  /**
+   * Two addresses doing two different jobs. The failure mode this guards is not
+   * a broken page but a silently misrouted one: a cancellation landing in a
+   * data-protection inbox, or a data-subject request landing in a support queue
+   * where the statutory clock is not being watched. A swap would look perfectly
+   * fine on screen, which is exactly why it needs pinning.
+   */
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/terms");
+  });
+
+  test("cancellation is directed to the support address", async ({ page }) => {
+    const section = page.locator("#cancellation").locator("xpath=..");
+
+    await expect(section).toContainText(SUPPORT_CONTACT);
+    await expect(section).not.toContainText(PRIVACY_CONTACT);
+  });
+
+  test("contractual notices are directed to the support address", async ({ page }) => {
+    const section = page.locator("#notices").locator("xpath=..");
+
+    await expect(section).toContainText(SUPPORT_CONTACT);
+    await expect(section).not.toContainText(PRIVACY_CONTACT);
+  });
+
+  test("general complaints go to support, privacy complaints to privacy", async ({
+    page,
+  }) => {
+    const section = page.locator("#complaints").locator("xpath=..");
+
+    await expect(section).toContainText(SUPPORT_CONTACT);
+    await expect(section).toContainText(PRIVACY_CONTACT);
+    // The privacy route is labelled, not left for the reader to infer.
+    await expect(section).toContainText(/complaint about privacy/i);
+  });
+
+  test("a data processing agreement request goes to the privacy address", async ({
+    page,
+  }) => {
+    const section = page.locator("#data-roles").locator("xpath=..");
+
+    await expect(section).toContainText(PRIVACY_CONTACT);
+    await expect(section).not.toContainText(SUPPORT_CONTACT);
+  });
+
+  test("closure goes to support and personal-data requests go to privacy", async ({
+    page,
+  }) => {
+    const section = page.locator("#closure").locator("xpath=..");
+
+    await expect(section).toContainText(SUPPORT_CONTACT);
+    await expect(section).toContainText(PRIVACY_CONTACT);
+    await expect(section).toContainText(/To close an account, write to/i);
+    await expect(section).toContainText(/copy of personal data, or its deletion/i);
+  });
+
+  test("the shared disclosure block labels both addresses", async ({ page }) => {
+    const body = await page.locator("body").innerText();
+
+    expect(body).toMatch(/Support and contractual notices/i);
+    expect(body).toMatch(/Privacy and data protection/i);
+
+    // Each label must sit with its own address, not the other one.
+    const disclosure = await page
+      .locator("dl")
+      .first()
+      .innerText();
+    const supportIndex = disclosure.indexOf("Support and contractual notices");
+    const privacyIndex = disclosure.indexOf("Privacy and data protection");
+    expect(supportIndex).toBeGreaterThanOrEqual(0);
+    expect(privacyIndex).toBeGreaterThan(supportIndex);
+    expect(disclosure.slice(supportIndex, privacyIndex)).toContain(SUPPORT_CONTACT);
+    expect(disclosure.slice(privacyIndex)).toContain(PRIVACY_CONTACT);
+  });
+
+  test("the addresses are not swapped anywhere on the page", async ({ page }) => {
+    // Every mailto on the page must be one of the two, and the privacy address
+    // must never appear in a sentence about cancelling or serving notice.
+    const hrefs = await page.locator('a[href^="mailto:"]').evaluateAll((links) =>
+      links.map((link) => link.getAttribute("href") ?? ""),
+    );
+    expect(hrefs.length).toBeGreaterThan(0);
+    for (const href of hrefs) {
+      expect([`mailto:${SUPPORT_CONTACT}`, `mailto:${PRIVACY_CONTACT}`]).toContain(href);
+    }
+
+    const cancellation = await page.locator("#cancellation").locator("xpath=..").innerText();
+    expect(cancellation).not.toContain(PRIVACY_CONTACT);
+  });
+
+  test("makes no claim that either mailbox is operational or tested", async ({ page }) => {
+    const body = await page.locator("body").innerText();
+
+    expect(body).not.toMatch(/monitored 24|staffed|manned inbox|we respond within/i);
+    expect(body).not.toMatch(/mailbox (is|has been) (tested|verified)/i);
+    // The honest position about response times is still there.
+    expect(body).toMatch(/do not publish a\s+guaranteed response time/i);
   });
 });
 

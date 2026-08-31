@@ -302,3 +302,87 @@ class TestNoMigrationWasNeeded:
         column = User.__table__.c.terms_version
         assert column.type.length is None or column.type.length >= len(TERMS_VERSION)
         assert column.nullable is True
+
+
+class TestTheRecordedDecisionsSurvive:
+    """The blockers and the approvals are documentation, and documentation rots.
+
+    Each item below was a deliberate decision with a reason behind it, and each
+    is one tidy-up away from disappearing. A publication checklist that has
+    quietly lost its backup gate is worse than no checklist, because somebody
+    will read it and believe they are done. These are cheap assertions against
+    an expensive mistake.
+    """
+
+    @staticmethod
+    def _doc(name: str) -> str:
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[3]
+        return (root / "docs" / "legal" / name).read_text(encoding="utf-8")
+
+    def test_the_hundred_pound_floor_is_recorded_as_operator_approved(self) -> None:
+        """It was a drafting proposal in LEGAL-T1. It is a decision now."""
+        review = self._doc("TERMS_LEGAL_REVIEW.md")
+
+        assert "£100" in review
+        assert "Operator-approved" in review
+        assert "operator-approved" in review.lower()
+
+    def test_the_floor_is_not_recorded_as_solicitor_approved(self) -> None:
+        """Operator approval of a figure is not legal approval of a mechanism.
+
+        Asserted on the explicit disclaimer rather than the absence of a phrase:
+        the document *does* contain "solicitor-approved", inside the sentence
+        saying these decisions are not. A substring check cannot tell a denial
+        from a claim, so it checks the denial is there.
+        """
+        review = self._doc("TERMS_LEGAL_REVIEW.md")
+
+        assert "None of them is legal approval" in review
+        assert "**solicitor**-approved" in review
+        assert "the mechanism is not legally reviewed" in self._doc(
+            "TERMS_PUBLICATION_CHECKLIST.md"
+        )
+
+    def test_the_backup_blocker_is_intact(self) -> None:
+        """The data-loss exclusion was approved *on condition* of this."""
+        checklist = self._doc("TERMS_PUBLICATION_CHECKLIST.md")
+        review = self._doc("TERMS_LEGAL_REVIEW.md")
+
+        assert "restoration has been tested" in checklist
+        assert "Backups — there are none" in checklist
+        assert "Backup restoration has been tested" in review
+        assert "does not weaken the backup blocker" in review
+
+    def test_the_solicitor_review_blocker_is_intact(self) -> None:
+        checklist = self._doc("TERMS_PUBLICATION_CHECKLIST.md")
+
+        assert "solicitor has reviewed the loss-of-data exclusion" in checklist
+        assert "Solicitor review and approval of the Terms" in checklist
+
+    def test_the_checklist_requires_support_mailbox_verification(self) -> None:
+        """`/terms` sends contractual notices there. Nobody has tested it."""
+        checklist = self._doc("TERMS_PUBLICATION_CHECKLIST.md")
+
+        assert "support@whiteto.com` exists and inbound delivery has been verified" in checklist
+        assert "no mail was sent" in checklist.lower()
+
+    def test_no_document_claims_a_mailbox_was_tested(self) -> None:
+        for name in (
+            "TERMS_LEGAL_REVIEW.md",
+            "TERMS_PUBLICATION_CHECKLIST.md",
+            "TERMS_PRODUCT_AUDIT.md",
+        ):
+            text = self._doc(name).lower()
+            assert "mailbox has been tested" not in text.replace(
+                "neither mailbox has been tested", ""
+            )
+            assert "delivery verified on the same basis" in text or "verified" in text
+
+    def test_the_contact_split_is_recorded(self) -> None:
+        review = self._doc("TERMS_LEGAL_REVIEW.md")
+
+        assert "support@whiteto.com" in review
+        assert "privacy@whiteto.com" in review
+        assert "data-subject requests" in review

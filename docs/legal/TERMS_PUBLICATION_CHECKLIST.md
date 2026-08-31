@@ -39,6 +39,18 @@ Nothing here may be ticked by the engineer who wrote the draft.
 - [ ] The registered-office and jurisdiction wording is confirmed against the
       Companies House record on the day of publication.
 
+### Contact mailboxes
+
+- [ ] **`support@whiteto.com` exists and inbound delivery has been verified.**
+      `/terms` directs cancellation, contractual notices and complaints there.
+      A contractual notice address that nobody receives is worse than none: the
+      reader believes they have served notice and has not. **Not done by
+      LEGAL-T1-R1 — no mail was sent and no DNS or provider setting was
+      changed.**
+- [ ] `privacy@whiteto.com` inbound delivery verified on the same basis.
+- [ ] Both addresses monitored by somebody, with a route for anything arriving
+      at the wrong one.
+
 ### Product truth
 
 - [ ] `TERMS_PRODUCT_AUDIT.md` re-checked against the tree being published — no
@@ -60,6 +72,13 @@ Nothing here may be ticked by the engineer who wrote the draft.
       `docs/governance/SUBPROCESSORS.md`.
 - [ ] A backup regime exists, or §21's statement that none exists is still true
       — `docs/governance/BACKUPS.md`.
+- [ ] **Backups exist and restoration has been tested.** This is a hard gate on
+      the §26 loss-of-data exclusion, which the operator approved keeping in the
+      draft *conditionally* — see `TERMS_LEGAL_REVIEW.md` §2b. Existing is not
+      working: an untested backup is a belief.
+- [ ] **A solicitor has reviewed the loss-of-data exclusion and the liability
+      clause as a whole**, including the £100 zero-fee floor. The floor is
+      operator-approved as a figure; the mechanism is not legally reviewed.
 
 ### Technical
 
@@ -127,11 +146,14 @@ Pinned by `backend/tests/integration/test_legal_t1_terms.py`:
 
 ## 5. Live-activation blockers (unchanged by this milestone)
 
-1. Solicitor review and approval of the Terms.
+1. Solicitor review and approval of the Terms, including the liability clause
+   and the loss-of-data exclusion.
 2. Final Terms version and `TERMS_PUBLISHED = True`.
 3. ICO assessment and registration.
 4. DPA and international-transfer work with Resend, Google and AliExpress.
-5. Backups — there are none.
-6. A real production frontend at the production hostname.
-7. Production configuration and deployment, including migrations `0031`/`0032`.
-8. Separately authorised live Google sign-in and real OTP email delivery.
+5. **Backups — there are none, and restoration has never been tested.** This
+   blocks the §26 loss-of-data exclusion by the operator's own condition.
+6. **`support@whiteto.com` created and inbound delivery verified.**
+7. A real production frontend at the production hostname.
+8. Production configuration and deployment, including migrations `0031`/`0032`.
+9. Separately authorised live Google sign-in and real OTP email delivery.

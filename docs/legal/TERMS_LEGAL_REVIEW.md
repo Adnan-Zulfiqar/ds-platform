@@ -42,7 +42,54 @@ If any is wrong the corresponding clause is wrong.
 5. The commercial liability position is an aggregate cap of the **previous
    twelve months' fees**.
 6. Governing law and jurisdiction: **England and Wales**.
-7. The legal and privacy contact is `privacy@whiteto.com`.
+7. Contacts: `support@whiteto.com` for support, cancellation, contractual
+   notices and complaints; `privacy@whiteto.com` for privacy rights, data
+   protection and data-subject requests.
+
+## 2a. Operator decisions recorded at LEGAL-T1-R1
+
+These were **explicitly approved by the operator** after reading the LEGAL-T1
+draft. They are commercial decisions by the party that will be bound by them.
+None of them is legal approval, and none of them is a substitute for the
+solicitor review in section 4.
+
+| # | Decision | Status |
+|---|---|---|
+| 1 | **Zero-fee liability floor of £100** | **Operator-approved.** This was a Claude drafting proposal in LEGAL-T1 and is no longer one. Question 2 in section 4 is answered as to the *figure*; whether a fixed floor is the right legal mechanism, and whether £100 is defensible under UCTA s.11, remains for the solicitor |
+| 2 | **`support@whiteto.com`** for general support, subscription cancellation, contractual notices, complaints and ordinary service enquiries | Operator-approved. Applied to `/terms` and the shared disclosure block |
+| 3 | **`privacy@whiteto.com`** for privacy rights, data-protection matters, data-subject requests and privacy complaints only | Operator-approved. The Privacy Notice keeps this address and was not changed |
+| 4 | **The loss-of-data exclusion may remain in the draft** | Operator-approved **conditionally** — see section 2b |
+
+### Mailbox status
+
+**Neither mailbox has been tested by this work.** No mail was sent, no DNS
+record was changed and no provider setting was touched. `support@whiteto.com`
+being created and verified for inbound delivery is a mandatory item on the
+publication checklist. A Terms document that directs cancellation and
+contractual notices to an address nobody reads is worse than one that gives no
+address at all, because the reader believes they have served notice.
+
+## 2b. The loss-of-data exclusion — approved, conditionally
+
+Section 26 excludes liability for loss or corruption of data. The operator has
+approved keeping that wording **in the draft**, on the express condition that
+publication remains blocked until all three of the following are true:
+
+1. **Backups exist.** `docs/governance/BACKUPS.md` currently records that there
+   are none — "not 'untested', not 'informal' — none."
+2. **Backup restoration has been tested.** Existing is not the same as working;
+   an untested backup is a belief, not a capability.
+3. **A solicitor has reviewed the exclusion and the liability clause as a
+   whole.**
+
+The reasoning behind the condition is the one recorded as question 4 in
+section 4, and it has not gone away: excluding liability for loss of data while
+operating no means of recovering it is the part of this contract most exposed
+under the UCTA s.3(2) reasonableness test. The operator's decision is to keep
+the clause and keep the blocker, not to keep the clause and drop the blocker.
+
+**This approval does not weaken the backup blocker.** It is listed unchanged in
+the publication checklist and in the live-activation blockers.
 
 ## 3. Drafting decisions and why
 
@@ -99,16 +146,22 @@ Numbered so they can be answered in order.
    jurisdiction field for this company; the register shows an English registered
    office. The Terms say "registered in England and Wales", per the operator.
    Is that the correct statutory form for this registration?
-2. **£100 liability floor.** Is a fixed floor for unpaid accounts the right
-   approach, and is £100 defensible? Alternatives: a fixed sum for all accounts
-   regardless of fees, or a "greater of fees or £X" formulation.
+2. **£100 liability floor.** The figure is now **operator-approved** (section
+   2a) rather than a drafting proposal. Still for the solicitor: is a fixed
+   floor for unpaid accounts the right *mechanism*, and is £100 defensible under
+   UCTA s.11? Alternatives: a fixed sum for all accounts regardless of fees, or
+   a "greater of fees or £X" formulation.
 3. **Twelve-month cap measurement.** "Paid or owed … in the twelve months before
    the event giving rise to the claim." Should it instead be the twelve months
    before the *claim*, or the contract year in which the event occurred?
 4. **Excluding loss of data.** §26 excludes loss or corruption of data. Given
    there are **no backups**, is that exclusion reasonable under UCTA s.3(2), or
    does the absence of any recovery capability make it more vulnerable, not less?
-   This is the question we are least comfortable answering ourselves.
+   This is the question we are least comfortable answering ourselves. The
+   operator has approved keeping the clause in the draft on the express
+   condition that publication stays blocked until backups exist, restoration is
+   tested and this question is answered — see section 2b. **The condition is
+   part of the approval, not a caveat on it.**
 5. **Suspension for non-payment** is described in §12 although no billing exists.
    Is describing a mechanism that is not yet built acceptable, or should §11–§12
    be removed until billing ships?
@@ -135,6 +188,9 @@ Numbered so they can be answered in order.
 
 ## 5. Standing statements this document does **not** make
 
+* That the £100 floor, the contact split or the data-loss exclusion have been
+  **solicitor**-approved. They are operator-approved commercial decisions.
+* That either mailbox has been created, tested or is receiving mail.
 * That the Terms are approved, in force, or reviewed by a solicitor.
 * That DESIRLY LIMITED is registered with the ICO.
 * That a DPA or international transfer assessment exists.

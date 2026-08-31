@@ -29,7 +29,26 @@ import Link from "next/link";
 export const LEGAL_ENTITY = "DESIRLY LIMITED";
 export const COMPANY_NUMBER = "16381500";
 export const REGISTERED_OFFICE = "200 Eton Road Eton Road, Ilford, England, IG1 2UN";
-export const LEGAL_CONTACT = "privacy@whiteto.com";
+/**
+ * Two addresses, deliberately not one.
+ *
+ * A single `LEGAL_CONTACT` was one identifier standing for two different jobs,
+ * which is precisely how a support enquiry ends up in a data-protection inbox
+ * and a data-subject request ends up in a support queue. The names now say
+ * which is which, and nothing exports a generic one that could be reached for
+ * by mistake.
+ *
+ * **Neither mailbox has been tested.** Creating `support@whiteto.com` and
+ * verifying inbound delivery is a publication-checklist item, not something
+ * this milestone did — no mail was sent and no DNS or provider setting was
+ * touched. See `docs/legal/TERMS_PUBLICATION_CHECKLIST.md`.
+ */
+
+/** General support, cancellation, contractual notices and complaints. */
+export const SUPPORT_CONTACT = "support@whiteto.com";
+
+/** Privacy rights, data-protection matters, data-subject requests. */
+export const PRIVACY_CONTACT = "privacy@whiteto.com";
 export const TRADING_NAME = "DropPilot AI";
 /** The register the company number belongs to — ECR 2002 reg 6(1)(d). */
 export const REGISTER = "the Companies House register for England and Wales";
@@ -57,10 +76,18 @@ export function CompanyDisclosure({ className }: { className?: string }) {
           <dd>{TRADING_NAME}</dd>
         </div>
         <div className="flex flex-wrap gap-x-2">
-          <dt className="font-medium text-foreground">Contact</dt>
+          <dt className="font-medium text-foreground">Support and contractual notices</dt>
           <dd>
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
+            </a>
+          </dd>
+        </div>
+        <div className="flex flex-wrap gap-x-2">
+          <dt className="font-medium text-foreground">Privacy and data protection</dt>
+          <dd>
+            <a className="text-primary hover:underline" href={`mailto:${PRIVACY_CONTACT}`}>
+              {PRIVACY_CONTACT}
             </a>
           </dd>
         </div>

@@ -46,6 +46,7 @@ Each of these is a sentence the Terms could easily have contained and does not.
 | **Suspension enforcement** | `TenantStatus.SUSPENDED` exists, but **`app/api/deps.py` contains zero `TenantStatus` checks**. The status only filters which tenants background tasks process | §22 is drafted as a **reserved right**, not a described capability. It does not claim access is automatically denied |
 | **Uptime / SLA** | No monitoring, no availability target, no status page | §21 states there is no SLA and no uptime commitment |
 | **Support SLA** | Email only, no ticketing | §34 says no guaranteed response time is published |
+| **A verified support mailbox** | `support@whiteto.com` has not been created or tested by this work | Named in §5, §13, §23, §30 and §34. Verification is a publication-checklist gate |
 | **Free trial** | No trial logic. `TenantStatus.TRIAL` is the default status, not a time-limited commercial trial | §15 says no free trial is offered |
 | **TikTok integration** | None anywhere in the repository | §8 names TikTok only in the no-affiliation disclaimer |
 | **Executed DPA** | `SUBPROCESSORS.md`: no DPA signed with Resend or Google | §10 states no DPA has been signed and gives the contact |

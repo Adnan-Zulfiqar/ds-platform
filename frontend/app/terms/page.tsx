@@ -4,10 +4,11 @@ import Link from "next/link";
 import {
   COMPANY_NUMBER,
   CompanyDisclosure,
-  LEGAL_CONTACT,
   LEGAL_ENTITY,
   LegalNav,
+  PRIVACY_CONTACT,
   REGISTERED_OFFICE,
+  SUPPORT_CONTACT,
   TRADING_NAME,
 } from "@/components/legal/company-disclosure";
 import { TERMS_PUBLISHED, TERMS_VERSION } from "@/lib/legal";
@@ -193,8 +194,8 @@ export default function TermsPage() {
           </p>
           <p>
             Tell us at{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
             </a>{" "}
             promptly if you believe your account has been accessed without your
             authorisation.
@@ -296,8 +297,8 @@ export default function TermsPage() {
           <p>
             We have not yet signed a data processing agreement with you. If you
             require one, contact{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${PRIVACY_CONTACT}`}>
+              {PRIVACY_CONTACT}
             </a>
             .
           </p>
@@ -337,8 +338,8 @@ export default function TermsPage() {
           </p>
           <p>
             Cancellation is currently handled by contacting{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
             </a>
             . There is no self-service cancellation button in the application
             yet.
@@ -481,9 +482,13 @@ export default function TermsPage() {
             <strong>
               There is no self-service data export in the application.
             </strong>{" "}
-            If you need a copy of your data, or deletion, ask us at{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            To close an account, write to{" "}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
+            </a>
+            . For a copy of personal data, or its deletion, write to{" "}
+            <a className="text-primary hover:underline" href={`mailto:${PRIVACY_CONTACT}`}>
+              {PRIVACY_CONTACT}
             </a>{" "}
             and we will handle it manually. Export anything you need from your
             connected stores and marketplaces directly as well — they hold their
@@ -618,8 +623,8 @@ export default function TermsPage() {
             You agree to receive contractual notices electronically. We will
             write to the email address on your account or show the notice in the
             application. You should write to us at{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
             </a>{" "}
             or to our registered office.
           </p>
@@ -662,13 +667,24 @@ export default function TermsPage() {
         <Section id="complaints" heading="34. Complaints and contact">
           <p>
             If something has gone wrong, write to{" "}
-            <a className="text-primary hover:underline" href={`mailto:${LEGAL_CONTACT}`}>
-              {LEGAL_CONTACT}
+            <a className="text-primary hover:underline" href={`mailto:${SUPPORT_CONTACT}`}>
+              {SUPPORT_CONTACT}
             </a>{" "}
             with your workspace name and what happened. We will acknowledge your
             message and work with you to resolve it. We do not publish a
             guaranteed response time, and we would rather say so than promise
             one we do not yet operate.
+          </p>
+          <p>
+            A complaint about privacy or how we handle personal data goes to{" "}
+            <a className="text-primary hover:underline" href={`mailto:${PRIVACY_CONTACT}`}>
+              {PRIVACY_CONTACT}
+            </a>{" "}
+            instead, and is answered under our{" "}
+            <Link href="/privacy" className="text-primary hover:underline">
+              Privacy Notice
+            </Link>
+            .
           </p>
           <CompanyDisclosure className="rounded-md border bg-muted/40 p-4" />
         </Section>
