@@ -74,6 +74,43 @@ rather than dropped quietly: an operator whose shell had exported
 `SECURITY_SECRET_KEY` would otherwise read a clean report about a configuration
 that does not exist on disk.
 
+Removed variables are reported in two categories, both derived from a single
+snapshot of the environment:
+
+| Heading | Meaning | Marker |
+|---|---|---|
+| `AMBIENT OVERRIDES REMOVED` | Set in the shell **and** present in the file. The file wins; the shell copy would have shadowed it | `!` |
+| `AMBIENT ONLY` | Set in the shell, **absent** from the file. Removed and ignored, so the report describes the file alone | `~` |
+
+Names only, sorted, so two runs of the same file produce byte-identical output
+and can be diffed. **Values are never shown** — knowing *which* setting the
+shell was shadowing is what an operator needs; knowing what it held is what an
+attacker needs. Variables the application does not read are neither removed nor
+reported.
+
+The environment is restored when the run ends, on every path including errors,
+so running the checker twice in one process is safe and the second run is not
+auditing the first one's leftovers.
+
+> The first version of this tool took the snapshot **twice** — once to find the
+> overridden variables and once to find the ambient-only ones. The second call
+> had nothing left to remove, so `AMBIENT ONLY` was silently always empty. The
+> shape changed rather than the call count: one call now returns both
+> categories, so there is no second call to get wrong.
+
+### Byte-order marks
+
+A file that begins with a UTF-8 BOM is read correctly. Windows editors add one
+routinely, and without handling it the first key would parse as a name beginning
+with U+FEFF — so a file whose very first line is `ENVIRONMENT=production` would
+read as declaring no environment at all, and the operator would be shown a
+problem invisible in their editor.
+
+Only a mark at the **start of the file** is removed; the file is read as
+`utf-8-sig`, which is otherwise identical to `utf-8`. A U+FEFF inside a value is
+left alone, because there it is data. Malformed lines are still reported by line
+number only, BOM or no BOM.
+
 ## 3. The matrix
 
 `Now` = required before the environment may be marked deployed.
@@ -209,13 +246,29 @@ Stated plainly, because a green report should not be read as more than it is.
   `NEXT_PUBLIC_*` is inlined at build time; the file is only evidence of intent.
 * **Whether backups work.** There are none, so there is nothing to test.
 * **Whether the Terms are lawful.** That is a solicitor's judgement.
+* **Whether the file it read is the one production uses.** It audits the path it
+  is given. Point it at the wrong file and it will tell you, accurately, about
+  the wrong file.
 
 ## 6. Why the checker and the application cannot disagree
 
 The rules live once, in `app/core/production_readiness.py`, as data.
 `Settings.model_post_init` walks the entries marked as enforced at startup and
 refuses to boot on the first failure; the CLI walks all of them and reports
-everything at once. `tests/unit/test_prod_h1_readiness.py` walks the same table
+everything at once.
+
+**The asymmetry is deliberate.** A process that must not start does not benefit
+from a full report — it needs to stop, and stopping on the first failure is the
+existing behaviour every current test asserts. An operator preparing a
+deployment needs the opposite: the whole picture, so they change one file once
+instead of discovering the next problem on the next restart. Same rules, two
+readings, chosen for who is looking.
+
+That is also why a configuration the CLI reports as invalid may still boot
+today: the CLI applies rules the startup path deliberately does not enforce —
+`CORS_ORIGINS`, the browser-facing URLs — because adding a new boot-time refusal
+to a running service is a change of behaviour, not a check. Those appear as
+`FAIL` in the report and are listed in the matrix as required-now. `tests/unit/test_prod_h1_readiness.py` walks the same table
 and, for each startup-enforced rule, breaks that one setting and asserts both
 that the evaluator reports `FAIL` **and** that constructing `Settings` raises.
 

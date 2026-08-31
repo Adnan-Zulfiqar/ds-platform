@@ -21,9 +21,24 @@ output into a ticket or screenshotting it is safe.
 removed from this process's environment before the file is loaded, because a
 shell that has exported `POSTGRES_DB` or `SECURITY_SECRET_KEY` would otherwise
 silently override the file and produce a confident answer about a configuration
-that does not exist on disk. Anything removed is *reported by name* rather than
-quietly dropped — an operator who does not know their shell was interfering
-would draw the wrong conclusion from a clean report.
+that does not exist on disk.
+
+Anything removed is *reported by name* rather than quietly dropped, in two
+categories taken from one snapshot (see `AmbientScrub`):
+
+* **overridden** — set in the shell *and* present in the file. The file wins,
+  and the operator is told the shell would otherwise have shadowed it.
+* **ambient only** — set in the shell and absent from the file. Removed and
+  ignored, so the report describes the file alone.
+
+Names only, sorted, never values. Variables the application does not read are
+neither removed nor reported. The environment is restored when the run ends, on
+every path including errors, so running this twice in one process is safe.
+
+**A byte-order mark is tolerated.** Windows editors add one routinely; without
+handling it the first key would parse as `﻿ENVIRONMENT` and a file whose
+first line declares the environment would read as declaring none. Only a mark at
+the very start of the file is removed.
 
 Exit codes:
 
@@ -40,6 +55,7 @@ import argparse
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -80,11 +96,18 @@ def _parse_env_file(path: Path) -> tuple[dict[str, str], list[int]]:
     Deliberately strict and deliberately silent about content: a malformed line
     is reported by *number*, never by text, because the text of a malformed line
     is exactly as likely to hold a secret as a well-formed one.
+
+    Read as `utf-8-sig`, which removes a byte-order mark **only if the file
+    starts with one** and is otherwise identical to `utf-8`. Windows editors add
+    one routinely, and without this the first key parses as `\ufeffENVIRONMENT`
+    — so a file whose very first line is `ENVIRONMENT=production` would be read
+    as declaring no environment at all. Narrow on purpose: nothing strips
+    U+FEFF anywhere else, because in the middle of a value it is data.
     """
     values: dict[str, str] = {}
     malformed: list[int] = []
     for number, line in enumerate(
-        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
+        path.read_text(encoding="utf-8-sig", errors="replace").splitlines(), 1
     ):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -101,12 +124,64 @@ def _parse_env_file(path: Path) -> tuple[dict[str, str], list[int]]:
     return values, malformed
 
 
-def _scrub_environment() -> list[str]:
-    """Remove every application variable, returning the names removed."""
-    removed = [name for name in list(os.environ) if name.startswith(_APP_PREFIXES)]
-    for name in removed:
-        del os.environ[name]
-    return removed
+@dataclass(frozen=True, slots=True)
+class AmbientScrub:
+    """The shell's application variables, removed and classified in one pass.
+
+    This used to be a function that removed variables and returned their names,
+    and the caller called it **twice** — once to find the overridden ones and
+    once to find the ambient-only ones. The second call had nothing left to
+    remove, so `ambient_only` was silently always empty and an operator whose
+    shell held a stray `SECURITY_SECRET_KEY` was never told.
+
+    A function that is wrong when called twice invites being called twice, so
+    the shape changed rather than the call count: `take()` reads the environment
+    once, classifies against the file's keys from that single snapshot, and
+    hands back both categories together. There is no longer a second call that
+    could return a different answer, because there is nothing a second call
+    would be *for*.
+
+    `restore()` puts the environment back. The CLI mutates `os.environ` to load
+    the file, and a tool that is run twice in one process — as the tests do —
+    must not leave the first run's configuration behind for the second.
+    """
+
+    #: Present in the shell **and** in the audited file. The file wins; the
+    #: operator is told the shell would otherwise have shadowed it.
+    overridden: tuple[str, ...]
+    #: Present in the shell and absent from the file. Removed and ignored.
+    ambient_only: tuple[str, ...]
+    #: Everything removed, with its value, solely so `restore()` can put it back.
+    #: Never read for reporting, never printed.
+    _saved: dict[str, str] = field(repr=False, compare=False)
+
+    @classmethod
+    def take(cls, file_keys: frozenset[str]) -> AmbientScrub:
+        """Remove every application variable and classify what was removed.
+
+        One read of `os.environ`, one classification, one return. Both
+        categories are sorted, so the report is byte-identical across runs.
+        """
+        saved = {
+            name: value for name, value in os.environ.items() if name.startswith(_APP_PREFIXES)
+        }
+        for name in saved:
+            del os.environ[name]
+        return cls(
+            overridden=tuple(sorted(n for n in saved if n in file_keys)),
+            ambient_only=tuple(sorted(n for n in saved if n not in file_keys)),
+            _saved=dict(saved),
+        )
+
+    def restore(self) -> None:
+        """Return the environment to what it was before `take()`.
+
+        Removes every application variable currently set — including the ones
+        the CLI itself loaded from the file — and reinstates the originals.
+        """
+        for name in [n for n in os.environ if n.startswith(_APP_PREFIXES)]:
+            del os.environ[name]
+        os.environ.update(self._saved)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -143,9 +218,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {path.name} defines no settings", file=sys.stderr)
         return 1
 
-    overridden = sorted(name for name in _scrub_environment() if name in values)
-    ambient_only = sorted(name for name in _scrub_environment() if name not in values)
+    # Exactly one snapshot. Both categories come from it, so they cannot
+    # disagree about what the shell held.
+    scrub = AmbientScrub.take(frozenset(values))
+    try:
+        return _audit(path, values, scrub, args)
+    finally:
+        # Every path, including the error returns and any exception: a second
+        # invocation in the same process must not inherit the first one's
+        # configuration.
+        scrub.restore()
 
+
+def _audit(
+    path: Path,
+    values: dict[str, str],
+    scrub: AmbientScrub,
+    args: argparse.Namespace,
+) -> int:
     # Load the file's values as the sole source, then build settings from them.
     os.environ.update(values)
 
@@ -184,15 +274,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  expected database    : {args.expect_database}")
     print()
 
-    if overridden:
-        print("AMBIENT OVERRIDES REMOVED (these were set in the shell and would have")
-        print("shadowed the file; the file was used instead):")
-        for name in overridden:
+    # Names only, in sorted order, from the single snapshot. A value is never
+    # printed here — knowing *which* setting the shell was shadowing is what an
+    # operator needs; knowing what it held is what an attacker needs.
+    if scrub.overridden:
+        print("AMBIENT OVERRIDES REMOVED (set in the shell and also in the file;")
+        print("the shell copy would have shadowed the file, so the file was used):")
+        for name in scrub.overridden:
             print(f"  ! {name}")
         print()
-    if ambient_only:
-        print(f"({len(ambient_only)} further application variable(s) were present in the")
-        print(" shell but not in the file; they were removed and ignored.)")
+    if scrub.ambient_only:
+        print("AMBIENT ONLY (set in the shell, absent from the file; removed and")
+        print("ignored, so the report describes the file alone):")
+        for name in scrub.ambient_only:
+            print(f"  ~ {name}")
         print()
 
     problems = 0

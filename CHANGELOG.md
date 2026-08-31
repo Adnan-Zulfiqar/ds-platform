@@ -12,6 +12,58 @@ production release.
 
 ### Added
 
+- **PROD-H1 — production-readiness rules, an operator checker and a runbook.**
+  Every production guard in this application is conditional on `is_deployed`,
+  and the live host runs as `ENVIRONMENT=local` — so none of them is in force.
+  The process starts, reports healthy, and each check written to protect it is
+  switched off.
+
+  The rules now live once as data in `app/core/production_readiness.py`, with
+  two readers: `Settings.model_post_init` walks the startup-enforced entries as
+  a backstop after its existing guards, and
+  `scripts/verify_production_config.py` walks all of them and reports the whole
+  picture without starting anything — no database, no Redis, no HTTP, no write.
+  Exit codes separate *ready* from *invalid* from *publication blocked* from
+  *dependency missing*, with `1` reserved for the tool's own usage errors so a
+  broken invocation is never mistaken for a verdict.
+
+  **No configuration value is ever printed.** Reasons describe a property — a
+  length band, whether a value matches a published default, whether a URL is
+  loopback — and `Finding` refuses to be constructed with a reason containing
+  an equals sign, which is the shape an accidental f-string takes.
+
+  Read-only audit of the real production file, values withheld: the signing key
+  is the placeholder **published in this repository**, the OTP key is absent so
+  the published default applies, the refresh cookie is not `Secure`,
+  `ALLOWED_HOSTS` is a wildcard, and the CORS origin and browser-facing URLs are
+  loopback. Nine `FAIL`, two `BLOCKED`, one `MISSING`, two `SKIPPED`, four
+  `PASS`. Nothing in production was changed; the runbook in
+  [docs/operations/PRODUCTION_CONFIG.md](docs/operations/PRODUCTION_CONFIG.md)
+  puts changing `ENVIRONMENT` last, after every guard can pass.
+
+  Also fixed a latent defect the rules found: the deployed encryption guard
+  never checked that a key was *usable*, and the fixture two test files called a
+  valid production configuration decoded to 34 bytes where Fernet accepts only
+  32. A malformed key is now caught at startup rather than the first time a
+  merchant connects a supplier.
+
+- **PROD-H1-R1 — the checker reported ambient variables incorrectly.** It took
+  the environment snapshot twice: the first call removed the application
+  variables, so the second found nothing and the "present in the shell but not
+  in the file" category was silently always empty. An operator whose shell held
+  a stray `SECURITY_SECRET_KEY` was never told.
+
+  One snapshot now returns both categories, so there is no second call to get
+  wrong. Names only, sorted for byte-identical output across runs, values never
+  shown; unrelated variables are neither removed nor reported; and the
+  environment is restored on every path including errors, so a second run in the
+  same process is not auditing the first one's leftovers.
+
+  A UTF-8 byte-order mark at the start of a file is now handled. Windows editors
+  add one routinely, and without it the first key parsed as a name beginning
+  with U+FEFF — a file whose first line declared the environment read as
+  declaring none. Only a leading mark is removed; inside a value it is data.
+
 - **LEGAL-T1 — a draft Terms of Service and a public `/terms` route.** A B2B
   contract for DESIRLY LIMITED trading as DropPilot AI: 34 sections covering
   identity, business-only eligibility, formation, integrations, merchant

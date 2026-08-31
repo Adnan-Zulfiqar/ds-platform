@@ -19,6 +19,7 @@ Nothing here connects to Postgres, Redis or any network service.
 from __future__ import annotations
 
 import base64
+import codecs
 import io
 import os
 import textwrap
@@ -572,3 +573,349 @@ class TestTheOperatorCli:
         for code in ("0", "1", "2", "3", "4"):
             assert f"| {code} " in runbook, f"exit code {code} is not in the runbook table"
         assert textwrap.dedent("verify_production_config.py") in runbook
+
+
+# ---------------------------------------------------------------------------
+# PROD-H1-R1 — the review findings
+# ---------------------------------------------------------------------------
+
+
+class TestTheAmbientScrubIsTakenOnce:
+    """The defect: `_scrub_environment()` was called twice.
+
+    The first call removed the variables; the second therefore found nothing, so
+    `ambient_only` was silently always empty and an operator whose shell held a
+    stray `SECURITY_SECRET_KEY` was never told. Every test below fails against
+    that version.
+    """
+
+    def test_a_shell_only_variable_is_removed_and_reported(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("REDIS_PASSWORD", "an-ambient-value-that-must-not-be-shown")
+
+        code, out, err = run_cli(write_env(tmp_path, READY))
+
+        assert "AMBIENT ONLY" in out
+        assert "~ REDIS_PASSWORD" in out
+        assert "an-ambient-value-that-must-not-be-shown" not in out + err
+        assert code == 3
+
+    def test_a_variable_in_both_shell_and_file_is_reported_as_overridden(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SECURITY_COOKIE_SECURE", "false")
+
+        _, out, _ = run_cli(write_env(tmp_path, READY))
+
+        assert "AMBIENT OVERRIDES REMOVED" in out
+        assert "! SECURITY_COOKIE_SECURE" in out
+        # The file, which says true, is what was judged.
+        assert "is true." in out
+
+    def test_variables_across_every_prefix_are_classified_correctly(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One from each family the application reads."""
+        in_file = {
+            "SECURITY_COOKIE_SECURE": "false",
+            "POSTGRES_DB": "some_other_database",
+            "EBAY_FRONTEND_RETURN_URL": "http://localhost:3000/x",
+        }
+        shell_only = {
+            "REDIS_PASSWORD": "ambient-redis",
+            "GOOGLE_OAUTH_CLIENT_ID": "ambient-google",
+            "EMAIL_PROVIDER": "resend",
+            "RESEND_API_KEY": "ambient-resend",
+        }
+        for name, value in {**in_file, **shell_only}.items():
+            monkeypatch.setenv(name, value)
+
+        _, out, err = run_cli(write_env(tmp_path, READY))
+
+        overridden_block, _, ambient_block = out.partition("AMBIENT ONLY")
+        for name in in_file:
+            assert f"! {name}" in overridden_block, name
+        for name in shell_only:
+            assert f"~ {name}" in ambient_block, name
+        for value in {**in_file, **shell_only}.values():
+            if len(value) > 8:
+                assert value not in out + err, "an ambient value was printed"
+
+    def test_unrelated_shell_variables_are_neither_removed_nor_reported(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tool has no business touching the rest of the environment."""
+        monkeypatch.setenv("PROD_H1_UNRELATED", "left-alone")
+        monkeypatch.setenv("MY_COMPANY_TOKEN", "also-left-alone")
+
+        _, out, err = run_cli(write_env(tmp_path, READY))
+
+        assert os.environ.get("PROD_H1_UNRELATED") == "left-alone"
+        assert os.environ.get("MY_COMPANY_TOKEN") == "also-left-alone"
+        assert "PROD_H1_UNRELATED" not in out + err
+        assert "MY_COMPANY_TOKEN" not in out + err
+
+    def test_ordering_is_deterministic_across_runs(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A report that reorders itself cannot be diffed between runs."""
+        for name in ("REDIS_PASSWORD", "AI_PROVIDER", "GOOGLE_OAUTH_CLIENT_ID", "FX_API_KEY"):
+            monkeypatch.setenv(name, "a-value")
+        monkeypatch.setenv("SECURITY_COOKIE_SECURE", "false")
+        monkeypatch.setenv("POSTGRES_DB", "elsewhere")
+
+        path = write_env(tmp_path, READY)
+        _, first, _ = run_cli(path)
+        _, second, _ = run_cli(path)
+
+        assert first == second
+        ambient_block = first.partition("AMBIENT ONLY")[2].partition("Expectations")[0]
+        names = [line.split("~ ")[1].strip() for line in ambient_block.splitlines() if "~ " in line]
+        assert names == sorted(names)
+
+    def test_a_second_invocation_sees_a_restored_environment(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The CLI loads the file into `os.environ`; it must put it back.
+
+        Otherwise the second run in a process audits the first run's leftovers
+        while reporting the second one's filename.
+        """
+        monkeypatch.setenv("REDIS_PASSWORD", "ambient")
+        before = dict(os.environ)
+
+        run_cli(write_env(tmp_path, READY))
+
+        assert dict(os.environ) == before, "the environment was not restored"
+
+        _, out, _ = run_cli(write_env(tmp_path, READY))
+        assert "~ REDIS_PASSWORD" in out, "the second run lost the ambient inventory"
+        assert dict(os.environ) == before
+
+    def test_the_environment_is_restored_even_when_the_run_fails(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("REDIS_PASSWORD", "ambient")
+        before = dict(os.environ)
+
+        code, _, _ = run_cli(write_env(tmp_path, {**READY, "ENVIRONMENT": "nonsense"}))
+
+        assert code == 2
+        assert dict(os.environ) == before, "an error path leaked the loaded configuration"
+
+    def test_the_snapshot_is_taken_exactly_once(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The structural guard on the defect itself.
+
+        `AmbientScrub.take` removes what it classifies, so a second call returns
+        two empty tuples — which is precisely how the bug hid. Counting the calls
+        states the invariant directly.
+        """
+        import scripts.verify_production_config as cli
+
+        calls = {"n": 0}
+        original = cli.AmbientScrub.take
+
+        def counting(file_keys: Any) -> Any:
+            calls["n"] += 1
+            return original(file_keys)
+
+        monkeypatch.setattr(cli.AmbientScrub, "take", counting)
+        run_cli(write_env(tmp_path, READY))
+
+        assert calls["n"] == 1, f"the environment was scrubbed {calls['n']} times"
+
+    def test_both_categories_come_from_one_snapshot(
+        self, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The API makes the old mistake unavailable: one call, both answers."""
+        from scripts.verify_production_config import AmbientScrub
+
+        monkeypatch.setenv("REDIS_PASSWORD", "ambient")
+        monkeypatch.setenv("SECURITY_COOKIE_SECURE", "true")
+
+        scrub = AmbientScrub.take(frozenset({"SECURITY_COOKIE_SECURE"}))
+        try:
+            assert "SECURITY_COOKIE_SECURE" in scrub.overridden
+            assert "REDIS_PASSWORD" in scrub.ambient_only
+            # A second call is not how the other half is obtained — it has
+            # nothing left to find, which is exactly the trap the old shape set.
+            second = AmbientScrub.take(frozenset({"SECURITY_COOKIE_SECURE"}))
+            assert second.overridden == ()
+            assert second.ambient_only == ()
+        finally:
+            scrub.restore()
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "has=an=equals",
+            "has:a:colon",
+            'has"double"quotes',
+            "has'single'quotes",
+            "påsswörd-ünicode-ключ",
+            "sk-livekeyshapedmaterial0123456789",
+            "",
+        ],
+        ids=[
+            "equals",
+            "colon",
+            "double-quote",
+            "single-quote",
+            "unicode",
+            "secret-shaped",
+            "empty",
+        ],
+    )
+    def test_no_ambient_value_of_any_shape_reaches_the_output(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        monkeypatch.setenv("REDIS_PASSWORD", value)
+
+        _, out, err = run_cli(write_env(tmp_path, READY))
+
+        assert "~ REDIS_PASSWORD" in out, "the variable was not classified"
+        if value:
+            assert value not in out + err
+
+    def test_an_empty_ambient_variable_is_still_classified(
+        self, tmp_path: Path, deployed: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty is a value, and an empty override still shadows the file."""
+        monkeypatch.setenv("SECURITY_OTP_HMAC_KEY", "")
+
+        _, out, _ = run_cli(write_env(tmp_path, READY))
+
+        assert "! SECURITY_OTP_HMAC_KEY" in out
+        # The file's key was used, so the rule passes.
+        assert "distinct from the signing key" in out
+
+
+#: The UTF-8 byte-order mark a Windows editor writes at the start of a file.
+BOM = codecs.BOM_UTF8
+
+
+class TestAByteOrderMarkIsTolerated:
+    """Windows editors add one routinely, and it lands on line 1.
+
+    Without handling it the first key parses as a name beginning with U+FEFF, so
+    a file whose first line declares the environment reads as declaring none —
+    and the tool reports a problem the operator cannot see in their editor.
+    """
+
+    @staticmethod
+    def write_bom(tmp_path: Path, *, newline: str = "\n", extra: str = "") -> Path:
+        path = tmp_path / ".env"
+        body = newline.join(f"{k}={v}" for k, v in READY.items())
+        path.write_bytes(b"\xef\xbb\xbf" + (body + newline + extra).encode("utf-8"))
+        return path
+
+    def test_a_bom_does_not_break_the_first_line(self, tmp_path: Path, deployed: Any) -> None:
+        code, out, err = run_cli(self.write_bom(tmp_path))
+
+        assert "matches the expected environment" in out, out + err
+        assert code == 3
+
+    def test_a_bom_with_crlf_line_endings_parses(self, tmp_path: Path, deployed: Any) -> None:
+        """The combination a Windows editor actually produces."""
+        code, out, err = run_cli(self.write_bom(tmp_path, newline="\r\n"))
+
+        assert "matches the expected environment" in out, out + err
+        assert "matches the expected database name" in out
+        assert code == 3
+
+    def test_a_bom_does_not_hide_a_malformed_line(self, tmp_path: Path, deployed: Any) -> None:
+        path = self.write_bom(tmp_path, newline="\r\n", extra="a-line-with-no-equals\r\n")
+
+        code, _, err = run_cli(path)
+
+        assert code == 1
+        assert "malformed" in err
+        assert "a-line-with-no-equals" not in err
+
+    def test_only_a_leading_mark_is_removed(self, tmp_path: Path) -> None:
+        """Inside a value a U+FEFF is data, not a mark.
+
+        Asserted against the parser rather than through `Settings`, because the
+        parser owns the encoding decision — and because an interior mark in a
+        *typed* setting would be rejected by that setting's own validation,
+        which would prove nothing about the mark.
+
+        `utf-8-sig` removes one at the start and nothing else, which is why the
+        fix is an encoding rather than a global replace.
+        """
+        from scripts.verify_production_config import _parse_env_file
+
+        path = tmp_path / ".env"
+        body = "ENVIRONMENT=production\nEMAIL_FROM=a﻿b\n"
+        path.write_bytes(BOM + body.encode("utf-8"))
+
+        values, malformed = _parse_env_file(path)
+
+        assert not malformed
+        # The leading mark is gone: the key is ENVIRONMENT, not one prefixed
+        # with U+FEFF.
+        assert "ENVIRONMENT" in values
+        assert not any(key.startswith("﻿") for key in values)
+        # The interior one survives, because it belongs to the value.
+        assert values["EMAIL_FROM"] == "a﻿b"
+
+    def test_a_leading_mark_is_what_would_otherwise_break_the_key(self, tmp_path: Path) -> None:
+        """The failure this fix prevents, stated as its counterfactual."""
+        from scripts.verify_production_config import _parse_env_file
+
+        path = tmp_path / ".env"
+        path.write_bytes(BOM + b"ENVIRONMENT=production\n")
+
+        # Read as plain utf-8, the first key carries the mark and is therefore
+        # not ENVIRONMENT at all — so the file would read as declaring none.
+        naive = path.read_text(encoding="utf-8").splitlines()[0].partition("=")[0]
+        assert naive != "ENVIRONMENT"
+        assert naive.startswith("﻿")
+
+        # Read as the tool reads it, it is.
+        assert "ENVIRONMENT" in _parse_env_file(path)[0]
+
+
+class TestTheReasonContractRejectsInnocentText:
+    """The equals ban is blunter than the leak it prevents, on purpose.
+
+    A rule needing judgement gets talked past; this one cannot be. These pin the
+    cost, so nobody relaxes it later for author ergonomics.
+    """
+
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "must be >= 32 characters",
+            "must be <= 100 characters",
+            "is not == the signing key",
+            "should read SECURITY_COOKIE_SECURE=true",
+            "ends with base64 padding such as abc=",
+        ],
+        ids=["gte", "lte", "eq", "example-assignment", "padding"],
+    )
+    def test_innocent_equals_text_is_still_refused(self, reason: str) -> None:
+        with pytest.raises(ValueError, match="interpolated configuration value"):
+            Finding("SECURITY_SECRET_KEY", Status.FAIL, reason)
+
+    def test_the_prose_alternatives_are_accepted(self) -> None:
+        """The cost is a sentence, not a capability."""
+        Finding("SECURITY_SECRET_KEY", Status.FAIL, "is shorter than 32 characters")
+        Finding("SECURITY_COOKIE_SECURE", Status.FAIL, "is false.")
+
+    def test_no_shipped_rule_reason_contains_an_equals_sign(self, deployed: Any) -> None:
+        """Every reason the table can emit, checked rather than assumed."""
+        report = evaluate(settings_with(deployed))
+        for finding in report.findings:
+            assert "=" not in finding.reason, finding.setting
+
+    def test_the_contract_is_documented_where_an_author_will_look(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[2] / "app" / "core" / "production_readiness.py"
+        ).read_text(encoding="utf-8")
+
+        assert "no `=`, anywhere, for any purpose" in source
+        assert "at least" in source

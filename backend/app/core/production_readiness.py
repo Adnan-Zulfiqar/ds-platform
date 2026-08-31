@@ -24,8 +24,19 @@ would be a new way to leak the secrets it exists to protect — into a terminal,
 a CI log, a screenshot, a support ticket. Where a reason needs to describe a
 value it describes a *property* of it: its length band, whether it equals
 another setting, whether it matches a published default, whether a URL is
-loopback. `Finding.__post_init__` refuses to construct a finding whose reason
-contains a known secret.
+loopback.
+
+**The reason contract: no `=`, anywhere, for any purpose.** `Finding` refuses to
+be constructed with a reason containing an equals sign. That is deliberately
+blunter than the problem it guards, and the bluntness is the point — a rule of
+"no interpolated values" needs a human to judge every reason, and a rule of "no
+`=`" needs nobody. It costs authors a little: `>=` must be written "at least",
+`key=value` must be described rather than shown, and "set to true" replaces
+"`X=true`". That is the whole price, and it is paid once per sentence.
+
+The alternative was matching reasons against known secret values, which fails
+exactly when it matters: it cannot recognise a secret it was not handed, and the
+reason a value reaches a report is usually that nobody realised it was one.
 """
 
 from __future__ import annotations
@@ -86,18 +97,26 @@ class Finding:
     secret: bool = False
 
     def __post_init__(self) -> None:
-        """Refuse to construct a finding that looks like it carries a value.
+        """Refuse any reason containing an equals sign.
 
-        Belt and braces against a future edit that interpolates a setting into a
-        reason. Cheap, and the failure it prevents is unrecoverable: once a
-        secret is in a CI log, it is in the CI log. `KEY=value` is the shape an
-        accidental f-string produces, so that shape is banned outright.
+        `KEY=value` is the shape an accidental f-string produces, and once a
+        secret is in a CI log it is in the CI log — so the shape is banned
+        outright rather than judged case by case.
+
+        **This rejects innocent uses too, and that is intended.** `>=`, `<=`,
+        `==`, a base64 value's trailing padding and a prose example like
+        `SECURITY_COOKIE_SECURE=true` are all refused. Write "at least", "no
+        more than", "equals", or name the setting and describe its state. The
+        rule is worth keeping precisely because it needs no judgement: a
+        reviewer can verify it by looking, and a future author cannot talk
+        themselves past it.
         """
         if "=" in self.reason:
             raise ValueError(
                 f"the reason for {self.setting} contains '=', which is the shape an "
-                "interpolated configuration value takes. Describe the property, "
-                "never the value."
+                "interpolated configuration value takes. Describe the property in "
+                "words — 'at least 32 characters', not a comparison operator; the "
+                "setting's name and state, not a sample assignment."
             )
 
 
