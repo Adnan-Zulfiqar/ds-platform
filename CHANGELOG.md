@@ -12,6 +12,55 @@ production release.
 
 ### Added
 
+- **INFRA-L1 — the AWS Lightsail deployment foundation.** The application has
+  only ever run on a Windows host, from drive-letter paths, started by Task
+  Scheduler, against a loopback PostgreSQL with no TLS. None of that survives a
+  move to Linux, and the parts that would have been quietly carried over are the
+  dangerous ones.
+
+  **The one code change is transport security.** `DatabaseSettings` had no TLS
+  support at all — correct when the database was a loopback process, wrong the
+  moment it becomes a managed service on AWS's network. There is now an
+  `sslmode`/`sslrootcert` pair read by both drivers: psycopg takes them as libpq
+  query parameters, asyncpg takes an `ssl.SSLContext` built from the same
+  setting, so the async engine and Alembic's synchronous one cannot end up
+  enforcing different things against one database. PROD-H1 gained a rule that
+  refuses anything below `verify-full` in a deployed environment, and refuses
+  `verify-full` without a CA bundle that exists — `require` encrypts the link
+  but never checks who answered, which is a different control entirely.
+
+  Everything else is deployment artefacts: a production Compose file where **no
+  service publishes a host port**, two networks so that "can reach the frontend"
+  and "can reach the broker" are different permissions, `cap_drop: ALL` and
+  `no-new-privileges` everywhere, read-only root filesystems with explicit
+  writable scratch, bounded logs and memory, and `${VAR:?}` on every mandatory
+  variable so Compose refuses rather than substituting a placeholder. PostgreSQL
+  is deliberately not a container: a database inside the Compose project dies
+  with the instance it was protecting against losing.
+
+  A fourth image, `droppilot-ops`, carries `pg_dump` and Alembic so the
+  internet-facing backend image does not. Its default command does nothing, so
+  starting it by accident cannot migrate anything.
+
+  Ingress is a Cloudflare tunnel that dials out — no inbound web rule, no origin
+  IP to route around the WAF, no certificate to expire — with a catch-all that
+  refuses rather than routing. systemd replaces Task Scheduler, with `--wait` so
+  the unit is active only once health checks pass. Six deployment scripts
+  refuse a dirty tree, a wrong commit, loose secret permissions, a published
+  port, a development server, or an image not pinned by digest.
+
+  **128 tests read the artefacts and assert what they exist to guarantee.** They
+  caught two real defects in this milestone's own work: the deployment scripts
+  were tracked mode 644 and would have landed on the instance as "Permission
+  denied", and the cloudflared template was not valid YAML.
+
+  **Not proven: the stack has not been run.** Docker Desktop's Linux engine
+  cannot start on this machine — WSL2 has no distribution installed — so no
+  image was built and no container started. The Compose file was validated
+  client-side, which is real but partial. Nothing is provisioned on AWS,
+  Cloudflare, Google or Resend, and production remains the Windows host,
+  untouched.
+
 - **BACKUP-B1-R1 — protected production database names are now policy, not
   spelling.** The accepted BACKUP-B1 review left one informational finding: the
   protected set was matched with exact, case-sensitive equality, so a database

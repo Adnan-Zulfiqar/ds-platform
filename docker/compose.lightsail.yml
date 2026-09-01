@@ -1,0 +1,420 @@
+# DropPilot AI — AWS Lightsail production stack (eu-west-2, London).
+#
+# **This file is not the development stack.** `docker-compose.yml` at the
+# repository root publishes ports, mounts source and runs uvicorn with
+# `--reload`; every one of those is a defect here. The two are kept separate
+# rather than merged with overrides because an override file that is forgotten
+# on the command line is a production deployment running a development server.
+#
+# Bring the stack up with the environment file that lives outside Git:
+#
+#     docker compose --env-file /etc/droppilot/deploy.env \
+#         -f docker/compose.lightsail.yml up -d
+#
+# The deployment scripts under `scripts/deploy/` do this for you and refuse
+# beforehand if the configuration is wrong. Run those rather than this.
+#
+# ---------------------------------------------------------------------------
+# What is deliberately absent
+# ---------------------------------------------------------------------------
+#
+# * **PostgreSQL.** It is a Lightsail Managed Database on private networking,
+#   not a container. A database in the same Compose project as the application
+#   dies with the instance it was protecting against losing, and takes its
+#   volume with it.
+# * **Published ports.** Not one service publishes to the host. The only route
+#   in is the Cloudflare tunnel, which dials *out*. See §7 of
+#   docs/operations/LIGHTSAIL_DEPLOYMENT.md.
+# * **nginx.** cloudflared routes directly to the two internal services by
+#   hostname. A second reverse proxy would be a second place for the
+#   forwarded-header trust story to be got wrong, and it terminates nothing —
+#   TLS ends at Cloudflare.
+# * **The backup service.** Present but never started; see `backup` below.
+
+name: droppilot
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+#
+# Two networks, so that "can reach the frontend" and "can reach the broker" are
+# different permissions. cloudflared sits only on `edge` and therefore cannot
+# reach Redis or RabbitMQ even if it is compromised; the worker sits only on
+# `internal` and cannot be reached from the tunnel at all.
+networks:
+  edge:
+    driver: bridge
+    # No inter-container communication beyond what is attached here, and no
+    # bridging to the host's other Docker networks.
+    internal: false
+  internal:
+    driver: bridge
+    # `internal: true` removes the default gateway: containers on this network
+    # have no route to the internet at all. The broker and cache have no
+    # business making outbound connections, and this is the difference between
+    # saying so and enforcing it.
+    internal: true
+
+volumes:
+  rabbitmq_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ---------------------------------------------------------------------------
+# Shared fragments
+# ---------------------------------------------------------------------------
+x-logging: &logging
+  driver: json-file
+  options:
+    # Without this a single crash-looping container fills the instance's disk
+    # and takes the database connection pool down with it. 10 MiB × 3 is enough
+    # to investigate a recent incident and bounded enough to be safe.
+    max-size: "10m"
+    max-file: "3"
+
+x-security: &hardening
+  # No new privileges: a setuid binary inside the image cannot be used to
+  # escalate. Nothing here needs one.
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+  logging: *logging
+
+x-app-environment: &app-environment
+  ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT must be set - production or staging, never local}
+  POSTGRES_HOST: ${POSTGRES_HOST:?the Lightsail managed database endpoint}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_DB: ${POSTGRES_DB:?the expected database name}
+  POSTGRES_USER: ${POSTGRES_USER:?the database role}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?the database password - from /etc/droppilot, never this file}
+  # A managed database is reached over a network this application does not own.
+  # `require` encrypts without checking who answered; `verify-full` checks the
+  # chain and the hostname. PROD-H1 refuses anything weaker in a deployed
+  # environment.
+  POSTGRES_SSLMODE: ${POSTGRES_SSLMODE:-verify-full}
+  POSTGRES_SSLROOTCERT: /etc/droppilot/tls/rds-ca-eu-west-2.pem
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  CELERY_BROKER_URL: amqp://${RABBITMQ_USER:?}:${RABBITMQ_PASSWORD:?}@rabbitmq:5672//
+  CELERY_RESULT_BACKEND: redis://redis:6379/3
+
+services:
+  # -------------------------------------------------------------------------
+  # Edge
+  # -------------------------------------------------------------------------
+  cloudflared:
+    <<: *hardening
+    image: cloudflare/cloudflared:2025.2.1
+    # `--no-autoupdate`: an unattended binary replacing itself on a production
+    # host is a supply-chain change nobody reviewed. Upgrades are a deliberate
+    # image bump.
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      # Read-only, and from outside Git. The credential file is the tunnel's
+      # private key: anything holding it can publish as these hostnames.
+      - /etc/droppilot/cloudflared:/etc/cloudflared:ro
+    networks: [edge]
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      # cloudflared serves its own metrics endpoint; a tunnel that has lost its
+      # connection to the edge still has a live process, so process liveness is
+      # not the question worth asking.
+      test: ["CMD", "cloudflared", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 256M }
+        reservations: { memory: 64M }
+
+  # -------------------------------------------------------------------------
+  # Application
+  # -------------------------------------------------------------------------
+  frontend:
+    <<: *hardening
+    image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE to a digest-pinned reference - scripts/deploy/build_images.sh writes one}
+    environment:
+      NODE_ENV: production
+      # Not a secret, and not runtime-effective either: NEXT_PUBLIC_* values are
+      # inlined into the client bundle at *build* time. Setting it here changes
+      # nothing — it is present only so a reader who expects it does not
+      # conclude it was forgotten. The build-time authority is
+      # `scripts/deploy/build_images.sh`.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?must match what the image was built with}
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    read_only: true
+    tmpfs:
+      # Next.js writes its image-optimisation cache and nothing else.
+      - /tmp:mode=1777,size=64m
+      - /app/.next/cache:mode=0755,uid=1001,gid=1001,size=256m
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 512M }
+        reservations: { memory: 128M }
+
+  backend:
+    <<: *hardening
+    image: ${BACKEND_IMAGE:?set BACKEND_IMAGE to a digest-pinned reference}
+    env_file:
+      # Everything secret arrives from here, root-owned and mode 600, outside
+      # Git. Compose reads it at start; it is never copied into an image layer
+      # and never appears in `docker inspect` output as a build argument.
+      - ${DEPLOY_ENV_FILE:?point at /etc/droppilot/app.env}
+    environment: *app-environment
+    networks: [edge, internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      # The migration container must have exited 0. `service_completed_successfully`
+      # is the only dependency condition that means "the work is done" rather
+      # than "the process started" — see the note under `migrate`.
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # `/health/ready` touches the database and Redis. Liveness would report a
+      # process that is up and cannot serve anything, which is the state that
+      # most needs to fail a health check.
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      start_period: 40s
+      retries: 5
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 768M }
+        reservations: { memory: 256M }
+
+  worker:
+    <<: *hardening
+    image: ${WORKER_IMAGE:?set WORKER_IMAGE to a digest-pinned reference}
+    env_file:
+      - ${DEPLOY_ENV_FILE:?point at /etc/droppilot/app.env}
+    environment: *app-environment
+    # Not on `edge`. A background worker has no reason to be reachable from the
+    # tunnel, and being unreachable is stronger than being unrouted.
+    networks: [internal]
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 45s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    # Celery's warm shutdown finishes in-flight tasks before exiting. A short
+    # grace period would SIGKILL a task mid-write; `task_acks_late` would then
+    # redeliver it, which is safe only because every task is idempotent — but
+    # letting it finish is better than relying on that.
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 768M }
+        reservations: { memory: 256M }
+
+  beat:
+    <<: *hardening
+    image: ${WORKER_IMAGE:?set WORKER_IMAGE to a digest-pinned reference}
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - ${DEPLOY_ENV_FILE:?point at /etc/droppilot/app.env}
+    environment: *app-environment
+    networks: [internal]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      # Beat persists its last-run state here. On this deployment the file is
+      # deliberately ephemeral: after a restart beat re-fires each schedule once,
+      # and every scheduled task is idempotent and windowed to overlap. The
+      # alternative — a persistent volume — makes a stale schedule file survive
+      # a rollback, which is worse.
+      - /tmp:mode=1777,size=32m
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 256M }
+        reservations: { memory: 64M }
+
+  # -------------------------------------------------------------------------
+  # Infrastructure — internal network only, never published
+  # -------------------------------------------------------------------------
+  redis:
+    <<: *hardening
+    image: redis:7.4-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      # Sessions and rate-limit counters. Losing them on restart logs everyone
+      # out and resets throttles; appendonly makes a restart invisible instead.
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 320M }
+        reservations: { memory: 96M }
+
+  rabbitmq:
+    <<: *hardening
+    # Not `-management`: the management plugin's UI is an administrative
+    # interface with its own authentication, and the only way to be certain it
+    # is not exposed is for it not to be running.
+    image: rabbitmq:4.0-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "0.75", memory: 512M }
+        reservations: { memory: 192M }
+
+  # -------------------------------------------------------------------------
+  # One-off jobs
+  # -------------------------------------------------------------------------
+  migrate:
+    # Runs to completion and exits. `backend`, `worker` and `beat` all wait on
+    # `service_completed_successfully`, so a failed migration keeps the whole
+    # application down rather than letting it start against a half-migrated
+    # schema — which is the failure that turns a bad deploy into a data problem.
+    image: ${OPS_IMAGE:?set OPS_IMAGE to a digest-pinned reference}
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - ${DEPLOY_ENV_FILE:?point at /etc/droppilot/app.env}
+    environment: *app-environment
+    volumes:
+      - /etc/droppilot/tls:/etc/droppilot/tls:ro
+    networks: [internal]
+    # Never restart. A migration that failed must be looked at, not retried in a
+    # loop against a database it may have partially changed.
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=32m
+    logging: *logging
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 512M }
+
+  readiness:
+    # The PROD-H1 audit, as a container. Run by `scripts/deploy/preflight.sh`
+    # before anything starts. Exits non-zero when the configuration is not fit
+    # to deploy, which is what makes it a gate rather than a report.
+    image: ${OPS_IMAGE:?set OPS_IMAGE to a digest-pinned reference}
+    command:
+      - python
+      - scripts/verify_production_config.py
+      - --env-file
+      - /etc/droppilot/app.env
+      - --expect-environment
+      - ${ENVIRONMENT:?}
+      - --expect-database
+      - ${POSTGRES_DB:?}
+    volumes:
+      - ${DEPLOY_ENV_FILE:?}:/etc/droppilot/app.env:ro
+      - /etc/droppilot/tls:/etc/droppilot/tls:ro
+    networks: [internal]
+    restart: "no"
+    profiles: ["ops"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    logging: *logging
+
+  backup:
+    # **Deliberately never started.** The `backup` profile is not in any script
+    # and not in the systemd unit, so `up` without `--profile backup` does not
+    # create it.
+    #
+    # BACKUP-B1 built and proved this tooling on isolated databases. Turning it
+    # on against production needs things that do not exist yet: a generated
+    # encryption key in a secret store, an off-site destination, an agreed
+    # retention period and a restore drill from a real production backup. Until
+    # those exist the PROD-H1 `BACKUPS` rule reports BLOCKED, and it should.
+    image: ${OPS_IMAGE:?set OPS_IMAGE to a digest-pinned reference}
+    command:
+      - python
+      - scripts/create_database_backup.py
+      - --expect-database
+      - ${POSTGRES_DB:?}
+      - --allow-production
+    env_file:
+      - ${DEPLOY_ENV_FILE:?point at /etc/droppilot/app.env}
+    environment: *app-environment
+    volumes:
+      - /etc/droppilot/tls:/etc/droppilot/tls:ro
+      - ${BACKUP_DIRECTORY:-/var/backups/droppilot}:/var/backups/droppilot
+    networks: [internal]
+    restart: "no"
+    profiles: ["backup"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *logging

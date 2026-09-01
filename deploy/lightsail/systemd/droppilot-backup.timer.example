@@ -1,0 +1,27 @@
+# DropPilot AI — nightly backup schedule.
+#
+# **TEMPLATE. NOT INSTALLED.** See droppilot-backup.service.example.
+
+[Unit]
+Description=Nightly DropPilot AI encrypted database backup
+Documentation=file:///opt/droppilot/docs/operations/BACKUP_RUNBOOK.md
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# UTC rather than local. The instance is in London and would otherwise shift by
+# an hour twice a year, which moves the backup window relative to every other
+# scheduled thing and makes "the 02:30 backup" ambiguous for two weeks a year.
+Persistent=true
+
+# `Persistent=true` runs a missed occurrence once the machine is back — the
+# equivalent of Task Scheduler's StartWhenAvailable. A missed window then shows
+# up as marker *age* in the readiness check, which is the real detector; the
+# timer is not a monitor.
+
+# Up to five minutes of jitter. Nothing else runs at 02:30 today, but a fixed
+# instant is how two schedules eventually collide on one small instance.
+RandomizedDelaySec=300
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

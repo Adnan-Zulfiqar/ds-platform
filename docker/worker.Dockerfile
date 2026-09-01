@@ -49,6 +49,21 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=droppilot:droppilot backend/ /app/
 
+
+# ---------------------------------------------------------------------------
+# Provenance. `APP_SHA` is passed by `scripts/deploy/build_images.sh` from the
+# commit being deployed, so a running container can always be traced back to a
+# reviewed commit — `docker inspect` answers "what is actually running", which
+# is the first question in every incident.
+# ---------------------------------------------------------------------------
+ARG APP_SHA=unknown
+LABEL org.opencontainers.image.title="droppilot-worker"       org.opencontainers.image.revision="${APP_SHA}"       org.opencontainers.image.source="https://github.com/Adnan-Zulfiqar/ds-platform"       org.opencontainers.image.vendor="Whiteto Ltd"       org.opencontainers.image.licenses="UNLICENSED"
+
+# Celery treats SIGTERM as "warm shutdown": stop consuming, finish what is in
+# flight, then exit. That is exactly what a deployment needs, and it is why the
+# Compose stop_grace_period is generous.
+STOPSIGNAL SIGTERM
+
 USER droppilot
 
 # Celery refuses to run as root by design, so the unprivileged user above is a

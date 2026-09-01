@@ -1,0 +1,48 @@
+# DropPilot AI — encrypted database backup, one run.
+#
+# **TEMPLATE. NOT INSTALLED, AND MUST NOT BE UNTIL BACKUP ACTIVATION IS
+# AUTHORISED.** Installing this begins taking production backups, which needs
+# the encryption key, the off-site destination and the agreed retention period
+# to exist first — none of which do. See docs/operations/BACKUP_RUNBOOK.md §8.
+#
+# Replaces the Windows Task Scheduler XML from BACKUP-B1. That template stays in
+# the repository for the old host; on Lightsail this is the scheduler.
+
+[Unit]
+Description=DropPilot AI encrypted database backup
+Documentation=file:///opt/droppilot/docs/operations/BACKUP_RUNBOOK.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/droppilot
+EnvironmentFile=/etc/droppilot/deploy.env
+
+# One instance, ever. Two pg_dumps against one database is load the database did
+# not plan for, and two writers in one directory race over the .part names.
+# systemd will not start a second instance of a Type=oneshot unit that is still
+# running, and the explicit name makes that guarantee readable.
+ExecStart=/usr/bin/docker compose --env-file /etc/droppilot/deploy.env \
+    -f /opt/droppilot/docker/compose.lightsail.yml \
+    --profile backup run --rm --name droppilot-backup-run backup
+
+# Exit codes propagate to systemd unchanged, and they are meaningful:
+#   0 published   2 configuration refused   3 pg_dump failed
+#   4 encryption  5 verification failed     6 filesystem refused
+# `systemctl show -p ExecMainStatus droppilot-backup` is therefore a diagnosis,
+# not just "it failed".
+SuccessExitStatus=0
+
+# A dump that has not finished in four hours has gone wrong. Killing it is safe:
+# nothing is published until the tool exits zero.
+TimeoutStartSec=4h
+
+# No Restart=. A failed backup is an operator action, not something to retry in
+# a loop against a database that may be under load. The timer's next firing is
+# the retry, and the readiness check's age test is what notices in between.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=droppilot-backup

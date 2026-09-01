@@ -17,7 +17,7 @@ from functools import lru_cache
 from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from pydantic import (
     AliasChoices,
@@ -149,10 +149,84 @@ class DatabaseSettings(_EnvFileSettings):
     )
     echo_sql: bool = False
 
+    # --- Transport security -------------------------------------------------
+    #
+    # A managed PostgreSQL service is reached over a network this application
+    # does not own, so the connection has to be both encrypted *and*
+    # authenticated. `require` gives encryption with no idea who answered;
+    # `verify-full` checks the certificate chain and that the hostname matches,
+    # which is what stops an attacker who can redirect traffic from reading
+    # every query. AWS publishes a CA bundle per region for exactly this.
+    #
+    # Default `prefer` matches libpq's own default and keeps local development
+    # working against a plaintext container. Deployed environments are held to
+    # `verify-full` by `app/core/production_readiness.py` — a default of
+    # `verify-full` here would instead break every developer's machine and be
+    # switched off, which protects nobody.
+    sslmode: str = Field(
+        default="prefer",
+        description="libpq sslmode. Deployed environments must use verify-full.",
+    )
+
+    #: Path to the CA bundle that signs the server certificate. Required by
+    #: `verify-ca` and `verify-full`; without it there is nothing to verify
+    #: against and the mode is a claim rather than a check.
+    sslrootcert: str | None = None
+
+    @field_validator("sslmode")
+    @classmethod
+    def _known_sslmode(cls, value: str) -> str:
+        allowed = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+        candidate = value.strip().lower()
+        if candidate not in allowed:
+            raise ValueError(
+                f"POSTGRES_SSLMODE must be one of {sorted(allowed)}; a typo such as "
+                "'verify_full' would otherwise be accepted by nothing and fail at "
+                "connection time."
+            )
+        return candidate
+
+    @property
+    def tls_verifies_certificate(self) -> bool:
+        """Whether this mode actually authenticates the server."""
+        return self.sslmode in ("verify-ca", "verify-full")
+
+    def ssl_parameter(self) -> object:
+        """What to hand asyncpg as its `ssl` connect argument.
+
+        asyncpg does not speak libpq's `sslmode`; it takes `False`, `True`, or
+        an `ssl.SSLContext`. Translating here rather than at the call site keeps
+        one authority over what the mode means, so the async engine and Alembic's
+        synchronous one cannot end up enforcing different things against the
+        same database.
+
+        Returns `False` (no TLS), `True` (encrypt, do not verify), or a context
+        configured to verify the chain and, for `verify-full`, the hostname.
+        """
+        import ssl as _ssl
+
+        if self.sslmode == "disable":
+            return False
+        if self.sslmode in ("allow", "prefer", "require"):
+            # asyncpg has no "try TLS and fall back" mode. `prefer` and `allow`
+            # therefore become "no TLS" rather than silently becoming
+            # "encrypted but unverified", which would misreport what happened.
+            return True if self.sslmode == "require" else False
+
+        context = _ssl.create_default_context(cafile=self.sslrootcert)
+        context.check_hostname = self.sslmode == "verify-full"
+        context.verify_mode = _ssl.CERT_REQUIRED
+        return context
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def async_dsn(self) -> str:
-        """DSN for the asyncpg driver, used by the application at runtime."""
+        """DSN for the asyncpg driver, used by the application at runtime.
+
+        No TLS parameters appear here. asyncpg rejects libpq query parameters,
+        and the engine supplies the SSL context through `connect_args` — see
+        `ssl_parameter` and `app/database/session.py`.
+        """
         return str(
             PostgresDsn.build(
                 scheme="postgresql+asyncpg",
@@ -171,7 +245,15 @@ class DatabaseSettings(_EnvFileSettings):
 
         Alembic and Celery run synchronously, so they need a non-async driver
         even though the application itself is fully async.
+
+        psycopg *is* libpq, so the TLS settings travel as query parameters here
+        rather than as a context object. The two drivers are configured
+        differently and must still mean the same thing; `sslmode` is the single
+        setting both read.
         """
+        query: dict[str, str] = {"sslmode": self.sslmode}
+        if self.sslrootcert:
+            query["sslrootcert"] = self.sslrootcert
         return str(
             PostgresDsn.build(
                 scheme="postgresql+psycopg",
@@ -180,6 +262,7 @@ class DatabaseSettings(_EnvFileSettings):
                 host=self.host,
                 port=self.port,
                 path=self.db,
+                query=urlencode(query),
             )
         )
 

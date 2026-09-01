@@ -62,6 +62,18 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
+
+# ---------------------------------------------------------------------------
+# Provenance. `APP_SHA` is passed by `scripts/deploy/build_images.sh` from the
+# commit being deployed, so a running container can always be traced back to a
+# reviewed commit — `docker inspect` answers "what is actually running", which
+# is the first question in every incident.
+# ---------------------------------------------------------------------------
+ARG APP_SHA=unknown
+LABEL org.opencontainers.image.title="droppilot-frontend"       org.opencontainers.image.revision="${APP_SHA}"       org.opencontainers.image.source="https://github.com/Adnan-Zulfiqar/ds-platform"       org.opencontainers.image.vendor="Whiteto Ltd"       org.opencontainers.image.licenses="UNLICENSED"
+
+STOPSIGNAL SIGTERM
+
 USER nextjs
 
 EXPOSE 3000

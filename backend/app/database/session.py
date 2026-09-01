@@ -55,10 +55,19 @@ def _create_engine() -> AsyncEngine:
         pool_recycle=db.pool_recycle,
         pool_pre_ping=db.pool_pre_ping,
         future=True,
-        # Statement caching is disabled because PgBouncer in transaction pooling
-        # mode reuses server connections across clients, which invalidates
-        # asyncpg's per-connection prepared-statement cache.
-        connect_args={"statement_cache_size": 0},
+        connect_args={
+            # Statement caching is disabled because PgBouncer in transaction
+            # pooling mode reuses server connections across clients, which
+            # invalidates asyncpg's per-connection prepared-statement cache.
+            "statement_cache_size": 0,
+            # TLS. asyncpg takes a context, not libpq's `sslmode`, so the
+            # translation lives in one place — `DatabaseSettings.ssl_parameter`
+            # — and the synchronous engine Alembic uses reads the same setting.
+            # A managed database is reached over a network this application does
+            # not own; `verify-full` is what makes the connection authenticated
+            # rather than merely encrypted.
+            "ssl": db.ssl_parameter(),
+        },
     )
 
 

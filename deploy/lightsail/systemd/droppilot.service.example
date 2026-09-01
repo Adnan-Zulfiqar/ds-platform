@@ -1,0 +1,74 @@
+# DropPilot AI — Compose stack as a systemd unit.
+#
+# **TEMPLATE. NOT INSTALLED.** Copy to /etc/systemd/system/droppilot.service on
+# the Lightsail instance, replace {{PLACEHOLDER}}s, then:
+#
+#     systemctl daemon-reload && systemctl enable --now droppilot
+#
+# Replaces the Windows Task Scheduler entry that starts the old host's backend.
+# Nothing on Lightsail depends on Task Scheduler.
+
+[Unit]
+Description=DropPilot AI application stack
+Documentation=file:///opt/droppilot/docs/operations/LIGHTSAIL_DEPLOYMENT.md
+
+# Docker must be up, and the network must be *configured* rather than merely
+# present. `network-online.target` is the difference between starting when an
+# interface exists and starting when it can reach the managed database —
+# without it the migration container races DNS on every boot.
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+# If Docker itself is restarted, this stack goes with it rather than being left
+# pointing at a daemon that has forgotten its containers.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Explicit, absolute, and not inherited. A unit that relies on the invoking
+# shell's working directory is a unit that behaves differently under systemd
+# than it did when tested by hand.
+WorkingDirectory=/opt/droppilot
+
+# The environment file lives outside Git, root-owned, mode 600. systemd reads it
+# and passes it to the Compose process; it is never echoed, and `systemctl show`
+# does not render EnvironmentFile contents.
+EnvironmentFile=/etc/droppilot/deploy.env
+
+# Absolute paths. $PATH under systemd is not the operator's $PATH, and a bare
+# `docker` resolves differently — or not at all.
+ExecStartPre=/usr/bin/docker compose --env-file /etc/droppilot/deploy.env -f /opt/droppilot/docker/compose.lightsail.yml pull --quiet
+ExecStart=/usr/bin/docker compose --env-file /etc/droppilot/deploy.env -f /opt/droppilot/docker/compose.lightsail.yml up -d --wait --wait-timeout 300
+ExecStop=/usr/bin/docker compose --env-file /etc/droppilot/deploy.env -f /opt/droppilot/docker/compose.lightsail.yml down
+
+# `--wait` above is what makes this unit honest: without it `up -d` returns as
+# soon as the containers are *created*, and systemd reports the service active
+# while the application is still failing its health checks. With it, a stack
+# that never becomes healthy fails the unit.
+
+# Restart throttling. Five attempts in ten minutes, then stop and stay stopped.
+# A crash-looping stack that restarts forever hammers the managed database's
+# connection limit and hides the original failure under a wall of identical
+# logs.
+Restart=on-failure
+RestartSec=30s
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Compose's own pull and health-wait can legitimately take minutes on a small
+# instance. A short timeout would kill a deployment that was working.
+TimeoutStartSec=600
+TimeoutStopSec=180
+
+# Logs to the journal, which is size-capped in /etc/systemd/journald.conf —
+# see §9 of the deployment runbook. Container logs are separately capped by the
+# json-file driver in the Compose file, so neither can fill the disk.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=droppilot
+
+[Install]
+WantedBy=multi-user.target

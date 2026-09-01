@@ -72,6 +72,22 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=droppilot:droppilot backend/ /app/
 
+
+# ---------------------------------------------------------------------------
+# Provenance. `APP_SHA` is passed by `scripts/deploy/build_images.sh` from the
+# commit being deployed, so a running container can always be traced back to a
+# reviewed commit — `docker inspect` answers "what is actually running", which
+# is the first question in every incident.
+# ---------------------------------------------------------------------------
+ARG APP_SHA=unknown
+LABEL org.opencontainers.image.title="droppilot-backend"       org.opencontainers.image.revision="${APP_SHA}"       org.opencontainers.image.source="https://github.com/Adnan-Zulfiqar/ds-platform"       org.opencontainers.image.vendor="Whiteto Ltd"       org.opencontainers.image.licenses="UNLICENSED"
+
+# SIGTERM is what Docker and Compose send on stop. uvicorn handles it and drains
+# in-flight requests; the default SIGTERM is therefore correct and is stated
+# rather than left implicit, because changing it silently breaks graceful
+# shutdown.
+STOPSIGNAL SIGTERM
+
 USER droppilot
 
 EXPOSE 8000

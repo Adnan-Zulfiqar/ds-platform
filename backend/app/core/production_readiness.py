@@ -561,6 +561,61 @@ def _check_email(settings: Any) -> Iterator[Finding]:
         )
 
 
+def _check_database_tls(settings: Any) -> Finding:
+    """A managed database is reached over a network this application does not own.
+
+    On the old Windows host PostgreSQL was a loopback process and TLS was
+    genuinely unnecessary. On Lightsail the database is a separate managed
+    service on AWS's network, and `require` — encryption with no idea who
+    answered — is not the same control as `verify-full`, which checks the chain
+    and the hostname. The difference is exactly an attacker who can redirect
+    traffic.
+    """
+    from pathlib import Path
+
+    database = settings.database
+    mode = database.sslmode
+
+    if mode in ("disable", "allow", "prefer"):
+        return Finding(
+            "POSTGRES_SSLMODE",
+            Status.FAIL,
+            f"is {mode!r}, which permits an unencrypted connection to the "
+            "database. A managed instance is reached across a network the "
+            "application does not control.",
+        )
+    if mode == "require":
+        return Finding(
+            "POSTGRES_SSLMODE",
+            Status.FAIL,
+            "is 'require', which encrypts the connection but never checks who "
+            "answered. Use 'verify-full' so the certificate chain and the "
+            "hostname are both verified.",
+        )
+    if not database.sslrootcert:
+        return Finding(
+            "POSTGRES_SSLROOTCERT",
+            Status.MISSING,
+            f"is unset while POSTGRES_SSLMODE is {mode!r}. Verification would "
+            "fall back to the host's trust store, so any publicly-trusted "
+            "certificate for the hostname would be accepted. Point it at the "
+            "regional AWS CA bundle.",
+        )
+    if not Path(database.sslrootcert).is_file():
+        return Finding(
+            "POSTGRES_SSLROOTCERT",
+            Status.FAIL,
+            "names a file that does not exist, so certificate verification "
+            "cannot succeed and every connection will fail at startup.",
+        )
+    return Finding(
+        "POSTGRES_SSLMODE",
+        Status.PASS,
+        f"is {mode!r} with a CA bundle present; the database connection is "
+        "encrypted and the server is authenticated.",
+    )
+
+
 def _check_terms(settings: Any) -> Finding:
     """Not a configuration defect. A deliberate publication gate."""
     from app.core.legal import TERMS_PUBLISHED, TERMS_VERSION
@@ -739,6 +794,15 @@ RULES: tuple[Rule, ...] = (
         "set only when Google sign-in is activated",
         _check_google,
         enforced_at_startup=True,
+    ),
+    Rule(
+        "POSTGRES_SSLMODE",
+        Classification.REQUIRED_NOW,
+        False,
+        "operator",
+        "verify-full with a CA bundle, against a managed database",
+        _check_database_tls,
+        enforced_at_startup=False,
     ),
     Rule(
         "TERMS_PUBLISHED",

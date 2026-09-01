@@ -1,0 +1,76 @@
+# DropPilot AI — Cloudflare Tunnel configuration.
+#
+# **TEMPLATE. NOT INSTALLED, AND NO REAL TUNNEL EXISTS.** Creating the tunnel,
+# writing DNS records and installing the credential are separate authorised
+# steps; INFRA-L1 created none of them. Copy this to
+# /etc/droppilot/cloudflared/config.yml on the Lightsail instance, replace every
+# {{PLACEHOLDER}}, and read §7 of docs/operations/LIGHTSAIL_DEPLOYMENT.md first.
+#
+# ---------------------------------------------------------------------------
+# Why a tunnel rather than ports 80/443
+# ---------------------------------------------------------------------------
+#
+# cloudflared dials *out* to Cloudflare and keeps the connection open. Nothing
+# dials in. The Lightsail firewall therefore needs no inbound web rule at all,
+# which removes the entire class of "someone found the origin IP and went
+# straight to it, bypassing the WAF". There is no origin port to find.
+#
+# It also means the instance has no public TLS certificate to renew, and no
+# window where a certificate expiry takes the site down.
+
+tunnel: "CHANGE-ME-tunnel-uuid"
+
+# The tunnel's private key. Root-owned, mode 600, outside Git — anything holding
+# this file can publish traffic as these hostnames, so it is exactly as
+# sensitive as a TLS private key.
+credentials-file: "/etc/cloudflared/CHANGE-ME-tunnel-uuid.json"
+
+# Prometheus-style metrics on loopback only. Used by the health check and by
+# `scripts/deploy/verify_health.sh`; never exposed.
+metrics: 127.0.0.1:2000
+
+# Reconnect behaviour. The defaults retry with backoff indefinitely, which is
+# what is wanted — a tunnel that gives up leaves the site down until somebody
+# notices. Stated explicitly so a future edit is a decision.
+retries: 5
+grace-period: 30s
+
+# `warp-routing` is off: this tunnel publishes two hostnames and is not a
+# network-level bridge into the VPC.
+warp-routing:
+  enabled: false
+
+ingress:
+  # -------------------------------------------------------------------------
+  # Public hostnames. Each maps to ONE internal service by container name,
+  # resolved on the `edge` Docker network.
+  # -------------------------------------------------------------------------
+  - hostname: app.whiteto.com
+    service: http://frontend:3000
+    originRequest:
+      # The origin speaks plain HTTP inside a private Docker network; TLS
+      # terminates at Cloudflare. `noTLSVerify` is not set because no TLS is
+      # attempted — setting it would be the dangerous shape of the same line.
+      connectTimeout: 10s
+      # Next.js streams. A short read timeout truncates a slow page render.
+      httpHostHeader: app.whiteto.com
+
+  - hostname: api.whiteto.com
+    service: http://backend:8000
+    originRequest:
+      connectTimeout: 10s
+      httpHostHeader: api.whiteto.com
+      # The backend reads X-Forwarded-For through `app.core.client_ip`, gated by
+      # SECURITY_TRUSTED_PROXIES. Cloudflare's connector address must be in that
+      # list or every client will appear to come from the tunnel.
+
+  # -------------------------------------------------------------------------
+  # Catch-all. **Required by cloudflared** — it refuses to start without a final
+  # rule — and deliberately a refusal rather than a route.
+  #
+  # A catch-all of `service: http://backend:8000` would publish the API under
+  # every hostname anyone ever points at this tunnel, including one added by
+  # mistake in the Cloudflare dashboard. 404 is the answer to "a hostname this
+  # tunnel was not configured for".
+  # -------------------------------------------------------------------------
+  - service: http_status:404

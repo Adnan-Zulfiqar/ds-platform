@@ -22,6 +22,8 @@ import base64
 import codecs
 import io
 import os
+import pathlib
+import tempfile
 import textwrap
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -49,8 +51,23 @@ VALID_OTP_KEY = "prod-h1-otp-key-distinct-from-the-signing-key"
 #: A deployed configuration with nothing wrong with it. Every test below breaks
 #: exactly one setting, so a failure names the control rather than the fixture.
 #: None of these values is a real secret; each is obviously synthetic.
+#: Stands in for the regional AWS CA bundle. The TLS rule checks the file
+#: exists, because a path that does not resolve turns "verified" into a
+#: connection error at startup — so the fixture has to be a real file.
+CA_BUNDLE = pathlib.Path(tempfile.gettempdir()) / "droppilot_infra_l1_fixture_ca.pem"
+CA_BUNDLE.write_text(
+    "# Not a certificate. A placeholder whose only job is to exist, so the "
+    "readiness rule's file check has something to find.",
+    encoding="utf-8",
+)
+
 READY: dict[str, str] = {
     "ENVIRONMENT": "production",
+    # INFRA-L1: a managed database is reached over a network the application
+    # does not own, so the deployed baseline verifies the server rather than
+    # merely encrypting the link.
+    "POSTGRES_SSLMODE": "verify-full",
+    "POSTGRES_SSLROOTCERT": str(CA_BUNDLE),
     "ALLOWED_HOSTS": "api.example.invalid",
     "CORS_ORIGINS": "https://app.example.invalid",
     "POSTGRES_DB": "droppilot",
