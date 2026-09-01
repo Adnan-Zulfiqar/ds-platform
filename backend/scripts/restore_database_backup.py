@@ -47,7 +47,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import settings
-from app.core.database_identity import PRODUCTION_DATABASE_NAMES
+from app.core.database_identity import (
+    DatabaseNameError,
+    is_protected_database,
+    safe_label,
+    validate_database_name,
+)
 from app.services.database_backup import (
     DEFAULT_INTEGRITY_QUERIES,
     BackupError,
@@ -108,13 +113,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _confirm_production(target: str) -> bool:
+def _confirm_production(observed: str) -> bool:
     """Require the database name to be typed. Never auto-answered.
 
     A y/n prompt is answered reflexively; a name has to be read off the screen
     and copied, which is the smallest amount of deliberation that is worth
     anything. If stdin is not a terminal — a scheduled task, a pipeline — this
     refuses rather than reading a line from somewhere unattended.
+
+    `observed` is the name the **server** reported, not the one typed on the
+    command line. The two agree by the time this runs, because the identity
+    check has already refused any disagreement — and that is the point: the
+    operator confirms what the database says it is, rather than re-typing their
+    own argument back at themselves.
+
+    The comparison here is **exact**, deliberately. The protected-name *policy*
+    is case-insensitive so that `DropPilot` cannot slip past it; the
+    confirmation is not, because typing a different capitalisation than the
+    server reported means the operator is not looking at what they think they
+    are looking at.
     """
     if not sys.stdin.isatty():
         print(
@@ -124,7 +141,7 @@ def _confirm_production(target: str) -> bool:
         )
         return False
     print()
-    print(f"About to restore over the PRODUCTION database {target!r}.")
+    print(f"About to restore over the PRODUCTION database {safe_label(observed)!r}.")
     print("Every row currently in it will be replaced by the backup's contents.")
     try:
         typed = input("Type the database name to continue: ").strip()
@@ -136,7 +153,7 @@ def _confirm_production(target: str) -> bool:
         print()
         print("REFUSED: no confirmation was given. Nothing was changed.", file=sys.stderr)
         return False
-    if typed != target:
+    if typed != observed:
         print("REFUSED: the name did not match. Nothing was changed.", file=sys.stderr)
         return False
     return True
@@ -177,17 +194,27 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     queries = _load_queries(args.integrity_queries)
 
-    if args.target in PRODUCTION_DATABASE_NAMES:
-        if not args.production_restore:
+    try:
+        # Names first, before configuration is even read. A malformed flag is
+        # the operator's typo, and it should be reported as that rather than as
+        # whatever unrelated thing happens to be missing from the environment.
+        validate_database_name(args.target, field="--target")
+        validate_database_name(args.expect_source, field="--expect-source")
+
+        # Refused before anything is connected to, on the stated name alone.
+        # `is_protected_database` canonicalises, so every capitalisation and
+        # whitespace variant of a protected name lands here.
+        if is_protected_database(args.target) and not args.production_restore:
             print(
-                f"REFUSED: {args.target!r} is a protected production database. "
-                "Restoring over it needs --production-restore and a typed "
-                "confirmation.",
+                f"REFUSED: {safe_label(args.target)!r} is a protected production "
+                "database name. Restoring over it needs --production-restore and "
+                "a typed confirmation.",
                 file=sys.stderr,
             )
             return int(ExitCode.CONFIGURATION)
-        if args.apply and not _confirm_production(args.target):
-            return int(ExitCode.CONFIGURATION)
+    except DatabaseNameError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return int(ExitCode.CONFIGURATION)
 
     try:
         key = load_key_from_settings(settings)
@@ -210,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
             allow_non_empty=args.allow_non_empty,
             pg_bin_dir=settings.backup.pg_bin_dir,
             integrity_queries=queries or DEFAULT_INTEGRITY_QUERIES,
+            # Passed unconditionally: the service decides whether a confirmation
+            # is needed, from the identity the server reported. A CLI that
+            # decided for itself would be deciding from the command line, which
+            # is the thing under suspicion.
+            confirm_production=_confirm_production,
         )
     except BackupError as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)

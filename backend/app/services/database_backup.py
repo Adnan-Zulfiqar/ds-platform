@@ -38,7 +38,7 @@ import secrets
 import shutil
 import subprocess  # pg_dump and pg_restore, invoked with a fixed argv and no shell
 import tempfile
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -60,9 +60,12 @@ from app.core.backup_crypto import (
     manifest_mac,
 )
 from app.core.database_identity import (
-    PRODUCTION_DATABASE_NAMES,
     DatabaseIdentityError,
+    DatabaseNameError,
+    is_protected_database,
     require_database_name,
+    safe_label,
+    validate_database_name,
 )
 
 __all__ = [
@@ -584,6 +587,21 @@ class DatabaseFacts:
     public_tables: int
 
 
+def _checked_name(raw: str, *, field: str) -> str:
+    """Validate an operator-supplied database name, as this layer's error type.
+
+    The validation itself lives in `app.core.database_identity` so that the
+    erasure tooling and the backup tooling cannot disagree about what a usable
+    name is. This wrapper only re-types the refusal, because the CLI routes on
+    `BackupError.exit_code` and a refusal must arrive as "configuration", never
+    as an unhandled traceback.
+    """
+    try:
+        return validate_database_name(raw, field=field)
+    except DatabaseNameError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+
 def _connect(target: PostgresTarget) -> Any:
     try:
         import psycopg
@@ -798,16 +816,24 @@ def create_backup(
     already renamed is removed — a backup nothing can verify is worse than an
     absent one, because it will be counted.
     """
+    expected_database = _checked_name(expected_database, field="the expected database")
+
     # Before any connection, not after. `inspect_database` refuses a production
     # name too, but only once it has connected and asked the server — and
     # opening a session against production is itself something an unauthorised
     # run must not do. The operator's stated name is enough to refuse on; the
     # server's answer remains the backstop for the case where the two differ.
-    if expected_database in PRODUCTION_DATABASE_NAMES and not allow_production:
+    #
+    # The comparison is case-insensitive policy, not identity: `DropPilot` is
+    # refused here even though it is a different PostgreSQL identifier from
+    # `droppilot`, because a protection that can be stepped over by holding
+    # shift is decoration. What gets connected to is still the operator's exact
+    # string.
+    if is_protected_database(expected_database) and not allow_production:
         raise ConfigurationError(
-            f"{expected_database!r} is a production database. Nothing was "
-            "connected to. Re-run with the explicit production flag if taking a "
-            "production backup is genuinely intended."
+            f"{safe_label(expected_database)!r} is a protected production "
+            "database name. Nothing was connected to. Re-run with the explicit "
+            "production flag if taking a production backup is genuinely intended."
         )
 
     facts = inspect_database(target, expected=expected_database, allow_production=allow_production)
@@ -1135,23 +1161,37 @@ def restore_backup(
     allow_non_empty: bool = False,
     pg_bin_dir: str | None = None,
     integrity_queries: Mapping[str, str] | None = None,
+    confirm_production: Callable[[str], bool] | None = None,
 ) -> RestoreOutcome:
     """Restore into an isolated database, after proving the backup and the target.
 
     `apply` defaults to false and that default is the safety property: the
     dangerous form of this command is the one an operator has to opt into, at
     three in the morning, having read what the rehearsal said it would do.
+
+    `confirm_production` is called only when the target is a protected
+    production name and `apply` is set, with the database name **the server
+    reported**. It is a callback rather than a prompt written here because a
+    service module that read from a terminal could not be driven by anything
+    else — and because the decision of what counts as confirmation belongs to
+    the tool the human is actually looking at.
     """
+    expected_target = _checked_name(expected_target, field="the target database")
+    expected_source = _checked_name(expected_source, field="the expected source database")
+
+    # Exact, deliberately. Two databases whose names differ only in case are two
+    # databases, and picking one for the operator is not this function's call.
     if target.dbname != expected_target:
         raise ConfigurationError(
-            f"The configured target database is {target.dbname!r} but "
-            f"{expected_target!r} was stated. Nothing was changed."
+            f"The configured target database is {safe_label(target.dbname)!r} but "
+            f"{safe_label(expected_target)!r} was stated. Nothing was changed."
         )
-    if expected_target in PRODUCTION_DATABASE_NAMES and not allow_production_target:
+    if is_protected_database(expected_target) and not allow_production_target:
         raise ConfigurationError(
-            f"{expected_target!r} is a protected production database. Restoring "
-            "over it is a separate, deliberately awkward operation; it needs the "
-            "production-restore flag and a typed confirmation."
+            f"{safe_label(expected_target)!r} is a protected production database "
+            "name. Restoring over it is a separate, deliberately awkward "
+            "operation; it needs the production-restore flag and a typed "
+            "confirmation."
         )
 
     # Identity from the manifest alone. Judging it before decrypting means a
@@ -1161,9 +1201,9 @@ def restore_backup(
     declared = read_manifest(ciphertext_path, key=key)
     if declared.database != expected_source:
         raise ConfigurationError(
-            f"This backup was taken from {declared.database!r}, and "
-            f"{expected_source!r} was stated. Restoring the wrong database's data "
-            "into a live system is the failure this check exists for."
+            f"This backup was taken from {safe_label(declared.database)!r}, and "
+            f"{safe_label(expected_source)!r} was stated. Restoring the wrong "
+            "database's data into a live system is the failure this check exists for."
         )
 
     facts = inspect_database(
@@ -1178,6 +1218,27 @@ def restore_backup(
         )
     if facts.public_tables:
         notes.append(f"target was not empty: {facts.public_tables} tables present")
+
+    # The confirmation is taken against the name the **server** reported, not
+    # the one on the command line. Those are the same string by the time
+    # execution reaches here — `inspect_database` has already refused any
+    # disagreement — and that is precisely why the prompt is placed after it
+    # rather than before: the operator is asked to confirm an observed identity,
+    # not to re-type their own argument back at themselves.
+    #
+    # Only on `apply`. A rehearsal writes nothing, so there is nothing to
+    # confirm, and prompting for one would train the reflex this guard depends
+    # on the operator not having.
+    if apply and is_protected_database(facts.name):
+        if confirm_production is None:
+            raise ConfigurationError(
+                f"{safe_label(facts.name)!r} is a protected production database "
+                "and no typed confirmation was possible. Nothing was changed."
+            )
+        if not confirm_production(facts.name):
+            raise ConfigurationError(
+                "The production restore was not confirmed. Nothing was changed."
+            )
 
     if not apply:
         # A rehearsal verifies in full. Its whole purpose is to answer "would

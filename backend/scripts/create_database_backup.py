@@ -11,7 +11,10 @@ indistinguishable from a good one until the day it is restored.
 
 **Production is refused by default.** `droppilot` needs `--allow-production`,
 which exists so that taking a production backup is a deliberate act with a flag
-somebody had to type — not something a mistyped staging name does silently.
+somebody had to type — not something a mistyped staging name does silently. The
+protected-name check is case-insensitive policy, so `DROPPILOT` and `DropPilot`
+are refused too; the name actually handed to `pg_dump` is always the operator's
+exact string.
 
 **Nothing is published until everything succeeded.** The dump streams through
 authenticated encryption into a `.part` file; that file is renamed into place
@@ -37,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.backup_crypto import CHUNK_BYTES
 from app.core.config import settings
+from app.core.database_identity import DatabaseNameError, validate_database_name
 from app.services.database_backup import (
     LAST_SUCCESS_MARKER,
     BackupError,
@@ -89,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    try:
+        # Before configuration is read, for the same reason as in the restore
+        # tool: a malformed name is a typo, not a missing environment.
+        validate_database_name(args.expect_database, field="--expect-database")
+    except DatabaseNameError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return int(ExitCode.CONFIGURATION)
 
     try:
         key = load_key_from_settings(settings)

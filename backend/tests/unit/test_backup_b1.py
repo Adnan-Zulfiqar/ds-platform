@@ -1078,7 +1078,17 @@ class TestRestoreRefusesEveryWrongTarget:
 
 
 class TestTheProductionRestoreFlagStillDemandsATypedName:
-    """The CLI's own gate, tested through the CLI because that is where it lives."""
+    """The CLI's own gate, tested through the CLI because that is where it lives.
+
+    **BACKUP-B1-R1 moved where the prompt happens.** It used to run in `main()`
+    against the name on the command line; it now runs after the server has been
+    asked what database it is, and confirms *that* name. So the refusal that
+    needs no configuration is still asserted through `main()` here, and the
+    prompt's own contract is asserted against `_confirm_production` directly —
+    driving it through `main()` would now be a test of key loading.
+    `tests/unit/test_backup_b1_r1_protected_names.py` covers the end-to-end
+    path with a connection in place.
+    """
 
     def _cli(self) -> Any:
         import scripts.restore_database_backup as module
@@ -1100,19 +1110,7 @@ class TestTheProductionRestoreFlagStillDemandsATypedName:
         """A scheduled task must never be able to answer this prompt."""
         module = self._cli()
         monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False, raising=False)
-        code = module.main(
-            [
-                "--file",
-                "x.dpbk",
-                "--expect-source",
-                "droppilot",
-                "--target",
-                "droppilot",
-                "--production-restore",
-                "--apply",
-            ]
-        )
-        assert code == int(ExitCode.CONFIGURATION)
+        assert module._confirm_production("droppilot") is False
         assert "no terminal" in capsys.readouterr().err
 
     def test_an_eof_at_the_prompt_refuses_rather_than_crashing(
@@ -1131,19 +1129,7 @@ class TestTheProductionRestoreFlagStillDemandsATypedName:
             raise EOFError
 
         monkeypatch.setattr("builtins.input", eof)
-        code = module.main(
-            [
-                "--file",
-                "x.dpbk",
-                "--expect-source",
-                "droppilot",
-                "--target",
-                "droppilot",
-                "--production-restore",
-                "--apply",
-            ]
-        )
-        assert code == int(ExitCode.CONFIGURATION)
+        assert module._confirm_production("droppilot") is False
         assert "no confirmation was given" in capsys.readouterr().err
 
     def test_a_mistyped_name_refuses(
@@ -1152,19 +1138,7 @@ class TestTheProductionRestoreFlagStillDemandsATypedName:
         module = self._cli()
         monkeypatch.setattr(module.sys.stdin, "isatty", lambda: True, raising=False)
         monkeypatch.setattr("builtins.input", lambda *a: "droppilot_staging")
-        code = module.main(
-            [
-                "--file",
-                "x.dpbk",
-                "--expect-source",
-                "droppilot",
-                "--target",
-                "droppilot",
-                "--production-restore",
-                "--apply",
-            ]
-        )
-        assert code == int(ExitCode.CONFIGURATION)
+        assert module._confirm_production("droppilot") is False
         assert "did not match" in capsys.readouterr().err
 
 

@@ -121,6 +121,66 @@ python -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).dec
 
 ---
 
+## 3a. Protected names: policy comparison, not identifier rewriting
+
+Two comparisons run over database names, and conflating them would be a bug.
+
+| | Question | Comparison | Why |
+|---|---|---|---|
+| **Identity** | Is the server I am connected to the one I was told to expect? | **Exact** | `droppilot_staging` and `droppilot_Staging` are two different databases in PostgreSQL. A tool that treated them as one would write to a database nobody named |
+| **Policy** | Is this one of the protected production names? | **Case-insensitive, whitespace-tolerant** | Its job is to be impossible to slip past. A protection you can step over by holding shift is decoration |
+
+Both live in `app/core/database_identity.py`, and every guard — in
+`database_backup.py`, in all four scripts, and in the erasure tool that shares
+the module — goes through the same two functions. There is no second copy to
+forget.
+
+**Nothing is ever rewritten.** PostgreSQL folds *unquoted* identifiers to lower
+case but preserves quoted ones exactly, so `"DropPilot"` and `droppilot` can
+both exist on one server. Canonicalisation here produces a comparison key that
+is used for one thing — membership in the protected set — and is never returned
+as a name, never written to a manifest, and never handed to libpq. The name
+that reaches the database is the operator's exact string, byte for byte.
+
+Case-folding uses `casefold`, not `lower`: `lower` is not a case-folding
+operation and leaves characters like `ẞ` comparing unequal to their lowercase
+form. It is deliberately **not** NFKC-normalised — normalising would map a
+fullwidth `ｄｒｏｐｐｉｌｏｔ` onto `droppilot`, and those are genuinely
+different databases. Treating them as one would refuse an operation on an
+innocent database while telling the operator it was production. Homoglyphs
+(CYRILLIC SMALL LETTER O, U+043E, standing in for the Latin `o` in a way no
+font will distinguish for you) are left alone for the same reason; the exact
+
+**Operator-supplied names are gated, not repaired.** Surrounding whitespace,
+control characters, format characters (including the bidirectional overrides),
+and anything PostgreSQL would truncate past 63 bytes are refused outright — with
+a message that names the *flag* and never echoes the value, because a name
+carrying an escape sequence is exactly what must not reach a log. Trimming
+would pick a database on the operator's behalf; the policy comparison trims
+because there tolerance is protective, and validation does not because there it
+would be presumptuous.
+
+### The production-restore override
+
+Three things, all required:
+
+1. `--production-restore` on the command line — checked **before any
+   connection**, so an accidental `--target DropPilot` never opens a session;
+2. the **observed** identity — the confirmation is taken against the name
+   `current_database()` reported, after `inspect_database` has already refused
+   any disagreement with `--target`. The operator confirms what the database
+   says it is, rather than re-typing their own argument back at themselves;
+3. a **typed** confirmation at a terminal. The comparison there is exact: a
+   different capitalisation than the server reported means the operator is not
+   looking at what they think they are. Without a terminal it refuses; on
+   end-of-file it refuses with exit code 2 rather than a traceback.
+
+A rehearsal never prompts — nothing is written, so there is nothing to confirm,
+and prompting would train the reflex this guard depends on the operator not
+having. **The flag remains unexercised.**
+
+---
+
 ## 4. The tools
 
 All four live in `backend/scripts/` and share their judgement with

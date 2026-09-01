@@ -12,6 +12,53 @@ production release.
 
 ### Added
 
+- **BACKUP-B1-R1 — protected production database names are now policy, not
+  spelling.** The accepted BACKUP-B1 review left one informational finding: the
+  protected set was matched with exact, case-sensitive equality, so a database
+  called `DropPilot` walked past every guard `droppilot` was stopped by. That is
+  a protection you can step over by holding shift.
+
+  There is now one canonicalisation authority in
+  `app/core/database_identity.py`, and every guard goes through it — the backup
+  service, all four scripts, and the erasure tool that already shared the
+  module. Comparison is `casefold`-based and trims surrounding whitespace, so
+  `DROPPILOT`, `DropPilot` and ` droppilot ` are all protected without any of
+  them being listed.
+
+  **Two comparisons, deliberately kept apart.** *Policy* — "is this a protected
+  name?" — is case-insensitive. *Identity* — "is the server I am connected to
+  the one I was told to expect?" — stays **exact**, because two PostgreSQL
+  databases whose names differ only in case are two different databases, and a
+  tool that picked one on the operator's behalf would write to a database
+  nobody named. Loosening the second while loosening the first was the
+  plausible mistake here, and it is asserted against directly.
+
+  **Nothing is rewritten.** The canonical form is a comparison key: never
+  returned as a name, never written to a manifest, never handed to libpq. It is
+  also deliberately *not* NFKC-normalised — normalising would map a fullwidth
+  `ｄｒｏｐｐｉｌｏｔ` onto `droppilot`, and refusing an operation on an innocent
+  database while calling it production is the worse failure. Homoglyphs are
+  left alone for the same reason; exact identity governs them.
+
+  Operator-supplied names are now gated rather than repaired: surrounding
+  whitespace, control and format characters (including bidirectional
+  overrides), non-strings and anything past PostgreSQL's 63-byte truncation are
+  refused — before configuration is even read, so a typo is reported as a typo.
+  Refusals name the flag and never echo the value, and every database name that
+  does reach a message goes through a renderer that strips anything
+  unprintable.
+
+  **The production-restore confirmation now runs against the observed
+  identity.** It used to prompt with the name from the command line, which is
+  the string under suspicion; it now prompts with what `current_database()`
+  reported, after the identity check has already refused any disagreement. The
+  flag alone is insufficient, a confirmation alone is insufficient, a rehearsal
+  never prompts, and the flag remains unexercised.
+
+  No operational blocker changes: no production backup, off-site copy, key
+  custody, scheduler or alerting exists, and the retention policy remains
+  proposed.
+
 - **BACKUP-B1 — encrypted PostgreSQL backups, verification, restore and
   retention.** The production database held 1,268 tenants with no backup of any
   kind: a bad migration or a failed disk lost every customer's workspace with no
