@@ -1153,6 +1153,60 @@ class StorageSettings(_EnvFileSettings):
     presigned_url_ttl_seconds: int = Field(default=3600, ge=1)
 
 
+class BackupSettings(_EnvFileSettings):
+    """Encrypted database backups.
+
+    Every field defaults to "not configured", and that is deliberate. A backup
+    key with a default value would be a backup key everybody has; a backup
+    directory with a default would put the only copy of every customer's data
+    on the same disk as the database it is protecting against losing. The
+    tooling refuses to run rather than guess either, and
+    `app/core/production_readiness.py` reports the absence rather than
+    tolerating it.
+
+    Nothing in the request path reads these. They exist for the operator
+    scripts and for the readiness check, which is why an unconfigured backup
+    regime does not stop the application from starting — it stops it from being
+    called ready.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="BACKUP_", extra="ignore")
+
+    #: A base64-encoded 32-byte key, from the operator's secret store. Never a
+    #: value from this repository, and never one of the application's own keys —
+    #: `app/core/backup_crypto.py` refuses both.
+    encryption_key: SecretStr | None = None
+
+    #: Absolute path to the backup directory. Must not be the database volume:
+    #: the failure this exists for is that disk dying.
+    directory: str | None = None
+
+    #: PostgreSQL client binaries, when `pg_dump` is not on PATH — the usual
+    #: case for a Windows service account.
+    pg_bin_dir: str | None = None
+
+    #: Where encrypted copies are sent after they are written locally. A plain
+    #: description, recorded so the readiness check can say whether *anything*
+    #: has been arranged. **Setting this does not create off-site storage and is
+    #: not evidence that any exists** — it is an operator's note, and the
+    #: readiness report says so.
+    offsite_destination: str | None = None
+
+    #: Retention, proposed for review rather than settled. See
+    #: docs/operations/BACKUP_RUNBOOK.md.
+    retention_daily_days: int = Field(default=14, ge=1)
+    retention_weekly_weeks: int = Field(default=8, ge=1)
+    retention_monthly_months: int = Field(default=12, ge=1)
+
+    #: How old the newest successful backup may be before readiness fails. A
+    #: daily schedule plus one missed run plus a margin.
+    max_backup_age_hours: int = Field(default=30, ge=1)
+
+    #: How old the newest successful restore drill may be. A backup regime
+    #: whose last proven restore was a year ago is a belief again.
+    max_drill_age_days: int = Field(default=90, ge=1)
+
+
 class FxSettings(_EnvFileSettings):
     """Exchange-rate provider configuration.
 
@@ -1238,6 +1292,7 @@ class Settings(_EnvFileSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    backup: BackupSettings = Field(default_factory=BackupSettings)
     google_oauth: GoogleOAuthSettings = Field(default_factory=GoogleOAuthSettings)
     email: EmailSettings = Field(default_factory=EmailSettings)
     resend: ResendSettings = Field(default_factory=ResendSettings)

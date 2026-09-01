@@ -15,7 +15,7 @@ responsible for the legal position has accurate facts to work from.
 | [RETENTION_AND_ERASURE.md](RETENTION_AND_ERASURE.md) | What is actually enforced in code |
 | [DATA_SUBJECT_REQUESTS.md](DATA_SUBJECT_REQUESTS.md) | The runbook: scopes, verification, database guard, rollback, deadline |
 | [LOG_RETENTION.md](LOG_RETENTION.md) | The log pruning authority, its limits, and why it currently refuses to run |
-| [BACKUPS.md](BACKUPS.md) | The backup position — which is that there are none |
+| [BACKUPS.md](BACKUPS.md) | The backup position — tooling exists and is proven on isolated databases; **no production backup has been taken** |
 | [SUBPROCESSORS.md](SUBPROCESSORS.md) | Active recipients, their locations and transfer position |
 | [ICO_REGISTRATION_GATE.md](ICO_REGISTRATION_GATE.md) | The registration gate that blocks public launch |
 
@@ -44,7 +44,7 @@ requirement or a claim the software currently cannot support.
 | # | Blocker | Why it blocks | Owner |
 |---|---|---|---|
 | 1 | **ICO registration** not completed | A UK controller processing personal data electronically must complete the fee self-assessment and, where required, register and pay before processing at launch scale | DESIRLY LIMITED |
-| 2 | **No backups exist** | An outage or disk failure loses every customer's workspace. This is a service-continuity failure before it is a privacy one | DESIRLY LIMITED |
+| 2 | **No production backup exists** | An outage or disk failure loses every customer's workspace. BACKUP-B1 built and proved the tooling on isolated databases; nothing has been run against production, no off-site copy exists, and no key has been generated. Service continuity before privacy | DESIRLY LIMITED |
 | 3 | **No Data Processing Agreement** offered to merchants | Where a merchant syncs orders, DESIRLY LIMITED processes their customers' data on their instructions. UK GDPR Article 28 requires that in writing | Legal review |
 | 4 | **Log persistence undecided** | Nothing is written to disk today, so nothing is retained — but also nothing is available for security investigation. Whichever way this goes, the privacy notice must match | DESIRLY LIMITED |
 | 5 | **`app.whiteto.com` does not resolve** | The privacy URL, the OAuth return URL and the application itself all depend on it (carried over from EBAY-C1) | DESIRLY LIMITED |

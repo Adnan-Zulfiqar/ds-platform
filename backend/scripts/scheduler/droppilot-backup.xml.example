@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Windows Task Scheduler definition for the nightly encrypted database backup.
+
+  THIS IS A TEMPLATE. IT HAS NOT BEEN IMPORTED ANYWHERE, AND IT MUST NOT BE
+  IMPORTED ON THE PRODUCTION HOST YET. Installing it starts taking production
+  backups, which requires the off-site destination, the key custody
+  arrangement and the retention decision to exist first — see
+  docs/operations/BACKUP_RUNBOOK.md section 8.
+
+  Before importing, replace every {{PLACEHOLDER}} and read the notes at the
+  bottom of this file. Import with:
+
+      schtasks /Create /TN "DropPilot Nightly Backup" /XML droppilot-backup.xml /RU {{SERVICE_ACCOUNT}}
+
+  schtasks prompts for the account's password; it is never written here.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>
+      Takes one encrypted, verifiable backup of the DropPilot production
+      database, then verifies it. Exit codes are meaningful: 0 succeeded,
+      2 configuration refused, 3 pg_dump failed, 4 encryption failed,
+      5 verification failed, 6 the filesystem refused. Any non-zero result is
+      an operator page the same day.
+    </Description>
+    <URI>\DropPilot\Nightly Backup</URI>
+  </RegistrationInfo>
+
+  <Principals>
+    <Principal id="Author">
+      <!--
+        A dedicated service account. It must be:
+          * a member of no administrative group;
+          * granted "Log on as a batch job" (secpol.msc → Local Policies →
+            User Rights Assignment);
+          * denied interactive and network logon;
+          * given write access to BACKUP_DIRECTORY and read access to the
+            checkout, and nothing else;
+          * backed by a PostgreSQL role with CONNECT and SELECT only — not the
+            application's role, which can write.
+        Running this as the interactive operator account gives a nightly
+        unattended process the operator's full authority, which is the
+        privilege the backup exists to survive losing.
+      -->
+      <UserId>{{SERVICE_ACCOUNT}}</UserId>
+      <LogonType>Password</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+
+  <Settings>
+    <!-- One instance, ever. A dump that overruns must not have a second one
+         start on top of it: two pg_dumps against one database is load the
+         database did not plan for, and two writers in one directory is a
+         race over the .part names. -->
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+
+    <!-- A dump that has not finished in four hours has gone wrong. Killing it
+         is safe: nothing is published until it exits zero. -->
+    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
+
+    <!-- Run late rather than not at all if the machine was off at 02:30. A
+         missed window then shows up as marker AGE in the readiness check,
+         which is the real detector — see the runbook. -->
+    <StartWhenAvailable>true</StartWhenAvailable>
+
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <WakeToRun>false</WakeToRun>
+
+    <!-- Retry twice, twenty minutes apart. A transient lock or a busy disk is
+         worth retrying; a configuration error is not, and exits 2 immediately
+         on each attempt so the retries cost nothing and the last result is
+         still 2. -->
+    <RestartOnFailure>
+      <Interval>PT20M</Interval>
+      <Count>2</Count>
+    </RestartOnFailure>
+  </Settings>
+
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T02:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+
+  <Actions Context="Author">
+    <Exec>
+      <Command>{{BACKEND_DIR}}\.venv\Scripts\python.exe</Command>
+      <!--
+        No secret appears here, and none may ever be added. Credentials come
+        from the .env that WorkingDirectory selects, which is ACL'd separately.
+        A command line is visible to every user on the machine.
+      -->
+      <Arguments>scripts\create_database_backup.py --expect-database {{DATABASE}} --allow-production</Arguments>
+      <!--
+        Not tidiness. The tools read the .env beside the checkout, so a wrong
+        working directory backs up the wrong database with the wrong key.
+      -->
+      <WorkingDirectory>{{BACKEND_DIR}}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+
+<!--
+  NOTES — read before importing.
+
+  1. VERIFY AS A SEPARATE TASK. This task takes the backup; a second task
+     should run
+
+         scripts\verify_database_backup.py --all
+
+     an hour later. Keeping them separate means a verification failure is
+     distinguishable from a dump failure in the task history, and a slow
+     verify never delays the next dump.
+
+  2. PRUNE AS A THIRD TASK, AND ONLY AFTER A REHEARSAL HAS BEEN READ. Run
+
+         scripts\prune_database_backups.py
+
+     with no flags first — it rehearses and changes nothing. Add --apply only
+     once an operator has read a report and agreed with it.
+
+  3. ALERTING IS NOT INCLUDED AND DOES NOT EXIST. Task Scheduler has none
+     built in. Two signals must be monitored:
+       (a) this task's Last Run Result, non-zero;
+       (b) scripts\verify_production_config.py reporting BACKUPS as anything
+           other than PASS — which covers the case this task never ran at all,
+           because a task that does not run produces no failing result.
+     Signal (b) is the important one. (a) cannot detect silence.
+
+  4. THE SERVICE ACCOUNT'S PASSWORD EXPIRING stops the task with a task-level
+     error, not a backup error. Set it not to expire, or monitor for it. This
+     is the most common way a Windows backup schedule dies quietly.
+
+  5. LOGS. Redirect stdout and stderr into the backup directory, which is
+     ACL'd to the service account:
+
+         ...python.exe scripts\create_database_backup.py ... >> {{BACKUP_DIR}}\backup.log 2>&1
+
+     Doing that needs cmd.exe as the Command and the whole line as Arguments,
+     which puts the redirection on a command line — harmless, since no secret
+     is on it. Task Scheduler's own history records the exit code either way.
+
+  6. OFF-SITE COPYING IS NOT PART OF THIS TASK and must not be bolted on
+     without review. A copy step with delete permission on the remote is the
+     mechanism by which ransomware on this host destroys the archive it was
+     supposed to be safe from. The remote credential must not be able to
+     delete.
+-->

@@ -17,6 +17,12 @@ dependencies = [
     "alembic>=1.14.0",
     "asyncpg>=0.30.0",
     "psycopg[binary]>=3.2.0",
+    # Credential encryption (`app/core/encryption.py`), the eBay signature
+    # verifier and the backup container all import this directly, but nothing
+    # declared it — it arrived transitively through `google-auth`. A transitive
+    # dependency is one upstream release away from disappearing, and the module
+    # that would stop importing is the one that encrypts every backup.
+    "cryptography>=44.0.0",
     "redis>=5.2.0",
     "celery>=5.4.0",
     "kombu>=5.4.0",

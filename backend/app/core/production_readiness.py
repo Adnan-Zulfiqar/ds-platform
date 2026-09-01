@@ -584,13 +584,48 @@ def _check_terms(settings: Any) -> Finding:
 
 
 def _check_backups(settings: Any) -> Finding:
-    """There is no backup setting to read, which is the finding."""
+    """Report the operational evidence that exists, and never more than that.
+
+    The tooling to take, verify and restore an encrypted backup exists as of
+    BACKUP-B1 and has been proven on isolated databases. **That proves the
+    tooling, not the regime.** A rule that turned `PASS` the moment the code
+    was merged would be asserting something nobody had done, and it is exactly
+    the assertion an operator would rely on when deciding to go live.
+
+    So this reads evidence rather than intent: an authenticated record of a
+    successful backup, an authenticated record of a successful restore drill,
+    a valid key, a configured directory, and a recorded off-site destination.
+    The records are MAC'd with a subkey of the backup key precisely so that
+    "backups are healthy" cannot be asserted by anyone who can create a file.
+
+    Each of the five is necessary. None of them, individually or together, can
+    be satisfied by editing configuration, which is why the status is `BLOCKED`
+    rather than `FAIL`.
+    """
+    from datetime import timedelta
+
+    from app.services.database_backup import collect_evidence, evidence_shortfalls
+
+    evidence = collect_evidence(settings)
+    shortfalls = evidence_shortfalls(
+        evidence,
+        max_backup_age=timedelta(hours=int(settings.backup.max_backup_age_hours)),
+        max_drill_age=timedelta(days=int(settings.backup.max_drill_age_days)),
+    )
+    if shortfalls:
+        return Finding(
+            "BACKUPS",
+            Status.BLOCKED,
+            f"{'; '.join(shortfalls)}. Tooling exists — see "
+            "docs/operations/BACKUP_RUNBOOK.md — but a backup regime is proven by "
+            "having run it, not by having written it.",
+            classification=Classification.REQUIRED_AT_ACTIVATION,
+        )
     return Finding(
         "BACKUPS",
-        Status.BLOCKED,
-        "no backup mechanism is configured or implemented — see "
-        "docs/governance/BACKUPS.md. Restoration has never been tested, and the "
-        "Terms' loss-of-data exclusion is conditional on that changing.",
+        Status.PASS,
+        "an authenticated record of a recent successful backup and a recent "
+        "successful restore drill exists, with an off-site destination recorded.",
         classification=Classification.REQUIRED_AT_ACTIVATION,
     )
 
@@ -719,7 +754,7 @@ RULES: tuple[Rule, ...] = (
         Classification.REQUIRED_AT_ACTIVATION,
         False,
         "operator",
-        "a backup regime with tested restoration",
+        "a recent verified backup and a recent successful restore drill, both recorded",
         _check_backups,
         enforced_at_startup=False,
     ),

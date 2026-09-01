@@ -25,6 +25,7 @@ __all__ = [
     "DatabaseIdentityError",
     "current_database",
     "require_database",
+    "require_database_name",
 ]
 
 #: Names that must never be touched without the explicit production flag. This
@@ -41,17 +42,15 @@ async def current_database(session: AsyncSession) -> str:
     return str((await session.execute(text("SELECT current_database()"))).scalar_one())
 
 
-async def require_database(
-    session: AsyncSession, *, expected: str, allow_production: bool = False
-) -> str:
-    """Refuse unless the connected database is exactly ``expected``.
+def require_database_name(actual: str, *, expected: str, allow_production: bool = False) -> str:
+    """The decision itself, with no opinion about how the name was obtained.
 
-    Returns the confirmed name so a caller can show it in a confirmation
-    prompt — the operator should see the database they are about to change,
-    named by the server rather than by their own shell.
+    Split out from `require_database` for the backup tooling, which reads
+    `current_database()` over a synchronous psycopg connection because it is
+    about to hand the same connection details to `pg_dump`. Two copies of this
+    reasoning would be two places for the production-name backstop to be
+    forgotten, and the one that gets forgotten is always the newer one.
     """
-    actual = await current_database(session)
-
     if actual != expected:
         raise DatabaseIdentityError(
             f"Connected to {actual!r} but {expected!r} was expected. "
@@ -65,3 +64,17 @@ async def require_database(
         )
 
     return actual
+
+
+async def require_database(
+    session: AsyncSession, *, expected: str, allow_production: bool = False
+) -> str:
+    """Refuse unless the connected database is exactly ``expected``.
+
+    Returns the confirmed name so a caller can show it in a confirmation
+    prompt — the operator should see the database they are about to change,
+    named by the server rather than by their own shell.
+    """
+    return require_database_name(
+        await current_database(session), expected=expected, allow_production=allow_production
+    )

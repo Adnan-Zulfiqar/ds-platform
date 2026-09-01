@@ -147,7 +147,11 @@ number only, BOM or no BOM.
 | `RESEND_API_KEY` | **yes** | Activation | Resend dashboard | required when the provider is `resend` | absent |
 | `EMAIL_FROM` | no | Activation | operator | must use the verified `auth.whiteto.com` domain | absent |
 | `TERMS_PUBLISHED` | no | Activation | legal | `true` only after solicitor approval | **blocked** — false by design |
-| Backups | n/a | Activation | operator | a regime with tested restoration | **blocked** — none exist |
+| `BACKUP_ENCRYPTION_KEY` | **yes** | Activation | secret store | base64 32 bytes, not published, not reused from another setting | absent |
+| `BACKUP_DIRECTORY` | no | Activation | operator | absolute, dedicated, on a volume other than the database's | absent |
+| `BACKUP_OFFSITE_DESTINATION` | no | Activation | operator | a recorded destination; **an operator's note, never evidence** | absent |
+| `BACKUP_PG_BIN_DIR` | no | Activation | operator | needed only when `pg_dump` is not on the service account's PATH | absent |
+| Backups | n/a | Activation | operator | a recent verified backup **and** a recent successful restore drill, both recorded | **blocked** — the tooling exists; nothing has been run against production |
 
 ## 4. Runbook: making production deployable
 
@@ -246,6 +250,10 @@ Stated plainly, because a green report should not be read as more than it is.
   `NEXT_PUBLIC_*` is inlined at build time; the file is only evidence of intent.
 * **Whether backups work.** There are none, so there is nothing to test.
 * **Whether the Terms are lawful.** That is a solicitor's judgement.
+* **Whether backups exist off-site, or would restore.** It reads authenticated
+  markers written by the backup tooling on this host. It cannot see a remote
+  destination, and `BACKUP_OFFSITE_DESTINATION` is an operator's note rather
+  than a check — see [BACKUP_RUNBOOK.md](BACKUP_RUNBOOK.md).
 * **Whether the file it read is the one production uses.** It audits the path it
   is given. Point it at the wrong file and it will tell you, accurately, about
   the wrong file.

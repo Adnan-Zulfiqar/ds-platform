@@ -12,6 +12,66 @@ production release.
 
 ### Added
 
+- **BACKUP-B1 — encrypted PostgreSQL backups, verification, restore and
+  retention.** The production database held 1,268 tenants with no backup of any
+  kind: a bad migration or a failed disk lost every customer's workspace with no
+  route to recovery. There is now tooling to take, prove and restore an
+  encrypted backup — and it has been proven end to end, **on isolated databases
+  only**. No production backup has been taken, and publication stays blocked
+  until one has.
+
+  Backups are encrypted with an AES-256-GCM envelope: a fresh random data key
+  per file, wrapped by a long-lived key from the operator's secret store, with
+  the dump split into authenticated 4 MiB chunks whose nonces carry a counter
+  and a final-chunk flag. A file that stops early is therefore *refused as
+  truncated* rather than accepted as short — the failure you would otherwise
+  discover 40 GB into a recovery. There is no unencrypted mode. The backup key
+  may not be `SECURITY_SECRET_KEY`, `SECURITY_OTP_HMAC_KEY` or any
+  `SECURITY_ENCRYPTION_KEYS` entry, by value or by decoded bytes: a backup
+  contains those keys' ciphertext, and an attacker holding both has live
+  marketplace access rather than a historical read.
+
+  **Existence is never treated as verification.** `verify` checks the manifest
+  against a closed schema, its HMAC, the file's size and SHA-256, then decrypts
+  the whole stream and asks `pg_restore` to parse a non-empty table of
+  contents. **Configuration is never treated as identity**: every operation
+  states the database it expects and confirms it with `current_database()`
+  against the server that will actually be read or written. `droppilot` is
+  refused in both directions without an explicit flag, and restoring over it
+  additionally requires a typed database name at a terminal — a flag that has
+  never been exercised.
+
+  The database password never reaches an argument vector or an environment
+  variable; it is handed to `pg_dump` through a password file in a directory
+  ACL'd to one account, shredded afterwards. Publication is atomic — the
+  manifest is renamed last, and a ciphertext that cannot get one is removed,
+  because a backup nothing can verify is worse than an absent one.
+
+  Retention is grandfather-father-son and refuses more than it deletes: never
+  the newest verified backup, never the only one, never anything unverifiable
+  (those are quarantined, not removed), and never outside one absolute,
+  non-symlinked, dedicated directory. The proposed 14 daily / 8 weekly / 12
+  monthly tiers are **for review, not settled** — twelve monthly copies means an
+  erased person can persist for a year, which is a data-protection decision.
+
+  The production-readiness `BACKUPS` rule now reads evidence instead of being a
+  constant: an authenticated record of a recent successful backup, a recent
+  successful restore drill, a valid key, a directory, and a recorded off-site
+  destination. Markers are MAC'd so "backups are healthy" cannot be asserted by
+  anyone who can create a file, and a failed run never writes one. It reports
+  `BLOCKED`, listing exactly which of the five is missing.
+
+  A Windows Task Scheduler template is committed and **deliberately not
+  installed**. Design, threat model and the honest list of what is still
+  missing: [docs/operations/BACKUP_RUNBOOK.md](docs/operations/BACKUP_RUNBOOK.md).
+
+  Also declares `cryptography` as a direct dependency. Four application modules
+  import it — credential encryption, the eBay signature verifier, and now the
+  backup container — but nothing declared it, so it arrived transitively
+  through `google-auth`. A transitive dependency is one upstream release away
+  from disappearing, and the module that would stop importing is the one that
+  encrypts every backup. No version change: it was already installed.
+
 - **PROD-H1 — production-readiness rules, an operator checker and a runbook.**
   Every production guard in this application is conditional on `is_deployed`,
   and the live host runs as `ENVIRONMENT=local` — so none of them is in force.
