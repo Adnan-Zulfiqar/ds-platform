@@ -2,7 +2,11 @@
 name = "droppilot-backend"
 version = "0.1.0"
 description = "DropPilot AI — multi-tenant dropshipping automation platform (backend)"
-requires-python = ">=3.13"
+# Pinned to one minor version, not an open upper bound. The lockfile below is
+# resolved for exactly this interpreter, and a resolution valid for 3.13 is not
+# automatically valid for 3.14 — markers, wheel availability and stdlib
+# behaviour all move. Widening this means regenerating the lock.
+requires-python = ">=3.13,<3.14"
 
 dependencies = [
     "fastapi>=0.115.0",

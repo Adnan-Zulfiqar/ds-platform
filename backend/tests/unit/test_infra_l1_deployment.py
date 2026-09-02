@@ -38,7 +38,15 @@ DOCKERFILES = {
     "frontend": REPO / "docker" / "frontend.Dockerfile",
     "ops": REPO / "docker" / "ops.Dockerfile",
 }
-DEPLOY_SCRIPTS = sorted((REPO / "scripts" / "deploy").glob("*.sh"))
+ALL_DEPLOY_SCRIPTS = sorted((REPO / "scripts" / "deploy").glob("*.sh"))
+
+#: The rehearsal runner is held to different rules from the deployment scripts
+#: and is excluded here deliberately. A deployment must never delete anything; a
+#: rehearsal must remove exactly what it created, or the next run starts from
+#: someone else's leftovers. `test_infra_l1_r1_reproducible_builds.py` asserts
+#: its side of that.
+REHEARSAL_SCRIPT = REPO / "scripts" / "deploy" / "rehearse_linux.sh"
+DEPLOY_SCRIPTS = [s for s in ALL_DEPLOY_SCRIPTS if s != REHEARSAL_SCRIPT]
 CLOUDFLARED = REPO / "deploy" / "lightsail" / "cloudflared" / "config.yml.example"
 SYSTEMD = REPO / "deploy" / "lightsail" / "systemd"
 APP_ENV_EXAMPLE = REPO / "deploy" / "lightsail" / "app.env.example"
@@ -465,6 +473,11 @@ class TestDeploymentScripts:
             "rollback.sh",
         }
 
+    def test_the_rehearsal_runner_is_present_but_separate(self) -> None:
+        """It shares the directory and not the rules — see the note above."""
+        assert REHEARSAL_SCRIPT.is_file()
+        assert REHEARSAL_SCRIPT not in DEPLOY_SCRIPTS
+
     @pytest.mark.parametrize("script", DEPLOY_SCRIPTS, ids=lambda s: s.name)
     def test_every_script_fails_fast_on_error(self, script: Path) -> None:
         """Without `set -e` a failed step is followed by the next one, and a
@@ -542,7 +555,8 @@ class TestDeploymentScripts:
         assert "REMOVED or" in text
         assert "alembic" in text
 
-    def test_nothing_deletes_an_image_or_a_volume(self) -> None:
+    def test_no_deployment_script_deletes_an_image_or_a_volume(self) -> None:
+        """A deployment that prunes has no rollback target left to return to."""
         for script in DEPLOY_SCRIPTS:
             text = script.read_text(encoding="utf-8")
             destructive_commands = (

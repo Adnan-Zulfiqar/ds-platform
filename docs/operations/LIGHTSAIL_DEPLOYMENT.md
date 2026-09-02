@@ -10,6 +10,52 @@ Production today remains the old Windows host, unchanged.
 
 ---
 
+## 0. The Linux rehearsal has not been run
+
+This is the first thing to read, because everything below describes what the
+configuration *specifies* rather than what has been observed working.
+
+**What has been verified:**
+
+* `docker compose config` renders the production stack client-side, confirming
+  eight services, zero published host ports, no privileged container, no host
+  networking, `cap_drop: ALL` throughout, and that the `backup` profile is not
+  selected without an explicit flag;
+* the dependency lock is consistent with `pyproject.toml`, hash-pinned, and
+  resolves for Linux and Windows together;
+* the test suite asserts the shape of every artefact here.
+
+**What has not been done, and is mandatory before any deployment:**
+
+* no image has been built — `docker build` has never run against these
+  Dockerfiles;
+* no container has ever started;
+* no vulnerability scan has run against a built image;
+* no secret scan has run against image layers or history;
+* no migration has been applied against a containerised database;
+* no Playwright suite has run against a Linux stack;
+* no graceful-restart, SIGTERM-draining or dependency-recovery behaviour has
+  been observed.
+
+The reason is environmental: the development machine has no working Docker
+engine (Docker Desktop's Linux backend requires a WSL2 distribution that is not
+installed), and provisioning one was not authorised.
+
+**Operator decision, recorded.** The rehearsal is deliberately deferred until a
+Linux host or a Lightsail staging instance is available. That deferral **does
+not block integrating this foundation into `develop`** — the code and templates
+can be reviewed and merged on their own terms. It **does block every
+deployment**, without exception.
+
+`scripts/deploy/rehearse_linux.sh` is the entry point for running it when a
+host exists, and
+[`rehearsal-evidence.template.md`](rehearsal-evidence.template.md) is where the
+result is recorded. That evidence file is in a `NOT EXECUTED` state and nothing
+reads it — no readiness rule consults it, so filling it in by hand cannot make
+any check pass. It is a record for reviewers, not a gate.
+
+---
+
 ## 1. Topology
 
 ```

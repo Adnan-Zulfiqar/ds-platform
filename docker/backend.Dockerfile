@@ -27,25 +27,32 @@ WORKDIR /build
 # application code does not reinstall every dependency — the difference between
 # a 5-second and a 3-minute rebuild.
 COPY backend/pyproject.toml ./
+COPY backend/requirements/runtime.txt ./requirements/runtime.txt
+COPY backend/scripts/check_dependency_lock.py ./scripts/check_dependency_lock.py
 
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install the *dependencies only*, never the application package itself.
+# Refuse to build from a stale lock. Someone adds a dependency, forgets to
+# recompile, and without this the image builds happily from the old resolution —
+# missing the package they just added. Nothing fails until runtime, in the
+# environment furthest from the person who made the change.
+RUN python scripts/check_dependency_lock.py --only runtime
+
+# `--require-hashes` is what makes this a frozen install rather than a fresh
+# resolution that happens to look similar. Every requirement must be pinned to
+# an exact version *and* match a recorded hash, so pip cannot pick up a newer
+# patch release, and a substituted artefact on the index is refused rather than
+# installed.
 #
-# An earlier version created a stub `app/__init__.py` so that `pip install .`
-# would succeed without the real source. That worked, but it left an empty `app`
-# package in site-packages which the real code at /app only shadows because the
-# working directory precedes site-packages on sys.path. Any command run from a
-# different directory resolved to the empty stub and failed with a confusing
-# ImportError.
+# `--no-deps` because the lock already holds the full transitive closure.
+# Letting pip resolve dependencies of pinned packages is how a version outside
+# the lock gets in.
 #
-# Extracting the dependency list keeps the layer cache — it changes only when
-# pyproject.toml changes — without installing anything that can shadow the
-# application. `tomllib` is in the standard library from Python 3.11.
-RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
-    && pip install --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+# The application package itself is never installed — only its dependencies.
+# Installing it would leave a stub `app` package in site-packages that shadows
+# the real code for any command run from another directory.
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements/runtime.txt
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime
