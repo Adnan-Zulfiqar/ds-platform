@@ -12,6 +12,25 @@ production release.
 
 ### Added
 
+- **UX-L1 — public marketing homepage and statutory company disclosure.** `/` is
+  now a server-rendered landing page with the DESIRLY LIMITED TikTok disclosure
+  in raw HTML (no AuthProvider required), Privacy Policy link, and Terms marked
+  as draft. A shared `PublicFooter` component carries the disclosure on public
+  routes. Playwright coverage asserts disclosure presence with and without
+  JavaScript, and on mobile viewports.
+
+### Fixed
+
+- **Registration legal acceptance** — the acceptance checkbox is wired through
+  `react-hook-form` so ticking it reliably enables “Create account”; the prior
+  separate `useState` could desync from the DOM under automation.
+- **404 page** — unauthenticated visitors see “Go to homepage” instead of “Back
+  to dashboard”.
+- **Auth layout footer** — Terms link is labelled “(draft)” consistently with
+  the publication gate.
+
+### Added
+
 - **INFRA-L1 — the AWS Lightsail deployment foundation.** The application has
   only ever run on a Windows host, from drive-letter paths, started by Task
   Scheduler, against a loopback PostgreSQL with no TLS. None of that survives a

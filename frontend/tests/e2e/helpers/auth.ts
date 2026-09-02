@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 import { PRIVACY_NOTICE_VERSION, TERMS_VERSION } from "@/lib/legal";
 
@@ -91,6 +91,7 @@ export async function acceptLegal(page: Page): Promise<void> {
   const box = page.getByTestId("accept-legal");
   await box.waitFor({ state: "visible" });
   await box.check();
+  await expect(box).toBeChecked();
 }
 
 /** A unique account per test, so tests never contend over one fixture user. */

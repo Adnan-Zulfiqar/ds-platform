@@ -46,8 +46,9 @@ export const viewport: Viewport = {
  * What that costs: nothing is served from the build-time static cache, so each
  * page render does the work rather than replaying stored HTML. It is a small
  * bill for this application — every route below `/` is an authenticated,
- * user-specific dashboard that was already dynamic, and the three public pages
- * (`/login`, `/register`, `/privacy`) are static markup with no data fetching.
+ * user-specific dashboard that was already dynamic, and the public pages
+ * (`/`, `/login`, `/register`, `/privacy`, `/terms`) are static markup with
+ * no data fetching.
  * Downstream HTTP caching is unaffected: protected routes already send
  * `no-store`, and public ones are unchanged.
  */

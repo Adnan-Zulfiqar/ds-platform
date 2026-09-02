@@ -51,7 +51,6 @@ export default function RegisterPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const router = useRouter();
-  const [accepted, setAccepted] = useState(false);
   const form = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     // Validate as the user types, but only after the first blur. Validating on
@@ -65,10 +64,12 @@ export default function RegisterPage() {
       email: "",
       password: "",
       confirmPassword: "",
+      acceptedLegal: false,
     },
   });
 
   const password = form.watch("password");
+  const acceptedLegal = form.watch("acceptedLegal");
   const strength = estimatePasswordStrength(password);
 
   async function onSubmit(values: RegisterFormValues) {
@@ -81,7 +82,7 @@ export default function RegisterPage() {
         firstName: values.firstName || undefined,
         lastName: values.lastName || undefined,
         // What was ticked, not what we would like to have been ticked.
-        acceptedLegal: accepted,
+        acceptedLegal: values.acceptedLegal,
       });
     } catch (error) {
       if (error instanceof ApiError) {
@@ -274,32 +275,19 @@ export default function RegisterPage() {
               )}
             />
 
-            {/* Acceptance is captured here and enforced on the server. The
-                checkbox alone proves nothing — the request can be made without
-                it — so `services/auth.ts` sends the versions and the backend
-                refuses a mismatch or a false flag.
-
-                Both documents are now linked, because asking somebody to accept
-                a document they cannot open is not asking them anything. The
-                Terms are still a draft and the page says so on its own face —
-                the label here does not have to carry that, and a deployed
-                environment refuses registration entirely while they are.
-
-                Deliberately not pre-ticked. */}
-            <label
-              className="flex items-start gap-2 text-sm text-muted-foreground"
-              htmlFor="accept-legal"
-            >
+            <div className="flex items-start gap-2">
               <input
                 id="accept-legal"
                 data-testid="accept-legal"
                 type="checkbox"
-                required
-                checked={accepted}
-                onChange={(e) => setAccepted(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-input"
+                disabled={isSubmitting}
+                {...form.register("acceptedLegal")}
+                className="mt-1 h-4 w-4 shrink-0 rounded border-input"
               />
-              <span>
+              <label
+                htmlFor="accept-legal"
+                className="text-sm text-muted-foreground"
+              >
                 I accept the{" "}
                 <Link href="/terms" className="text-primary hover:underline">
                   Terms of Service
@@ -309,8 +297,13 @@ export default function RegisterPage() {
                   Privacy Notice
                 </Link>
                 .
-              </span>
-            </label>
+              </label>
+            </div>
+            {form.formState.errors.acceptedLegal?.message && (
+              <p className="text-sm font-medium text-destructive" role="alert">
+                {form.formState.errors.acceptedLegal.message}
+              </p>
+            )}
           </CardContent>
 
           <CardFooter className="flex-col gap-4">
@@ -323,7 +316,7 @@ export default function RegisterPage() {
             <Button
               type="submit"
               className="w-full"
-              disabled={isSubmitting || !accepted}
+              disabled={isSubmitting || !acceptedLegal}
             >
               {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
               {isSubmitting ? "Creating account..." : "Create account"}
@@ -341,7 +334,7 @@ export default function RegisterPage() {
             <div className="w-full">
               <GoogleSignInButton
                 intent="signup"
-                legalAccepted={accepted}
+                legalAccepted={acceptedLegal}
                 onSuccess={() => router.replace("/dashboard")}
                 text="signup_with"
               />

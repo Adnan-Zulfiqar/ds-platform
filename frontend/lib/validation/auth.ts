@@ -56,6 +56,10 @@ export const registerSchema = z
     email: emailSchema,
     password: passwordSchema,
     confirmPassword: z.string().min(1, "Confirm your password"),
+    acceptedLegal: z.boolean().refine((value) => value, {
+      message:
+        "You must accept the Terms of Service and acknowledge the Privacy Notice.",
+    }),
   })
   // Cross-field checks must be a refinement on the object: a field-level rule
   // cannot see its siblings.

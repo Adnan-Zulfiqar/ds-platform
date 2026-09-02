@@ -121,6 +121,17 @@ test.describe("Registration page", () => {
     await expect(page.getByText(/Password strength: Strong/)).toBeVisible();
   });
 
+  test("legal acceptance enables account creation", async ({ page }) => {
+    await page.getByLabel("Company name").fill("Acme Trading");
+    await page.getByLabel("Work email").fill("owner@acme.example");
+    await page.getByLabel("Password", { exact: true }).fill("Correct-Horse-Battery9");
+    await page.getByLabel("Confirm password").fill("Correct-Horse-Battery9");
+
+    await expect(page.getByRole("button", { name: "Create account" })).toBeDisabled();
+    await acceptLegal(page);
+    await expect(page.getByRole("button", { name: "Create account" })).toBeEnabled();
+  });
+
   test("requires a company name", async ({ page }) => {
     // Acceptance now gates the submit control, so the test does what a
     // person must do before the button is usable.
@@ -167,9 +178,10 @@ test.describe("Route protection", () => {
     await expect(page).toHaveURL(/next=/);
   });
 
-  test("root redirects through to sign-in when signed out", async ({ page }) => {
+  test("serves the public marketing homepage when signed out", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByTestId("company-disclosure")).toBeVisible();
   });
 
   test("public routes remain reachable", async ({ page }) => {

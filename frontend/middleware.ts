@@ -79,8 +79,8 @@ export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
   const response = withCsp(request);
 
-  // `/` is a redirect stub with nothing to protect; sending it to the guard
-  // would cost a render before the redirect it was always going to perform.
+  // `/` is a public marketing homepage with statutory disclosures; public legal
+  // routes are listed in `PUBLIC_ROUTES` below.
   if (pathname === "/" || isPublicRoute(pathname)) {
     return response;
   }

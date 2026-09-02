@@ -40,7 +40,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
             className="underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             href="/terms"
           >
-            Terms of Service
+            Terms of Service <span className="text-muted-foreground">(draft)</span>
           </Link>
           <Link
             className="underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"

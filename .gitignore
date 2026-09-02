@@ -27,6 +27,7 @@ yarn-error.log*
 playwright-report/
 test-results/
 blob-report/
+.ux-review/
 
 # ---- Environment ----
 .env
