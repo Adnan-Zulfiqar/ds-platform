@@ -165,8 +165,12 @@ function trackDraftWrites(target: Page): void {
 async function saveAndSettle(page: Page): Promise<void> {
   const save = visibleTestId(page, "save-draft");
   await save.click({ timeout: 3000 }).catch(() => {});
-  await expect(save).toBeDisabled({ timeout: 10_000 });
+  // UX-L2A: a clean draft hides Save rather than leaving a disabled button.
   await expect.poll(() => pendingWrites, { timeout: 15_000 }).toBe(0);
+  await expect(page.getByTestId("draft-save-state")).not.toContainText(/Unsaved changes/i, {
+    timeout: 10_000,
+  });
+  await expect(page.locator('[data-testid="save-draft"]:visible')).toHaveCount(0);
 }
 
 test.describe("Draft editor — rich-text description (M2B)", () => {
@@ -290,12 +294,16 @@ test.describe("Draft editor — rich-text description (M2B)", () => {
 
     await page.reload();
     await expect(page.getByTestId("draft-description-editor")).toBeVisible({ timeout: 30_000 });
-    await expect(visibleTestId(page, "save-draft")).toBeDisabled();
+    // UX-L2A removed the always-visible disabled Save control; a clean load
+    // must show no Save button and must not claim unsaved changes.
+    await expect(page.locator('[data-testid="save-draft"]:visible')).toHaveCount(0);
+    await expect(page.getByTestId("draft-save-state")).not.toContainText(/Unsaved changes/i);
     // Comfortably past the 1.8s autosave debounce.
     await page.waitForTimeout(4000);
 
     expect(patches, "opening a draft must not write to it").toBe(0);
-    await expect(visibleTestId(page, "save-draft")).toBeDisabled();
+    await expect(page.locator('[data-testid="save-draft"]:visible')).toHaveCount(0);
+    await expect(page.getByTestId("draft-save-state")).not.toContainText(/Unsaved changes/i);
   });
 
   test("supplier images and tables survive being opened and edited", async () => {

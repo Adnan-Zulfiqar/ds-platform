@@ -12,6 +12,15 @@ production release.
 
 ### Changed
 
+- **UX-L2A-R2 — matching isolated-stack verification harness (on
+  `feature/ux-l2a-editor-foundation`, not merged).** Proves the original
+  `draft-editor-concurrency` suite against a backend built from the same
+  feature SHA. Test harness only: rich-text clean-load assertions follow the
+  L2A rule that Save is hidden when there is nothing to save; AliExpress
+  connect tests skip when platform credentials are absent; Celery-dependent
+  global-rules waits can skip without racing the suite timeout. No product
+  behaviour change. Independent review and production deploy are not claimed.
+
 - **UX-L2A-R1 — evidence and state corrections (on `feature/ux-l2a-editor-foundation`,
   not merged).** Removes invented Required/Recommended checklist labels (the
   API does not classify findings; checklist items are “Items to review”). Save

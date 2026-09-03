@@ -20,7 +20,7 @@ Last updated: 2026-09-03
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
-| UX-L2A | Product editor foundation | 🚧 **On `feature/ux-l2a-editor-foundation`** — candidate + R1 corrections; not merged; not independently reviewed |
+| UX-L2A | Product editor foundation | 🚧 **On `feature/ux-l2a-editor-foundation`** — candidate + R1 + R2 harness; not merged; not independently reviewed |
 
 ---
 

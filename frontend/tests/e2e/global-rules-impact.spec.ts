@@ -349,6 +349,9 @@ test.describe("Asynchronous application", () => {
   });
 
   test("the worker finishes the run and the results persist", async ({ page }) => {
+    // Room for the no-worker skip path: a 30s expect under a 30s test timeout
+    // races the suite clock and reports failure instead of skip.
+    test.setTimeout(60_000);
     const session = await signIn(page);
     await createRule(page, session);
     await seedDrafts(page, session, 3);
@@ -364,7 +367,7 @@ test.describe("Asynchronous application", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 30_000,
+        timeout: 12_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming; the queue path is untested here.");
@@ -381,6 +384,7 @@ test.describe("Asynchronous application", () => {
   });
 
   test("results can be filtered by outcome", async ({ page }) => {
+    test.setTimeout(60_000);
     const session = await signIn(page);
     await createRule(page, session);
     await seedDrafts(page, session, 2);
@@ -393,7 +397,7 @@ test.describe("Asynchronous application", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 30_000,
+        timeout: 12_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming.");
@@ -435,6 +439,7 @@ test.describe("Cancellation", () => {
   });
 
   test("a completed run offers no cancel action", async ({ page }) => {
+    test.setTimeout(60_000);
     const session = await signIn(page);
     await createRule(page, session);
     await seedDrafts(page, session, 1);
@@ -447,7 +452,7 @@ test.describe("Cancellation", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 30_000,
+        timeout: 12_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming.");
