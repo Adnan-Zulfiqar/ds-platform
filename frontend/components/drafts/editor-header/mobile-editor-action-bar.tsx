@@ -35,10 +35,11 @@ export function MobileEditorActionBar({
       data-testid="mobile-editor-action-bar"
     >
       <div className="mx-auto flex max-w-lg items-center gap-2">
+      {!saveDisabled || saving ? (
         <Button
           variant="outline"
           className="min-h-11 flex-1"
-          disabled={saveDisabled || saving}
+          disabled={saving}
           onClick={onSave}
           data-testid="save-draft"
         >
@@ -47,8 +48,9 @@ export function MobileEditorActionBar({
           ) : (
             <Save className="mr-1.5 h-4 w-4" aria-hidden="true" />
           )}
-          Save
+          {saving ? "Saving…" : "Save draft"}
         </Button>
+      ) : null}
         <Button
           variant="outline"
           className="min-h-11 flex-1"

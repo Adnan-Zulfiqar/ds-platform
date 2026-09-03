@@ -82,7 +82,7 @@ function LoginForm() {
       </CardHeader>
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+        <form method="post" onSubmit={form.handleSubmit(onSubmit)} noValidate>
           <CardContent className="space-y-4">
             {formError && (
               <Alert variant="destructive">

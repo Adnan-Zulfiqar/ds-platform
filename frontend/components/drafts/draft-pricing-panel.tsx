@@ -236,7 +236,7 @@ export function DraftPricingPanel({
       {!workspace.shippingCostAvailable ? (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
           {workspace.shippingWarning ??
-            "Shipping cost unavailable — freight is not treated as zero."}
+            "Shipping price not available — missing freight is not treated as zero."}
         </div>
       ) : null}
 

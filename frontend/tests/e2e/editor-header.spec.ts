@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { isApiReachable, type TestAccount } from "./helpers/auth";
-import { seedCatalogueViaApi, signInWithAccount } from "./helpers/catalogue";
+import { openMockedEditor } from "./helpers/editor-fixture";
 
 /** Prefer the currently visible control when responsive duplicates stay in the DOM. */
 function visibleTestId(page: Page, testId: string) {
@@ -9,41 +8,14 @@ function visibleTestId(page: Page, testId: string) {
 }
 
 /**
- * Premium draft editor header — hierarchy, responsive chrome, keyboard menu.
+ * UX-L2A command bar — hierarchy, responsive chrome, keyboard menu.
  *
- * Prefer a seeded AliExpress import when the live gateway allows it. Otherwise
- * `E2E_PRODUCT_ID` + `E2E_EMAIL` + `E2E_PASSWORD` open an existing draft so the
- * header shell can still be asserted without inventing product fixtures.
- *
- * Sign-in always uses `?next=` so the SPA keeps the in-memory access token
- * (hard navigations after login currently lose session until refresh-cookie
- * Path quirks are resolved).
+ * Uses synthetic mocked API responses so the suite never depends on AliExpress
+ * import or production customer drafts.
  */
 
 async function openDraftEditor(page: Page): Promise<void> {
-  const apiUp = await isApiReachable();
-  test.skip(!apiUp, "API not reachable at E2E_API_URL / default.");
-
-  const existingId = process.env.E2E_PRODUCT_ID;
-  const existingEmail = process.env.E2E_EMAIL;
-  const existingPassword = process.env.E2E_PASSWORD;
-
-  if (existingId && existingEmail && existingPassword) {
-    const account: TestAccount = {
-      email: existingEmail,
-      password: existingPassword,
-      companyName: "E2E Existing",
-    };
-    await signInWithAccount(page, account, `/drafts/${existingId}`);
-  } else {
-    const seeded = await seedCatalogueViaApi(page.request);
-    test.skip(
-      seeded === null,
-      "Catalogue seeding failed — set E2E_PRODUCT_ID/E2E_EMAIL/E2E_PASSWORD or enable AliExpress import.",
-    );
-    await signInWithAccount(page, seeded.account, `/drafts/${seeded.product.id}`);
-  }
-
+  await openMockedEditor(page);
   await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 }
 
@@ -59,24 +31,25 @@ test.describe("Draft editor header — desktop", () => {
     await openDraftEditor(page);
 
     await expect(page.getByTestId("product-editor-header")).toBeVisible();
-    await expect(page.getByTestId("product-editor-breadcrumb")).toContainText(
-      "Edit Product",
-    );
+    await expect(page.getByRole("link", { name: /Back to drafts/i })).toBeVisible();
     await expect(page.getByTestId("product-editor-title")).toBeVisible();
-    await expect(page.getByTestId("supplier-sync-status")).toBeVisible();
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Draft");
+    await expect(page.getByTestId("draft-save-state")).toBeVisible();
     await expect(visibleTestId(page, "publish-action")).toHaveCount(1);
-    await expect(visibleTestId(page, "save-draft")).toHaveCount(1);
 
-    // Preview opens Draft Preview — not a silent tab switch.
     await page.getByRole("button", { name: "Preview" }).first().click();
     await expect(page.getByTestId("draft-preview-panel")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Draft Preview" })).toBeVisible();
     await page.keyboard.press("Escape");
 
     await visibleTestId(page, "product-actions-menu").click();
-    await expect(page.getByRole("menuitem", { name: /Refresh Supplier/i })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: /Optimize with AI/i })).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: /View History/i })).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /Refresh supplier information/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /Improve with AI tools/i }),
+    ).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /View history/i })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Delete Draft/i })).toHaveCount(0);
 
     await page.screenshot({
@@ -93,7 +66,9 @@ test.describe("Draft editor header — desktop", () => {
     const more = visibleTestId(page, "product-actions-menu");
     await more.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("menuitem", { name: /Refresh Supplier/i })).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /Refresh supplier information/i }),
+    ).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(more).toBeFocused();
 
@@ -146,7 +121,6 @@ test.describe("Draft editor header — mobile", () => {
 
     await expect(page.getByTestId("mobile-editor-action-bar")).toBeVisible();
     await expect(visibleTestId(page, "product-actions-menu")).toHaveCount(1);
-    // Desktop/tablet action clusters remain in the DOM but must not be visible.
     await expect(visibleTestId(page, "product-editor-actions")).toHaveCount(0);
 
     const barBox = await page.getByTestId("mobile-editor-action-bar").boundingBox();
@@ -161,19 +135,8 @@ test.describe("Draft editor header — mobile", () => {
 });
 
 test.describe("Draft editor header — drafts shell smoke", () => {
-  test("authenticated shell still reaches drafts list", async ({ page }) => {
-    const apiUp = await isApiReachable();
-    test.skip(!apiUp, "API not reachable.");
-
-    const email = process.env.E2E_EMAIL;
-    const password = process.env.E2E_PASSWORD;
-    test.skip(!email || !password, "E2E_EMAIL/E2E_PASSWORD required for drafts smoke.");
-
-    await signInWithAccount(
-      page,
-      { email, password, companyName: "E2E Existing" },
-      "/drafts",
-    );
-    await expect(page).toHaveURL(/\/drafts/);
+  test("mocked session can reach drafts editor route", async ({ page }) => {
+    await openDraftEditor(page);
+    await expect(page).toHaveURL(/\/drafts\//);
   });
 });

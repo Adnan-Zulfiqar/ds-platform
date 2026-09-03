@@ -34,7 +34,7 @@ interface ProductEditorActionsProps {
 export function ProductEditorActions({
   saving,
   saveDisabled,
-  dirty,
+  dirty: _dirty,
   publishKind,
   issueCount,
   disabledPublishReason,
@@ -66,20 +66,24 @@ export function ProductEditorActions({
         Preview
       </Button>
 
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={saveDisabled || saving}
-        onClick={onSave}
-        data-testid="save-draft"
-      >
-        {saving ? (
-          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />
-        ) : (
-          <Save className="mr-1.5 h-4 w-4" aria-hidden="true" />
-        )}
-        {saving ? "Saving…" : dirty ? "Save Draft" : "Saved"}
-      </Button>
+      {/* Manual save only when there is something to save or retry — never a
+          disabled “Saved” button that looks like an action. */}
+      {!saveDisabled || saving ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={saving}
+          onClick={onSave}
+          data-testid="save-draft"
+        >
+          {saving ? (
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Save className="mr-1.5 h-4 w-4" aria-hidden="true" />
+          )}
+          {saving ? "Saving…" : "Save draft"}
+        </Button>
+      ) : null}
 
       <PublishAction
         kind={publishKind}

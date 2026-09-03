@@ -1,37 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { MobileEditorActionBar } from "@/components/drafts/editor-header/mobile-editor-action-bar";
 import { ProductActionsMenu } from "@/components/drafts/editor-header/product-actions-menu";
 import { ProductEditorActions } from "@/components/drafts/editor-header/product-editor-actions";
-import { ProductEditorBreadcrumb } from "@/components/drafts/editor-header/product-editor-breadcrumb";
 import {
   ProductEditorTabs,
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
-import { ProductIdentity } from "@/components/drafts/editor-header/product-identity";
-import { ProductMetrics } from "@/components/drafts/editor-header/product-metrics";
-import {
-  ProductStatusGroup,
-  type LifecycleBadge,
-} from "@/components/drafts/editor-header/product-status-group";
+import { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
 import type { PublishActionKind } from "@/components/drafts/editor-header/publish-action";
 import {
-  estimateMarginPercent,
   type ReadinessSummary,
 } from "@/components/drafts/editor-header/readiness";
 import {
   SaveStateIndicator,
   type SaveState,
 } from "@/components/drafts/editor-header/save-state-indicator";
-import {
-  deriveSupplierSyncKind,
-  SupplierSyncStatus,
-} from "@/components/drafts/editor-header/supplier-sync-status";
+import { deriveSupplierSyncKind } from "@/components/drafts/editor-header/supplier-sync-status";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { ProductDetail, SeoScore, StoreListing } from "@/types/api";
 
 interface ProductEditorHeaderProps {
@@ -63,16 +60,13 @@ function deriveLifecycle(params: {
   publishPending: boolean;
   publishFailed: boolean;
   listing: StoreListing | null;
-  readiness: ReadinessSummary;
-}): LifecycleBadge {
+}): "Draft" | "Publishing" | "Published" | "Publish failed" | "Archived" {
   if (params.productStatus === "archived") return "Archived";
   if (params.publishPending) return "Publishing";
   if (params.publishFailed || params.listing?.status === "error") {
-    return "Publish Failed";
+    return "Publish failed";
   }
   if (params.listing?.status === "synced") return "Published";
-  if (params.readiness.level === "Ready") return "Ready";
-  if (params.readiness.level === "Needs Review") return "Needs Review";
   return "Draft";
 }
 
@@ -81,14 +75,14 @@ function derivePublishKind(params: {
   publishFailed: boolean;
   listing: StoreListing | null;
   dirty: boolean;
-  issueCount: number;
+  requiredIssueCount: number;
 }): PublishActionKind {
   if (params.publishPending) return "publishing";
   if (params.publishFailed || params.listing?.status === "error") return "retry";
   if (params.listing?.status === "synced") {
     return params.dirty ? "push_updates" : "view_store";
   }
-  if (params.issueCount > 0) return "fix_issues";
+  if (params.requiredIssueCount > 0) return "fix_issues";
   return "publish";
 }
 
@@ -121,51 +115,44 @@ export function ProductEditorHeader({
     publishPending,
     publishFailed,
     listing,
-    readiness,
   });
+  const requiredIssueCount = readiness.items.filter(
+    (item) => item.severity === "required",
+  ).length;
   const publishKind = derivePublishKind({
     publishPending,
     publishFailed,
     listing,
     dirty,
-    issueCount: readiness.issues.length,
+    requiredIssueCount,
   });
   const supplierKind = deriveSupplierSyncKind({
     lastSyncedAt: product.lastSyncedAt,
     lastSyncError: product.lastSyncError,
     refreshing,
   });
-  const margin = estimateMarginPercent(
-    product.sellPrice,
-    product.costPriceMin,
-  );
-  const shopifyLabel = listing
+  const storeLabel = listing
     ? listing.status === "synced"
-      ? "Connected"
+      ? listing.shopDomain || "Connected store"
       : listing.status === "error"
-        ? "Failed"
-        : "Pending"
-    : "Not connected";
-  const publicationLabel = listing
-    ? listing.status === "synced"
-      ? listing.onlineStorePublished === false
-        ? "Published (unpublished on storefront)"
-        : "Published to Shopify"
-      : listing.status === "error"
-        ? "Publish failed"
-        : "Out of sync"
-    : "Not published";
+        ? "Store needs attention"
+        : "Connecting store…"
+    : "Connect Shopify to publish";
 
   const disabledPublishReason =
     publishKind === "fix_issues"
-      ? readiness.issues.slice(0, 3).join(" · ")
+      ? `Fix ${requiredIssueCount} thing${requiredIssueCount === 1 ? "" : "s"} before publishing.`
       : null;
 
-  const openAliExpress = () => {
+  const openSupplier = () => {
     if (product.externalUrl) {
       window.open(product.externalUrl, "_blank", "noopener,noreferrer");
     }
   };
+
+  const supplierLine = product.supplierName
+    ? `Imported from ${product.supplierName}`
+    : "Imported from AliExpress";
 
   const menuProps = {
     refreshing,
@@ -173,7 +160,7 @@ export function ProductEditorHeader({
     hasExternalUrl: Boolean(product.externalUrl),
     onRefresh,
     onOptimize,
-    onOpenAliExpress: openAliExpress,
+    onOpenAliExpress: openSupplier,
     onViewHistory,
     onGoHistoryTab: () => onTabChange("history"),
   };
@@ -183,7 +170,7 @@ export function ProductEditorHeader({
     saveDisabled: !dirty && saveState !== "error",
     dirty,
     publishKind,
-    issueCount: readiness.issues.length,
+    issueCount: requiredIssueCount,
     disabledPublishReason,
     storefrontUrl: listing?.storefrontUrl,
     adminUrl: listing?.adminUrl,
@@ -203,94 +190,137 @@ export function ProductEditorHeader({
     publishing: publishKind === "fix_issues" ? { blocked: true } : undefined,
   };
 
+  const title = product.title || "Untitled draft";
+  const isLiveOnStore = listing?.status === "synced";
+
   return (
     <>
       <header
         className="sticky top-0 z-20 -mx-1 border-b border-border/80 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85"
         data-testid="product-editor-header"
       >
-        <div className="space-y-3 px-1 py-3 md:px-2">
-          {/* Layer 1 — context */}
-          <div className="flex items-center gap-2">
+        <div className="space-y-2 px-1 py-2 md:px-2">
+          <div className="flex items-start gap-2 md:gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-1 hidden h-11 shrink-0 gap-1.5 px-2 text-muted-foreground md:inline-flex"
+              asChild
+            >
+              <Link href="/drafts">
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                Back to drafts
+              </Link>
+            </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="h-11 w-11 shrink-0 md:hidden"
+              className="mt-1 h-11 w-11 shrink-0 md:hidden"
               asChild
             >
-              <Link href="/drafts" aria-label="Back to Drafts">
+              <Link href="/drafts" aria-label="Back to drafts">
                 <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               </Link>
             </Button>
-            <ProductEditorBreadcrumb className="hidden min-w-0 flex-1 sm:block" />
-            <p className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground sm:hidden">
-              Edit draft
-            </p>
-            <div className="ml-auto flex items-center gap-2 sm:gap-3">
-              <SaveStateIndicator dirty={dirty} saveState={saveState} />
-              <div className="md:hidden">
-                <ProductActionsMenu {...menuProps} />
+
+            <ProductThumbnail
+              url={featuredImage}
+              title={title}
+              onOpenMedia={() => onTabChange("media")}
+            />
+
+            <div className="min-w-0 flex-1">
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h1
+                      className="line-clamp-2 text-base font-semibold tracking-tight text-foreground md:text-lg"
+                      data-testid="product-editor-title"
+                      title={title}
+                    >
+                      {title}
+                    </h1>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" align="start" className="max-w-md">
+                    {title}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <span className="sr-only">{title}</span>
+              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
+                <span className="truncate">{supplierLine}</span>
+                {product.externalUrl ? (
+                  <a
+                    href={product.externalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-h-11 items-center gap-1 rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                    View supplier product
+                  </a>
+                ) : null}
               </div>
-              <button
-                type="button"
-                className="hidden text-xs text-muted-foreground underline-offset-2 hover:underline lg:inline"
-                onClick={onToggleInspector}
+              <div
+                className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"
+                data-testid="product-status-group"
               >
-                {inspectorOpen ? "Hide inspector" : "Show inspector"}
-              </button>
+                <span
+                  className={cn(
+                    "inline-flex rounded-md border px-2 py-0.5 text-xs font-medium",
+                    lifecycle === "Published" &&
+                      "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
+                    lifecycle === "Draft" && "border-border bg-muted text-foreground",
+                    lifecycle === "Publish failed" &&
+                      "border-destructive/30 bg-destructive/10 text-destructive",
+                    lifecycle === "Publishing" &&
+                      "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+                  )}
+                  data-testid="product-lifecycle"
+                >
+                  {lifecycle}
+                </span>
+                <SaveStateIndicator
+                  dirty={dirty}
+                  saveState={saveState}
+                  isLiveOnStore={isLiveOnStore}
+                  onRetry={onSave}
+                />
+                <span
+                  className="truncate text-xs text-muted-foreground"
+                  data-testid="product-editor-store"
+                >
+                  {storeLabel}
+                </span>
+                {supplierKind === "stale" || supplierKind === "failed" || supplierKind === "never" ? (
+                  <span className="text-xs text-amber-700 dark:text-amber-400">
+                    Supplier information may be out of date
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline-offset-2 hover:underline lg:hidden"
+                  onClick={onToggleInspector}
+                >
+                  {inspectorOpen ? "Hide checklist" : "Things to fix"}
+                </button>
+              </div>
+            </div>
+
+            <ProductEditorActions
+              {...actionsProps}
+              className="hidden shrink-0 lg:flex"
+            />
+            <div className="md:hidden">
+              <ProductActionsMenu {...menuProps} />
             </div>
           </div>
 
-          {/* Layer 2 — identity + actions */}
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
-            <ProductIdentity
-              title={product.title}
-              externalId={product.externalId}
-              supplierName={product.supplierName}
-              externalUrl={product.externalUrl}
-              thumbnailUrl={featuredImage}
-            >
-              <SupplierSyncStatus
-                kind={supplierKind}
-                lastSyncedAt={product.lastSyncedAt}
-                shipToCountry={product.shipToCountry}
-              />
-              <ProductStatusGroup
-                lifecycle={lifecycle}
-                readiness={readiness}
-                seoScore={seoScore?.score}
-                seoStatus={seoScore?.status}
-                publicationLabel={publicationLabel}
-                onReadinessClick={onToggleInspector}
-                onSeoClick={() => onTabChange("seo")}
-              />
-              <ProductMetrics
-                readinessScore={readiness.score}
-                seoScore={null}
-                marginPercent={margin}
-                shopifyLabel={shopifyLabel}
-                onReadinessClick={undefined}
-                onSeoClick={undefined}
-                onMarginClick={() => onTabChange("pricing")}
-                onShopifyClick={() => onTabChange("publishing")}
-                className="hidden pt-0.5 sm:flex"
-              />
-            </ProductIdentity>
-
-            {/* Desktop: actions beside identity */}
-            <ProductEditorActions
-              {...actionsProps}
-              className="hidden lg:flex"
-            />
-          </div>
-
-          {/* Tablet: actions under identity, above tabs */}
           <ProductEditorActions
             {...actionsProps}
             className="hidden md:flex lg:hidden"
           />
 
-          {/* Layer 3 — tabs */}
           <ProductEditorTabs
             activeTab={activeTab}
             onChange={onTabChange}
@@ -303,7 +333,7 @@ export function ProductEditorHeader({
         saving={saving}
         saveDisabled={!dirty && saveState !== "error"}
         publishKind={publishKind}
-        issueCount={readiness.issues.length}
+        issueCount={requiredIssueCount}
         disabledPublishReason={disabledPublishReason}
         storefrontUrl={listing?.storefrontUrl}
         onPreview={onPreview}
@@ -317,13 +347,12 @@ export function ProductEditorHeader({
 export function ProductEditorHeaderSkeleton() {
   return (
     <div className="space-y-3 border-b py-3" data-testid="draft-editor-loading">
-      <Skeleton className="h-4 w-64" />
       <div className="flex gap-3">
-        <Skeleton className="h-[72px] w-[72px] rounded-lg" />
+        <Skeleton className="h-14 w-14 rounded-[10px]" />
         <div className="flex-1 space-y-2">
-          <Skeleton className="h-7 w-3/4" />
+          <Skeleton className="h-6 w-3/4" />
           <Skeleton className="h-4 w-1/2" />
-          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-4 w-40" />
         </div>
       </div>
       <Skeleton className="h-10 w-full" />

@@ -23,13 +23,13 @@ interface SupplierSyncStatusProps {
 function labelFor(kind: SupplierSyncKind): string {
   switch (kind) {
     case "refreshing":
-      return "Refreshing supplier";
+      return "Checking supplier…";
     case "failed":
-      return "Supplier refresh failed";
+      return "Couldn’t refresh supplier information";
     case "stale":
-      return "Supplier data stale";
+      return "Supplier information may be out of date";
     case "never":
-      return "Supplier not synced";
+      return "Supplier not checked yet";
     default:
       return "Supplier up to date";
   }

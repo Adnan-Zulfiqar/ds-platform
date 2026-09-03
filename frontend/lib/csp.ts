@@ -58,6 +58,15 @@ export const API_ORIGIN = new URL(
 
 export const GOOGLE_IDENTITY_ORIGIN = "https://accounts.google.com";
 
+/**
+ * Webpack's development runtime evaluates module factories via `eval`.
+ * Without `'unsafe-eval'`, `next dev` downloads every chunk and then refuses
+ * to run them. Production builds do not use eval, so this token is omitted
+ * outside development.
+ */
+const SCRIPT_SRC_EVAL =
+  process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";
+
 /** The full policy for one response. */
 export function buildContentSecurityPolicy(nonce: string): string {
   return [
@@ -67,7 +76,8 @@ export function buildContentSecurityPolicy(nonce: string): string {
     "frame-ancestors 'none'",
     "form-action 'self'",
     // No 'unsafe-inline'. The nonce is what lets Next.js hydrate.
-    `script-src 'self' 'nonce-${nonce}' ${GOOGLE_IDENTITY_ORIGIN}`,
+    // 'unsafe-eval' only in development — see SCRIPT_SRC_EVAL above.
+    `script-src 'self' 'nonce-${nonce}'${SCRIPT_SRC_EVAL} ${GOOGLE_IDENTITY_ORIGIN}`,
     `style-src 'self' 'unsafe-inline' ${GOOGLE_IDENTITY_ORIGIN}`,
     "img-src 'self' data: https://*.googleusercontent.com",
     "font-src 'self' data:",

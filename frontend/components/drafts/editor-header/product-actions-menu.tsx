@@ -56,26 +56,26 @@ export function ProductActionsMenu({
           disabled={refreshing}
           onSelect={() => onRefresh()}
         >
-          {refreshing ? "Refreshing…" : "Refresh Supplier Data"}
+          {refreshing ? "Refreshing…" : "Refresh supplier information"}
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={optimizing}
           onSelect={() => onOptimize()}
         >
-          {optimizing ? "Optimizing…" : "Optimize with AI"}
+          {optimizing ? "Optimizing…" : "Improve with AI tools"}
         </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!hasExternalUrl}
           onSelect={() => onOpenAliExpress()}
         >
-          Open AliExpress Listing
+          Open supplier product
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onViewHistory()}>
-          View History
+          View history
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onGoHistoryTab()}>
-          Open History tab
+          Open history
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

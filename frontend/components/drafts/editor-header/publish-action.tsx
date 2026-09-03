@@ -31,17 +31,17 @@ interface PublishActionProps {
 function labelFor(kind: PublishActionKind, issueCount: number): string {
   switch (kind) {
     case "fix_issues":
-      return `Fix ${issueCount} issue${issueCount === 1 ? "" : "s"} to publish`;
+      return `Fix ${issueCount} thing${issueCount === 1 ? "" : "s"}`;
     case "publishing":
       return "Publishing…";
     case "view_store":
-      return "View in Store";
+      return "View in store";
     case "push_updates":
-      return "Push Updates";
+      return "Push updates";
     case "retry":
-      return "Retry Publishing";
+      return "Try publishing again";
     default:
-      return "Publish to Store";
+      return "Publish to store";
   }
 }
 

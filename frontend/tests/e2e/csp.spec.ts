@@ -86,6 +86,11 @@ test.describe("Content-Security-Policy header", () => {
     expect(scriptSrc).toMatch(/'nonce-[A-Za-z0-9+/=]{16,}'/);
     expect(scriptSrc).toContain("'self'");
     expect(scriptSrc).toContain("https://accounts.google.com");
+    // Production (start:e2e) must never include unsafe-eval. A reused next-dev
+    // server will fail this on purpose — point E2E_BASE_URL at standalone.
+    expect(scriptSrc, "production CSP must not contain unsafe-eval").not.toContain(
+      "'unsafe-eval'",
+    );
   });
 
   test("no directive opens a wildcard or a whole-of-Google origin", async ({ page }) => {

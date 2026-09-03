@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Changed
+
+- **UX-L2A — product editor foundation.** Frontend-only. The draft editor
+  command bar now shows the product, draft/live status, save status, store, and
+  next action in the first viewport. Sections are grouped (Product, Selling,
+  Improve, Publish) without changing URLs. Shipping explains a missing supplier
+  price in plain English and never presents it as free. The inspector is a
+  “Before you publish” checklist. Production CSP still has no `'unsafe-eval'`;
+  login uses `method="post"`. Business rules, APIs, and publishing behaviour
+  are unchanged.
+
 ### Added
 
 - **INFRA-L1 — the AWS Lightsail deployment foundation.** The application has

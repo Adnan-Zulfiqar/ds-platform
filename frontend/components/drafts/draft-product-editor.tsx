@@ -21,7 +21,8 @@ import {
   isEditorTab,
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
-import { readinessFor } from "@/components/drafts/editor-header/readiness";
+import { PublishChecklist } from "@/components/drafts/editor-header/publish-checklist";
+import { formatSupplierSyncedAt, readinessFor } from "@/components/drafts/editor-header/readiness";
 import {
   DESCRIPTION_MAX_LENGTH,
   RichTextDescriptionEditor,
@@ -29,7 +30,6 @@ import {
 import type { SaveState } from "@/components/drafts/editor-header/save-state-indicator";
 import { ProductVersionHistorySheet } from "@/components/products/product-version-history-sheet";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -42,7 +42,7 @@ import {
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn, formatDateTime, formatMoney } from "@/lib/utils";
+import { formatDateTime, formatMoney } from "@/lib/utils";
 import {
   draftKeys,
   useDraft,
@@ -163,7 +163,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishOk, setPublishOk] = useState<string | null>(null);
   const [publishResult, setPublishResult] =
     useState<ShopifyPublishResult | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
@@ -1057,7 +1057,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           {tab === "overview" ? (
             <section className="space-y-4" aria-labelledby="overview-heading">
               <h2 id="overview-heading" className="text-lg font-semibold">
-                Overview
+                Product details
               </h2>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2 md:col-span-2">
@@ -1071,6 +1071,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     }}
                     data-testid="draft-title-input"
                   />
+                  {title.trim().length > 0 && title.trim().length < 8 ? (
+                    <p className="text-sm text-amber-800 dark:text-amber-300" role="status">
+                      Add a clearer product title. Shoppers need a title before
+                      this can be published.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="draft-brand">Brand</Label>
@@ -1161,7 +1167,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                   <div>
                     <dt className="text-muted-foreground">Last refresh</dt>
                     <dd className="font-medium">
-                      {formatDateTime(data.lastSyncedAt)}
+                      {formatSupplierSyncedAt(data.lastSyncedAt) ?? "—"}
                     </dd>
                   </div>
                   <div>
@@ -1262,11 +1268,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
 
           {tab === "publishing" ? (
             <section className="space-y-4" data-testid="publishing-panel">
-              <h2 className="text-lg font-semibold">Publish to Store</h2>
+              <h2 className="text-lg font-semibold">Review and publish</h2>
               <p className="text-sm text-muted-foreground">
-                Sends this prepared draft to a connected Shopify store. Import
-                means supplier ingestion only — this action is channel
-                publishing.
+                Send this draft to a connected Shopify store. Importing from the
+                supplier is separate from publishing to your shop.
               </p>
               {(publishResult || syncedListing) && (
                 <DraftPostPublishPanel
@@ -1275,11 +1280,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                   onContinueEditing={() => selectTab("overview")}
                 />
               )}
-              {readiness.issues.length > 0 ? (
+              {readiness.items.some((item) => item.severity === "required") ? (
                 <Alert>
                   <AlertDescription>
-                    Readiness {readiness.score}/100 ({readiness.level}). Review
-                    issues in the sidebar before publishing when possible.
+                    Not ready to publish. Open the checklist and fix the
+                    required items first.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -1358,85 +1363,35 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               <h2 className="text-lg font-semibold">{EDITOR_TAB_LABEL[tab]}</h2>
               <p className="mt-2 text-sm text-muted-foreground">
                 {tab === "ai-studio" &&
-                  "Use Optimize with AI from More actions for now. Side-by-side proposal studio is Stage 6."}
+                  "Use Improve with AI tools from More actions for now. Side-by-side proposal studio is Stage 6."}
                 {tab === "history" &&
-                  "Use View History in More actions for AI version restore. Full edit timeline is Stage 6."}
+                  "Use View history in More actions for AI version restore. Full edit timeline is Stage 6."}
               </p>
             </section>
           ) : null}
         </div>
 
-        <aside
-          className={cn(
-            "space-y-4 xl:sticky xl:top-36 xl:self-start",
-            !inspectorOpen && "hidden xl:hidden",
-          )}
-        >
-          <div className="rounded-lg border p-4">
-            <h3 className="text-sm font-semibold">Publish readiness</h3>
-            <p className="mt-2 text-3xl font-semibold tabular-nums">
-              {readiness.score}
-              <span className="text-base font-normal text-muted-foreground">
-                /100
-              </span>
-            </p>
-            <Badge className="mt-2" variant="outline">
-              {readiness.level}
-            </Badge>
-            {seoScoreQuery.data ? (
-              <p className="mt-3 text-sm text-muted-foreground">
-                SEO score {seoScoreQuery.data.score}/100 (
-                {seoScoreQuery.data.status})
-              </p>
-            ) : null}
-            {syncedListing ? (
-              <p className="mt-2 text-sm text-muted-foreground">
-                Listing {syncedListing.status}
-                {syncedListing.onlineStorePublished === false
-                  ? " · not on Online Store"
-                  : syncedListing.storefrontUrl
-                    ? " · storefront URL verified"
-                    : ""}
-              </p>
-            ) : null}
-            {readiness.issues.length > 0 ? (
-              <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
-                {readiness.issues.map((issue) => (
-                  <li key={issue}>• {issue}</li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-3 text-sm text-muted-foreground">
-                Core content checks passed. Channel validation still runs at
-                publish time.
-              </p>
-            )}
-          </div>
-
-          <div className="rounded-lg border p-4 text-sm">
-            <h3 className="font-semibold">Supplier summary</h3>
-            <dl className="mt-2 space-y-1 text-muted-foreground">
-              <div className="flex justify-between gap-2">
-                <dt>Stock (cached)</dt>
-                <dd className="tabular-nums text-foreground">
-                  {data.stockQuantity.toLocaleString()}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt>Variants</dt>
-                <dd className="tabular-nums text-foreground">
-                  {data.variants.length}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt>Images</dt>
-                <dd className="tabular-nums text-foreground">
-                  {data.images.length}
-                </dd>
-              </div>
-            </dl>
-          </div>
-        </aside>
+        <PublishChecklist
+          readiness={readiness}
+          seoScore={seoScoreQuery.data}
+          listing={syncedListing}
+          open={inspectorOpen}
+          onClose={() => setInspectorOpen(false)}
+          onOpenTab={selectTab}
+          variant="aside"
+        />
+        <PublishChecklist
+          readiness={readiness}
+          seoScore={seoScoreQuery.data}
+          listing={syncedListing}
+          open={inspectorOpen}
+          onClose={() => setInspectorOpen(false)}
+          onOpenTab={(next) => {
+            setInspectorOpen(false);
+            selectTab(next);
+          }}
+          variant="sheet"
+        />
       </div>
 
     </div>
