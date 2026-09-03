@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 
 export type PublishActionKind =
   | "publish"
-  | "fix_issues"
+  | "review_items"
   | "publishing"
   | "view_store"
   | "push_updates"
@@ -30,8 +30,8 @@ interface PublishActionProps {
 
 function labelFor(kind: PublishActionKind, issueCount: number): string {
   switch (kind) {
-    case "fix_issues":
-      return `Fix ${issueCount} thing${issueCount === 1 ? "" : "s"}`;
+    case "review_items":
+      return `Review ${issueCount} item${issueCount === 1 ? "" : "s"}`;
     case "publishing":
       return "Publishing…";
     case "view_store":
@@ -56,7 +56,7 @@ export function PublishAction({
   size = "default",
 }: PublishActionProps) {
   const label = labelFor(kind, issueCount);
-  const disabled = kind === "fix_issues" || kind === "publishing";
+  const disabled = kind === "review_items" || kind === "publishing";
   const isPrimary = kind !== "view_store";
 
   const button = (

@@ -70,9 +70,10 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       "Before you publish",
     );
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /Required checks look complete|Fix \d+ thing/,
+      /No content gaps flagged here|Review \d+ item/,
     );
-    // Recommended only when SEO gaps exist — this product has SEO filled.
+    await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
     await expect(page.locator("text=raw backend").or(page.locator("text={code}"))).toHaveCount(0);
 
     await assertNoHorizontalOverflow(page);
@@ -176,9 +177,18 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("product-editor-store")).toContainText(
       "Connect Shopify to publish",
     );
-    await expect(page.getByTestId("publish-checklist-aside")).toContainText("Required");
-    await expect(page.getByTestId("publish-checklist-aside")).toContainText("Recommended");
+    await expect(page.getByTestId("publish-checklist-aside")).toContainText(
+      "Items to review",
+    );
+    await expect(page.getByTestId("publish-checklist-aside")).toContainText(
+      /Review \d+ item/,
+    );
+    await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Before you publish").first()).toBeVisible();
+    await expect(visibleTestId(page, "publish-action")).toContainText(
+      /Review \d+ item/,
+    );
     await shot(page, "1440x900-publish-blockers.png");
   });
 
@@ -191,6 +201,20 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("editor-tab-description")).toBeFocused();
     await page.keyboard.press("Home");
     await expect(page.getByTestId("editor-tab-overview")).toBeFocused();
+  });
+
+  test("200 percent zoom keeps command bar usable", async ({ page }) => {
+    // 1440×900 at 200% browser zoom ≈ 720×450 CSS pixels.
+    await page.setViewportSize({ width: 720, height: 450 });
+    await openMockedEditor(page);
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("product-editor-header")).toBeVisible();
+    await expect(page.getByTestId("product-editor-title")).toBeVisible();
+    await expect(page.getByTestId("publish-action").first()).toBeAttached();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    );
+    expect(overflow).toBe(false);
   });
 });
 
@@ -276,7 +300,6 @@ test.describe("UX-L2A editor foundation — save failure", () => {
     await page.locator("#draft-title").fill(
       "Updated title that should trigger autosave eventually",
     );
-    // Force manual save if the button appears when dirty.
     const save = visibleTestId(page, "save-draft");
     await expect(save).toBeVisible({ timeout: 10_000 });
     await save.click();
@@ -286,6 +309,79 @@ test.describe("UX-L2A editor foundation — save failure", () => {
     await expect(page.getByTestId("draft-save-retry")).toBeVisible();
     await expect(page.getByText(/"code":\s*"internal_error"/)).toHaveCount(0);
     await shot(page, "1440x900-save-failure.png");
+  });
+
+  test("real request in flight shows Saving then Draft saved", async ({ page }) => {
+    await openMockedEditor(page, { patchDelayMs: 1200 });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await page.locator("#draft-title").fill("Title changed for saving state");
+    await visibleTestId(page, "save-draft").click();
+    await expect(page.getByTestId("draft-save-state")).toContainText("Saving…", {
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("draft-save-state")).toContainText(
+      "Draft saved — not live",
+      { timeout: 15_000 },
+    );
+    await shot(page, "1440x900-saving-inflight.png");
+  });
+
+  test("edits during save keep unsaved after older response", async ({ page }) => {
+    await openMockedEditor(page, { patchDelayMs: 1500 });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await page.locator("#draft-title").fill("First save title");
+    await visibleTestId(page, "save-draft").click();
+    await expect(page.getByTestId("draft-save-state")).toContainText("Saving…");
+    await page.locator("#draft-title").fill("Edited again while saving");
+    await expect(page.getByTestId("draft-save-state")).toContainText(/Unsaved changes/i, {
+      timeout: 20_000,
+    });
+  });
+
+  test("retry after failure can succeed", async ({ page }) => {
+    await openMockedEditor(page, {
+      patchResponder: (attempt) => {
+        if (attempt === 1) {
+          return {
+            status: 500,
+            body: {
+              code: "internal_error",
+              message: "Could not save.",
+              details: [],
+              requestId: "req-1",
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: {
+            ...buildSyntheticProduct(),
+            title: "Retried title",
+            updatedAt: new Date().toISOString(),
+          },
+        };
+      },
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await page.locator("#draft-title").fill("Retried title");
+    await visibleTestId(page, "save-draft").click();
+    await expect(page.getByTestId("draft-save-retry")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("draft-save-retry").click();
+    await expect(page.getByTestId("draft-save-state")).toContainText(
+      "Draft saved — not live",
+      { timeout: 15_000 },
+    );
+  });
+
+  test("409 conflict surfaces conflict save wording", async ({ page }) => {
+    await openMockedEditor(page, { patchStatus: 409 });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await page.locator("#draft-title").fill("Conflict title");
+    await visibleTestId(page, "save-draft").click();
+    await expect(page.getByTestId("draft-save-state")).toContainText(
+      /Someone else saved this product/i,
+      { timeout: 15_000 },
+    );
   });
 });
 

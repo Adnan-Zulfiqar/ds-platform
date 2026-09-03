@@ -162,7 +162,7 @@ export function ProductEditorTabs({
                 const selected = activeTab === id;
                 const indicator = indicators?.[id];
                 let suffix = "";
-                if (indicator?.blocked) suffix = " · Not ready";
+                if (indicator?.blocked) suffix = " · Review";
                 else if (
                   typeof indicator?.issues === "number" &&
                   indicator.issues > 0

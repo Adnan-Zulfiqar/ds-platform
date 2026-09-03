@@ -1,12 +1,10 @@
 import type { ProductDetail } from "@/types/api";
 
-export type ReadinessSeverity = "required" | "recommended";
-
 export interface ReadinessIssue {
   id: string;
   message: string;
   effect: string;
-  /** Existing editor tab to open when the merchant chooses to fix this. */
+  /** Existing editor tab to open when the merchant chooses to review this. */
   tab:
     | "overview"
     | "description"
@@ -16,7 +14,6 @@ export interface ReadinessIssue {
     | "seo"
     | "publishing"
     | "shipping";
-  severity: ReadinessSeverity;
 }
 
 export interface ReadinessSummary {
@@ -28,14 +25,12 @@ export interface ReadinessSummary {
 }
 
 /**
- * Lightweight client-side readiness for header and checklist chrome.
+ * Lightweight client-side checklist for editor chrome.
  *
- * Channel validation still runs at publish time — this only surfaces obvious
- * content gaps so merchants see progress without a separate API call.
- *
- * Severity is presentation-only over the same client checks: SEO/slug gaps are
- * shown as recommended; content gaps that block a sensible publish attempt are
- * required. The API does not classify these.
+ * This is presentation advice only. Channel validation still runs when the
+ * merchant publishes — the API does not return Required/Recommended categories,
+ * and this helper must not invent them. UX-L2B should design a real authority
+ * if the product needs one.
  */
 export function readinessFor(product: ProductDetail): ReadinessSummary {
   const items: ReadinessIssue[] = [];
@@ -46,9 +41,8 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
     items.push({
       id: "title",
       message: "Add a clearer product title",
-      effect: "Shoppers need a title before this can be published.",
+      effect: "Shoppers usually need a clear title before listing.",
       tab: "overview",
-      severity: "required",
     });
   }
 
@@ -58,9 +52,8 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
     items.push({
       id: "description",
       message: "Add a product description",
-      effect: "A blank description looks incomplete on your store.",
+      effect: "A blank description can look incomplete on your store.",
       tab: "description",
-      severity: "required",
     });
   }
 
@@ -69,9 +62,8 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
     items.push({
       id: "images",
       message: "Add at least one product image",
-      effect: "Stores expect a main image before listing.",
+      effect: "Stores usually expect a main image before listing.",
       tab: "media",
-      severity: "required",
     });
   }
 
@@ -82,7 +74,6 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
       message: "Import product options",
       effect: "Variants carry size, colour and stock from the supplier.",
       tab: "variants",
-      severity: "required",
     });
   }
 
@@ -93,7 +84,6 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
       message: "Supplier cost is missing",
       effect: "Profit tools need a cost before you confirm your selling price.",
       tab: "pricing",
-      severity: "required",
     });
   }
 
@@ -102,9 +92,8 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
     items.push({
       id: "seo-title",
       message: "Add a search title",
-      effect: "Helps search results, but is not a hard publish gate here.",
+      effect: "Helps how the listing may appear in search results.",
       tab: "seo",
-      severity: "recommended",
     });
   }
 
@@ -115,21 +104,18 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
       message: "Add a product URL",
       effect: "Gives the listing a stable link on your store.",
       tab: "seo",
-      severity: "recommended",
     });
   }
 
-  const requiredCount = items.filter((i) => i.severity === "required").length;
+  // Level remains a simple progress hint for chrome — not a publish authority.
   const level: ReadinessSummary["level"] =
     items.length === 0
       ? "Ready"
-      : requiredCount === 0
+      : score >= 60
         ? "Needs Review"
-        : score >= 60
-          ? "Needs Review"
-          : score >= 30
-            ? "Incomplete"
-            : "Blocked";
+        : score >= 30
+          ? "Incomplete"
+          : "Blocked";
 
   return {
     score,

@@ -179,12 +179,17 @@ export async function openMockedEditor(
     seoScore?: SeoScore;
     patchStatus?: number;
     patchBody?: unknown;
+    /** Artificial network delay for PATCH only — never used to invent UI state. */
+    patchDelayMs?: number;
+    /** Per-attempt PATCH override (1-based). Falls back to patchStatus/patchBody. */
+    patchResponder?: (attempt: number) => { status: number; body?: unknown };
   } = {},
 ): Promise<ProductDetail> {
   const product = options.product ?? buildSyntheticProduct();
   const listings = options.listings ?? emptyListings();
   const seoScore = options.seoScore ?? demoSeoScore();
   const auth = mockAuthResponse();
+  let patchAttempts = 0;
 
   await blockGoogleIdentityScript(page);
 
@@ -241,13 +246,22 @@ export async function openMockedEditor(
       });
     }
     if (method === "PATCH") {
-      const status = options.patchStatus ?? 200;
+      if (options.patchDelayMs && options.patchDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.patchDelayMs));
+      }
+      patchAttempts += 1;
+      const responded = options.patchResponder?.(patchAttempts);
+      const status = responded?.status ?? options.patchStatus ?? 200;
       const body =
+        responded?.body ??
         options.patchBody ??
         (status >= 400
           ? {
-              code: "conflict",
-              message: "Someone else saved this product.",
+              code: status === 409 ? "conflict" : "internal_error",
+              message:
+                status === 409
+                  ? "Someone else saved this product."
+                  : "Could not save.",
               details: [],
               requestId: "req-ux-l2a-demo",
             }

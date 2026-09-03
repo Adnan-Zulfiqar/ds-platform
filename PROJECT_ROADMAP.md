@@ -20,7 +20,7 @@ Last updated: 2026-09-03
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
-| UX-L2A | Product editor foundation | 🚧 **On `feature/ux-l2a-editor-foundation`** — shell, shipping, checklist; not merged |
+| UX-L2A | Product editor foundation | 🚧 **On `feature/ux-l2a-editor-foundation`** — candidate + R1 corrections; not merged; not independently reviewed |
 
 ---
 
@@ -267,7 +267,7 @@ synced). Plans:
 | 4 | Media + structured variants | **Done (MVP) on `develop`** |
 | 5 | Pricing / inventory / shipping | **Done (MVP) on `cursor/draft-product-editor`** |
 | 6–8 | AI Studio, publish polish, E2E | Pending |
-| UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **On `feature/ux-l2a-editor-foundation` — not merged** |
+| UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **On `feature/ux-l2a-editor-foundation` — not merged; R1 removing invented Required/Recommended labels; authority gap deferred to UX-L2B** |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.

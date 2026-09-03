@@ -82,6 +82,8 @@ function LoginForm() {
       </CardHeader>
 
       <Form {...form}>
+        {/* method="post" is defence in depth: if client JS fails to hydrate,
+            a bare form would GET and put the password in the query string. */}
         <form method="post" onSubmit={form.handleSubmit(onSubmit)} noValidate>
           <CardContent className="space-y-4">
             {formError && (

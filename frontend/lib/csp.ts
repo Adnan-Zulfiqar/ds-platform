@@ -61,8 +61,9 @@ export const GOOGLE_IDENTITY_ORIGIN = "https://accounts.google.com";
 /**
  * Webpack's development runtime evaluates module factories via `eval`.
  * Without `'unsafe-eval'`, `next dev` downloads every chunk and then refuses
- * to run them. Production builds do not use eval, so this token is omitted
- * outside development.
+ * to run them — React never hydrates, the login form stays a native GET, and
+ * credentials leak into the address bar. Production builds do not use eval,
+ * so this token is omitted outside development.
  */
 const SCRIPT_SRC_EVAL =
   process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : "";

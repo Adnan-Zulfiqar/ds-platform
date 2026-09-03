@@ -32,6 +32,7 @@ export function SaveStateIndicator({
   let Icon: typeof Check | null = Check;
   let showRetry = false;
 
+  // In-flight request wins over dirty — derived from the real save lifecycle.
   if (saveState === "saving") {
     label = "Saving…";
     tone = "muted";
@@ -75,6 +76,7 @@ export function SaveStateIndicator({
       )}
       data-testid="draft-save-state"
       aria-live="polite"
+      aria-atomic="true"
     >
       {Icon ? (
         <Icon

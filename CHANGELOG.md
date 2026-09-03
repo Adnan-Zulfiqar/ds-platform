@@ -12,14 +12,24 @@ production release.
 
 ### Changed
 
-- **UX-L2A — product editor foundation.** Frontend-only. The draft editor
-  command bar now shows the product, draft/live status, save status, store, and
-  next action in the first viewport. Sections are grouped (Product, Selling,
-  Improve, Publish) without changing URLs. Shipping explains a missing supplier
-  price in plain English and never presents it as free. The inspector is a
-  “Before you publish” checklist. Production CSP still has no `'unsafe-eval'`;
-  login uses `method="post"`. Business rules, APIs, and publishing behaviour
-  are unchanged.
+- **UX-L2A-R1 — evidence and state corrections (on `feature/ux-l2a-editor-foundation`,
+  not merged).** Removes invented Required/Recommended checklist labels (the
+  API does not classify findings; checklist items are “Items to review”). Save
+  wording includes a real `Saving…` state from the in-flight request, with
+  generation guards so a stale response cannot clear newer edits. Before
+  screenshots were reconstructed from parent `d1360a1` for comparison — they
+  were not captured during the original L2A implementation. Independent review
+  and production deploy are not claimed.
+
+- **UX-L2A — product editor foundation (candidate, not accepted).** Frontend-only.
+  The draft editor command bar shows the product, draft/live status, save
+  status, store, and next action in the first viewport. Sections are grouped
+  (Product, Selling, Improve, Publish) without changing URLs. Shipping explains
+  a missing supplier price in plain English and never presents it as free. The
+  inspector is a “Before you publish” checklist. Production CSP still has no
+  `'unsafe-eval'`; login uses `method="post"`. Business rules, APIs, and
+  publishing behaviour are unchanged. Baseline screenshots were missed before
+  edits and later reconstructed under UX-L2A-R1.
 
 ### Added
 

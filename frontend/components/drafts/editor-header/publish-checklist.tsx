@@ -19,6 +19,12 @@ interface PublishChecklistProps {
   variant?: "aside" | "sheet";
 }
 
+/**
+ * Checklist chrome over client-side readiness hints.
+ *
+ * Does not claim Required/Recommended — the API does not classify findings.
+ * Publishing still runs its own channel checks.
+ */
 export function PublishChecklist({
   readiness,
   seoScore,
@@ -29,9 +35,8 @@ export function PublishChecklist({
   variant = "aside",
 }: PublishChecklistProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const required = readiness.items.filter((i) => i.severity === "required");
-  const recommended = readiness.items.filter((i) => i.severity === "recommended");
-  const ready = required.length === 0;
+  const items = readiness.items;
+  const hasItems = items.length > 0;
 
   useEffect(() => {
     if (variant !== "sheet" || !open) return;
@@ -44,9 +49,9 @@ export function PublishChecklist({
         <div>
           <h3 className="text-sm font-semibold">Before you publish</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            {ready
-              ? "Required checks look complete. Channel checks still run when you publish."
-              : `Fix ${required.length} thing${required.length === 1 ? "" : "s"} to publish.`}
+            {hasItems
+              ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
+              : "No content gaps flagged here. Channel checks still run when you publish."}
           </p>
         </div>
         {variant === "sheet" ? (
@@ -64,41 +69,17 @@ export function PublishChecklist({
         ) : null}
       </div>
 
-      {required.length > 0 ? (
+      {hasItems ? (
         <section>
           <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Required
+            Items to review
           </h4>
           <ul className="mt-2 space-y-2">
-            {required.map((item) => (
+            {items.map((item) => (
               <li key={item.id}>
                 <button
                   type="button"
-                  className="w-full rounded-[10px] border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-left text-sm hover:bg-amber-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => onOpenTab(item.tab)}
-                >
-                  <span className="font-medium text-foreground">{item.message}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {item.effect}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {recommended.length > 0 ? (
-        <section>
-          <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Recommended
-          </h4>
-          <ul className="mt-2 space-y-2">
-            {recommended.map((item) => (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className="w-full rounded-[10px] border border-border/80 px-3 py-2 text-left text-sm hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="w-full rounded-[10px] border border-border/80 bg-muted/20 px-3 py-2 text-left text-sm hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => onOpenTab(item.tab)}
                 >
                   <span className="font-medium text-foreground">{item.message}</span>
@@ -159,12 +140,9 @@ export function PublishChecklist({
     );
   }
 
-  // Desktop keeps the checklist visible; `open` only drives the mobile sheet.
   return (
     <aside
-      className={cn(
-        "hidden space-y-4 lg:block xl:sticky xl:top-28 xl:self-start",
-      )}
+      className={cn("hidden space-y-4 lg:block xl:sticky xl:top-28 xl:self-start")}
       data-testid="publish-checklist-aside"
     >
       <div className="rounded-[10px] border border-border/80 bg-card p-4">{body}</div>

@@ -75,14 +75,17 @@ function derivePublishKind(params: {
   publishFailed: boolean;
   listing: StoreListing | null;
   dirty: boolean;
-  requiredIssueCount: number;
+  /** Client checklist item count — same gate as pre-L2A (all items). */
+  issueCount: number;
 }): PublishActionKind {
   if (params.publishPending) return "publishing";
   if (params.publishFailed || params.listing?.status === "error") return "retry";
   if (params.listing?.status === "synced") {
     return params.dirty ? "push_updates" : "view_store";
   }
-  if (params.requiredIssueCount > 0) return "fix_issues";
+  // Matches parent develop: any client checklist item → review CTA (not a
+  // server Required/Recommended split).
+  if (params.issueCount > 0) return "review_items";
   return "publish";
 }
 
@@ -116,15 +119,13 @@ export function ProductEditorHeader({
     publishFailed,
     listing,
   });
-  const requiredIssueCount = readiness.items.filter(
-    (item) => item.severity === "required",
-  ).length;
+  const issueCount = readiness.items.length;
   const publishKind = derivePublishKind({
     publishPending,
     publishFailed,
     listing,
     dirty,
-    requiredIssueCount,
+    issueCount,
   });
   const supplierKind = deriveSupplierSyncKind({
     lastSyncedAt: product.lastSyncedAt,
@@ -140,8 +141,8 @@ export function ProductEditorHeader({
     : "Connect Shopify to publish";
 
   const disabledPublishReason =
-    publishKind === "fix_issues"
-      ? `Fix ${requiredIssueCount} thing${requiredIssueCount === 1 ? "" : "s"} before publishing.`
+    publishKind === "review_items"
+      ? `Review ${issueCount} item${issueCount === 1 ? "" : "s"} before publishing.`
       : null;
 
   const openSupplier = () => {
@@ -170,7 +171,7 @@ export function ProductEditorHeader({
     saveDisabled: !dirty && saveState !== "error",
     dirty,
     publishKind,
-    issueCount: requiredIssueCount,
+    issueCount,
     disabledPublishReason,
     storefrontUrl: listing?.storefrontUrl,
     adminUrl: listing?.adminUrl,
@@ -187,7 +188,7 @@ export function ProductEditorHeader({
       typeof seoScore?.score === "number"
         ? { score: seoScore.score }
         : undefined,
-    publishing: publishKind === "fix_issues" ? { blocked: true } : undefined,
+    publishing: publishKind === "review_items" ? { blocked: true } : undefined,
   };
 
   const title = product.title || "Untitled draft";
@@ -333,7 +334,7 @@ export function ProductEditorHeader({
         saving={saving}
         saveDisabled={!dirty && saveState !== "error"}
         publishKind={publishKind}
-        issueCount={requiredIssueCount}
+        issueCount={issueCount}
         disabledPublishReason={disabledPublishReason}
         storefrontUrl={listing?.storefrontUrl}
         onPreview={onPreview}

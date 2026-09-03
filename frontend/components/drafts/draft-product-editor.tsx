@@ -157,6 +157,19 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   // copy of the type omitted "conflict", so nothing could ever set it and
   // a real 409 displayed the generic "Save failed" instead.
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  /**
+   * Monotonic counters so an older save response cannot clear newer edits
+   * or overwrite a newer save outcome. `dirtyEpoch` rises on every merchant
+   * edit; `saveEpoch` rises when a save starts (and when the form is reset
+   * from the server so in-flight responses are discarded).
+   */
+  const dirtyEpochRef = useRef(0);
+  const saveEpochRef = useRef(0);
+
+  function markDirty() {
+    dirtyEpochRef.current += 1;
+    setDirty(true);
+  }
   const [publishStoreId, setPublishStoreId] = useState("");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishPending, setPublishPending] = useState(false);
@@ -296,6 +309,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setRedirectOldHandle(detail.redirectOldHandle ?? true);
     setOgTitle(detail.ogTitle ?? "");
     setOgDescription(detail.ogDescription ?? "");
+    // Invalidate any in-flight save so a late response cannot clear a
+    // freshly hydrated form or mark a discarded draft as saved.
+    dirtyEpochRef.current += 1;
+    saveEpochRef.current += 1;
     setDirty(false);
     setSaveState("idle");
   }
@@ -404,6 +421,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     // send a request guaranteed to 422.
     if (!savedUpdatedAt) return;
 
+    const dirtyEpochAtStart = dirtyEpochRef.current;
+    const thisSave = ++saveEpochRef.current;
     setFormError(null);
     setSaveState("saving");
 
@@ -411,8 +430,16 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       const saved = await updateDraft.mutateAsync(
         buildSavePayload(captureEditableSnapshot(), savedUpdatedAt),
       );
-      setDirty(false);
-      setSaveState("saved");
+      // Discard stale completions: a newer save may have started, or the
+      // form may have been reset from the server while this request flew.
+      if (thisSave !== saveEpochRef.current) return;
+      // Only clear dirty when no edits landed after this request started.
+      if (dirtyEpochRef.current === dirtyEpochAtStart) {
+        setDirty(false);
+        setSaveState("saved");
+      } else {
+        setSaveState("idle");
+      }
       // The server's response is authoritative: the next save's version
       // check is against what was *actually* persisted, not a value
       // computed client-side.
@@ -421,6 +448,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         queryKey: draftKeys.seoScore(productId),
       });
     } catch (err) {
+      if (thisSave !== saveEpochRef.current) return;
       if (err instanceof ApiError && err.status === 409) {
         // A newer save landed elsewhere since this editor last loaded.
         // Surfaced as its own state, not folded into `formError` -- the
@@ -583,6 +611,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     }
 
     setFormError(null);
+    const dirtyEpochAtStart = dirtyEpochRef.current;
+    const thisSave = ++saveEpochRef.current;
     setSaveState("saving");
 
     try {
@@ -591,12 +621,17 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       const saved = await updateDraft.mutateAsync(
         buildSavePayload(reviewSnapshot.local, reviewSnapshot.server.updatedAt),
       );
+      if (thisSave !== saveEpochRef.current) return;
       // The merchant's values won and are now the persisted truth. The
       // response is authoritative for the new baseline -- but note it is
       // only the *token* and dirty flag that move here, never the form
       // fields: those already hold exactly what was sent.
-      setDirty(false);
-      setSaveState("saved");
+      if (dirtyEpochRef.current === dirtyEpochAtStart) {
+        setDirty(false);
+        setSaveState("saved");
+      } else {
+        setSaveState("idle");
+      }
       setSavedUpdatedAt(saved.updatedAt);
       hydratedFromRef.current = saved.id;
       clearConflict();
@@ -604,6 +639,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         queryKey: draftKeys.seoScore(productId),
       });
     } catch (err) {
+      if (thisSave !== saveEpochRef.current) return;
       if (err instanceof ApiError && err.status === 409) {
         // The row moved again between the review and this override. The
         // merchant's values are still in the form and still theirs --
@@ -1067,14 +1103,14 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     value={title}
                     onChange={(event) => {
                       setTitle(event.target.value);
-                      setDirty(true);
+                      markDirty();
                     }}
                     data-testid="draft-title-input"
                   />
                   {title.trim().length > 0 && title.trim().length < 8 ? (
                     <p className="text-sm text-amber-800 dark:text-amber-300" role="status">
-                      Add a clearer product title. Shoppers need a title before
-                      this can be published.
+                      Add a clearer product title so shoppers can recognise
+                      this listing.
                     </p>
                   ) : null}
                 </div>
@@ -1085,7 +1121,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     value={brand}
                     onChange={(event) => {
                       setBrand(event.target.value);
-                      setDirty(true);
+                      markDirty();
                     }}
                   />
                 </div>
@@ -1096,7 +1132,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     value={vendor}
                     onChange={(event) => {
                       setVendor(event.target.value);
-                      setDirty(true);
+                      markDirty();
                     }}
                   />
                 </div>
@@ -1107,7 +1143,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     value={categoryName}
                     onChange={(event) => {
                       setCategoryName(event.target.value);
-                      setDirty(true);
+                      markDirty();
                     }}
                   />
                 </div>
@@ -1118,7 +1154,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                     value={tags}
                     onChange={(event) => {
                       setTags(event.target.value);
-                      setDirty(true);
+                      markDirty();
                     }}
                   />
                 </div>
@@ -1210,7 +1246,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                   maxLength={DESCRIPTION_MAX_LENGTH}
                   onChange={(html) => {
                     setDescription(html);
-                    setDirty(true);
+                    markDirty();
                   }}
                 />
               </div>
@@ -1261,7 +1297,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 if (patch.ogTitle !== undefined) setOgTitle(patch.ogTitle);
                 if (patch.ogDescription !== undefined)
                   setOgDescription(patch.ogDescription);
-                setDirty(true);
+                markDirty();
               }}
             />
           ) : null}
@@ -1280,11 +1316,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                   onContinueEditing={() => selectTab("overview")}
                 />
               )}
-              {readiness.items.some((item) => item.severity === "required") ? (
+              {readiness.items.length > 0 ? (
                 <Alert>
                   <AlertDescription>
-                    Not ready to publish. Open the checklist and fix the
-                    required items first.
+                    Open the checklist to review items before you publish.
+                    Channel checks still run when you publish.
                   </AlertDescription>
                 </Alert>
               ) : null}
