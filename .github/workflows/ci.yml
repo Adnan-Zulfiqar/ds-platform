@@ -563,10 +563,11 @@ jobs:
       EBAY_REDIRECT_URI_NAME: DropPilot-CiOnly-RuName
       CORS_ORIGINS: http://localhost:3000
       LOG_JSON_OUTPUT: "false"
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
       NEXT_PUBLIC_ENVIRONMENT: local
-      # Ephemeral CI compose listens on :8000 — not production. Local runs must
-      # not inherit this; see resolveE2eApiUrl in tests/e2e/helpers/auth.ts.
+      # Ephemeral CI Postgres/Redis + this job's own backend on :8000 — not
+      # production. Requires CI + GITHUB_ACTIONS (set by Actions) + this flag;
+      # see resolveE2eApiUrl. Local runs must use 127.0.0.1:8100–8199.
       E2E_ALLOW_LOCAL_8000: "1"
       CI: "true"
 

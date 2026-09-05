@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { isApiReachable, registerAndSignIn } from "./helpers/auth";
+import { isApiReachable, registerAndSignIn, resolveE2eApiUrl } from "./helpers/auth";
 
 /**
  * EBAY-C1.1 — the public privacy policy.
@@ -90,12 +90,11 @@ test.describe("Privacy policy — public reachability", () => {
   });
 
   test("renders completely with the API unreachable", async ({ page }) => {
-    // No CORS dependency and no API availability dependency: every call to the
-    // backend origin is aborted, and the page must still be whole.
-    const apiBase = new URL(
-      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8099",
-    );
-    await page.route(`${apiBase.origin}/**`, (route) => route.abort());
+    // Abort calls to the validated E2E API origin only. Uses the same resolver
+    // as live helpers so this cannot widen to production; the route never
+    // fetches — it only cancels matching requests.
+    const apiOrigin = resolveE2eApiUrl();
+    await page.route(`${apiOrigin}/**`, (route) => route.abort());
 
     await page.goto("/privacy");
 

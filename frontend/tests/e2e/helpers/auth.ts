@@ -14,53 +14,137 @@ import { PRIVACY_NOTICE_VERSION, TERMS_VERSION } from "@/lib/legal";
  * skip cleanly when it is not, rather than failing with a wall of connection
  * errors that hide real regressions.
  *
- * **Isolation:** never default to `:8000`. An empty or production-like API URL
- * fails immediately so a local Playwright run cannot register against a live
- * backend by accident (UX-L2A-R4 review incident). CI's ephemeral stack on
- * `:8000` must set `E2E_ALLOW_LOCAL_8000=1`.
+ * **Isolation (UX-L2A-R6):** the API origin is an allowlist of parsed `URL`
+ * values — loopback `127.0.0.1` on ports `8100–8199` only — not a denylist of
+ * string literals. Empty or production-like URLs fail before any request.
+ * GitHub Actions may use `http://127.0.0.1:8000` only when `CI`,
+ * `GITHUB_ACTIONS`, and `E2E_ALLOW_LOCAL_8000` are all exactly set.
  */
 
-const PRODUCTION_LIKE_API_URLS = new Set([
-  "http://localhost:8000",
-  "http://127.0.0.1:8000",
-  "https://api.whiteto.com",
-]);
+/** Configuration / isolation failure — must not be treated as “API down”. */
+export class E2eIsolationError extends Error {
+  override readonly name = "E2eIsolationError";
+}
 
-function normalizeApiBase(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase();
+const ISOLATED_PORT_MIN = 8100;
+const ISOLATED_PORT_MAX = 8199;
+
+let hasLoggedApiOrigin = false;
+let lastLoggedApiOrigin: string | undefined;
+
+/** Test-only: reset the once-per-process origin diagnostic. */
+export function resetE2eApiOriginLogForTests(): void {
+  hasLoggedApiOrigin = false;
+  lastLoggedApiOrigin = undefined;
+}
+
+/** Test-only: inspect the once-per-process origin diagnostic. */
+export function peekE2eApiOriginLogForTests(): {
+  logged: boolean;
+  origin: string | undefined;
+} {
+  return { logged: hasLoggedApiOrigin, origin: lastLoggedApiOrigin };
+}
+
+function refuse(message: string): never {
+  throw new E2eIsolationError(message);
+}
+
+function hasCiEphemeral8000Proof(env: NodeJS.ProcessEnv): boolean {
+  return (
+    env.CI === "true" &&
+    env.GITHUB_ACTIONS === "true" &&
+    env.E2E_ALLOW_LOCAL_8000 === "1"
+  );
+}
+
+function isBarePath(pathname: string): boolean {
+  return pathname === "" || pathname === "/";
+}
+
+function isExactCiEphemeralOrigin(url: URL): boolean {
+  return (
+    url.protocol === "http:" &&
+    url.hostname === "127.0.0.1" &&
+    url.port === "8000" &&
+    isBarePath(url.pathname) &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}
+
+function isIsolatedLoopbackOrigin(url: URL): boolean {
+  if (url.protocol !== "http:") return false;
+  if (url.hostname !== "127.0.0.1") return false;
+  if (url.port === "") return false;
+  const port = Number(url.port);
+  if (!Number.isInteger(port) || port < ISOLATED_PORT_MIN || port > ISOLATED_PORT_MAX) {
+    return false;
+  }
+  if (!isBarePath(url.pathname)) return false;
+  if (url.username !== "" || url.password !== "") return false;
+  if (url.search !== "" || url.hash !== "") return false;
+  return true;
+}
+
+function logApiOriginOnce(origin: string): void {
+  if (hasLoggedApiOrigin) return;
+  hasLoggedApiOrigin = true;
+  lastLoggedApiOrigin = origin;
+  // Node-side diagnostic only — never written into the browser.
+  console.log(`[E2E] API origin: ${origin}`);
 }
 
 /**
  * Resolve the API base for live e2e helpers.
  *
- * Throws rather than falling back to a production-port default.
+ * Uses the WHATWG `URL` parser. Throws {@link E2eIsolationError} rather than
+ * falling back to a production-port default. Does not perform DNS or I/O.
  */
 export function resolveE2eApiUrl(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const raw = (env.NEXT_PUBLIC_API_URL ?? env.E2E_API_URL ?? "").trim();
   if (!raw) {
-    throw new Error(
+    refuse(
       "E2E isolation: set NEXT_PUBLIC_API_URL (or E2E_API_URL) explicitly. " +
-        "Refusing the historical default http://localhost:8000.",
+        "Refusing any default that could reach a production-like :8000 host.",
     );
   }
-  const normalized = normalizeApiBase(raw);
-  if (PRODUCTION_LIKE_API_URLS.has(normalized)) {
-    if (
-      (normalized === "http://localhost:8000" ||
-        normalized === "http://127.0.0.1:8000") &&
-      env.E2E_ALLOW_LOCAL_8000 === "1"
-    ) {
-      return raw.replace(/\/+$/, "");
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    refuse(`E2E isolation: refusing invalid API URL "${raw}".`);
+  }
+
+  if (isIsolatedLoopbackOrigin(parsed)) {
+    const origin = `http://127.0.0.1:${parsed.port}`;
+    logApiOriginOnce(origin);
+    return origin;
+  }
+
+  if (isExactCiEphemeralOrigin(parsed)) {
+    if (!hasCiEphemeral8000Proof(env)) {
+      refuse(
+        "E2E isolation: http://127.0.0.1:8000 requires CI=true, " +
+          "GITHUB_ACTIONS=true, and E2E_ALLOW_LOCAL_8000=1 together. " +
+          "Local runs must use http://127.0.0.1:8100–8199.",
+      );
     }
-    throw new Error(
-      `E2E isolation: refusing API URL "${raw}". Use an isolated port ` +
-        "(for example http://127.0.0.1:8105), not production or :8000. " +
-        "CI ephemeral stacks may set E2E_ALLOW_LOCAL_8000=1.",
-    );
+    const origin = "http://127.0.0.1:8000";
+    logApiOriginOnce(origin);
+    return origin;
   }
-  return raw.replace(/\/+$/, "");
+
+  refuse(
+    `E2E isolation: refusing API URL "${raw}". Allowed: ` +
+      `http://127.0.0.1:8100–8199 (no path/query/userinfo), or in GitHub Actions ` +
+      `only http://127.0.0.1:8000 with CI + GITHUB_ACTIONS + E2E_ALLOW_LOCAL_8000.`,
+  );
 }
 
 /**
@@ -166,12 +250,16 @@ export function buildAccount(): TestAccount {
 
 /** Whether the backend is reachable, used to skip rather than fail. */
 export async function isApiReachable(): Promise<boolean> {
+  // Validate before the network try/catch so isolation errors never look like
+  // a quiet “API not reachable” skip (UX-L2A-R6 F-4).
+  const base = resolveE2eApiUrl();
   try {
-    const response = await fetch(`${API_URL}/health/live`, {
+    const response = await fetch(`${base}/health/live`, {
       signal: AbortSignal.timeout(3000),
     });
     return response.ok;
-  } catch {
+  } catch (error) {
+    if (error instanceof E2eIsolationError) throw error;
     return false;
   }
 }
@@ -189,8 +277,9 @@ export async function isApiReachable(): Promise<boolean> {
  * than by connecting to Redis from the test.
  */
 export async function isRedisAvailable(): Promise<boolean> {
+  const base = resolveE2eApiUrl();
   try {
-    const response = await fetch(`${API_URL}/health`, {
+    const response = await fetch(`${base}/health`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok && response.status !== 503) return false;
@@ -203,7 +292,8 @@ export async function isRedisAvailable(): Promise<boolean> {
         (component) => component.name === "redis" && component.status === "healthy",
       ) ?? false
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof E2eIsolationError) throw error;
     return false;
   }
 }

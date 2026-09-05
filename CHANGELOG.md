@@ -12,6 +12,16 @@ production release.
 
 ### Changed
 
+- **UX-L2A-R6 — E2E API isolation fail-closed (on
+  `feature/ux-l2a-editor-foundation`, not merged).** Test-harness only: the
+  Playwright API origin is a parsed allowlist (`http://127.0.0.1:8100–8199`),
+  not a string denylist; the CI `:8000` exception requires `CI` +
+  `GITHUB_ACTIONS` + `E2E_ALLOW_LOCAL_8000` and exact `http://127.0.0.1:8000`;
+  isolation errors throw instead of becoming “API not reachable” skips; the
+  resolved origin is logged once per process. Product UI is unchanged.
+  Independent acceptance still pending; unmerged and undeployed; UX-L2B has
+  not started. **Carried forward:** failed-save-before-publish integrity item.
+
 - **UX-L2A-R5 — responsive sheet and touch-target polish (on
   `feature/ux-l2a-editor-foundation`, not merged).** Closes two Low findings
   after R4 integration acceptance: the mobile “Things to fix” sheet now closes
