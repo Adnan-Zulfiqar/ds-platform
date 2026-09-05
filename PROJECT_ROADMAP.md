@@ -21,7 +21,7 @@ Last updated: 2026-09-05
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
-| UX-L2B | Server-authoritative publish integrity | 🚧 **On `feature/ux-l2b-publish-integrity`** — not merged; not independently accepted; production undeployed; UX-L2C not started |
+| UX-L2B | Server-authoritative publish integrity | 🚧 **R1 evidence on `feature/ux-l2b-publish-integrity`** — not merged; not independently accepted; production undeployed; UX-L2C not started |
 
 ---
 

@@ -43,6 +43,18 @@ os.environ.setdefault(
 # The OTP key is fixed by the harness rather than inherited from the shell —
 # see `tests.environment` for why that mattered.
 os.environ.setdefault("SECURITY_OTP_HMAC_KEY", TEST_OTP_HMAC_KEY)
+# Isolated worktrees do not inherit a root `.env`. Google AUTH-G1 tests mock
+# Google's verifier but still require a configured client id so the app does
+# not short-circuit with "not configured". Synthetic only — not a production
+# credential.
+os.environ.setdefault(
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "1000000000000-uxl2b-test.apps.googleusercontent.com",
+)
+# Isolated shells sometimes inherit a raised general quota from developer
+# tooling. eBay C0 asserts the compliance budget is strictly above the general
+# quota; pin the test default so that assertion is about product constants.
+os.environ["SECURITY_RATE_LIMIT_REQUESTS"] = "100"
 # Prompt mutation is off by default (audit A-03). The suite exercises create /
 # version / activate, so tests opt in explicitly without weakening production.
 os.environ.setdefault("AI_ALLOW_PROMPT_MUTATION", "true")

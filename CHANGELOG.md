@@ -10,6 +10,25 @@ production release.
 
 ## [Unreleased]
 
+### Changed
+
+- **UX-L2B-R1 — mandatory security/data-integrity evidence (on
+  `feature/ux-l2b-publish-integrity`, not merged).** Adds HTTP cross-tenant
+  404 matrix for publish-readiness and publish (foreign draft/store,
+  random-vs-foreign indistinguishability, provider call count zero);
+  documents repository-layer isolation as **N/A** (no repository files in
+  UX-L2B diff) with compiled-SQL proof that readiness product load still
+  carries `tenant_id` + `deleted_at`; Redis 3.0.504 inventory shows **zero**
+  Redis commands on the publish/readiness path (handle-based
+  `_create_or_adopt` / `droppilot-{product_id}` is the named idempotency
+  mechanism — no Redis lock; concurrent double-POST remains a known gap);
+  OpenAPI/schema/camelCase/`requestId` assertions; synthetic isolated env
+  proof outside Git. Test harness: synthetic `GOOGLE_OAUTH_CLIENT_ID` + pinned
+  `SECURITY_RATE_LIMIT_REQUESTS=100` so isolated worktrees without a root
+  `.env` do not false-fail AUTH-G1 / eBay C0. Full backend suite single clean
+  run: **2959 passed, 1 skipped**. Not independently accepted; not merged or
+  deployed.
+
 ### Added
 
 - **UX-L2B — server-authoritative publish integrity (on
