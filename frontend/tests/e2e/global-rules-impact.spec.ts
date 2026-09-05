@@ -367,7 +367,9 @@ test.describe("Asynchronous application", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 12_000,
+        // Keep the original 30s detection window; the suite timeout is 60s so
+        // a slow worker is not silently classified as absent.
+        timeout: 30_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming; the queue path is untested here.");
@@ -397,7 +399,7 @@ test.describe("Asynchronous application", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 12_000,
+        timeout: 30_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming.");
@@ -452,7 +454,7 @@ test.describe("Cancellation", () => {
     const progress = page.getByTestId("application-progress");
     try {
       await expect(progress).toHaveAttribute("data-status", "completed", {
-        timeout: 12_000,
+        timeout: 30_000,
       });
     } catch {
       test.skip(true, "No Celery worker is consuming.");

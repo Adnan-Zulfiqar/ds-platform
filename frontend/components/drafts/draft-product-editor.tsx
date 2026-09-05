@@ -1401,7 +1401,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 {tab === "ai-studio" &&
                   "Use Improve with AI tools from More actions for now. Side-by-side proposal studio is Stage 6."}
                 {tab === "history" &&
-                  "Use View history in More actions for AI version restore. Full edit timeline is Stage 6."}
+                  "Use View recent activity in More actions for AI version restore. Full edit timeline is Stage 6."}
               </p>
             </section>
           ) : null}

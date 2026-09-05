@@ -1,11 +1,9 @@
 import { cn } from "@/lib/utils";
 
 interface ProductMetricsProps {
-  readinessScore: number;
   seoScore?: number | null;
   marginPercent?: number | null;
   shopifyLabel?: string | null;
-  onReadinessClick?: () => void;
   onSeoClick?: () => void;
   onMarginClick?: () => void;
   onShopifyClick?: () => void;
@@ -41,13 +39,14 @@ function MetricChip({
 
 /**
  * Compact commercial summary — chips, not dashboard cards.
+ *
+ * Intentionally omits any “% Ready” / publish-completion claim. Client
+ * readiness is presentation advice only; channel checks decide publishing.
  */
 export function ProductMetrics({
-  readinessScore,
   seoScore,
   marginPercent,
   shopifyLabel,
-  onReadinessClick,
   onSeoClick,
   onMarginClick,
   onShopifyClick,
@@ -58,13 +57,6 @@ export function ProductMetrics({
       className={cn("flex flex-wrap items-center gap-1.5", className)}
       data-testid="product-metrics"
     >
-      {onReadinessClick ? (
-        <MetricChip
-          label={`${readinessScore}% Ready`}
-          onClick={onReadinessClick}
-          testId="metric-readiness"
-        />
-      ) : null}
       {typeof seoScore === "number" ? (
         <MetricChip
           label={`SEO ${seoScore}`}

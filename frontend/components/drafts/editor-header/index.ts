@@ -15,10 +15,6 @@ export {
 } from "@/components/drafts/editor-header/product-editor-tabs";
 export { ProductIdentity } from "@/components/drafts/editor-header/product-identity";
 export { ProductMetrics } from "@/components/drafts/editor-header/product-metrics";
-export {
-  ProductStatusGroup,
-  type LifecycleBadge,
-} from "@/components/drafts/editor-header/product-status-group";
 export { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
 export {
   PublishAction,

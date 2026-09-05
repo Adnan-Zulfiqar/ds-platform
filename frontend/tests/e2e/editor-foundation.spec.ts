@@ -88,9 +88,251 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       page.getByRole("menuitem", { name: /Refresh supplier information/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: /View history/i }),
+      page.getByRole("menuitem", { name: /View recent activity/i }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
+  });
+
+  test("advisory SEO title alone does not hard-disable Review & publish", async ({
+    page,
+  }) => {
+    let publishCalls = 0;
+    await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+      publishCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "should not be called" }),
+      });
+    });
+
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ seoTitle: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    const action = visibleTestId(page, "publish-action");
+    await expect(action).toBeEnabled();
+    await expect(action).toContainText(/Review 1 item/);
+    await expect(page.getByTestId("editor-tab-publishing")).not.toContainText(/· Review/);
+    await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
+    await shot(page, "1440x900-review-items-enabled.png");
+
+    await action.click();
+    await expect(page.getByTestId("editor-tab-publishing")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByTestId("publish-to-store")).toBeVisible();
+    expect(publishCalls).toBe(0);
+    await shot(page, "1440x900-review-publish-section.png");
+  });
+
+  test("advisory slug alone does not hard-disable Review & publish", async ({
+    page,
+  }) => {
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ slug: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    const action = visibleTestId(page, "publish-action");
+    await expect(action).toBeEnabled();
+    await expect(action).toContainText(/Review 1 item/);
+    await action.click();
+    await expect(page.getByTestId("editor-tab-publishing")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  test("multiple advisory items keep Review N items enabled without publishing", async ({
+    page,
+  }) => {
+    let publishCalls = 0;
+    await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+      publishCalls += 1;
+      await route.abort();
+    });
+
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({
+        title: "Ab",
+        description: null,
+        images: [],
+        seoTitle: null,
+        slug: null,
+      }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    const action = visibleTestId(page, "publish-action");
+    await expect(action).toBeEnabled();
+    await expect(action).toContainText(/Review \d+ items/);
+    await action.click();
+    await expect(page.getByTestId("publish-to-store")).toBeVisible();
+    expect(publishCalls).toBe(0);
+  });
+
+  test("in-flight publishing disables the header action against double submit", async ({
+    page,
+  }) => {
+    const storeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const storePage = {
+      items: [
+        {
+          id: storeId,
+          name: "Demo Store",
+          slug: "demo-store",
+          platform: "shopify",
+          status: "connected",
+          storefrontUrl: "https://demo.myshopify.com",
+          externalStoreId: "demo",
+          currency: "GBP",
+          currencyLastSyncedAt: null,
+          timezone: "Europe/London",
+          settings: {},
+          inventorySyncEnabled: true,
+          pricingSyncEnabled: true,
+          orderSyncEnabled: true,
+          lastSyncAt: null,
+          lastActivityAt: null,
+          lastError: null,
+          healthScore: 100,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      meta: {
+        page: 1,
+        size: 50,
+        totalItems: 1,
+        totalPages: 1,
+        hasNext: false,
+        hasPrevious: false,
+      },
+    };
+    await page.route("**/api/v1/stores**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(storePage),
+      });
+    });
+    await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+      await new Promise((r) => setTimeout(r, 2500));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "Published." }),
+      });
+    });
+
+    await openMockedEditor(page);
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    await page.getByTestId("editor-tab-publishing").click();
+    await page.locator("#publish-store").selectOption(storeId);
+    await page.getByTestId("publish-to-store").click();
+    await expect(visibleTestId(page, "publish-action")).toBeDisabled({ timeout: 5_000 });
+    await expect(visibleTestId(page, "publish-action")).toContainText(/Publishing/);
+  });
+
+  test("channel publish failure remains visible and truthful", async ({ page }) => {
+    const storeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const storePage = {
+      items: [
+        {
+          id: storeId,
+          name: "Demo Store",
+          slug: "demo-store",
+          platform: "shopify",
+          status: "connected",
+          storefrontUrl: "https://demo.myshopify.com",
+          externalStoreId: "demo",
+          currency: "GBP",
+          currencyLastSyncedAt: null,
+          timezone: "Europe/London",
+          settings: {},
+          inventorySyncEnabled: true,
+          pricingSyncEnabled: true,
+          orderSyncEnabled: true,
+          lastSyncAt: null,
+          lastActivityAt: null,
+          lastError: null,
+          healthScore: 100,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      meta: {
+        page: 1,
+        size: 50,
+        totalItems: 1,
+        totalPages: 1,
+        hasNext: false,
+        hasPrevious: false,
+      },
+    };
+    await page.route("**/api/v1/stores**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(storePage),
+      });
+    });
+    await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "validation_error",
+          message: "Store is not connected.",
+          details: [],
+          requestId: "req-pub-fail",
+        }),
+      });
+    });
+
+    await openMockedEditor(page);
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    await page.getByTestId("editor-tab-publishing").click();
+    await page.locator("#publish-store").selectOption(storeId);
+    await page.getByTestId("publish-to-store").click();
+    await expect(page.getByText(/Store is not connected/i)).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText(/"code":\s*"validation_error"/)).toHaveCount(0);
+  });
+
+  test("More menu History actions have distinct labels and destinations", async ({
+    page,
+  }) => {
+    await openMockedEditor(page);
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    const more = visibleTestId(page, "product-actions-menu");
+    await more.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: /^View recent activity$/i }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /^Open full history$/i }),
+    ).toBeVisible();
+    await shot(page, "1440x900-history-menu-labels.png");
+
+    await page.getByRole("menuitem", { name: /^View recent activity$/i }).click();
+    await expect(page.getByRole("dialog", { name: /Version history/i })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: /Version history/i })).toHaveCount(0);
+
+    await more.click();
+    await page.getByRole("menuitem", { name: /^Open full history$/i }).click();
+    await expect(page).toHaveURL(/[?&]tab=history/);
+    await expect(page.getByRole("heading", { name: /^History$/i })).toBeVisible();
+    await page.goBack();
+    await expect(page).not.toHaveURL(/[?&]tab=history/);
   });
 
   test("long title stays two lines and does not hide actions", async ({
@@ -189,6 +431,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(visibleTestId(page, "publish-action")).toContainText(
       /Review \d+ item/,
     );
+    await expect(visibleTestId(page, "publish-action")).toBeEnabled();
     await shot(page, "1440x900-publish-blockers.png");
   });
 
@@ -265,7 +508,7 @@ test.describe("UX-L2A editor foundation — mobile", () => {
     await expect(page.getByTestId("mobile-editor-action-bar")).toBeVisible();
     await expect(visibleTestId(page, "product-editor-actions")).toHaveCount(0);
 
-    await page.getByRole("button", { name: /Things to fix/i }).click();
+    await page.getByTestId("things-to-fix-trigger").click();
     await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
     await expect(
       page
@@ -279,6 +522,91 @@ test.describe("UX-L2A editor foundation — mobile", () => {
       .getByRole("button", { name: "Close checklist" })
       .click();
     await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0);
+  });
+
+  test("mobile checklist sheet traps focus, Escape restores trigger", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({
+        title: "Ab",
+        seoTitle: null,
+        slug: null,
+      }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    const trigger = page.getByTestId("things-to-fix-trigger");
+    await trigger.click();
+
+    const dialog = page.getByRole("dialog", { name: "Before you publish" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    const close = dialog.getByRole("button", { name: "Close checklist" });
+    await expect(close).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    const afterTab = await page.evaluate(() => {
+      const active = document.activeElement;
+      const sheet = document.querySelector('[data-testid="publish-checklist-sheet"]');
+      return Boolean(active && sheet && sheet.contains(active));
+    });
+    expect(afterTab).toBe(true);
+
+    await page.keyboard.press("Shift+Tab");
+    const afterShift = await page.evaluate(() => {
+      const active = document.activeElement;
+      const sheet = document.querySelector('[data-testid="publish-checklist-sheet"]');
+      return Boolean(active && sheet && sheet.contains(active));
+    });
+    expect(afterShift).toBe(true);
+
+    // Background must not be keyboard-interactive while the modal is open.
+    const backgroundFocusable = await page.evaluate(() => {
+      const sheet = document.querySelector('[data-testid="publish-checklist-sheet"]');
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      return candidates.some((el) => {
+        if (sheet?.contains(el)) return false;
+        // Radix marks the rest of the page inert via aria-hidden / pointer-events.
+        let node: HTMLElement | null = el;
+        while (node) {
+          if (node.getAttribute("aria-hidden") === "true") return false;
+          if (node.hasAttribute("inert")) return false;
+          node = node.parentElement;
+        }
+        return el.tabIndex >= 0 || el.tagName === "BUTTON" || el.tagName === "A";
+      });
+    });
+    expect(backgroundFocusable).toBe(false);
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await shot(page, "390x844-mobile-sheet-closed-escape.png");
+
+    await trigger.click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Close checklist" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    expect(
+      errors.filter(
+        (e) =>
+          !/favicon|Download the React DevTools|401 \(Unauthorized\)/i.test(e),
+      ),
+    ).toEqual([]);
   });
 });
 

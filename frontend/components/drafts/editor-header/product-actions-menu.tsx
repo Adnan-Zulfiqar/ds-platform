@@ -72,10 +72,10 @@ export function ProductActionsMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onViewHistory()}>
-          View history
+          View recent activity
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onGoHistoryTab()}>
-          Open history
+          Open full history
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -56,7 +56,10 @@ export function PublishAction({
   size = "default",
 }: PublishActionProps) {
   const label = labelFor(kind, issueCount);
-  const disabled = kind === "review_items" || kind === "publishing";
+  // Presentation checklist items must not hard-disable this control — they only
+  // change the label to "Review N items". Only an in-flight publish is disabled,
+  // so a double-submit cannot race the channel request.
+  const disabled = kind === "publishing";
   const isPrimary = kind !== "view_store";
 
   const button = (

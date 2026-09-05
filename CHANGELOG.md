@@ -12,6 +12,18 @@ production release.
 
 ### Changed
 
+- **UX-L2A-R4 — close independent-review findings (on
+  `feature/ux-l2a-editor-foundation`, not merged).** Independent review found
+  fixes. Presentation readiness advice no longer hard-disables navigation to
+  Review & publish; server/channel checks remain authoritative for actual
+  publishing. Mobile “Items to review” sheet now uses the shared accessible
+  Sheet primitive (Escape, focus trap, focus return). History menu labels are
+  distinct (`View recent activity` vs `Open full history`). Dead
+  `ProductStatusGroup` / `% Ready` completion claim removed. Celery worker
+  detection wait restored to 30s under a 60s suite timeout. Branch remains
+  unmerged; production remains undeployed; UX-L2B has not started. Acceptance
+  is not claimed before re-review.
+
 - **UX-L2A-R2 — matching isolated-stack verification harness (on
   `feature/ux-l2a-editor-foundation`, not merged).** Proves the original
   `draft-editor-concurrency` suite against a backend built from the same

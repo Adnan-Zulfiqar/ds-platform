@@ -83,8 +83,9 @@ function derivePublishKind(params: {
   if (params.listing?.status === "synced") {
     return params.dirty ? "push_updates" : "view_store";
   }
-  // Matches parent develop: any client checklist item → review CTA (not a
-  // server Required/Recommended split).
+  // Presentation advice only changes the CTA label to Review N items.
+  // It must not invent Required/Recommended or hard-disable publishing —
+  // channel checks remain authoritative on the Review & publish tab.
   if (params.issueCount > 0) return "review_items";
   return "publish";
 }
@@ -140,10 +141,8 @@ export function ProductEditorHeader({
         : "Connecting store…"
     : "Connect Shopify to publish";
 
-  const disabledPublishReason =
-    publishKind === "review_items"
-      ? `Review ${issueCount} item${issueCount === 1 ? "" : "s"} before publishing.`
-      : null;
+  // Advisory checklist items never disable the CTA — there is no tooltip reason.
+  const disabledPublishReason: string | null = null;
 
   const openSupplier = () => {
     if (product.externalUrl) {
@@ -188,7 +187,8 @@ export function ProductEditorHeader({
       typeof seoScore?.score === "number"
         ? { score: seoScore.score }
         : undefined,
-    publishing: publishKind === "review_items" ? { blocked: true } : undefined,
+    // Presentation advice must not mark Review & publish as blocked — channel
+    // checks remain the publish authority once the merchant reaches that tab.
   };
 
   const title = product.title || "Untitled draft";
@@ -302,6 +302,9 @@ export function ProductEditorHeader({
                   type="button"
                   className="text-xs text-muted-foreground underline-offset-2 hover:underline lg:hidden"
                   onClick={onToggleInspector}
+                  data-testid="things-to-fix-trigger"
+                  aria-expanded={inspectorOpen}
+                  aria-controls="publish-checklist-sheet"
                 >
                   {inspectorOpen ? "Hide checklist" : "Things to fix"}
                 </button>

@@ -1,11 +1,18 @@
 "use client";
 
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
 
 import type { EditorTab } from "@/components/drafts/editor-header/product-editor-tabs";
 import type { ReadinessSummary } from "@/components/drafts/editor-header/readiness";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import type { SeoScore, StoreListing } from "@/types/api";
 
@@ -23,7 +30,8 @@ interface PublishChecklistProps {
  * Checklist chrome over client-side readiness hints.
  *
  * Does not claim Required/Recommended — the API does not classify findings.
- * Publishing still runs its own channel checks.
+ * Publishing still runs its own channel checks. The mobile sheet uses the
+ * shared Radix Sheet primitive so Escape, focus trap, and focus return work.
  */
 export function PublishChecklist({
   readiness,
@@ -34,41 +42,11 @@ export function PublishChecklist({
   onOpenTab,
   variant = "aside",
 }: PublishChecklistProps) {
-  const closeRef = useRef<HTMLButtonElement>(null);
   const items = readiness.items;
   const hasItems = items.length > 0;
 
-  useEffect(() => {
-    if (variant !== "sheet" || !open) return;
-    closeRef.current?.focus();
-  }, [variant, open]);
-
   const body = (
     <div className="space-y-4" data-testid="publish-checklist">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">Before you publish</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {hasItems
-              ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
-              : "No content gaps flagged here. Channel checks still run when you publish."}
-          </p>
-        </div>
-        {variant === "sheet" ? (
-          <Button
-            ref={closeRef}
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-11 w-11"
-            onClick={onClose}
-            aria-label="Close checklist"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        ) : null}
-      </div>
-
       {hasItems ? (
         <section>
           <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -112,31 +90,68 @@ export function PublishChecklist({
     </div>
   );
 
+  const summary = hasItems
+    ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
+    : "No content gaps flagged here. Channel checks still run when you publish.";
+
   if (variant === "sheet") {
-    if (!open) return null;
     return (
-      <div
-        className="fixed inset-0 z-40 lg:hidden"
-        data-testid="publish-checklist-sheet"
+      <Sheet
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) onClose();
+        }}
       >
-        <button
-          type="button"
-          className="absolute inset-0 bg-black/40"
-          aria-label="Dismiss checklist overlay"
-          onClick={onClose}
-        />
-        <div
-          role="dialog"
+        <SheetContent
+          side="bottom"
+          hideCloseButton
+          id="publish-checklist-sheet"
           aria-modal="true"
-          aria-labelledby="checklist-title"
-          className="absolute inset-x-0 bottom-0 max-h-[80vh] overflow-y-auto rounded-t-[12px] border bg-background p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-lg"
+          className="max-h-[80vh] gap-0 overflow-y-auto rounded-t-[12px] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:hidden"
+          data-testid="publish-checklist-sheet"
+          onOpenAutoFocus={(event) => {
+            // Land on Close — a predictable, labelled control — rather than the
+            // first checklist row, which may navigate away on activation.
+            const close = (event.currentTarget as HTMLElement).querySelector<HTMLElement>(
+              '[data-testid="publish-checklist-close"]',
+            );
+            if (close) {
+              event.preventDefault();
+              close.focus();
+            }
+          }}
+          onCloseAutoFocus={(event) => {
+            // Controlled open (trigger lives in the header) — restore focus to
+            // the exact control that opened the sheet.
+            event.preventDefault();
+            document
+              .querySelector<HTMLElement>('[data-testid="things-to-fix-trigger"]')
+              ?.focus();
+          }}
         >
-          <p id="checklist-title" className="sr-only">
-            Before you publish
-          </p>
-          {body}
-        </div>
-      </div>
+          <SheetHeader className="space-y-1 pr-12 text-left">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <SheetTitle>Before you publish</SheetTitle>
+                <SheetDescription className="mt-1">{summary}</SheetDescription>
+              </div>
+              <SheetClose asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-3 top-3 h-11 w-11"
+                  aria-label="Close checklist"
+                  data-testid="publish-checklist-close"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </SheetClose>
+            </div>
+          </SheetHeader>
+          <div className="mt-4">{body}</div>
+        </SheetContent>
+      </Sheet>
     );
   }
 
@@ -145,7 +160,13 @@ export function PublishChecklist({
       className={cn("hidden space-y-4 lg:block xl:sticky xl:top-28 xl:self-start")}
       data-testid="publish-checklist-aside"
     >
-      <div className="rounded-[10px] border border-border/80 bg-card p-4">{body}</div>
+      <div className="rounded-[10px] border border-border/80 bg-card p-4">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold">Before you publish</h3>
+          <p className="mt-1 text-sm text-muted-foreground">{summary}</p>
+        </div>
+        {body}
+      </div>
     </aside>
   );
 }
