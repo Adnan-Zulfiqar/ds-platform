@@ -2,16 +2,19 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Loader2, Store } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
 import { DraftMediaPanel } from "@/components/drafts/draft-media-panel";
-import { DraftPostPublishPanel } from "@/components/drafts/draft-post-publish-panel";
 import { DraftPricingPanel } from "@/components/drafts/draft-pricing-panel";
 import { DraftSeoPanel } from "@/components/drafts/draft-seo-panel";
 import { DraftShippingPanel } from "@/components/drafts/draft-shipping-panel";
 import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
 import { DraftPreviewPanel } from "@/components/drafts/draft-preview-panel";
+import {
+  ReviewPublishPanel,
+  type PublishSaveFailureReason,
+} from "@/components/drafts/review-publish-panel";
 import {
   ProductEditorHeader,
   ProductEditorHeaderSkeleton,
@@ -43,6 +46,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatDateTime, formatMoney } from "@/lib/utils";
+import { apiClient, ApiError } from "@/lib/api-client";
 import {
   draftKeys,
   useDraft,
@@ -51,9 +55,12 @@ import {
   useRefreshDraft,
   useUpdateDraft,
 } from "@/services/drafts";
+import {
+  invalidatePublishReadiness,
+  usePublishReadiness,
+} from "@/services/publish-readiness";
 import { useOptimizeProduct } from "@/services/products";
 import { useStores } from "@/services/stores";
-import { apiClient, ApiError } from "@/lib/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   ProductDetail,
@@ -165,17 +172,21 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    */
   const dirtyEpochRef = useRef(0);
   const saveEpochRef = useRef(0);
-
-  function markDirty() {
-    dirtyEpochRef.current += 1;
-    setDirty(true);
-  }
   const [publishStoreId, setPublishStoreId] = useState("");
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishPending, setPublishPending] = useState(false);
   const [publishOk, setPublishOk] = useState<string | null>(null);
   const [publishResult, setPublishResult] =
     useState<ShopifyPublishResult | null>(null);
+  const [publishSaveFailure, setPublishSaveFailure] =
+    useState<PublishSaveFailureReason | null>(null);
+  const publishInFlightRef = useRef(false);
+
+  function markDirty() {
+    dirtyEpochRef.current += 1;
+    setDirty(true);
+    setPublishSaveFailure(null);
+  }
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -403,7 +414,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     };
   }
 
-  async function handleSave(event?: FormEvent) {
+  type SaveResult =
+    | { ok: true; updatedAt: string }
+    | { ok: false; reason: PublishSaveFailureReason };
+
+  async function handleSave(event?: FormEvent): Promise<SaveResult> {
     event?.preventDefault();
     // Guards against two hazards at once: a double-click or a keyboard
     // shortcut firing while a save is already in flight (no concurrent
@@ -413,13 +428,17 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     // banner below). `handleSaveMyVersionAnyway` is the one save path that
     // deliberately bypasses this guard, because it *is* the explicit,
     // reviewed choice this guard exists to require first.
-    if (updateDraft.isPending || isConflicted) return;
+    if (updateDraft.isPending || isConflicted) {
+      return { ok: false, reason: isConflicted ? "conflict" : "busy" };
+    }
     // The form only renders once `data` has loaded (see the early returns
     // below), and the `[data]` effect always sets this in the same tick --
     // reaching here without it would mean saving against no known version
     // at all, which the backend now rejects outright. Bail rather than
     // send a request guaranteed to 422.
-    if (!savedUpdatedAt) return;
+    if (!savedUpdatedAt) {
+      return { ok: false, reason: "missing_version" };
+    }
 
     const dirtyEpochAtStart = dirtyEpochRef.current;
     const thisSave = ++saveEpochRef.current;
@@ -432,33 +451,54 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       );
       // Discard stale completions: a newer save may have started, or the
       // form may have been reset from the server while this request flew.
-      if (thisSave !== saveEpochRef.current) return;
-      // Only clear dirty when no edits landed after this request started.
-      if (dirtyEpochRef.current === dirtyEpochAtStart) {
-        setDirty(false);
-        setSaveState("saved");
-      } else {
-        setSaveState("idle");
+      if (thisSave !== saveEpochRef.current) {
+        return { ok: false, reason: "stale_completion" };
       }
       // The server's response is authoritative: the next save's version
       // check is against what was *actually* persisted, not a value
       // computed client-side.
       setSavedUpdatedAt(saved.updatedAt);
+      invalidatePublishReadiness(queryClient, productId);
       void queryClient.invalidateQueries({
         queryKey: draftKeys.seoScore(productId),
       });
+      // Only clear dirty when no edits landed after this request started.
+      // Newer unsaved edits must not be authorised by this save result.
+      if (dirtyEpochRef.current === dirtyEpochAtStart) {
+        setDirty(false);
+        setSaveState("saved");
+        return { ok: true, updatedAt: saved.updatedAt };
+      }
+      setSaveState("idle");
+      return { ok: false, reason: "dirty_after_save" };
     } catch (err) {
-      if (thisSave !== saveEpochRef.current) return;
+      if (thisSave !== saveEpochRef.current) {
+        return { ok: false, reason: "stale_completion" };
+      }
       if (err instanceof ApiError && err.status === 409) {
         // A newer save landed elsewhere since this editor last loaded.
         // Surfaced as its own state, not folded into `formError` -- the
         // recovery here is "reload or review", not "fix a field and
         // retry", and the two must not look the same to the merchant.
         await enterConflict(savedUpdatedAt);
-      } else {
-        setSaveState("error");
-        setFormError(err instanceof Error ? err.message : "Save failed.");
+        return { ok: false, reason: "conflict" };
       }
+      setSaveState("error");
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        setFormError("You need to sign in again before saving.");
+        return { ok: false, reason: "auth" };
+      }
+      if (err instanceof ApiError && err.status !== null && err.status < 500) {
+        setFormError(
+          err.message ||
+            "We couldn’t save your changes. Check the highlighted fields and try again.",
+        );
+        return { ok: false, reason: "validation" };
+      }
+      setFormError(
+        "We couldn’t save your changes. Check your connection and try again.",
+      );
+      return { ok: false, reason: "network" };
     }
   }
 
@@ -695,18 +735,49 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setPublishError(null);
     setPublishOk(null);
     setPublishResult(null);
+    setPublishSaveFailure(null);
     if (!publishStoreId) {
       setPublishError("Select a connected Shopify store.");
       return;
     }
+    if (publishInFlightRef.current || publishPending) {
+      return;
+    }
+    publishInFlightRef.current = true;
     setPublishPending(true);
     try {
-      if (dirty) await handleSave();
+      let expectedUpdatedAt = savedUpdatedAt;
+      if (dirty) {
+        const saveResult = await handleSave();
+        if (!saveResult.ok) {
+          setPublishSaveFailure(saveResult.reason);
+          if (saveResult.reason === "conflict") {
+            setPublishError(
+              "This draft changed somewhere else. Review the latest version before publishing.",
+            );
+          } else {
+            setPublishError(
+              "We couldn’t save your changes. Your product was not published. Review the changes and try again.",
+            );
+          }
+          return;
+        }
+        expectedUpdatedAt = saveResult.updatedAt;
+      }
+      if (!expectedUpdatedAt) {
+        setPublishSaveFailure("missing_version");
+        setPublishError(
+          "We couldn’t save your changes. Your product was not published. Review the changes and try again.",
+        );
+        return;
+      }
+
       const { data: result } = await apiClient.post<ShopifyPublishResult>(
         "/integrations/shopify/publish",
         {
           productId,
           storeId: publishStoreId,
+          expectedUpdatedAt,
         },
       );
       setPublishResult(result);
@@ -715,14 +786,40 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       void queryClient.invalidateQueries({
         queryKey: draftKeys.listings(productId),
       });
+      invalidatePublishReadiness(queryClient, productId);
     } catch (err) {
-      setPublishError(
-        err instanceof Error ? err.message : "Publish to Store failed.",
-      );
+      if (err instanceof ApiError && err.status === 409) {
+        setPublishError(
+          "This draft changed somewhere else. Review the latest version before publishing.",
+        );
+        await enterConflict(savedUpdatedAt);
+        return;
+      }
+      if (err instanceof ApiError) {
+        const blocked =
+          err.details?.some((detail) => detail.type === "reason" && detail.message === "publish_blocked") ||
+          err.code === "validation_error";
+        setPublishError(
+          blocked
+            ? err.message || "Fix the issues below before publishing."
+            : err.message || "Publish to Store failed.",
+        );
+        invalidatePublishReadiness(queryClient, productId);
+        return;
+      }
+      setPublishError("Publish to Store failed. Try again in a moment.");
     } finally {
+      publishInFlightRef.current = false;
       setPublishPending(false);
     }
   }
+
+  const publishReadinessQuery = usePublishReadiness({
+    productId,
+    storeId: publishStoreId || null,
+    draftUpdatedAt: dirty ? null : savedUpdatedAt,
+    enabled: tab === "publishing" && Boolean(publishStoreId) && !dirty,
+  });
 
   if (isPending) {
     return (
@@ -1303,67 +1400,57 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           ) : null}
 
           {tab === "publishing" ? (
-            <section className="space-y-4" data-testid="publishing-panel">
-              <h2 className="text-lg font-semibold">Review and publish</h2>
-              <p className="text-sm text-muted-foreground">
-                Send this draft to a connected Shopify store. Importing from the
-                supplier is separate from publishing to your shop.
-              </p>
-              {(publishResult || syncedListing) && (
-                <DraftPostPublishPanel
-                  listing={syncedListing}
-                  publishResult={publishResult}
-                  onContinueEditing={() => selectTab("overview")}
-                />
-              )}
-              {readiness.items.length > 0 ? (
-                <Alert>
-                  <AlertDescription>
-                    Open the checklist to review items before you publish.
-                    Channel checks still run when you publish.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              <div className="space-y-2">
-                <Label htmlFor="publish-store">Shopify store</Label>
-                <select
-                  id="publish-store"
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={publishStoreId}
-                  onChange={(event) => setPublishStoreId(event.target.value)}
-                >
-                  <option value="">Select a store…</option>
-                  {shopifyStores.map((store) => (
-                    <option key={store.id} value={store.id}>
-                      {store.name}
-                      {store.status !== "connected" ? ` (${store.status})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {publishError ? (
-                <Alert variant="destructive">
-                  <AlertDescription>{publishError}</AlertDescription>
-                </Alert>
-              ) : null}
-              {publishOk ? (
-                <Alert>
-                  <AlertDescription>{publishOk}</AlertDescription>
-                </Alert>
-              ) : null}
-              <Button
-                disabled={publishPending}
-                onClick={() => void handlePublish()}
-                data-testid="publish-to-store"
-              >
-                {publishPending ? (
-                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                ) : (
-                  <Store className="mr-1.5 h-4 w-4" />
-                )}
-                Publish to Store
-              </Button>
-            </section>
+            <ReviewPublishPanel
+              productId={productId}
+              stores={shopifyStores.map((store) => ({
+                id: store.id,
+                name: store.name,
+                status: store.status,
+              }))}
+              storeId={publishStoreId}
+              dirty={dirty}
+              onStoreChange={(next) => {
+                setPublishStoreId(next);
+                setPublishSaveFailure(null);
+                setPublishError(null);
+                invalidatePublishReadiness(queryClient, productId);
+              }}
+              readiness={publishReadinessQuery.data}
+              readinessStatus={
+                !publishStoreId || dirty
+                  ? "idle"
+                  : publishReadinessQuery.isError
+                    ? "error"
+                    : publishReadinessQuery.isPending
+                      ? "pending"
+                      : publishReadinessQuery.isSuccess
+                        ? "success"
+                        : "idle"
+              }
+              readinessFetching={publishReadinessQuery.isFetching}
+              onRetryReadiness={() => {
+                void publishReadinessQuery.refetch();
+              }}
+              saveFailureReason={publishSaveFailure}
+              onRetrySave={() => {
+                void (async () => {
+                  setPublishSaveFailure(null);
+                  setPublishError(null);
+                  const result = await handleSave();
+                  if (!result.ok) {
+                    setPublishSaveFailure(result.reason);
+                  }
+                })();
+              }}
+              publishError={publishError}
+              publishOk={publishOk}
+              publishPending={publishPending}
+              publishResult={publishResult}
+              syncedListing={syncedListing}
+              onPublish={() => void handlePublish()}
+              onOpenSection={(next) => selectTab(next)}
+              onContinueEditing={() => selectTab("overview")}
+            />
           ) : null}
 
           {tab === "media" ? (

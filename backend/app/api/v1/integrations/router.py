@@ -55,6 +55,9 @@ from app.integrations.shopify.schemas import (
     ShopifyClaimInstallRequest,
     ShopifyConnectionRead,
     ShopifyConnectRequest,
+    ShopifyPublishCheckItem,
+    ShopifyPublishReadinessRequest,
+    ShopifyPublishReadinessResponse,
     ShopifyPublishRequest,
     ShopifyPublishResponse,
     ShopifyStatusResponse,
@@ -76,6 +79,7 @@ from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
 from app.schemas.common import MessageResponse
+from app.services.publish_readiness import CHANNEL_SHOPIFY, PublishReadinessService
 
 logger = get_logger(__name__)
 
@@ -856,6 +860,59 @@ async def reconcile_shopify_webhooks(
 
 
 @router.post(
+    "/shopify/publish-readiness",
+    response_model=ShopifyPublishReadinessResponse,
+    summary="Evaluate Shopify publish blockers for a draft",
+)
+async def shopify_publish_readiness(
+    payload: ShopifyPublishReadinessRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyPublishReadinessResponse:
+    """Server-authoritative publish check used by Review & publish.
+
+    Same rule set as ``POST /shopify/publish`` — recommendations never set
+    ``canPublish`` to false. Foreign draft/store ids return the established
+    non-disclosing 404. Response never includes tokens or provider secrets.
+    """
+    result = await PublishReadinessService(session).evaluate(
+        channel=CHANNEL_SHOPIFY,
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        expected_updated_at=payload.expected_updated_at,
+        enforce_version=False,
+    )
+    return ShopifyPublishReadinessResponse(
+        channel=result.channel,
+        store_id=result.store_id,
+        draft_id=result.draft_id,
+        draft_updated_at=result.draft_updated_at,
+        can_publish=result.can_publish,
+        blockers=[
+            ShopifyPublishCheckItem(
+                code=item.code,
+                message=item.message,
+                field=item.field,
+                section=item.section,
+                action=item.action,
+            )
+            for item in result.blockers
+        ],
+        recommendations=[
+            ShopifyPublishCheckItem(
+                code=item.code,
+                message=item.message,
+                field=item.field,
+                section=item.section,
+                action=item.action,
+            )
+            for item in result.recommendations
+        ],
+        checked_at=result.checked_at,
+    )
+
+
+@router.post(
     "/shopify/publish",
     response_model=ShopifyPublishResponse,
     summary="Publish a product to Shopify",
@@ -868,6 +925,7 @@ async def publish_to_shopify(
     result = await ShopifySyncService(session).publish_product(
         store_id=payload.store_id,
         product_id=payload.product_id,
+        expected_updated_at=payload.expected_updated_at,
     )
     external_id = str(result["external_product_id"])
     return ShopifyPublishResponse(

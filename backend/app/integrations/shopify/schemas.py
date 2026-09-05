@@ -101,6 +101,38 @@ class ShopifyWebhookReconcileResponse(CamelCaseModel):
 class ShopifyPublishRequest(CamelCaseModel):
     product_id: uuid.UUID
     store_id: uuid.UUID
+    #: Optimistic concurrency token from the draft the merchant just saved.
+    #: When supplied, publish refuses a stale draft before any provider call.
+    expected_updated_at: datetime | None = None
+
+
+class ShopifyPublishCheckItem(CamelCaseModel):
+    """One server-authoritative publish blocker or recommendation."""
+
+    code: str
+    message: str
+    field: str | None = None
+    section: str | None = None
+    action: str | None = None
+
+
+class ShopifyPublishReadinessRequest(CamelCaseModel):
+    product_id: uuid.UUID
+    store_id: uuid.UUID | None = None
+    expected_updated_at: datetime | None = None
+
+
+class ShopifyPublishReadinessResponse(CamelCaseModel):
+    """Authoritative publish check — no readiness score, no secrets."""
+
+    channel: str
+    store_id: uuid.UUID | None = None
+    draft_id: uuid.UUID
+    draft_updated_at: datetime
+    can_publish: bool
+    blockers: list[ShopifyPublishCheckItem] = Field(default_factory=list)
+    recommendations: list[ShopifyPublishCheckItem] = Field(default_factory=list)
+    checked_at: datetime
 
 
 class ShopifyPublishResponse(CamelCaseModel):

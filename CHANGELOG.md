@@ -10,17 +10,25 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **UX-L2B — server-authoritative publish integrity (on
+  `feature/ux-l2b-publish-integrity`, not merged).** Failed or conflicted
+  draft saves can no longer continue into Shopify publish. `handleSave`
+  returns an explicit success/failure contract; `handlePublish` stops on
+  save failure, 409, auth errors, or newer unsaved edits, and always sends
+  `expectedUpdatedAt`. New shared `PublishReadinessService` is the single
+  authority for both `POST /integrations/shopify/publish-readiness` and the
+  final publish path (provider is not contacted when blockers exist or the
+  draft version is stale). Review & publish UI separates blockers from
+  advice, with no readiness score and no false “ready” claim. No migration.
+  Not independently accepted; not merged or deployed; UX-L2C not started.
+
 ### Changed
 
-- **UX-L2A-R6 — E2E API isolation fail-closed (on
-  `feature/ux-l2a-editor-foundation`, not merged).** Test-harness only: the
-  Playwright API origin is a parsed allowlist (`http://127.0.0.1:8100–8199`),
-  not a string denylist; the CI `:8000` exception requires `CI` +
-  `GITHUB_ACTIONS` + `E2E_ALLOW_LOCAL_8000` and exact `http://127.0.0.1:8000`;
-  isolation errors throw instead of becoming “API not reachable” skips; the
-  resolved origin is logged once per process. Product UI is unchanged.
-  Independent acceptance still pending; unmerged and undeployed; UX-L2B has
-  not started. **Carried forward:** failed-save-before-publish integrity item.
+- **UX-L2A integrated into `develop` at `e1dd0f0`.** UX-L2B builds from that
+  baseline. Carried-forward unused presentation `readiness.score` /
+  `readiness.level` remain non-authoritative.
 
 - **UX-L2A-R5 — responsive sheet and touch-target polish (on
   `feature/ux-l2a-editor-foundation`, not merged).** Closes two Low findings

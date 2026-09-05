@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   buildSyntheticProduct,
   DEMO_PRODUCT_ID,
+  DEMO_STORE_ID,
   openMockedEditor,
   UX_L2A_SHOT_ROOT,
 } from "./helpers/editor-fixture";
@@ -176,48 +177,6 @@ test.describe("UX-L2A editor foundation — desktop", () => {
   test("in-flight publishing disables the header action against double submit", async ({
     page,
   }) => {
-    const storeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const storePage = {
-      items: [
-        {
-          id: storeId,
-          name: "Demo Store",
-          slug: "demo-store",
-          platform: "shopify",
-          status: "connected",
-          storefrontUrl: "https://demo.myshopify.com",
-          externalStoreId: "demo",
-          currency: "GBP",
-          currencyLastSyncedAt: null,
-          timezone: "Europe/London",
-          settings: {},
-          inventorySyncEnabled: true,
-          pricingSyncEnabled: true,
-          orderSyncEnabled: true,
-          lastSyncAt: null,
-          lastActivityAt: null,
-          lastError: null,
-          healthScore: 100,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-      meta: {
-        page: 1,
-        size: 50,
-        totalItems: 1,
-        totalPages: 1,
-        hasNext: false,
-        hasPrevious: false,
-      },
-    };
-    await page.route("**/api/v1/stores**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(storePage),
-      });
-    });
     await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
       await new Promise((r) => setTimeout(r, 2500));
       await route.fulfill({
@@ -231,55 +190,14 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 
     await page.getByTestId("editor-tab-publishing").click();
-    await page.locator("#publish-store").selectOption(storeId);
+    await page.locator("#publish-store").selectOption(DEMO_STORE_ID);
+    await expect(page.getByTestId("publish-to-store")).toBeEnabled({ timeout: 10_000 });
     await page.getByTestId("publish-to-store").click();
     await expect(visibleTestId(page, "publish-action")).toBeDisabled({ timeout: 5_000 });
     await expect(visibleTestId(page, "publish-action")).toContainText(/Publishing/);
   });
 
   test("channel publish failure remains visible and truthful", async ({ page }) => {
-    const storeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const storePage = {
-      items: [
-        {
-          id: storeId,
-          name: "Demo Store",
-          slug: "demo-store",
-          platform: "shopify",
-          status: "connected",
-          storefrontUrl: "https://demo.myshopify.com",
-          externalStoreId: "demo",
-          currency: "GBP",
-          currencyLastSyncedAt: null,
-          timezone: "Europe/London",
-          settings: {},
-          inventorySyncEnabled: true,
-          pricingSyncEnabled: true,
-          orderSyncEnabled: true,
-          lastSyncAt: null,
-          lastActivityAt: null,
-          lastError: null,
-          healthScore: 100,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      ],
-      meta: {
-        page: 1,
-        size: 50,
-        totalItems: 1,
-        totalPages: 1,
-        hasNext: false,
-        hasPrevious: false,
-      },
-    };
-    await page.route("**/api/v1/stores**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(storePage),
-      });
-    });
     await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
       await route.fulfill({
         status: 422,
@@ -297,7 +215,8 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 
     await page.getByTestId("editor-tab-publishing").click();
-    await page.locator("#publish-store").selectOption(storeId);
+    await page.locator("#publish-store").selectOption(DEMO_STORE_ID);
+    await expect(page.getByTestId("publish-to-store")).toBeEnabled({ timeout: 10_000 });
     await page.getByTestId("publish-to-store").click();
     await expect(page.getByText(/Store is not connected/i)).toBeVisible({
       timeout: 10_000,

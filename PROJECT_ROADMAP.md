@@ -20,7 +20,8 @@ Last updated: 2026-09-05
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
-| UX-L2A | Product editor foundation | 🚧 **On `feature/ux-l2a-editor-foundation`** — R6 E2E isolation tighten after R5; not merged; not re-accepted; UX-L2B not started |
+| UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
+| UX-L2B | Server-authoritative publish integrity | 🚧 **On `feature/ux-l2b-publish-integrity`** — not merged; not independently accepted; production undeployed; UX-L2C not started |
 
 ---
 
@@ -267,7 +268,8 @@ synced). Plans:
 | 4 | Media + structured variants | **Done (MVP) on `develop`** |
 | 5 | Pricing / inventory / shipping | **Done (MVP) on `cursor/draft-product-editor`** |
 | 6–8 | AI Studio, publish polish, E2E | Pending |
-| UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **On `feature/ux-l2a-editor-foundation` — not merged; R6: E2E API allowlist fail-closed (no product UI change); failed-save-before-publish carried to UX-L2B; production undeployed; UX-L2B not started** |
+| UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **Integrated into `develop` (`e1dd0f0`); production undeployed** |
+| UX-L2B | Save-before-publish integrity + server publish authority | **On `feature/ux-l2b-publish-integrity` — not merged; not independently accepted; production undeployed; UX-L2C not started** |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.

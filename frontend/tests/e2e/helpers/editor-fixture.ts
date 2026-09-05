@@ -154,6 +154,62 @@ export function emptyListings(): StoreListing[] {
   return [];
 }
 
+export const DEMO_STORE_ID = "55555555-5555-4555-8555-555555555555";
+
+export function mockShopifyStoresResponse() {
+  const now = new Date().toISOString();
+  return {
+    items: [
+      {
+        id: DEMO_STORE_ID,
+        name: "Demo Shopify",
+        slug: "demo-shopify",
+        platform: "shopify",
+        status: "connected",
+        storefrontUrl: "https://demo.myshopify.com",
+        externalStoreId: "demo",
+        currency: "GBP",
+        currencyLastSyncedAt: now,
+        timezone: "Europe/London",
+        settings: {},
+        inventorySyncEnabled: true,
+        pricingSyncEnabled: true,
+        orderSyncEnabled: true,
+        lastSyncAt: null,
+        lastActivityAt: null,
+        lastError: null,
+        healthScore: 100,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    meta: {
+      page: 1,
+      size: 50,
+      totalItems: 1,
+      totalPages: 1,
+      hasNext: false,
+      hasPrevious: false,
+    },
+  };
+}
+
+export function mockPublishReadiness(overrides: Record<string, unknown> = {}) {
+  const now = new Date().toISOString();
+  return {
+    channel: "shopify",
+    storeId: DEMO_STORE_ID,
+    draftId: DEMO_PRODUCT_ID,
+    draftUpdatedAt: now,
+    canPublish: true,
+    blockers: [],
+    recommendations: [],
+    checkedAt: now,
+    ...overrides,
+  };
+}
+
+
 export function demoSeoScore(score = 72): SeoScore {
   return {
     score,
@@ -210,6 +266,47 @@ export async function openMockedEditor(
   await page.route("**/api/v1/auth/logout", (route) =>
     route.fulfill({ status: 204, body: "" }),
   );
+
+  await page.route("**/api/v1/stores**", async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(mockShopifyStoresResponse()),
+    });
+  });
+
+  await page.route("**/api/v1/integrations/shopify/publish-readiness", async (route) => {
+    const postData = route.request().postDataJSON() as {
+      productId?: string;
+      storeId?: string | null;
+      expectedUpdatedAt?: string | null;
+    } | null;
+    const draftUpdatedAt =
+      postData?.expectedUpdatedAt ?? product.updatedAt ?? new Date().toISOString();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        mockPublishReadiness({
+          storeId: postData?.storeId ?? null,
+          draftId: product.id,
+          draftUpdatedAt,
+          canPublish: Boolean(postData?.storeId),
+          blockers: postData?.storeId
+            ? []
+            : [
+                {
+                  code: "store_required",
+                  message: "Select where you want to publish this product.",
+                  field: "storeId",
+                  section: "publishing",
+                  action: "Choose a store",
+                },
+              ],
+        }),
+      ),
+    });
+  });
 
   // One handler: Playwright matches last-registered first, so branching here
   // avoids listings/seo-score being swallowed by a broad drafts pattern.

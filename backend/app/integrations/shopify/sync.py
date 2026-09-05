@@ -152,7 +152,11 @@ class ShopifySyncService(BaseService):
         return product
 
     async def publish_product(
-        self, *, store_id: uuid.UUID, product_id: uuid.UUID
+        self,
+        *,
+        store_id: uuid.UUID,
+        product_id: uuid.UUID,
+        expected_updated_at: datetime | None = None,
     ) -> dict[str, Any]:
         """Create or update a Shopify product for a DropPilot catalogue product.
 
@@ -161,11 +165,22 @@ class ShopifySyncService(BaseService):
         deterministic handle so a Celery redelivery after Shopify create /
         before the listing commit adopts the existing product instead of
         duplicating it (audit A-04).
+
+        Publication blockers are evaluated by
+        :class:`~app.services.publish_readiness.PublishReadinessService`
+        before any Shopify client is constructed — the same authority the
+        readiness endpoint uses. A stale ``expected_updated_at`` raises 409
+        and never reaches the provider.
         """
+        from app.services.publish_readiness import CHANNEL_SHOPIFY, PublishReadinessService
+
+        await PublishReadinessService(self.session).require_publishable(
+            channel=CHANNEL_SHOPIFY,
+            product_id=product_id,
+            store_id=store_id,
+            expected_updated_at=expected_updated_at,
+        )
         product = await self._load_product(product_id)
-        store = await self.stores.get_by_id_or_raise(store_id)
-        self._assert_import_destination_matches_store(product=product, store=store)
-        self._assert_variant_prices_match_store_currency(product=product, store=store)
         client, connection = await self.shopify.client_for_store(store_id)
         listing = await self.listings.get_for_product(store_id=store_id, product_id=product_id)
 

@@ -599,6 +599,27 @@ export interface ShopifyPublishResult {
   updated: boolean;
 }
 
+/** One server-authoritative publish blocker or recommendation. */
+export interface ShopifyPublishCheckItem {
+  code: string;
+  message: string;
+  field: string | null;
+  section: string | null;
+  action: string | null;
+}
+
+/** Response from POST /integrations/shopify/publish-readiness. */
+export interface ShopifyPublishReadiness {
+  channel: string;
+  storeId: string | null;
+  draftId: string;
+  draftUpdatedAt: string;
+  canPublish: boolean;
+  blockers: ShopifyPublishCheckItem[];
+  recommendations: ShopifyPublishCheckItem[];
+  checkedAt: string;
+}
+
 export interface SeoScore {
   score: number;
   status: string;
