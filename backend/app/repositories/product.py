@@ -12,10 +12,11 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, Exists, func, select
+from sqlalchemy import ColumnElement, Exists, func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ShopifyPublishBusyError
 from app.models.product import (
     ImportStatus,
     Product,
@@ -29,6 +30,23 @@ from app.models.product import (
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.repositories.base import TenantScopedRepository
 from app.schemas.common import ListQueryParams
+
+#: PostgreSQL SQLSTATE for ``lock_timeout`` expiring on a row lock.
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+def _is_lock_timeout(exc: DBAPIError) -> bool:
+    """Whether this driver error is PostgreSQL refusing to keep waiting.
+
+    Matched on SQLSTATE rather than message wording. Same check as the
+    Shopify connection row lock — duplicated here so the product repository
+    does not import from the Shopify repository package.
+    """
+    original = getattr(exc, "orig", None)
+    for attribute in ("sqlstate", "pgcode"):
+        if getattr(original, attribute, None) == _LOCK_NOT_AVAILABLE:
+            return True
+    return False
 
 
 class ProductRepository(TenantScopedRepository[Product]):
@@ -220,6 +238,49 @@ class ProductRepository(TenantScopedRepository[Product]):
         """
         query = self._base_query().where(Product.slug == slug)
         result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def lock_for_update(
+        self, product_id: uuid.UUID, *, timeout_ms: int | None = None
+    ) -> Product | None:
+        """Take this tenant's product row for the rest of the transaction.
+
+        Shopify publish is list-decide-create: two concurrent publishes of the
+        same draft can both miss ``StoreListing``, both miss the remote handle,
+        and both create a Shopify product. Serialising on the product row closes
+        that window across workers and processes — an in-process lock would not.
+
+        Tenant-scoped via ``_base_query``: a foreign id finds nothing (404 at
+        the service layer), never a 403. ``populate_existing`` forces a fresh
+        read so a guard does not inspect a stale identity-map copy.
+
+        ``timeout_ms`` bounds the wait with PostgreSQL ``SET LOCAL lock_timeout``
+        (transaction-scoped, reset immediately after acquire) so a wedged
+        publish cannot hold HTTP workers forever. Expiry becomes
+        ``ShopifyPublishBusyError`` rather than a raw 500.
+        """
+        query = (
+            self._base_query()
+            .where(Product.id == product_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if timeout_ms is None:
+            result = await self.session.execute(query)
+            return result.scalar_one_or_none()
+
+        await self.session.execute(text(f"SET LOCAL lock_timeout = '{int(timeout_ms)}ms'"))
+        try:
+            result = await self.session.execute(query)
+        except DBAPIError as exc:
+            if _is_lock_timeout(exc):
+                raise ShopifyPublishBusyError(details={"timeout_ms": timeout_ms}) from exc
+            raise
+        finally:
+            try:
+                await self.session.execute(text("SET LOCAL lock_timeout = DEFAULT"))
+            except DBAPIError:  # pragma: no cover - transaction already aborted
+                pass
         return result.scalar_one_or_none()
 
     async def count_by_status(self) -> dict[str, int]:

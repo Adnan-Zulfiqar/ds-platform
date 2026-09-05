@@ -10,6 +10,24 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **UX-L2B-R2 — serialise concurrent Shopify publication (on
+  `feature/ux-l2b-publish-integrity`, not merged).** Closes the R1-found race
+  where two simultaneous publishes could both miss ``StoreListing``, both miss
+  the deterministic remote handle, and both create a Shopify product.
+  Mechanism: tenant-scoped product ``SELECT ... FOR UPDATE``
+  (`ProductRepository.lock_for_update`, ``PUBLISH_LOCK_TIMEOUT_MS=30000``)
+  acquired after readiness/version checks and before any provider client call;
+  ``StoreListing`` is re-read under the lock; lock releases on commit/rollback.
+  Bounded wait surfaces stable ``shopify_publish_busy`` (409). Handle-based
+  ``_create_or_adopt`` remains the recovery path after a lost response. No
+  Redis; no migration; Alembic head remains ``0032``. Wording: at-most-one
+  concurrent provider create for the same publication identity, with
+  deterministic adoption on retry — not exactly-once delivery. Full backend
+  single clean suite after the fix: **2976 passed, 1 skipped**, ~618s. Not
+  independently accepted; not merged or deployed.
+
 ### Changed
 
 - **UX-L2B-R1 — mandatory security/data-integrity evidence (on
@@ -20,8 +38,9 @@ production release.
   UX-L2B diff) with compiled-SQL proof that readiness product load still
   carries `tenant_id` + `deleted_at`; Redis 3.0.504 inventory shows **zero**
   Redis commands on the publish/readiness path (handle-based
-  `_create_or_adopt` / `droppilot-{product_id}` is the named idempotency
-  mechanism — no Redis lock; concurrent double-POST remains a known gap);
+  `_create_or_adopt` / `droppilot-{product_id}` plus R2 product-row lock is the
+  named idempotency/concurrency mechanism — no Redis lock; R1 concurrent
+  double-POST gap is closed in R2);
   OpenAPI/schema/camelCase/`requestId` assertions; synthetic isolated env
   proof outside Git. Test harness: synthetic `GOOGLE_OAUTH_CLIENT_ID` + pinned
   `SECURITY_RATE_LIMIT_REQUESTS=100` so isolated worktrees without a root

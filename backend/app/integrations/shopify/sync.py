@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -32,6 +32,12 @@ from app.services.base import BaseService
 from app.services.import_destination import country_from_store_settings
 
 logger = get_logger(__name__)
+
+#: Bound on waiting for another publish that already holds the product row.
+#: Matches the webhook-reconcile pattern: long enough for a typical Admin API
+#: create to finish under the lock, short enough that a wedged worker surfaces
+#: ``shopify_publish_busy`` instead of hanging HTTP workers forever.
+PUBLISH_LOCK_TIMEOUT_MS: Final = 30_000
 
 
 def _deterministic_handle(product_id: uuid.UUID) -> str:
@@ -160,29 +166,51 @@ class ShopifySyncService(BaseService):
     ) -> dict[str, Any]:
         """Create or update a Shopify product for a DropPilot catalogue product.
 
-        Idempotent two ways: a local :class:`StoreListing` drives update vs
-        create; when no listing exists yet, :meth:`_create_or_adopt` uses a
-        deterministic handle so a Celery redelivery after Shopify create /
-        before the listing commit adopts the existing product instead of
-        duplicating it (audit A-04).
+        Ordering (UX-L2B-R2):
 
-        Publication blockers are evaluated by
-        :class:`~app.services.publish_readiness.PublishReadinessService`
-        before any Shopify client is constructed — the same authority the
-        readiness endpoint uses. A stale ``expected_updated_at`` raises 409
-        and never reaches the provider.
+        1. Authoritative readiness + version check (no provider contact).
+        2. Tenant-scoped ``SELECT ... FOR UPDATE`` on the product row so two
+           workers cannot both miss ``StoreListing`` and both create remotely.
+        3. Re-run readiness under the lock (state may have changed while waiting).
+        4. Re-read ``StoreListing``; construct the Shopify client only after the
+           lock is held.
+        5. Update existing listing, or ``_create_or_adopt`` via deterministic
+           handle; persist ``StoreListing`` before the request transaction
+           commits (lock releases on commit/rollback).
+
+        At-most-one concurrent provider create for the same publication
+        identity, with deterministic adoption on retry. Not exactly-once
+        delivery — a lost response after remote create is recovered by handle
+        search on the next attempt.
         """
         from app.services.publish_readiness import CHANNEL_SHOPIFY, PublishReadinessService
 
-        await PublishReadinessService(self.session).require_publishable(
+        readiness = PublishReadinessService(self.session)
+        # Fail fast on blockers / stale version without taking the row lock.
+        await readiness.require_publishable(
             channel=CHANNEL_SHOPIFY,
             product_id=product_id,
             store_id=store_id,
             expected_updated_at=expected_updated_at,
         )
+
+        locked = await self.products.lock_for_update(product_id, timeout_ms=PUBLISH_LOCK_TIMEOUT_MS)
+        if locked is None:
+            raise NotFoundError("Product not found.")
+
+        # Revalidate under the lock: a concurrent editor or a finished peer
+        # publish may have moved state while we waited.
+        await readiness.require_publishable(
+            channel=CHANNEL_SHOPIFY,
+            product_id=product_id,
+            store_id=store_id,
+            expected_updated_at=expected_updated_at,
+        )
+
         product = await self._load_product(product_id)
-        client, connection = await self.shopify.client_for_store(store_id)
         listing = await self.listings.get_for_product(store_id=store_id, product_id=product_id)
+        # Provider client only after auth, ownership, version, readiness, lock.
+        client, connection = await self.shopify.client_for_store(store_id)
 
         variants_payload: list[dict[str, Any]] = []
         for variant in product.variants:

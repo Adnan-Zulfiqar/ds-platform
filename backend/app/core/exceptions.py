@@ -183,6 +183,24 @@ class ShopifyWebhookReconcileBusyError(ConflictError):
     message = "Webhook setup for this store is already running. Please try again in a moment."
 
 
+class ShopifyPublishBusyError(ConflictError):
+    """Another publish already holds this draft's product row.
+
+    Concurrent identical Shopify publish requests are serialised on the
+    tenant-scoped product row so two workers cannot both miss ``StoreListing``,
+    both miss the remote handle, and both create a Shopify product. A caller
+    that waits longer than the bounded ``lock_timeout`` is told to retry,
+    rather than waiting forever or seeing PostgreSQL's timeout as a 500.
+
+    409 with a stable busy code — nothing is wrong with the draft; publication
+    is already in flight. Lives beside ``ShopifyWebhookReconcileBusyError`` so
+    the product repository never imports from an integration package.
+    """
+
+    code = "shopify_publish_busy"
+    message = "Publishing is already in progress. Please try again in a moment."
+
+
 class RateLimitExceededError(AppError):
     """Too many requests within the configured window."""
 

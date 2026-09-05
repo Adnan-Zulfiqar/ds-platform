@@ -105,7 +105,12 @@ class TestRedisCommandInventory:
 
 
 class TestNamedShopifyPublishIdempotency:
-    """Trace the real mechanism — handle adopt + StoreListing — not Redis locks."""
+    """Trace the real mechanism — row lock + handle adopt + StoreListing.
+
+    UX-L2B-R2 added tenant-scoped product ``FOR UPDATE`` so concurrent
+    identical publishes cannot both create remotely. Handle adopt remains the
+    recovery path after a lost response / Celery redelivery.
+    """
 
     def test_deterministic_handle_format(self) -> None:
         product_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -117,6 +122,15 @@ class TestNamedShopifyPublishIdempotency:
         source = inspect.getsource(ShopifySyncService._create_or_adopt)
         assert "handle" in source
         assert "products.json" in source
+
+    def test_publish_acquires_product_row_lock_before_provider(self) -> None:
+        source = inspect.getsource(ShopifySyncService.publish_product)
+        assert "lock_for_update" in source
+        assert "PUBLISH_LOCK_TIMEOUT_MS" in source
+        # Client construction must follow the lock in source order.
+        lock_at = source.index("lock_for_update")
+        client_at = source.index("client_for_store")
+        assert lock_at < client_at
 
     @pytest.mark.asyncio
     async def test_same_handle_adopts_instead_of_second_create(self) -> None:

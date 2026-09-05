@@ -18,7 +18,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.core.context import MissingTenantContextError, clear_context, set_tenant_id
-from app.models.product import ProductSource
+from app.models.product import Product, ProductSource
 from app.repositories.base import TenantScopedRepository
 from app.repositories.product import (
     ProductImageRepository,
@@ -115,6 +115,42 @@ class TestIdempotencyLookup:
         where_clause = repository._base_query().whereclause
         assert where_clause is not None
         assert str(tenant_id) in _compile(where_clause)
+
+
+class TestPublishRowLock:
+    """UX-L2B-R2 — product FOR UPDATE used to serialise Shopify publish."""
+
+    def test_lock_query_carries_tenant_and_soft_delete_predicates(
+        self, tenant_id: uuid.UUID
+    ) -> None:
+        set_tenant_id(tenant_id)
+        repository = ProductRepository(MagicMock())
+        product_id = uuid.uuid4()
+        query = (
+            repository._base_query()
+            .where(Product.id == product_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        sql = _compile(query)
+        assert "products.tenant_id" in sql
+        assert str(tenant_id) in sql
+        assert "deleted_at IS NULL" in sql
+        assert f"products.id = {product_id}" in sql or str(product_id) in sql
+        assert "FOR UPDATE" in sql.upper()
+
+    def test_lock_query_cannot_select_by_id_alone(self, tenant_id: uuid.UUID) -> None:
+        set_tenant_id(tenant_id)
+        repository = ProductRepository(MagicMock())
+        sql = _compile(repository._base_query().where(Product.id == uuid.uuid4()).with_for_update())
+        assert "products.tenant_id" in sql
+        assert "FOR UPDATE" in sql.upper()
+
+    def test_lock_for_update_method_exists_and_documents_timeout(self) -> None:
+        assert hasattr(ProductRepository, "lock_for_update")
+        source = ProductRepository.lock_for_update.__doc__ or ""
+        assert "timeout" in source.lower()
+        assert "ShopifyPublishBusyError" in source or "busy" in source.lower()
 
 
 class TestSortAllowlists:

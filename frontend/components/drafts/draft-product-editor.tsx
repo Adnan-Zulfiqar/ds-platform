@@ -789,6 +789,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       invalidatePublishReadiness(queryClient, productId);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
+        if (err.code === "shopify_publish_busy") {
+          setPublishError(
+            "Publishing is already in progress. Please try again in a moment.",
+          );
+          return;
+        }
         setPublishError(
           "This draft changed somewhere else. Review the latest version before publishing.",
         );
