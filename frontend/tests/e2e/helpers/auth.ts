@@ -13,9 +13,70 @@ import { PRIVACY_NOTICE_VERSION, TERMS_VERSION } from "@/lib/legal";
  * The cost is that these tests need the backend and its database running. They
  * skip cleanly when it is not, rather than failing with a wall of connection
  * errors that hide real regressions.
+ *
+ * **Isolation:** never default to `:8000`. An empty or production-like API URL
+ * fails immediately so a local Playwright run cannot register against a live
+ * backend by accident (UX-L2A-R4 review incident). CI's ephemeral stack on
+ * `:8000` must set `E2E_ALLOW_LOCAL_8000=1`.
  */
 
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const PRODUCTION_LIKE_API_URLS = new Set([
+  "http://localhost:8000",
+  "http://127.0.0.1:8000",
+  "https://api.whiteto.com",
+]);
+
+function normalizeApiBase(url: string): string {
+  return url.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * Resolve the API base for live e2e helpers.
+ *
+ * Throws rather than falling back to a production-port default.
+ */
+export function resolveE2eApiUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const raw = (env.NEXT_PUBLIC_API_URL ?? env.E2E_API_URL ?? "").trim();
+  if (!raw) {
+    throw new Error(
+      "E2E isolation: set NEXT_PUBLIC_API_URL (or E2E_API_URL) explicitly. " +
+        "Refusing the historical default http://localhost:8000.",
+    );
+  }
+  const normalized = normalizeApiBase(raw);
+  if (PRODUCTION_LIKE_API_URLS.has(normalized)) {
+    if (
+      (normalized === "http://localhost:8000" ||
+        normalized === "http://127.0.0.1:8000") &&
+      env.E2E_ALLOW_LOCAL_8000 === "1"
+    ) {
+      return raw.replace(/\/+$/, "");
+    }
+    throw new Error(
+      `E2E isolation: refusing API URL "${raw}". Use an isolated port ` +
+        "(for example http://127.0.0.1:8105), not production or :8000. " +
+        "CI ephemeral stacks may set E2E_ALLOW_LOCAL_8000=1.",
+    );
+  }
+  return raw.replace(/\/+$/, "");
+}
+
+/**
+ * Lazy so hermetic specs can import sibling helpers without requiring an API
+ * URL until a live call actually runs.
+ */
+export function getApiUrl(): string {
+  return resolveE2eApiUrl();
+}
+
+/** Resolved on first string coercion / live helper call — never a :8000 default. */
+export const API_URL = {
+  toString: () => resolveE2eApiUrl(),
+  valueOf: () => resolveE2eApiUrl(),
+  [Symbol.toPrimitive]: () => resolveE2eApiUrl(),
+} as unknown as string;
 
 /** Meets the server-side password policy: 12+ chars, mixed case, a digit. */
 export const TEST_PASSWORD = "Correct-Horse-Battery9";

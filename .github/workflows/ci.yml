@@ -565,6 +565,9 @@ jobs:
       LOG_JSON_OUTPUT: "false"
       NEXT_PUBLIC_API_URL: http://localhost:8000
       NEXT_PUBLIC_ENVIRONMENT: local
+      # Ephemeral CI compose listens on :8000 — not production. Local runs must
+      # not inherit this; see resolveE2eApiUrl in tests/e2e/helpers/auth.ts.
+      E2E_ALLOW_LOCAL_8000: "1"
       CI: "true"
 
     steps:

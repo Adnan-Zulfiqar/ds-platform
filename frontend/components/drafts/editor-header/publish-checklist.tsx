@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { useEffect } from "react";
 
 import type { EditorTab } from "@/components/drafts/editor-header/product-editor-tabs";
 import type { ReadinessSummary } from "@/components/drafts/editor-header/readiness";
@@ -13,6 +14,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useIsLgUp } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import type { SeoScore, StoreListing } from "@/types/api";
 
@@ -32,6 +34,8 @@ interface PublishChecklistProps {
  * Does not claim Required/Recommended — the API does not classify findings.
  * Publishing still runs its own channel checks. The mobile sheet uses the
  * shared Radix Sheet primitive so Escape, focus trap, and focus return work.
+ * Crossing Tailwind `lg` closes the sheet (not merely CSS-hides it) so the
+ * portalled overlay cannot leave the desktop page inert.
  */
 export function PublishChecklist({
   readiness,
@@ -42,8 +46,16 @@ export function PublishChecklist({
   onOpenTab,
   variant = "aside",
 }: PublishChecklistProps) {
+  const isLgUp = useIsLgUp();
   const items = readiness.items;
   const hasItems = items.length > 0;
+
+  useEffect(() => {
+    if (variant !== "sheet") return;
+    if (!open) return;
+    if (!isLgUp) return;
+    onClose();
+  }, [variant, open, isLgUp, onClose]);
 
   const body = (
     <div className="space-y-4" data-testid="publish-checklist">
@@ -107,7 +119,7 @@ export function PublishChecklist({
           hideCloseButton
           id="publish-checklist-sheet"
           aria-modal="true"
-          className="max-h-[80vh] gap-0 overflow-y-auto rounded-t-[12px] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] lg:hidden"
+          className="max-h-[80vh] gap-0 overflow-y-auto rounded-t-[12px] p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
           data-testid="publish-checklist-sheet"
           onOpenAutoFocus={(event) => {
             // Land on Close — a predictable, labelled control — rather than the

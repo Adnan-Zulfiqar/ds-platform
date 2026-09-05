@@ -311,6 +311,14 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await openMockedEditor(page);
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 
+    // selectTab uses router.replace, so History does not push a stack frame.
+    // Seed a known prior entry; Back must return here — not to a previous tab.
+    await page.evaluate(() => {
+      const here = window.location.href;
+      window.history.replaceState(window.history.state, "", "/drafts?e2e-back-target=1");
+      window.history.pushState(window.history.state, "", here);
+    });
+
     const more = visibleTestId(page, "product-actions-menu");
     await more.focus();
     await page.keyboard.press("Enter");
@@ -331,8 +339,11 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await page.getByRole("menuitem", { name: /^Open full history$/i }).click();
     await expect(page).toHaveURL(/[?&]tab=history/);
     await expect(page.getByRole("heading", { name: /^History$/i })).toBeVisible();
+    await shot(page, "1440x900-full-history-section.png");
+
     await page.goBack();
-    await expect(page).not.toHaveURL(/[?&]tab=history/);
+    await expect(page).toHaveURL(/e2e-back-target=1/);
+    await expect(page.getByRole("heading", { name: /^History$/i })).toHaveCount(0);
   });
 
   test("long title stays two lines and does not hide actions", async ({
@@ -607,6 +618,138 @@ test.describe("UX-L2A editor foundation — mobile", () => {
           !/favicon|Download the React DevTools|401 \(Unauthorized\)/i.test(e),
       ),
     ).toEqual([]);
+  });
+
+  test("Things to fix touch target is at least 44×44 CSS pixels", async ({ page }) => {
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ seoTitle: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    const trigger = page.getByTestId("things-to-fix-trigger");
+    await expect(trigger).toBeVisible();
+    const box = await trigger.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    await shot(page, "390x844-things-to-fix-touch-target.png");
+  });
+
+  test("open sheet closes cleanly when viewport crosses lg to desktop", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ seoTitle: null, slug: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    await page.getByTestId("things-to-fix-trigger").click();
+    await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
+    await shot(page, "390x844-sheet-open-before-resize.png");
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0, {
+      timeout: 5_000,
+    });
+    await expect(
+      page.getByRole("dialog", { name: "Before you publish" }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator('[data-state="open"].fixed.inset-0'),
+    ).toHaveCount(0);
+    await shot(page, "1440x900-after-resize-no-overlay.png");
+
+    const bodyState = await page.evaluate(() => {
+      const style = window.getComputedStyle(document.body);
+      return {
+        pointerEvents: style.pointerEvents,
+        overflow: style.overflow,
+      };
+    });
+    expect(bodyState.pointerEvents).not.toBe("none");
+
+    await expect(page.getByTestId("publish-checklist-aside")).toBeVisible();
+    await expect(page.getByTestId("editor-tab-overview")).toBeEnabled();
+    await page.getByTestId("editor-tab-overview").click();
+    await expect(page.getByTestId("editor-tab-overview")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await shot(page, "1440x900-desktop-clickable-after-sheet-close.png");
+
+    expect(
+      errors.filter(
+        (e) =>
+          !/favicon|Download the React DevTools|401 \(Unauthorized\)/i.test(e),
+      ),
+    ).toEqual([]);
+  });
+
+  test("breakpoint cycles keep sheet and desktop aside stable", async ({ page }) => {
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ seoTitle: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const trigger = page.getByTestId("things-to-fix-trigger");
+      await expect(trigger).toBeVisible();
+      await trigger.click();
+      await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
+
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0);
+      await expect(
+        page.getByRole("dialog", { name: "Before you publish" }),
+      ).toHaveCount(0);
+      await expect(page.getByTestId("publish-checklist-aside")).toBeVisible();
+      await page.getByTestId("editor-tab-description").click();
+    }
+
+    // 1024px is the lg boundary — open on mobile, cross the boundary, then return.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("things-to-fix-trigger").click();
+    await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0);
+    await expect(
+      page.getByRole("dialog", { name: "Before you publish" }),
+    ).toHaveCount(0);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("things-to-fix-trigger").click();
+    await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "Before you publish" })
+      .getByRole("button", { name: "Close checklist" })
+      .click();
+    await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0);
+    await shot(page, "390x844-after-mobile-desktop-mobile-cycle.png");
+  });
+
+  test("dark mode mobile sheet opens without trapping desktop later", async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ seoTitle: null }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId("things-to-fix-trigger").click();
+    await expect(page.getByTestId("publish-checklist-sheet")).toBeVisible();
+    await shot(page, "390x844-dark-sheet-open.png");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(page.getByTestId("publish-checklist-sheet")).toHaveCount(0);
+    await expect(
+      page.getByRole("dialog", { name: "Before you publish" }),
+    ).toHaveCount(0);
   });
 });
 

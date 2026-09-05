@@ -35,6 +35,14 @@ export function useMediaQuery(query: string): boolean {
 /** Tailwind's `md` breakpoint. Matches the sidebar's own visibility rule. */
 export const MD_BREAKPOINT_QUERY = "(min-width: 768px)";
 
+/** Tailwind's `lg` breakpoint — desktop checklist aside becomes visible here. */
+export const LG_BREAKPOINT_QUERY = "(min-width: 1024px)";
+
 export function useIsDesktop(): boolean {
   return useMediaQuery(MD_BREAKPOINT_QUERY);
+}
+
+/** True when the viewport is at or above Tailwind `lg` (1024px). */
+export function useIsLgUp(): boolean {
+  return useMediaQuery(LG_BREAKPOINT_QUERY);
 }

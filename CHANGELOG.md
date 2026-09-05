@@ -12,6 +12,20 @@ production release.
 
 ### Changed
 
+- **UX-L2A-R5 — responsive sheet and touch-target polish (on
+  `feature/ux-l2a-editor-foundation`, not merged).** Closes two Low findings
+  after R4 integration acceptance: the mobile “Things to fix” sheet now closes
+  its Radix modal state when the viewport crosses Tailwind `lg` (so a resize
+  cannot leave a dark inert overlay), and the trigger meets a 44×44 CSS-pixel
+  minimum target. History Back assertions match `router.replace` behaviour.
+  Playwright refuses empty/` :8000`/production API defaults unless CI opts in.
+  Not independently accepted yet; not merged or deployed; UX-L2B has not
+  started. **Carried forward (mandatory UX-L2B / publishing integrity):**
+  `handlePublish` awaits `handleSave` when dirty, but `handleSave` swallows
+  failures, so a failed save or 409 may still allow the publish POST. Also
+  note unused `readiness.score` / `readiness.level` and unused generic tab
+  `blocked` capability — do not treat either as authoritative readiness.
+
 - **UX-L2A-R4 — close independent-review findings (on
   `feature/ux-l2a-editor-foundation`, not merged).** Independent review found
   fixes. Presentation readiness advice no longer hard-disables navigation to
