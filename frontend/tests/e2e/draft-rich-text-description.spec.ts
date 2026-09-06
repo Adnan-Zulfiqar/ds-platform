@@ -10,7 +10,7 @@ import {
 } from "@playwright/test";
 
 import { API_URL, isApiReachable, type TestAccount } from "./helpers/auth";
-import { seedCatalogueViaApi, signInWithAccount } from "./helpers/catalogue";
+import { seedEditorFixtureViaDb, signInWithAccount } from "./helpers/catalogue";
 
 /**
  * M2B — rich-text product description.
@@ -203,35 +203,24 @@ test.describe("Draft editor — rich-text description (M2B)", () => {
   }
 
   test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
+    test.setTimeout(120_000);
     const apiUp = await isApiReachable();
     test.skip(!apiUp, "API not reachable at E2E_API_URL / default.");
 
-    const existingId = process.env.E2E_PRODUCT_ID;
-    const existingEmail = process.env.E2E_EMAIL;
-    const existingPassword = process.env.E2E_PASSWORD;
-
-    if (existingId && existingEmail && existingPassword) {
-      account = { email: existingEmail, password: existingPassword, companyName: "E2E Existing" };
-      productId = existingId;
-    } else {
-      const seedContext = await browser.newContext();
-      const seeded = await seedCatalogueViaApi(seedContext.request);
-      await seedContext.close();
-      test.skip(
-        seeded === null,
-        "Catalogue seeding failed — set E2E_PRODUCT_ID/E2E_EMAIL/E2E_PASSWORD or enable AliExpress import.",
-      );
-      account = seeded!.account;
-      productId = seeded!.product.id;
-    }
+    const seedContext = await browser.newContext();
+    const seeded = await seedEditorFixtureViaDb(seedContext.request);
+    await seedContext.close();
+    test.skip(
+      seeded === null,
+      "DB draft seeding unavailable — set E2E_PYTHON / E2E_DATABASE_URL for this isolated stack.",
+    );
+    account = seeded!.account;
+    productId = seeded!.productId;
+    // Reuse the registration access token — a second password login can 401
+    // under throttle noise and is unnecessary when we already hold a fresh token.
+    apiToken = seeded!.accessToken;
 
     api = await playwrightRequest.newContext();
-    const login = await api.post(`${API_URL}/api/v1/auth/login`, {
-      data: { email: account.email, password: account.password },
-    });
-    expect(login.ok(), `API login failed: ${login.status()}`).toBe(true);
-    apiToken = ((await login.json()) as { tokens: { accessToken: string } }).tokens.accessToken;
-
     page = await establishSession(testInfo);
   });
 

@@ -140,6 +140,15 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const refreshDraft = useRefreshDraft(productId);
   const optimizeProduct = useOptimizeProduct(productId);
   const storesQuery = useStores({ size: 50 });
+  const refetchStores = storesQuery.refetch;
+  // Refresh store list so connect/disconnect in another tab updates chrome copy.
+  // Does not affect publication authority (server readiness does).
+  useEffect(() => {
+    const handle = window.setInterval(() => {
+      void refetchStores();
+    }, 15_000);
+    return () => window.clearInterval(handle);
+  }, [refetchStores]);
 
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
@@ -930,6 +939,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         publishPending={publishPending}
         publishFailed={Boolean(publishError)}
         listing={syncedListing}
+        shopifyStores={shopifyStores}
+        storesPending={storesQuery.isPending}
+        storesError={storesQuery.isError}
         seoScore={seoScoreQuery.data}
         readiness={readiness}
         refreshing={refreshDraft.isPending}
@@ -1504,6 +1516,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           readiness={readiness}
           seoScore={seoScoreQuery.data}
           listing={syncedListing}
+          shopifyStores={shopifyStores}
+          storesPending={storesQuery.isPending}
+          storesError={storesQuery.isError}
           open={inspectorOpen}
           onClose={() => setInspectorOpen(false)}
           onOpenTab={selectTab}
@@ -1513,6 +1528,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           readiness={readiness}
           seoScore={seoScoreQuery.data}
           listing={syncedListing}
+          shopifyStores={shopifyStores}
+          storesPending={storesQuery.isPending}
+          storesError={storesQuery.isError}
           open={inspectorOpen}
           onClose={() => setInspectorOpen(false)}
           onOpenTab={(next) => {

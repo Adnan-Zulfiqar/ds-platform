@@ -10,6 +10,25 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
+  `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run
+  failures with harness/env corrections (not UX-L2B redesign): DB-seeded editor
+  fixtures instead of stale `E2E_*` / AliExpress-dependent seed; POST-only
+  `/products/import` response matcher; global-rules history waits for PATCH
+  200 before reopening Edit; OAuth malformed-callback asserts redirect
+  `Location` against this stack’s `SHOPIFY_FRONTEND_RETURN_URL` (R3
+  `CONNECTION_REFUSED` was Chromium following a redirect to dead `:3105`);
+  Redis logical DBs kept in `0–15` with synthetic rate-limit
+  `SECURITY_RATE_LIMIT_REQUESTS=500`. Product: header/checklist store copy
+  follows workspace store state (`deriveStoreStatusLabel`) — never claims
+  “Connect Shopify” while stores are loading or when a connected store
+  exists without a listing. Clean full Chromium (workers=1): **482 passed,
+  9 skipped, 0 failed, 0 did not run**, ~20.6m. Backend suite carried forward
+  from R2: **2976 passed, 1 skipped**. No migration; Alembic head ``0032``.
+  Not independently accepted; not merged or deployed; UX-L2C not started.
+
 ### Changed
 
 - **UX-L2B-R3 — locked-state and live-API evidence (on

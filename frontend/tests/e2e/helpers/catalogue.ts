@@ -150,6 +150,48 @@ export async function seedCatalogueViaApi(request: APIRequestContext): Promise<{
 }
 
 /**
+ * Register a unique tenant and insert one draft via the DB seed helper.
+ *
+ * Used by editor suites that must not depend on AliExpress credentials or on
+ * host-exported `E2E_PRODUCT_ID` / `E2E_EMAIL` / `E2E_PASSWORD` that may point
+ * at a different isolated database.
+ */
+export async function seedEditorFixtureViaDb(
+  request: APIRequestContext,
+): Promise<{
+  account: TestAccount;
+  productId: string;
+  accessToken: string;
+} | null> {
+  const { canSeed, seedDrafts } = await import("./seed");
+  if (!(await canSeed())) {
+    return null;
+  }
+
+  const registered = await registerViaApi(request);
+  const prefix = `E2E editor ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await seedDrafts(registered.tenantId, 1, { prefix });
+
+  const listed = await request.get(`${API_URL}/api/v1/drafts?size=1`, {
+    headers: { Authorization: `Bearer ${registered.accessToken}` },
+  });
+  if (!listed.ok()) {
+    return null;
+  }
+  const body = (await listed.json()) as { items?: Array<{ id: string }> };
+  const productId = body.items?.[0]?.id;
+  if (!productId) {
+    return null;
+  }
+
+  return {
+    account: registered.account,
+    productId,
+    accessToken: registered.accessToken,
+  };
+}
+
+/**
  * Sign in through the UI using credentials from an API-seeded (or env) account.
  *
  * Prefer `nextPath` so the SPA client-navigates after login and keeps the

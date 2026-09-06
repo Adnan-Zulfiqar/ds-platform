@@ -1,7 +1,7 @@
 import { chromium, expect, test, type Browser, type Page, type Route } from "@playwright/test";
 
 import { isApiReachable, type TestAccount } from "./helpers/auth";
-import { seedCatalogueViaApi, signInWithAccount } from "./helpers/catalogue";
+import { seedEditorFixtureViaDb, signInWithAccount } from "./helpers/catalogue";
 
 /**
  * Draft editor — optimistic-concurrency save flow, hardened in the M2A
@@ -96,33 +96,22 @@ test.describe("Draft editor — conflict resolution (M2A acceptance pass)", () =
   }
 
   test.beforeAll(async ({ browser }: { browser: Browser }, testInfo) => {
+    // Register + DB seed + UI sign-in exceeds the default 30s hook budget.
+    test.setTimeout(120_000);
     const apiUp = await isApiReachable();
     test.skip(!apiUp, "API not reachable at E2E_API_URL / default.");
 
-    const existingId = process.env.E2E_PRODUCT_ID;
-    const existingEmail = process.env.E2E_EMAIL;
-    const existingPassword = process.env.E2E_PASSWORD;
-
-    if (existingId && existingEmail && existingPassword) {
-      account = {
-        email: existingEmail,
-        password: existingPassword,
-        companyName: "E2E Existing",
-      };
-      productId = existingId;
-    } else {
-      // Seeding only needs an API context, not device emulation -- borrow
-      // the worker's own browser for this one throwaway request context.
-      const seedContext = await browser.newContext();
-      const seeded = await seedCatalogueViaApi(seedContext.request);
-      await seedContext.close();
-      test.skip(
-        seeded === null,
-        "Catalogue seeding failed — set E2E_PRODUCT_ID/E2E_EMAIL/E2E_PASSWORD or enable AliExpress import.",
-      );
-      account = seeded!.account;
-      productId = seeded!.product.id;
-    }
+    // Prefer DB seed over host E2E_* credentials — those often point at another
+    // isolated database and produce login hangs / 401s in a fresh stack.
+    const seedContext = await browser.newContext();
+    const seeded = await seedEditorFixtureViaDb(seedContext.request);
+    await seedContext.close();
+    test.skip(
+      seeded === null,
+      "DB draft seeding unavailable — set E2E_PYTHON / E2E_DATABASE_URL for this isolated stack.",
+    );
+    account = seeded!.account;
+    productId = seeded!.productId;
 
     page = await establishSession(testInfo);
   });

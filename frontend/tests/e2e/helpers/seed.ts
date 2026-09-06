@@ -21,10 +21,10 @@ const run = promisify(execFile);
  */
 
 const PYTHON =
-  process.env.E2E_PYTHON ?? "C:/dspm3av2/backend/.venv/Scripts/python.exe";
+  process.env.E2E_PYTHON ?? "C:/dspuxl2a/backend/.venv/Scripts/python.exe";
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
-  "postgresql+psycopg://droppilot:droppilot@localhost:5432/droppilot_m3a4b";
+  "postgresql+psycopg://droppilot:droppilot@127.0.0.1:5432/droppilot_uxl2b_r4_placeholder";
 
 const SCRIPT = `
 import sys, uuid

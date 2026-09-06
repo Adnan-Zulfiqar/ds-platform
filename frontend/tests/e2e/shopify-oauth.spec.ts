@@ -208,11 +208,21 @@ test.describe("Shopify OAuth callback banners", () => {
 
 test.describe("Shopify OAuth callback — malformed request handling", () => {
   test("a callback with no valid signature is rejected, not crashed", async ({ page }) => {
+    // Lifecycle: require isolated API health, and assert the redirect Location
+    // points at *this* stack's frontend (mis-set SHOPIFY_FRONTEND_RETURN_URL
+    // previously sent Chromium to a dead :3105 and looked like CONNECTION_REFUSED).
+    test.skip(!(await isApiReachable()), "Backend API is not reachable.");
     const zeroHmac = "0".repeat(64);
-    await page.goto(
-      `${API_URL}/api/v1/integrations/shopify/callback?code=fake&state=does-not-exist&shop=e2e-malformed.myshopify.com&hmac=${zeroHmac}`,
-    );
+    const callbackUrl =
+      `${API_URL}/api/v1/integrations/shopify/callback?code=fake&state=does-not-exist&shop=e2e-malformed.myshopify.com&hmac=${zeroHmac}`;
+    const probe = await page.request.get(callbackUrl, { maxRedirects: 0 });
+    expect([302, 303]).toContain(probe.status());
+    const location = probe.headers()["location"] ?? "";
+    expect(location).toMatch(/\/settings\/integrations\?shopify=hmac/);
+    const frontendOrigin = new URL(process.env.E2E_BASE_URL ?? "http://127.0.0.1:3122").origin;
+    expect(new URL(location).origin).toBe(frontendOrigin);
 
+    await page.goto(location);
     await expect(page).toHaveURL(/\/settings\/integrations\?shopify=hmac/);
   });
 });

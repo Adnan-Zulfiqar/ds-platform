@@ -57,7 +57,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       /Draft saved — not live|Unsaved changes/,
     );
     await expect(page.getByTestId("product-editor-store")).toContainText(
-      /Connect Shopify to publish/,
+      /Choose a store in Review & publish/,
     );
 
     await expect(page.getByTestId("editor-nav-group-product")).toBeVisible();
@@ -347,7 +347,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     });
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("product-editor-store")).toContainText(
-      "Connect Shopify to publish",
+      "Choose a store in Review & publish",
     );
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
       "Items to review",

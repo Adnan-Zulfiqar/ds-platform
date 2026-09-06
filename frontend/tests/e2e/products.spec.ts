@@ -215,9 +215,16 @@ test.describe("Drafts page", () => {
     await page.getByTestId("import-external-id").fill("3256806389000685");
     await page.getByTestId("import-ship-to").selectOption("US");
 
-    const response = page.waitForResponse((r) =>
-      r.url().includes("/products/import"),
-    );
+    // Match the POST import only — GET `/products/import/check` also contains
+    // that path segment and returns 200 while the submit is still validating.
+    const response = page.waitForResponse((r) => {
+      if (r.request().method() !== "POST") return false;
+      try {
+        return /\/api\/v1\/products\/import\/?$/.test(new URL(r.url()).pathname);
+      } catch {
+        return false;
+      }
+    });
     await page.getByTestId("import-as-draft-submit").click();
 
     expect((await response).status()).toBe(409);

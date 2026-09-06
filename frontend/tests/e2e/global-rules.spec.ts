@@ -662,12 +662,21 @@ test.describe("Rule history", () => {
     const row = page.getByTestId("rule-row").filter({ hasText: "Busy rule" });
 
     // Eleven versions in total: one create plus ten edits, one past the page.
+    // Wait for each PATCH to succeed before reopening Edit — otherwise the
+    // dialog can reopen with a stale `expectedUpdatedAt` from the list cache
+    // and stay open on a 409 conflict banner.
     for (let percent = 11; percent <= 20; percent += 1) {
       await row.getByRole("button", { name: "Edit" }).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel("Markup percentage").fill(String(percent));
+      const patched = page.waitForResponse((r) => {
+        if (r.request().method() !== "PATCH") return false;
+        return r.url().includes("/api/v1/global-rules/pricing/");
+      });
       await dialog.getByRole("button", { name: "Save changes" }).click();
+      expect((await patched).status()).toBe(200);
       await expect(dialog).toBeHidden();
+      await expect(row).toContainText(`${percent}%`);
     }
 
     await row.getByRole("button", { name: "History" }).click();

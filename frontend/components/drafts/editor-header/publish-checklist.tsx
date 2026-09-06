@@ -17,11 +17,16 @@ import {
 import { useIsLgUp } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import type { SeoScore, StoreListing } from "@/types/api";
+import type { Store } from "@/services/stores";
+import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
 
 interface PublishChecklistProps {
   readiness: ReadinessSummary;
   seoScore?: SeoScore | null;
   listing: StoreListing | null;
+  shopifyStores: Store[];
+  storesPending: boolean;
+  storesError: boolean;
   open: boolean;
   onClose: () => void;
   onOpenTab: (tab: EditorTab) => void;
@@ -41,6 +46,9 @@ export function PublishChecklist({
   readiness,
   seoScore,
   listing,
+  shopifyStores,
+  storesPending,
+  storesError,
   open,
   onClose,
   onOpenTab,
@@ -49,6 +57,12 @@ export function PublishChecklist({
   const isLgUp = useIsLgUp();
   const items = readiness.items;
   const hasItems = items.length > 0;
+  const storeGuidance = deriveStoreStatusLabel({
+    storesPending,
+    storesError,
+    shopifyStores,
+    listing,
+  });
 
   useEffect(() => {
     if (variant !== "sheet") return;
@@ -90,15 +104,11 @@ export function PublishChecklist({
         </p>
       ) : null}
 
-      {listing ? (
-        <p className="text-sm text-muted-foreground">
-          Store listing: {listing.status === "synced" ? "connected" : listing.status}
-        </p>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Connect Shopify to publish.
-        </p>
-      )}
+      <p className="text-sm text-muted-foreground" data-testid="store-status-guidance">
+        {listing
+          ? `Store listing: ${listing.status === "synced" ? "connected" : listing.status}`
+          : storeGuidance}
+      </p>
     </div>
   );
 

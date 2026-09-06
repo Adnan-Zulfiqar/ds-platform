@@ -30,6 +30,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ProductDetail, SeoScore, StoreListing } from "@/types/api";
+import type { Store } from "@/services/stores";
+import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
 
 interface ProductEditorHeaderProps {
   product: ProductDetail;
@@ -41,6 +43,10 @@ interface ProductEditorHeaderProps {
   publishPending: boolean;
   publishFailed: boolean;
   listing: StoreListing | null;
+  /** Workspace Shopify stores — used for connect guidance, not publication authority. */
+  shopifyStores: Store[];
+  storesPending: boolean;
+  storesError: boolean;
   seoScore: SeoScore | null | undefined;
   readiness: ReadinessSummary;
   refreshing: boolean;
@@ -100,6 +106,9 @@ export function ProductEditorHeader({
   publishPending,
   publishFailed,
   listing,
+  shopifyStores,
+  storesPending,
+  storesError,
   seoScore,
   readiness,
   refreshing,
@@ -133,13 +142,12 @@ export function ProductEditorHeader({
     lastSyncError: product.lastSyncError,
     refreshing,
   });
-  const storeLabel = listing
-    ? listing.status === "synced"
-      ? listing.shopDomain || "Connected store"
-      : listing.status === "error"
-        ? "Store needs attention"
-        : "Connecting store…"
-    : "Connect Shopify to publish";
+  const storeLabel = deriveStoreStatusLabel({
+    storesPending,
+    storesError,
+    shopifyStores,
+    listing,
+  });
 
   // Advisory checklist items never disable the CTA — there is no tooltip reason.
   const disabledPublishReason: string | null = null;
