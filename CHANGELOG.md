@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Changed
+
+- **UX-L2B-R3 — locked-state and live-API evidence (on
+  `feature/ux-l2b-publish-integrity`, not merged).** Proves that after waiting
+  for the product row lock, publication re-runs authoritative readiness
+  (including `expectedUpdatedAt`) and re-reads store/listing state before any
+  provider call: edit-while-waiting → 409 + zero creates; destination /
+  disconnect / soft-delete while waiting → blockers/404 + zero creates.
+  Adds barrier-controlled HTTP dual-POST concurrency (create count = 1) and
+  Chromium/mobile visual + a11y evidence outside Git. No product-code change;
+  no migration; Alembic head remains ``0032``. Backend suite carried forward
+  from R2: **2976 passed, 1 skipped**. Not independently accepted; not merged
+  or deployed; UX-L2C not started.
+
 ### Fixed
 
 - **UX-L2B-R2 — serialise concurrent Shopify publication (on
