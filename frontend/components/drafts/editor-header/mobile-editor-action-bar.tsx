@@ -67,6 +67,7 @@ export function MobileEditorActionBar({
             storefrontUrl={storefrontUrl}
             onPublish={onPublish}
             size="default"
+            intent="navigate"
           />
         </div>
       </div>

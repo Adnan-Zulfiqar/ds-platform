@@ -114,7 +114,7 @@ export function PublishChecklist({
 
   const summary = hasItems
     ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
-    : "No content gaps flagged here. Channel checks still run when you publish.";
+    : "No title, description or image suggestions. Channel checks still run when you publish.";
 
   if (variant === "sheet") {
     return (

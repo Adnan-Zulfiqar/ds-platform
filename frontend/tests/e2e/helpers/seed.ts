@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import {
+  E2eSeedConfigError,
+  resolveSeedAvailability,
+  type ResolvedSeedConfig,
+} from "./seed-config";
+
 const run = promisify(execFile);
 
 /**
@@ -17,14 +23,20 @@ const run = promisify(execFile);
  * assertion afterwards goes through the real API.
  *
  * Skips the whole file cleanly when the interpreter or database is not
- * configured, rather than failing with a wall of spawn errors.
+ * configured, rather than failing with a wall of spawn errors — except in CI,
+ * where missing seed configuration is a hard failure.
  */
 
-const PYTHON =
-  process.env.E2E_PYTHON ?? "C:/dspuxl2a/backend/.venv/Scripts/python.exe";
-const DATABASE_URL =
-  process.env.E2E_DATABASE_URL ??
-  "postgresql+psycopg://droppilot:droppilot@127.0.0.1:5432/droppilot_uxl2b_r4_placeholder";
+let cachedConfig: ResolvedSeedConfig | null | undefined;
+
+async function loadSeedConfig(): Promise<ResolvedSeedConfig | null> {
+  if (cachedConfig !== undefined) {
+    return cachedConfig;
+  }
+  const availability = await resolveSeedAvailability();
+  cachedConfig = availability.available ? availability.config : null;
+  return cachedConfig;
+}
 
 const SCRIPT = `
 import sys, uuid
@@ -112,27 +124,50 @@ export async function seedDrafts(
   count: number,
   options: SeedOptions = {},
 ): Promise<void> {
-  const { stdout } = await run(PYTHON, [
-    "-c",
-    SCRIPT,
-    DATABASE_URL,
-    tenantId,
-    String(count),
-    String(options.published ?? 0),
-    String(options.flagged ?? 0),
-    options.prefix ?? "Impact draft",
-  ]);
+  const config = await loadSeedConfig();
+  if (!config) {
+    throw new E2eSeedConfigError(await explainSeedUnavailable());
+  }
+
+  const { stdout, stderr } = await run(
+    config.python,
+    [
+      "-c",
+      SCRIPT,
+      config.databaseUrl,
+      tenantId,
+      String(count),
+      String(options.published ?? 0),
+      String(options.flagged ?? 0),
+      options.prefix ?? "Impact draft",
+    ],
+    { timeout: 120_000 },
+  );
+
   if (!stdout.includes("seeded")) {
-    throw new Error(`Seeding did not confirm: ${stdout}`);
+    const detail = (stderr || stdout || "no output").slice(0, 500);
+    throw new E2eSeedConfigError(`Seeding did not confirm success (${detail}).`);
   }
 }
 
-/** Whether seeding can run at all, so the suite skips instead of erroring. */
-export async function canSeed(): Promise<boolean> {
-  try {
-    await run(PYTHON, ["-c", "import sqlalchemy"]);
-    return true;
-  } catch {
-    return false;
+/** Human-readable reason when seeding is unavailable locally (for test.skip). */
+export async function explainSeedUnavailable(): Promise<string> {
+  const availability = await resolveSeedAvailability();
+  if (availability.available) {
+    return "Seed configuration is available.";
   }
+  return availability.reason;
 }
+
+/** Whether seeding can run at all, so the suite skips instead of erroring locally. */
+export async function canSeed(): Promise<boolean> {
+  const availability = await resolveSeedAvailability();
+  return availability.available;
+}
+
+/** Test-only: clear cached seed resolution between hermetic cases. */
+export function resetSeedConfigCacheForTests(): void {
+  cachedConfig = undefined;
+}
+
+export { E2eSeedConfigError };

@@ -348,3 +348,87 @@ test.describe("UX-L2B save-before-publish integrity", () => {
     await expect(page.getByText(/free shipping/i)).toHaveCount(0);
   });
 });
+
+test.describe("UX-L2B-R5 header publish truthfulness", () => {
+  function visibleHeaderPublish(page: Page) {
+    return page
+      .locator('[data-testid="publish-action"][data-publish-intent="navigate"]:visible')
+      .first();
+  }
+
+  for (const viewport of [
+    { width: 320, height: 640, name: "320px" },
+    { width: 390, height: 844, name: "390px" },
+    { width: 768, height: 1024, name: "tablet" },
+    { width: 1440, height: 900, name: "desktop" },
+  ] as const) {
+    test(`header navigate CTA at ${viewport.name} never publishes or says Publish to store`, async ({
+      page,
+    }) => {
+      let publishCalls = 0;
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+        publishCalls += 1;
+        await route.abort();
+      });
+
+      await openMockedEditor(page);
+      await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+      const headerAction = visibleHeaderPublish(page);
+      await expect(headerAction).toBeVisible();
+      await expect(headerAction).not.toContainText(/Publish to store/i);
+      await expect(headerAction).toContainText(/Review/i);
+
+      await headerAction.click();
+      await expect(page.getByTestId("editor-tab-publishing")).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(publishCalls).toBe(0);
+    });
+  }
+
+  test("server blockers keep advisory checklist wording precise", async ({ page }) => {
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({
+        title: "Complete title",
+        description: "Complete description",
+        images: [{ id: "1", url: "https://example.com/a.jpg", position: 0 }],
+      }),
+    });
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+
+    await page.route("**/api/v1/integrations/shopify/publish-readiness", async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          mockPublishReadiness({
+            canPublish: false,
+            blockers: [
+              {
+                code: "selling_currency_mismatch",
+                message: "Recalculate pricing for this store on the Pricing tab.",
+                field: "sellPrice",
+                section: "pricing",
+                action: "Go to Pricing",
+              },
+            ],
+            recommendations: [],
+          }),
+        ),
+      });
+    });
+
+    await openReview(page);
+    await selectDemoStore(page);
+    await expect(page.getByTestId("publish-blockers")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("publish-checklist-aside")).toContainText(
+      /No title, description or image suggestions/,
+    );
+    await expect(page.getByTestId("publish-checklist-aside")).not.toContainText(
+      /No content gaps flagged here/i,
+    );
+  });
+});

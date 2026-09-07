@@ -93,6 +93,7 @@ export function ProductEditorActions({
         adminUrl={adminUrl}
         onPublish={onPublish}
         size="sm"
+        intent="navigate"
       />
 
       <ProductActionsMenu

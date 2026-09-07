@@ -17,6 +17,8 @@ export type PublishActionKind =
   | "push_updates"
   | "retry";
 
+export type PublishActionIntent = "navigate" | "publish";
+
 interface PublishActionProps {
   kind: PublishActionKind;
   issueCount?: number;
@@ -26,9 +28,34 @@ interface PublishActionProps {
   onPublish: () => void;
   className?: string;
   size?: "default" | "sm";
+  /** Header/mobile controls navigate to Review & publish; only the panel publishes. */
+  intent?: PublishActionIntent;
 }
 
-function labelFor(kind: PublishActionKind, issueCount: number): string {
+function labelFor(
+  kind: PublishActionKind,
+  issueCount: number,
+  intent: PublishActionIntent,
+): string {
+  if (intent === "navigate") {
+    switch (kind) {
+      case "review_items":
+        return `Review ${issueCount} item${issueCount === 1 ? "" : "s"}`;
+      case "publishing":
+        return "Publishing…";
+      case "view_store":
+        return "View in store";
+      case "retry":
+      case "push_updates":
+      case "publish":
+        return issueCount > 0
+          ? `Review ${issueCount} item${issueCount === 1 ? "" : "s"}`
+          : "Review & publish";
+      default:
+        return "Review & publish";
+    }
+  }
+
   switch (kind) {
     case "review_items":
       return `Review ${issueCount} item${issueCount === 1 ? "" : "s"}`;
@@ -54,8 +81,9 @@ export function PublishAction({
   onPublish,
   className,
   size = "default",
+  intent = "publish",
 }: PublishActionProps) {
-  const label = labelFor(kind, issueCount);
+  const label = labelFor(kind, issueCount, intent);
   // Presentation checklist items must not hard-disable this control — they only
   // change the label to "Review N items". Only an in-flight publish is disabled,
   // so a double-submit cannot race the channel request.
@@ -79,6 +107,7 @@ export function PublishAction({
         className,
       )}
       data-testid="publish-action"
+      data-publish-intent={intent}
       aria-disabled={disabled || undefined}
     >
       {kind === "publishing" ? (

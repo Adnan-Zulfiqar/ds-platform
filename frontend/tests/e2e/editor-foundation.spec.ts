@@ -71,7 +71,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       "Before you publish",
     );
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /No content gaps flagged here|Review \d+ item/,
+      /No title, description or image suggestions|Review \d+ item/,
     );
     await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
