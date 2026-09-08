@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   // container.
   output: "standalone",
 
+  // Isolated acceptance builds can set NEXT_DIST_DIR (for example `.next-r6`).
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
+
   // Do not advertise the framework and version to every client.
   poweredByHeader: false,
 

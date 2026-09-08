@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  CI_ALEMBIC_HEAD_REVISION,
+  CI_E2E_DATABASE_URL,
+  CI_E2E_POSTGRES_DB,
+  CI_E2E_PYTHON,
+} from "./helpers/ci-e2e-database";
+import {
   E2eSeedConfigError,
   isCiSeedEnvironment,
   parseE2eDatabaseUrl,
@@ -149,5 +155,19 @@ test.describe("E2E seed harness", () => {
       isCiSeedEnvironment({ CI: "true", GITHUB_ACTIONS: "true" }),
     ).toBe(true);
     expect(isCiSeedEnvironment({ CI: "true" })).toBe(false);
+  });
+
+  test("CI Playwright job database URL matches postgres service droppilot_e2e", () => {
+    const parsed = parseE2eDatabaseUrl(CI_E2E_DATABASE_URL);
+    expect(parsed.database).toBe(CI_E2E_POSTGRES_DB);
+    validateDatabaseTarget(parsed);
+  });
+
+  test("CI Playwright job E2E_PYTHON resolves to workflow interpreter name", () => {
+    expect(resolveE2ePython({ E2E_PYTHON: CI_E2E_PYTHON })).toBe("python");
+  });
+
+  test("CI Alembic head revision is documented for workflow verification", () => {
+    expect(CI_ALEMBIC_HEAD_REVISION).toBe("0032");
   });
 });

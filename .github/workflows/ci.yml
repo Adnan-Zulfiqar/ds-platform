@@ -567,6 +567,7 @@ jobs:
       NEXT_PUBLIC_ENVIRONMENT: local
       E2E_DATABASE_URL: postgresql+psycopg://droppilot:droppilot@127.0.0.1:5432/droppilot_e2e
       E2E_PYTHON: python
+      GITHUB_ACTIONS: "true"
       # Ephemeral CI Postgres/Redis + this job's own backend on :8000 — not
       # production. Requires CI + GITHUB_ACTIONS (set by Actions) + this flag;
       # see resolveE2eApiUrl. Local runs must use 127.0.0.1:8100–8199.
@@ -598,6 +599,31 @@ jobs:
         working-directory: backend
         run: alembic upgrade head
 
+      - name: Verify e2e database identity and Alembic head
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          current="$(alembic current 2>/dev/null | awk '{print $1}')"
+          if [ "$current" != "0032" ]; then
+            echo "::error::Expected Alembic head 0032, got ${current:-<none>}"
+            exit 1
+          fi
+          python - <<'PY'
+          import os
+          import sqlalchemy as sa
+
+          db = os.environ["POSTGRES_DB"]
+          url = (
+              f"postgresql+psycopg://{os.environ['POSTGRES_USER']}:"
+              f"{os.environ['POSTGRES_PASSWORD']}@{os.environ['POSTGRES_HOST']}:5432/{db}"
+          )
+          with sa.create_engine(url).connect() as conn:
+              name = conn.execute(sa.text("select current_database()")).scalar()
+          if name != "droppilot_e2e":
+              raise SystemExit(f"expected droppilot_e2e, connected to {name!r}")
+          print(f"verified database {name} at Alembic {os.popen('alembic current').read().strip()}")
+          PY
+
       - name: Start API
         working-directory: backend
         run: |
@@ -620,6 +646,10 @@ jobs:
       - name: Install Playwright Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
+
+      - name: Verify seed harness CI contract
+        working-directory: frontend
+        run: npx playwright test tests/e2e/seed-harness.spec.ts --project=chromium
 
       - name: Run Playwright (chromium)
         working-directory: frontend

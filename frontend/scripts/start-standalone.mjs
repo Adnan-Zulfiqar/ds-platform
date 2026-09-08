@@ -12,23 +12,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const standalone = path.join(root, ".next", "standalone");
+const distDir = process.env.NEXT_DIST_DIR ?? ".next";
+const standalone = path.join(root, distDir, "standalone");
 const serverJs = path.join(standalone, "server.js");
-const staticSrc = path.join(root, ".next", "static");
-const staticDest = path.join(standalone, ".next", "static");
+const staticSrc = path.join(root, distDir, "static");
+const staticDest = path.join(standalone, distDir, "static");
 const publicSrc = path.join(root, "public");
 const publicDest = path.join(standalone, "public");
 
 if (!existsSync(serverJs)) {
-  console.error("Missing .next/standalone/server.js — run `npm run build` first.");
+  console.error(`Missing ${distDir}/standalone/server.js — run \`npm run build\` first.`);
   process.exit(1);
 }
 if (!existsSync(staticSrc)) {
-  console.error("Missing .next/static — run `npm run build` first.");
+  console.error(`Missing ${distDir}/static — run \`npm run build\` first.`);
   process.exit(1);
 }
 
-mkdirSync(path.join(standalone, ".next"), { recursive: true });
+mkdirSync(path.dirname(staticDest), { recursive: true });
 cpSync(staticSrc, staticDest, { recursive: true });
 if (existsSync(publicSrc)) {
   cpSync(publicSrc, publicDest, { recursive: true });

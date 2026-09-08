@@ -1,21 +1,17 @@
 /**
- * UX-L2B-R3 — visual + accessibility evidence for Review & publish states.
+ * UX-L2B-R3/R6 — visual + accessibility evidence for Review & publish states.
  *
- * Screenshots land outside Git under UX_L2B_R3_SHOT_ROOT.
+ * Screenshots land outside Git under UX_L2B_R6_SHOT_ROOT (or legacy R3 root).
  * Uses mocked API routes (provider boundary fake); does not call Shopify.
  */
 import { expect, test, type Page } from "@playwright/test";
-import path from "node:path";
 
 import {
   DEMO_STORE_ID,
   mockPublishReadiness,
   openMockedEditor,
 } from "./helpers/editor-fixture";
-
-const SHOT_ROOT =
-  process.env.UX_L2B_R3_SHOT_ROOT ??
-  "C:\\Users\\profe\\DropPilotLogs\\ux-l2b-r3\\shots";
+import { captureEvidenceScreenshot } from "./helpers/screenshot-evidence";
 
 async function openReview(page: Page) {
   await page.getByTestId("editor-tab-publishing").click();
@@ -27,9 +23,7 @@ async function selectDemoStore(page: Page) {
 }
 
 async function shot(page: Page, name: string) {
-  const file = path.join(SHOT_ROOT, `${name}.png`);
-  await page.screenshot({ path: file, fullPage: true });
-  return file;
+  return captureEvidenceScreenshot(page, name);
 }
 
 async function stubReadiness(page: Page, overrides: Record<string, unknown>) {
@@ -88,7 +82,15 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
     await openReview(page);
     await selectDemoStore(page);
     await expect(page.getByTestId("publish-blockers")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("publish-checklist-aside")).toBeVisible();
+    await expect(page.getByTestId("publish-checklist-aside")).toContainText(
+      /No title, description or image suggestions/i,
+    );
+    await expect(page.getByTestId("publish-checklist-aside")).not.toContainText(
+      /No content gaps flagged here/i,
+    );
     await shot(page, "03-one-blocker");
+    await shot(page, "r6-server-blocker-with-advisory-checklist");
 
     await stubReadiness(page, {
       canPublish: false,
@@ -119,6 +121,7 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
 
     await expect(page.getByTestId("publish-to-store")).toBeDisabled();
     await expect(page.getByTestId("publish-disabled-reason")).toBeVisible();
+    await shot(page, "r6-disabled-publish-with-reason");
     const blockerBox = page.getByTestId("publish-blockers");
     await expect(blockerBox).not.toContainText(/score/i);
     await expect(blockerBox).not.toContainText(/\{"/);
@@ -353,6 +356,17 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
       await openMockedEditor(page);
       await stubReadiness(page, blockerStub);
       await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+      if (size.width <= 390) {
+        const mobileCta = page
+          .getByTestId("mobile-editor-action-bar")
+          .getByTestId("publish-action");
+        await expect(mobileCta).toContainText(/Review & publish/i);
+        await expect(mobileCta).not.toContainText(/Publish to store/i);
+        await expect(mobileCta).toHaveAttribute("data-publish-intent", "navigate");
+        if (size.width === 390) {
+          await shot(page, "r6-mobile-review-cta-390");
+        }
+      }
       await openReview(page);
       await selectDemoStore(page);
       await expect(page.getByTestId("publish-blockers")).toBeVisible({ timeout: 15_000 });
