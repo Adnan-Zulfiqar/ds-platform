@@ -2,15 +2,16 @@ import type { Page } from "@playwright/test";
 
 import type { AuthResponse, ProductDetail, SeoScore, StoreListing } from "@/types/api";
 
+import { resolveSuiteShotRoot } from "./evidence-paths";
 import { blockGoogleIdentityScript } from "./auth";
 
 /** Stable synthetic draft id — never a production customer product. */
 export const DEMO_PRODUCT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 /** Outside the Git worktree — screenshots must not land in the repo. */
-export const UX_L2A_SHOT_ROOT =
-  process.env.UX_L2A_SHOT_ROOT ??
-  "C:\\Users\\profe\\DropPilotLogs\\ux-l2a-editor-foundation";
+export const UX_L2A_SHOT_ROOT = resolveSuiteShotRoot("ux-l2a-editor-foundation", [
+  "UX_L2A_SHOT_ROOT",
+]);
 
 export function mockAuthResponse(): AuthResponse {
   const now = Date.now();

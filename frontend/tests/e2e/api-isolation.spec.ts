@@ -75,12 +75,25 @@ test.describe("E2E API isolation guard", () => {
     ).toThrow(E2eIsolationError);
   });
 
-  test("CI=true + override without GITHUB_ACTIONS fails", () => {
+  test("CI=true + E2E_ALLOW_LOCAL_8000 without GITHUB_ACTIONS refuses :8000", () => {
     expect(() =>
       resolveE2eApiUrl({
         NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000",
         CI: "true",
         E2E_ALLOW_LOCAL_8000: "1",
+      }),
+    ).toThrow(E2eIsolationError);
+  });
+
+  test("locally copied CI env block cannot unlock :8000 without platform GITHUB_ACTIONS", () => {
+    expect(() =>
+      resolveE2eApiUrl({
+        NEXT_PUBLIC_API_URL: "http://127.0.0.1:8000",
+        CI: "true",
+        E2E_ALLOW_LOCAL_8000: "1",
+        E2E_DATABASE_URL:
+          "postgresql+psycopg://droppilot:droppilot@127.0.0.1:5432/droppilot_e2e",
+        E2E_PYTHON: "python",
       }),
     ).toThrow(E2eIsolationError);
   });

@@ -3,14 +3,12 @@ import path from "node:path";
 
 import { expect, type Page } from "@playwright/test";
 
-/** Default R6 evidence root — outside Git, never committed. */
-export const DEFAULT_SHOT_ROOT =
-  process.env.UX_L2B_R6_SHOT_ROOT ??
-  process.env.UX_L2B_R3_SHOT_ROOT ??
-  "C:\\Users\\profe\\DropPilotLogs\\ux-l2b-r6\\shots";
+import { resolveSuiteShotRoot } from "./evidence-paths";
+
+const SHOT_ENV_KEYS = ["UX_L2B_R6_SHOT_ROOT", "UX_L2B_R3_SHOT_ROOT"] as const;
 
 export function resolveShotRoot(): string {
-  return DEFAULT_SHOT_ROOT;
+  return resolveSuiteShotRoot("ux-l2b-visual-evidence", SHOT_ENV_KEYS);
 }
 
 /**

@@ -1,25 +1,23 @@
 /**
  * UX-L2B-R4 — capture store guidance chrome for connected / disconnected states.
- * Screenshots land under UX_L2B_R4_SHOT_ROOT (outside Git).
+ * Screenshots land under test-results/ux-l2b-r4-store-guidance/ by default.
  */
 import { expect, test } from "@playwright/test";
-import path from "node:path";
 
+import { captureEvidenceScreenshot } from "./helpers/screenshot-evidence";
 import {
   DEMO_STORE_ID,
   mockShopifyStoresResponse,
   openMockedEditor,
 } from "./helpers/editor-fixture";
+import { resolveSuiteShotRoot } from "./helpers/evidence-paths";
 
-const SHOT_ROOT =
-  process.env.UX_L2B_R4_SHOT_ROOT ??
-  "C:\\Users\\profe\\DropPilotLogs\\ux-l2b-r4\\shots";
+const SHOT_ROOT = resolveSuiteShotRoot("ux-l2b-r4-store-guidance", [
+  "UX_L2B_R4_SHOT_ROOT",
+]);
 
 async function shot(page: import("@playwright/test").Page, name: string) {
-  await page.screenshot({
-    path: path.join(SHOT_ROOT, `${name}.png`),
-    fullPage: false,
-  });
+  await captureEvidenceScreenshot(page, name, { root: SHOT_ROOT, fullPage: false });
 }
 
 test.describe("UX-L2B-R4 store guidance screenshots", () => {

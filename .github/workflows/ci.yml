@@ -567,9 +567,8 @@ jobs:
       NEXT_PUBLIC_ENVIRONMENT: local
       E2E_DATABASE_URL: postgresql+psycopg://droppilot:droppilot@127.0.0.1:5432/droppilot_e2e
       E2E_PYTHON: python
-      GITHUB_ACTIONS: "true"
       # Ephemeral CI Postgres/Redis + this job's own backend on :8000 — not
-      # production. Requires CI + GITHUB_ACTIONS (set by Actions) + this flag;
+      # production. Requires CI + platform GITHUB_ACTIONS + this flag;
       # see resolveE2eApiUrl. Local runs must use 127.0.0.1:8100–8199.
       E2E_ALLOW_LOCAL_8000: "1"
       CI: "true"

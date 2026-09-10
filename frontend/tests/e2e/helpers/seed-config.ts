@@ -1,11 +1,83 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+// Playwright executes from `frontend/`; keep paths cwd-relative for CJS transpile.
+const HELPERS_DIR = path.join(process.cwd(), "tests", "e2e", "helpers");
+
+export type SeedStdinPayload = Record<string, unknown>;
+
+let lastSpawnArgv: string[] | undefined;
+
+export function peekLastSeedSpawnArgvForTests(): string[] | undefined {
+  return lastSpawnArgv;
+}
+
+export function resetLastSeedSpawnArgvForTests(): void {
+  lastSpawnArgv = undefined;
+}
+
+export function resolveSeedScriptPath(scriptName: string): string {
+  return path.join(HELPERS_DIR, scriptName);
+}
+
+export async function runSeedPythonScript(
+  python: string,
+  scriptName: string,
+  payload: SeedStdinPayload,
+  options?: { timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string; argv: string[] }> {
+  const scriptPath = resolveSeedScriptPath(scriptName);
+  const argv = [python, scriptPath];
+  lastSpawnArgv = argv;
+  const timeoutMs = options?.timeoutMs ?? 120_000;
+  const stdinBody = JSON.stringify(payload);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, [scriptPath], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`Seed script timed out after ${timeoutMs}ms.`));
+    }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr, argv });
+        return;
+      }
+      reject(new Error((stderr || stdout || `exit ${code}`).slice(0, 500)));
+    });
+    child.stdin.write(stdinBody);
+    child.stdin.end();
+  });
+}
 
 /** Configuration / isolation failure — must not be treated as a quiet skip in CI. */
 export class E2eSeedConfigError extends Error {
@@ -43,12 +115,8 @@ export function isCiSeedEnvironment(env: NodeJS.ProcessEnv = process.env): boole
   return env.CI === "true" && env.GITHUB_ACTIONS === "true";
 }
 
-/** Repository root from this module's location (`frontend/tests/e2e/helpers`). */
-export function resolveRepoRoot(moduleUrl?: string): string {
-  if (moduleUrl) {
-    return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "../../../..");
-  }
-  // Playwright executes from `frontend/`; the repository root is one level up.
+/** Repository root when Playwright executes from `frontend/`. */
+export function resolveRepoRoot(): string {
   return path.resolve(process.cwd(), "..");
 }
 
@@ -115,7 +183,7 @@ export function validateDatabaseTarget(target: ParsedDatabaseTarget): void {
 export function resolveE2ePython(
   env: NodeJS.ProcessEnv = process.env,
   repoRoot: string = resolveRepoRoot(),
-): string | null {
+): string {
   const explicit = env.E2E_PYTHON?.trim();
   if (explicit) {
     return explicit;
@@ -145,16 +213,8 @@ async function pythonCommandExists(python: string): Promise<boolean> {
 }
 
 async function readCurrentDatabase(python: string, databaseUrl: string): Promise<string> {
-  const script = `
-import sys
-import sqlalchemy as sa
-
-engine = sa.create_engine(sys.argv[1])
-with engine.connect() as connection:
-    print(connection.execute(sa.text("select current_database()")).scalar())
-`;
-  const { stdout } = await run(python, ["-c", script, databaseUrl], {
-    timeout: 20_000,
+  const { stdout } = await runSeedPythonScript(python, "seed_db_identity.py", {
+    databaseUrl,
   });
   return stdout.trim();
 }
@@ -205,14 +265,6 @@ export async function resolveSeedAvailability(
   }
 
   const python = resolveE2ePython(env, repoRoot);
-  if (!python) {
-    const reason =
-      "DB draft seeding unavailable — set E2E_PYTHON or install backend dependencies in backend/.venv.";
-    if (ci) {
-      refuse(`E2E seed: ${reason}`);
-    }
-    return { available: false, reason };
-  }
 
   if (!(await pythonCommandExists(python))) {
     const reason =
@@ -255,5 +307,5 @@ export async function resolveSeedAvailability(
 
 /** Test-only helpers */
 export function resetSeedDiagnosticsForTests(): void {
-  // Reserved for future once-per-process logging, mirroring auth helpers.
+  resetLastSeedSpawnArgvForTests();
 }
