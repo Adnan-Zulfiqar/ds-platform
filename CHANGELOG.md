@@ -30,7 +30,21 @@ production release.
   proof, and isolated R1 regression stack (8130/3130). No migration; Alembic
   head ``0032``. Not independently accepted; not merged or deployed.
 
+- **UX-L2C-R2 — sync authority and reviewer handoff (on
+  `feature/ux-l2c-live-state-clarity`, not merged).** Documents every
+  `StoreListing` sync-field writer; removes unsafe “Up to date on Shopify”
+  badge (inventory/price pushes advance `lastSyncedAt` without full product
+  body sync). Adds timestamp/partial-sync unit tests, expanded visual evidence
+  matrix, `scripts/r2_provision_stack.py` with pre-use Redis `DBSIZE` checks,
+  and restricted Claude reviewer stack. No migration; Alembic head ``0032``.
+  Not independently accepted; not merged or deployed.
+
 ### Fixed
+
+- **UX-L2C-R2 — conservative Shopify sync wording.** `lastSyncedAt` no longer
+  authorizes “Up to date on Shopify”; synced listings with unknown visibility
+  use “Added to Shopify” plus conservative copy; visibility claims require
+  `onlineStorePublished === true`.
 
 - **UX-L2C-R1 — Rules of Hooks violation in draft editor.** Moved publish
   overlay cleanup `useEffect` before conditional returns so mocked and live

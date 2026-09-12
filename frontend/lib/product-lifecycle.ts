@@ -10,7 +10,6 @@ export type ProductLifecycleKind =
   | "visible_on_shop"
   | "unsaved_changes"
   | "changes_not_sent"
-  | "up_to_date_on_shopify"
   | "publishing"
   | "publish_failed";
 
@@ -44,13 +43,18 @@ export interface DeriveProductLifecycleInput {
   publishFailed?: boolean;
 }
 
-export type DraftShopifySyncComparison = "unsent" | "up_to_date" | "unknown";
+export type DraftShopifySyncComparison = "unsent" | "not_unsent" | "unknown";
+
+/** Copy when a listing exists but full draft-to-Shopify sync cannot be proven. */
+export const CONSERVATIVE_SHOPIFY_SYNC_COPY =
+  "Your DropPilot draft may contain changes that have not been sent to Shopify.";
 
 /**
- * Compare the saved draft version to the last confirmed Shopify sync.
+ * Compare the saved draft version to the last confirmed Shopify sync timestamp.
  *
- * `dirty === false` proves the draft is saved in DropPilot; it does not prove
- * the saved version was sent to Shopify. Only a timestamp comparison can.
+ * `not_unsent` means the saved draft is not provably newer than `lastSyncedAt`.
+ * It does **not** prove the complete draft was sent through the full Shopify
+ * product publish path — inventory and price pushes also advance `lastSyncedAt`.
  */
 export function compareDraftToShopifySync(
   draftUpdatedAt: string | null | undefined,
@@ -61,7 +65,7 @@ export function compareDraftToShopifySync(
   const syncMs = Date.parse(lastSyncedAt);
   if (Number.isNaN(draftMs) || Number.isNaN(syncMs)) return "unknown";
   if (draftMs > syncMs) return "unsent";
-  return "up_to_date";
+  return "not_unsent";
 }
 
 export function hasUnsentShopifyChanges(
@@ -137,46 +141,7 @@ function visibilitySyncedView(
   online: boolean | null,
   storefrontUrl: string | null,
   adminUrl: string | null,
-  syncComparison: DraftShopifySyncComparison,
 ): ProductLifecycleView {
-  const upToDate = syncComparison === "up_to_date";
-
-  if (upToDate && online === true) {
-    return baseSyncedView(
-      "up_to_date_on_shopify",
-      "Up to date on Shopify",
-      "Your latest saved version matches what is on Shopify.",
-      true,
-      storefrontUrl,
-      adminUrl,
-      false,
-    );
-  }
-
-  if (upToDate && online === false) {
-    return baseSyncedView(
-      "visibility_setup_needed",
-      "Added to Shopify",
-      "Added to Shopify, but it may not be visible on your online shop yet.",
-      false,
-      storefrontUrl,
-      adminUrl,
-      false,
-    );
-  }
-
-  if (upToDate) {
-    return baseSyncedView(
-      "added_to_shopify",
-      "Added to Shopify",
-      "Your product is in Shopify. Open Shopify to check how it appears in your shop.",
-      null,
-      storefrontUrl,
-      adminUrl,
-      false,
-    );
-  }
-
   if (online === true) {
     return baseSyncedView(
       "visible_on_shop",
@@ -204,7 +169,7 @@ function visibilitySyncedView(
   return baseSyncedView(
     "added_to_shopify",
     "Added to Shopify",
-    "Your DropPilot draft may contain changes that have not been sent to Shopify.",
+    CONSERVATIVE_SHOPIFY_SYNC_COPY,
     null,
     storefrontUrl,
     adminUrl,
@@ -325,7 +290,7 @@ export function deriveProductLifecycle(
     );
   }
 
-  return visibilitySyncedView(online, storefrontUrl, adminUrl, syncComparison);
+  return visibilitySyncedView(online, storefrontUrl, adminUrl);
 }
 
 function unavailableView(): ProductLifecycleView {

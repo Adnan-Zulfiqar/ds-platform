@@ -808,7 +808,7 @@ test.describe("UX-L2A editor foundation — live listing copy", () => {
     });
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("product-lifecycle")).toHaveText(
-      "Up to date on Shopify",
+      "Visible on your shop",
     );
     await expect(page.getByTestId("draft-save-state")).toContainText(
       /Changes saved as a draft — your live product has not changed/,

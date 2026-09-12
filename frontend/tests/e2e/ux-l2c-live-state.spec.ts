@@ -16,7 +16,10 @@ import { resolveSuiteShotRoot } from "./helpers/evidence-paths";
 import { captureEvidenceScreenshot } from "./helpers/screenshot-evidence";
 import type { StoreListing } from "@/types/api";
 
-const UX_L2C_SHOT_ROOT = resolveSuiteShotRoot("ux-l2c-live-state", ["UX_L2C_SHOT_ROOT"]);
+const UX_L2C_SHOT_ROOT = resolveSuiteShotRoot("l2c-r2-after", [
+  "UX_L2C_R2_SHOT_ROOT",
+  "UX_L2C_SHOT_ROOT",
+]);
 
 function visibleTestId(page: Page, testId: string): Locator {
   return page.locator(`[data-testid="${testId}"]:visible`).first();
@@ -120,8 +123,10 @@ test.describe("UX-L2C lifecycle and calm completion", () => {
       ],
     });
     await expect(page.getByTestId("product-lifecycle")).toHaveText(
-      "Up to date on Shopify",
+      "Visible on your shop",
     );
+    await expect(page.getByText(/Up to date on Shopify/i)).toHaveCount(0);
+    await shot(page, "after-1440-visible-on-shop");
   });
 
   test("reload preserves saved-not-sent after autosave", async ({ page }) => {
@@ -460,16 +465,203 @@ test.describe("UX-L2C lifecycle and calm completion", () => {
   });
 });
 
+test.describe("UX-L2C dark and tablet evidence", () => {
+  test.use({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+
+  test("dark draft-not-on-shopify", async ({ page }) => {
+    await openMockedEditor(page);
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Draft — not on Shopify",
+    );
+    await shot(page, "after-1440-dark-draft");
+  });
+
+  test("dark visibility setup needed", async ({ page }) => {
+    await openMockedEditor(page, {
+      listings: [
+        syncedListing({
+          onlineStorePublished: false,
+          lastSyncedAt: "2026-09-12T10:00:00.000Z",
+        }),
+      ],
+      product: buildSyntheticProduct({ updatedAt: "2026-09-12T10:00:00.000Z" }),
+    });
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Added to Shopify");
+    await shot(page, "after-1440-dark-visibility-setup");
+  });
+});
+
+test.describe("UX-L2C 1024 lifecycle evidence", () => {
+  test("1024 light saved-not-sent", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ updatedAt: "2026-09-12T11:00:00.000Z" }),
+      listings: [
+        syncedListing({ lastSyncedAt: "2026-09-12T10:00:00.000Z" }),
+      ],
+    });
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Changes saved in DropPilot — not sent to Shopify",
+    );
+    await shot(page, "after-1024-saved-not-sent");
+  });
+
+  test("1024 dark post-publish success", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openMockedEditor(page);
+    await page.route("**/api/v1/integrations/shopify/publish", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          message: "Published.",
+          listingId: "66666666-6666-4666-8666-666666666666",
+          externalProductId: "1001",
+          externalHandle: "lamp",
+          externalGraphqlId: null,
+          shopDomain: "demo.myshopify.com",
+          storefrontUrl: null,
+          adminUrl: "https://demo.myshopify.com/admin/products/1001",
+          onlineStorePublished: false,
+          updated: true,
+        }),
+      }),
+    );
+    await openReview(page);
+    await page.locator("#publish-store").selectOption(DEMO_STORE_ID);
+    await page.getByTestId("publish-to-store").click();
+    await expect(page.getByTestId("post-publish-success")).toBeVisible();
+    await shot(page, "after-1024-dark-post-publish");
+  });
+
+  test("1024 dark publish failure", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openMockedEditor(page);
+    await page.route("**/api/v1/integrations/shopify/publish", (route) =>
+      route.fulfill({ status: 500, body: '{"message":"failed"}' }),
+    );
+    await openReview(page);
+    await page.locator("#publish-store").selectOption(DEMO_STORE_ID);
+    await page.getByTestId("publish-to-store").click();
+    await expect(page.getByTestId("publish-error")).toBeVisible();
+    await shot(page, "after-1024-dark-publish-failure");
+  });
+});
+
+test.describe("UX-L2C additional lifecycle states", () => {
+  test.use({ viewport: { width: 1440, height: 900 }, colorScheme: "light" });
+
+  test("unsaved browser changes", async ({ page }) => {
+    await openMockedEditor(page, { listings: [syncedListing()] });
+    await page.locator("#draft-title").fill("Unsaved edit");
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Unsaved changes");
+    await shot(page, "after-1440-unsaved");
+  });
+
+  test("listing status unavailable on product detail", async ({ page }) => {
+    const product = buildSyntheticProduct();
+    await page.route("**/api/v1/auth/refresh", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          identity: {
+            user: {
+              id: "11111111-1111-4111-8111-111111111111",
+              tenantId: "22222222-2222-4222-8222-222222222222",
+              email: "ux-l2c-demo@example.com",
+              firstName: "Demo",
+              lastName: "Seller",
+              fullName: "Demo Seller",
+              isActive: true,
+              isVerified: true,
+              lastLoginAt: null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            tenant: {
+              id: "22222222-2222-4222-8222-222222222222",
+              name: "Demo Workspace",
+              slug: "demo-workspace",
+              status: "active",
+              timezone: "Europe/London",
+              defaultCurrency: "GBP",
+            },
+            roles: ["owner"],
+          },
+          tokens: {
+            accessToken: "demo",
+            tokenType: "bearer",
+            expiresIn: 3600,
+            refreshToken: null,
+            accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+            refreshExpiresAt: new Date(Date.now() + 86400000).toISOString(),
+          },
+        }),
+      }),
+    );
+    await page.route("**/api/v1/auth/me", (route) => route.fulfill({ status: 200, body: "{}" }));
+    await page.route(`**/api/v1/products/${DEMO_PRODUCT_ID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(product),
+      }),
+    );
+    await page.route(`**/api/v1/drafts/${DEMO_PRODUCT_ID}/listings`, (route) =>
+      route.fulfill({ status: 503, body: "{}" }),
+    );
+    await page.goto(`/products/${DEMO_PRODUCT_ID}`);
+    await expect(page.getByTestId("published-product-lifecycle")).toHaveText(
+      "Shopify status unavailable",
+      { timeout: 30_000 },
+    );
+    await shot(page, "after-1440-unavailable");
+  });
+
+  test("visibility explicitly confirmed", async ({ page }) => {
+    const ts = "2026-09-12T10:00:00.000Z";
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ updatedAt: ts }),
+      listings: [
+        syncedListing({
+          onlineStorePublished: true,
+          lastSyncedAt: ts,
+          storefrontUrl: "https://demo.myshopify.com/products/lamp",
+        }),
+      ],
+    });
+    await expect(page.getByText(/Up to date on Shopify/i)).toHaveCount(0);
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Visible on your shop");
+    await openReview(page);
+    await expect(page.getByTestId("publish-form-collapsed")).toBeVisible();
+    await shot(page, "after-1440-visible-confirmed");
+  });
+});
+
 test.describe("UX-L2C responsive evidence", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("mobile completion bar after publish", async ({ page }) => {
+  test("mobile completion bar after publish light", async ({ page }) => {
+    const syncedAt = "2026-09-12T10:00:00.000Z";
     await openMockedEditor(page, {
-      listings: [syncedListing()],
+      product: buildSyntheticProduct({ updatedAt: syncedAt }),
+      listings: [syncedListing({ lastSyncedAt: syncedAt })],
     });
     await expect(page.getByTestId("mobile-editor-action-bar")).toBeVisible();
     await expect(page.getByRole("link", { name: "View product" })).toBeVisible();
-    await captureEvidenceScreenshot(page, "after-390-mobile-view-product", {
+    await captureEvidenceScreenshot(page, "after-390-light-mobile", {
+      root: UX_L2C_SHOT_ROOT,
+    });
+  });
+
+  test("mobile dark journey", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await openMockedEditor(page, { listings: [syncedListing()] });
+    await expect(page.getByTestId("product-lifecycle")).toBeVisible();
+    await captureEvidenceScreenshot(page, "after-390-dark-mobile", {
       root: UX_L2C_SHOT_ROOT,
     });
   });
