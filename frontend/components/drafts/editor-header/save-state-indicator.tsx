@@ -43,8 +43,8 @@ export function SaveStateIndicator({
     Icon = AlertCircle;
     showRetry = Boolean(onRetry);
   } else if (saveState === "conflict") {
-    label = "Someone else saved this product";
-    tone = "error";
+    label = "Editing conflict — see above";
+    tone = "warn";
     Icon = AlertCircle;
   } else if (dirty) {
     label = "Unsaved changes";

@@ -27,6 +27,8 @@ interface PublishChecklistProps {
   shopifyStores: Store[];
   storesPending: boolean;
   storesError: boolean;
+  /** When server readiness reports blockers on Review & publish. */
+  hasServerBlockers?: boolean;
   open: boolean;
   onClose: () => void;
   onOpenTab: (tab: EditorTab) => void;
@@ -49,6 +51,7 @@ export function PublishChecklist({
   shopifyStores,
   storesPending,
   storesError,
+  hasServerBlockers = false,
   open,
   onClose,
   onOpenTab,
@@ -104,17 +107,25 @@ export function PublishChecklist({
         </p>
       ) : null}
 
-      <p className="text-sm text-muted-foreground" data-testid="store-status-guidance">
-        {listing
-          ? `Store listing: ${listing.status === "synced" ? "connected" : listing.status}`
-          : storeGuidance}
-      </p>
+      {hasServerBlockers ? (
+        <p className="text-sm text-muted-foreground" data-testid="server-blocker-deferral">
+          Store checks are shown in Review & publish.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground" data-testid="store-status-guidance">
+          {listing
+            ? `Store listing: ${listing.status === "synced" ? "connected" : listing.status}`
+            : storeGuidance}
+        </p>
+      )}
     </div>
   );
 
   const summary = hasItems
-    ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
-    : "No title, description or image suggestions. Channel checks still run when you publish.";
+    ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish.`
+    : hasServerBlockers
+      ? "No title, description or image suggestions."
+      : "No title, description or image suggestions.";
 
   if (variant === "sheet") {
     return (

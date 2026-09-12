@@ -7,13 +7,17 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { EditorTab } from "@/components/drafts/editor-header";
+import { DraftPostPublishPanel } from "@/components/drafts/draft-post-publish-panel";
+import {
+  editorTabForSection,
+  sellerSectionLabel,
+} from "@/lib/editor-section-labels";
 import type {
   ShopifyPublishCheckItem,
   ShopifyPublishReadiness,
   ShopifyPublishResult,
   StoreListing,
 } from "@/types/api";
-import { DraftPostPublishPanel } from "@/components/drafts/draft-post-publish-panel";
 
 type StoreOption = {
   id: string;
@@ -48,25 +52,11 @@ type ReviewPublishPanelProps = {
   publishPending: boolean;
   publishResult: ShopifyPublishResult | null;
   syncedListing: StoreListing | null | undefined;
+  hasEditingConflict: boolean;
   onPublish: () => void;
   onOpenSection: (tab: EditorTab) => void;
   onContinueEditing: () => void;
 };
-
-function isEditorSection(value: string | null): value is EditorTab {
-  if (!value) return false;
-  return (
-    value === "overview" ||
-    value === "description" ||
-    value === "media" ||
-    value === "variants" ||
-    value === "pricing" ||
-    value === "seo" ||
-    value === "publishing" ||
-    value === "shipping" ||
-    value === "inventory"
-  );
-}
 
 function CheckItemList({
   items,
@@ -87,17 +77,15 @@ function CheckItemList({
           data-code={item.code}
         >
           <p className="text-sm font-medium text-foreground">{item.message}</p>
-          {item.section ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Section: {item.section}
-            </p>
-          ) : null}
-          {item.action && isEditorSection(item.section) ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {sellerSectionLabel(item.section)}
+          </p>
+          {item.action && editorTabForSection(item.section) ? (
             <Button
               type="button"
               variant="link"
               className="mt-1 h-11 min-h-11 px-0 text-sm"
-              onClick={() => onOpenSection(item.section as EditorTab)}
+              onClick={() => onOpenSection(editorTabForSection(item.section)!)}
             >
               {item.action}
             </Button>
@@ -118,6 +106,7 @@ function CheckItemList({
 }
 
 export function ReviewPublishPanel({
+  productId,
   stores,
   storeId,
   onStoreChange,
@@ -133,6 +122,7 @@ export function ReviewPublishPanel({
   publishPending,
   publishResult,
   syncedListing,
+  hasEditingConflict,
   onPublish,
   onOpenSection,
   onContinueEditing,
@@ -145,24 +135,35 @@ export function ReviewPublishPanel({
     hasStore &&
     !dirty &&
     !saveFailureReason &&
+    !hasEditingConflict &&
     (readinessStatus === "pending" ||
       (readinessFetching && readinessStatus !== "error"));
   const checkUnavailable = hasStore && !dirty && readinessStatus === "error";
+  const hasPostPublishSuccess = Boolean(publishResult || syncedListing?.status === "synced");
+  const collapsePublishForm =
+    hasPostPublishSuccess && !dirty && !publishPending && !saveFailureReason;
+  const selectedStoreName =
+    stores.find((store) => store.id === storeId)?.name ?? null;
+
   const canPublish =
     hasStore &&
     !checking &&
     !checkUnavailable &&
     !saveFailureReason &&
+    !hasEditingConflict &&
     (dirty || (Boolean(readiness?.canPublish) && blockers.length === 0));
 
   useEffect(() => {
+    if (hasEditingConflict) return;
     if (!saveFailureReason && blockers.length === 0 && !publishError) return;
     summaryRef.current?.focus();
-  }, [saveFailureReason, blockers.length, publishError]);
+  }, [saveFailureReason, blockers.length, publishError, hasEditingConflict]);
 
   let statusMessage = "Choose a store";
-  if (saveFailureReason) {
-    statusMessage = "Your changes were not saved, so publishing was stopped.";
+  if (hasEditingConflict) {
+    statusMessage = "Fix the editing conflict above first.";
+  } else if (saveFailureReason) {
+    statusMessage = "We couldn’t save your changes, so nothing was published.";
   } else if (!hasStore) {
     statusMessage = "Choose a store";
   } else if (checking) {
@@ -170,14 +171,17 @@ export function ReviewPublishPanel({
   } else if (checkUnavailable) {
     statusMessage = "We couldn’t check this product";
   } else if (blockers.length > 0) {
-    statusMessage = `Fix before publishing · ${blockers.length} ${
-      blockers.length === 1 ? "issue" : "issues"
-    }`;
+    statusMessage = `${blockers.length} ${
+      blockers.length === 1 ? "thing" : "things"
+    } blocking publish`;
+  } else if (dirty && hasPostPublishSuccess) {
+    statusMessage = "You have changes that are not on Shopify yet.";
   } else if (dirty) {
-    statusMessage =
-      "We’ll save your latest changes, then check again when you publish.";
+    statusMessage = "We’ll save your latest changes before publishing.";
+  } else if (collapsePublishForm) {
+    statusMessage = "Your product is on Shopify.";
   } else {
-    statusMessage = "No blocking issues found";
+    statusMessage = "Ready to publish when you are";
   }
 
   return (
@@ -190,93 +194,90 @@ export function ReviewPublishPanel({
 
       {(publishResult || syncedListing) && (
         <DraftPostPublishPanel
+          productId={productId}
+          storeName={selectedStoreName}
           listing={syncedListing}
           publishResult={publishResult}
           onContinueEditing={onContinueEditing}
+          onReviewChanges={() => onOpenSection("overview")}
         />
       )}
 
-      <div className="space-y-2">
-        <Label htmlFor="publish-store">Shopify store</Label>
-        <select
-          id="publish-store"
-          className="flex h-11 min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
-          value={storeId}
-          onChange={(event) => onStoreChange(event.target.value)}
-          data-testid="publish-store-select"
+      {collapsePublishForm ? (
+        <div
+          className="rounded-md border border-border/80 bg-muted/20 p-3 text-sm text-muted-foreground"
+          data-testid="publish-form-collapsed"
         >
-          <option value="">Select a store…</option>
-          {stores.map((store) => (
-            <option key={store.id} value={store.id}>
-              {store.name}
-              {store.status !== "connected" ? ` (${store.status})` : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div
-        ref={summaryRef}
-        tabIndex={-1}
-        aria-live="polite"
-        className="rounded-md border border-border/80 bg-muted/20 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        data-testid="publish-status-summary"
-      >
-        <p className="text-sm font-medium text-foreground">{statusMessage}</p>
-        {!hasStore && !saveFailureReason ? (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Select where you want to publish this product.
+          <p>
+            {dirty
+              ? "Review your changes below, then update Shopify when you are ready."
+              : "Use Update Shopify below when you make new edits."}
           </p>
-        ) : null}
-        {checking ? (
-          <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-            Checking this product…
-          </p>
-        ) : null}
-        {checkUnavailable ? (
-          <div className="mt-2 space-y-2">
-            <p className="text-sm text-muted-foreground">
-              Try again before publishing.
-            </p>
-            <Button
-              type="button"
-              variant="secondary"
-              className="h-11 min-h-11"
-              onClick={onRetryReadiness}
-              data-testid="publish-readiness-retry"
+        </div>
+      ) : (
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="publish-store">Shopify store</Label>
+            <select
+              id="publish-store"
+              className="flex h-11 min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={storeId}
+              onChange={(event) => onStoreChange(event.target.value)}
+              data-testid="publish-store-select"
             >
-              Try again
-            </Button>
+              <option value="">Select a store…</option>
+              {stores.map((store) => (
+                <option key={store.id} value={store.id}>
+                  {store.name}
+                  {store.status !== "connected" ? ` (${store.status})` : ""}
+                </option>
+              ))}
+            </select>
           </div>
-        ) : null}
-        {!checking &&
-        !checkUnavailable &&
-        hasStore &&
-        !saveFailureReason &&
-        blockers.length === 0 &&
-        !dirty ? (
-          <p className="mt-1 text-sm text-muted-foreground">
-            We’ll check again when you publish.
-          </p>
-        ) : null}
-        {dirty && hasStore && !saveFailureReason ? (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Unsaved edits are saved first. Publishing stops if that save fails.
-          </p>
-        ) : null}
-      </div>
 
-      {saveFailureReason ? (
+          <div
+            ref={summaryRef}
+            tabIndex={-1}
+            aria-live="polite"
+            className="rounded-md border border-border/80 bg-muted/20 p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            data-testid="publish-status-summary"
+          >
+            <p className="text-sm font-medium text-foreground">{statusMessage}</p>
+            {checking ? (
+              <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                Checking this product…
+              </p>
+            ) : null}
+            {checkUnavailable ? (
+              <div className="mt-2 space-y-2">
+                <p className="text-sm text-muted-foreground">Try again before publishing.</p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-11 min-h-11"
+                  onClick={onRetryReadiness}
+                  data-testid="publish-readiness-retry"
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </>
+      )}
+
+      {hasEditingConflict ? (
+        <p className="text-sm text-muted-foreground" data-testid="publish-conflict-pointer">
+          Fix the editing conflict above first.
+        </p>
+      ) : null}
+
+      {saveFailureReason && !hasEditingConflict ? (
         <Alert variant="destructive" data-testid="publish-save-failure">
           <AlertDescription>
             <p className="font-medium">
-              {saveFailureReason === "conflict"
-                ? "This draft changed somewhere else. Review the latest version before publishing."
-                : "We couldn’t save your changes. Your product was not published. Review the changes and try again."}
-            </p>
-            <p className="mt-1 text-sm">
-              Your changes were not saved, so publishing was stopped.
+              We couldn’t save your changes, so nothing was published.
             </p>
             {saveFailureReason !== "conflict" ? (
               <Button
@@ -293,7 +294,12 @@ export function ReviewPublishPanel({
         </Alert>
       ) : null}
 
-      {!dirty && !checking && !checkUnavailable && blockers.length > 0 ? (
+      {!collapsePublishForm &&
+      !dirty &&
+      !checking &&
+      !checkUnavailable &&
+      !hasEditingConflict &&
+      blockers.length > 0 ? (
         <div className="space-y-2" data-testid="publish-blockers">
           <h3 className="text-sm font-semibold">Fix before publishing</h3>
           <CheckItemList
@@ -304,7 +310,12 @@ export function ReviewPublishPanel({
         </div>
       ) : null}
 
-      {!dirty && !checking && !checkUnavailable && recommendations.length > 0 ? (
+      {!collapsePublishForm &&
+      !dirty &&
+      !checking &&
+      !checkUnavailable &&
+      !hasEditingConflict &&
+      recommendations.length > 0 ? (
         <div className="space-y-2" data-testid="publish-advice">
           <h3 className="text-sm font-semibold">Worth checking</h3>
           <p className="text-sm text-muted-foreground">
@@ -319,33 +330,36 @@ export function ReviewPublishPanel({
         </div>
       ) : null}
 
-      {publishError ? (
+      {publishError && !hasEditingConflict ? (
         <Alert variant="destructive" data-testid="publish-error">
           <AlertDescription>{publishError}</AlertDescription>
         </Alert>
       ) : null}
-      {publishOk ? (
+      {publishOk && !publishError ? (
         <Alert data-testid="publish-ok">
           <AlertDescription>{publishOk}</AlertDescription>
         </Alert>
       ) : null}
 
+      {(dirty || !collapsePublishForm) && (
       <div className="space-y-2">
         <Button
           disabled={!canPublish || publishPending}
           onClick={onPublish}
           data-testid="publish-to-store"
           className="h-11 min-h-11"
-          aria-describedby={
-            !canPublish ? "publish-disabled-reason" : undefined
-          }
+          aria-describedby={!canPublish ? "publish-disabled-reason" : undefined}
         >
           {publishPending ? (
-            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
           ) : (
-            <Store className="mr-1.5 h-4 w-4" aria-hidden />
+            <Store className="mr-1.5 h-4 w-4" aria-hidden="true" />
           )}
-          {publishPending ? "Publishing…" : "Publish to Store"}
+          {publishPending
+            ? "Publishing…"
+            : hasPostPublishSuccess && dirty
+              ? "Update Shopify"
+              : "Publish to Store"}
         </Button>
         {!canPublish ? (
           <p
@@ -353,24 +367,27 @@ export function ReviewPublishPanel({
             className="text-sm text-muted-foreground"
             data-testid="publish-disabled-reason"
           >
-            {saveFailureReason
-              ? "Save your changes successfully before publishing."
-              : !hasStore
-                ? "Choose a store to continue."
-                : checking
-                  ? "Wait until the check finishes."
-                  : checkUnavailable
-                    ? "Run the check again before publishing."
-                    :                     blockers.length > 0
-                      ? "Fix the issues above before publishing."
-                      : dirty
-                        ? "Publishing will save first, then check again on the server."
-                        : readiness?.canPublish
-                          ? "Publishing is available."
-                          : "Publishing is unavailable until the product can be checked."}
+            {hasEditingConflict
+              ? "Fix the editing conflict above first."
+              : saveFailureReason
+                ? "Save your changes successfully before publishing."
+                : !hasStore
+                  ? "Choose a store to continue."
+                  : checking
+                    ? "Wait until the check finishes."
+                    : checkUnavailable
+                      ? "Run the check again before publishing."
+                      : blockers.length > 0
+                        ? "Fix the issues above before publishing."
+                        : dirty
+                          ? "Publishing will save first, then check again on the server."
+                          : readiness?.canPublish
+                            ? "Publishing is available."
+                            : "Publishing is unavailable until the product can be checked."}
           </p>
         ) : null}
       </div>
+      )}
     </section>
   );
 }
