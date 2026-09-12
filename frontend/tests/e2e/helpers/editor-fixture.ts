@@ -240,6 +240,16 @@ export async function openMockedEditor(
     patchDelayMs?: number;
     /** Per-attempt PATCH override (1-based). Falls back to patchStatus/patchBody. */
     patchResponder?: (attempt: number) => { status: number; body?: unknown };
+    /** Hold the listings response until this many milliseconds elapse. */
+    listingsDelayMs?: number;
+    /** HTTP status for GET listings (default 200). */
+    listingsHttpStatus?: number;
+    /** Body for GET listings when status is 2xx (default options.listings or []). */
+    listingsResponse?: StoreListing[];
+    /** Per-attempt listings override (1-based). When omitted, uses listingsHttpStatus. */
+    listingsAttemptResponder?: (
+      attempt: number,
+    ) => { status: number; body?: StoreListing[] } | null;
   } = {},
 ): Promise<ProductDetail> {
   const product = options.product ?? buildSyntheticProduct();
@@ -247,6 +257,7 @@ export async function openMockedEditor(
   const seoScore = options.seoScore ?? demoSeoScore();
   const auth = mockAuthResponse();
   let patchAttempts = 0;
+  let listingsAttempts = 0;
 
   await blockGoogleIdentityScript(page);
 
@@ -350,10 +361,25 @@ export async function openMockedEditor(
     const method = route.request().method();
 
     if (url.includes("/listings")) {
+      if (options.listingsDelayMs && options.listingsDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.listingsDelayMs));
+      }
+      listingsAttempts += 1;
+      const responded = options.listingsAttemptResponder?.(listingsAttempts);
+      const listingsStatus = responded?.status ?? options.listingsHttpStatus ?? 200;
+      const listingsBody =
+        listingsStatus >= 200 && listingsStatus < 300
+          ? JSON.stringify(responded?.body ?? options.listingsResponse ?? listings)
+          : JSON.stringify({
+              code: "internal_error",
+              message: "Could not load listings.",
+              details: [],
+              requestId: "req-ux-l2c-demo",
+            });
       return route.fulfill({
-        status: 200,
+        status: listingsStatus,
         contentType: "application/json",
-        body: JSON.stringify(listings),
+        body: listingsBody,
       });
     }
     if (url.includes("/seo-score")) {

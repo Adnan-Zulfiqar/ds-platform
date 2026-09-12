@@ -39,7 +39,22 @@ production release.
   and restricted Claude reviewer stack. No migration; Alembic head ``0032``.
   Not independently accepted; not merged or deployed.
 
+- **UX-L2C-R3 — Shopify status loading/error truthfulness (on
+  `feature/ux-l2c-live-state-clarity`, not merged).** Centralizes listings
+  load/error semantics in `product-lifecycle.ts`; draft editor and product
+  detail pass React Query failure/loading into lifecycle authority; shared
+  `ShopifyListingStatus` retry + live-region UX; expanded unit/E2E truth
+  table; `scripts/r3_provision_stack.py`; replaces stale R2 reviewer stack.
+  No migration; Alembic head ``0032``. Not independently accepted; not merged
+  or deployed.
+
 ### Fixed
+
+- **UX-L2C-R3 — listings failure no longer shows Draft.** Initial listings
+  API errors or in-flight loads show “Shopify status unavailable” or
+  “Checking Shopify status…” instead of falsely claiming “Draft — not on
+  Shopify”; cached listing state is preserved during background refresh
+  failures with retry.
 
 - **UX-L2C-R2 — conservative Shopify sync wording.** `lastSyncedAt` no longer
   authorizes “Up to date on Shopify”; synced listings with unknown visibility

@@ -960,6 +960,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         publishPending={publishPending}
         publishFailed={Boolean(publishError)}
         listing={syncedListing}
+        listingsQuery={listingsQuery}
         publishResult={publishResult}
         preferPublishOverlay={preferPublishOverlay}
         draftUpdatedAt={draftUpdatedAt}

@@ -32,7 +32,12 @@ import { cn } from "@/lib/utils";
 import type { ProductDetail, SeoScore, ShopifyPublishResult, StoreListing } from "@/types/api";
 import type { Store } from "@/services/stores";
 import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
-import { deriveProductLifecycle } from "@/lib/product-lifecycle";
+import { ShopifyListingStatus } from "@/components/drafts/shopify-listing-status";
+import {
+  deriveListingsQueryLifecycleFlags,
+  deriveProductLifecycle,
+  type ListingsQueryLifecycleFlags,
+} from "@/lib/product-lifecycle";
 
 interface ProductEditorHeaderProps {
   productId: string;
@@ -45,6 +50,14 @@ interface ProductEditorHeaderProps {
   publishPending: boolean;
   publishFailed: boolean;
   listing: StoreListing | null;
+  listingsQuery?: {
+    isPending: boolean;
+    isFetching: boolean;
+    isError: boolean;
+    isRefetchError: boolean;
+    data: StoreListing[] | undefined;
+    refetch: () => void;
+  };
   publishResult?: ShopifyPublishResult | null;
   preferPublishOverlay?: boolean;
   draftUpdatedAt?: string | null;
@@ -96,6 +109,7 @@ export function ProductEditorHeader({
   publishPending,
   publishFailed,
   listing,
+  listingsQuery,
   publishResult = null,
   preferPublishOverlay = false,
   draftUpdatedAt = null,
@@ -116,6 +130,9 @@ export function ProductEditorHeader({
   onViewHistory,
 }: ProductEditorHeaderProps) {
   const featuredImage = product.images[0]?.url ?? null;
+  const listingsFlags: ListingsQueryLifecycleFlags | undefined = listingsQuery
+    ? deriveListingsQueryLifecycleFlags(listingsQuery)
+    : undefined;
   const lifecycleView = deriveProductLifecycle({
     syncedListing: listing,
     publishResult,
@@ -124,7 +141,12 @@ export function ProductEditorHeader({
     publishPending,
     publishFailed,
     dirty,
+    ...(listingsFlags ?? {}),
   });
+  const listingsRetryInFlight = Boolean(
+    listingsQuery?.isFetching &&
+      !listingsFlags?.listingsHasConfirmedData,
+  );
   const issueCount = readiness.items.length;
   const publishKind = derivePublishKind({
     publishPending,
@@ -289,6 +311,10 @@ export function ProductEditorHeader({
                       "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
                     lifecycleView.kind === "draft_not_on_shopify" &&
                       "border-border bg-muted text-foreground",
+                    lifecycleView.kind === "loading" &&
+                      "border-border bg-muted text-foreground",
+                    lifecycleView.kind === "unavailable" &&
+                      "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-200",
                     lifecycleView.kind === "publish_failed" &&
                       "border-destructive/30 bg-destructive/10 text-destructive",
                     lifecycleView.kind === "publishing" &&
@@ -319,6 +345,14 @@ export function ProductEditorHeader({
                     Supplier information may be out of date
                   </span>
                 ) : null}
+                <ShopifyListingStatus
+                  lifecycle={lifecycleView}
+                  onRetry={
+                    listingsQuery ? () => void listingsQuery.refetch() : undefined
+                  }
+                  retryInFlight={listingsRetryInFlight}
+                  className="flex w-full flex-wrap items-center gap-2 sm:w-auto"
+                />
                 <button
                   type="button"
                   className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md px-2 text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"

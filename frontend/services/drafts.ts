@@ -258,6 +258,11 @@ export function useDraftListings(
       return data;
     },
     enabled: Boolean(productId),
+    // Recovery is explicit via ShopifyListingStatus — automatic retries would
+    // consume failure attempts and hide unavailable/retry truthfulness.
+    retry: false,
+    // Show cached status immediately, then refresh in the background on mount.
+    refetchOnMount: "always",
   });
 }
 

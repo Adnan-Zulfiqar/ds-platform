@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 
+import { ShopifyListingStatus } from "@/components/drafts/shopify-listing-status";
 import { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  deriveListingsQueryLifecycleFlags,
   deriveProductLifecycle,
   type ProductLifecycleView,
 } from "@/lib/product-lifecycle";
@@ -48,7 +50,7 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
   const productQuery = useProduct(productId);
   const listingsQuery = useDraftListings(productId);
 
-  if (productQuery.isPending || listingsQuery.isPending) {
+  if (productQuery.isPending) {
     return (
       <div className="space-y-4" data-testid="published-product-loading">
         <Skeleton className="h-8 w-48" />
@@ -79,11 +81,7 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
       <div data-testid="published-product-error">
         <ErrorState
           title="Could not load product"
-          description={
-            productQuery.error instanceof Error
-              ? productQuery.error.message
-              : "Please try again."
-          }
+          description="Please try again."
           onRetry={() => void productQuery.refetch()}
         />
       </div>
@@ -91,6 +89,7 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
   }
 
   const product = productQuery.data;
+  const listingsFlags = deriveListingsQueryLifecycleFlags(listingsQuery);
   const syncedListing =
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
@@ -98,10 +97,13 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
 
   const lifecycle = deriveProductLifecycle({
     syncedListing,
-    listingsError: listingsQuery.isError,
-    listingsLoading: listingsQuery.isPending,
     draftUpdatedAt: product.updatedAt,
+    ...listingsFlags,
   });
+
+  const listingsRetryInFlight = Boolean(
+    listingsQuery.isFetching && !listingsFlags.listingsHasConfirmedData,
+  );
 
   const featuredImage = product.images[0]?.url ?? null;
   const displayTitle = product.title || "Untitled product";
@@ -153,6 +155,12 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
             ) : null}
           </div>
           <p className="text-sm text-muted-foreground">{lifecycle.supportingCopy}</p>
+          <ShopifyListingStatus
+            lifecycle={lifecycle}
+            onRetry={() => void listingsQuery.refetch()}
+            retryInFlight={listingsRetryInFlight}
+            className="flex flex-wrap items-center gap-2"
+          />
         </div>
       </div>
 

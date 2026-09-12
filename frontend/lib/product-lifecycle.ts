@@ -13,6 +13,8 @@ export type ProductLifecycleKind =
   | "publishing"
   | "publish_failed";
 
+export type ShopifyStatusNote = "none" | "refreshing" | "refresh_failed";
+
 export interface ProductLifecycleView {
   kind: ProductLifecycleKind;
   /** Short badge label for headers and tables. */
@@ -28,10 +30,35 @@ export interface ProductLifecycleView {
   adminUrl: string | null;
   /** True when saved draft is newer than last confirmed Shopify sync. */
   hasUnsentShopifyChanges: boolean;
+  /** Secondary note when cached status is refreshing or refresh failed. */
+  statusNote: ShopifyStatusNote;
+  statusNoteMessage: string | null;
+  /** Show Try again for listings fetch failures. */
+  showListingsRetry: boolean;
+}
+
+export interface ListingsQueryLifecycleFlags {
+  listingsHasConfirmedData: boolean;
+  listingsInitialLoading: boolean;
+  listingsInitialError: boolean;
+  listingsFetching: boolean;
+  listingsRefreshFailed: boolean;
 }
 
 export interface DeriveProductLifecycleInput {
+  /** Successful listings response received (including an empty array). */
+  listingsHasConfirmedData?: boolean;
+  /** First fetch in progress with no confirmed response yet. */
+  listingsInitialLoading?: boolean;
+  /** First fetch failed with no confirmed response. */
+  listingsInitialError?: boolean;
+  /** Background refetch while cached listing data is shown. */
+  listingsFetching?: boolean;
+  /** Refetch failed while cached listing data remains. */
+  listingsRefreshFailed?: boolean;
+  /** @deprecated Use listingsInitialLoading */
   listingsLoading?: boolean;
+  /** @deprecated Use listingsInitialError */
   listingsError?: boolean;
   syncedListing: StoreListing | null;
   /** Ephemeral publish response — overlay only while listings have not refetched. */
@@ -48,6 +75,38 @@ export type DraftShopifySyncComparison = "unsent" | "not_unsent" | "unknown";
 /** Copy when a listing exists but full draft-to-Shopify sync cannot be proven. */
 export const CONSERVATIVE_SHOPIFY_SYNC_COPY =
   "Your DropPilot draft may contain changes that have not been sent to Shopify.";
+
+export const REFRESHING_SHOPIFY_STATUS_COPY = "Refreshing Shopify status…";
+export const REFRESH_FAILED_SHOPIFY_STATUS_COPY =
+  "Couldn't refresh Shopify status";
+
+/**
+ * Map a React Query listings result to lifecycle authority inputs.
+ * Never treat `isError` with cached data as an empty listings success.
+ */
+export function deriveListingsQueryLifecycleFlags(query: {
+  isPending: boolean;
+  isFetching: boolean;
+  isError: boolean;
+  isRefetchError: boolean;
+  data: StoreListing[] | undefined;
+}): ListingsQueryLifecycleFlags {
+  const listingsHasConfirmedData = query.data !== undefined;
+  const listingsInitialLoading =
+    query.isFetching && !listingsHasConfirmedData;
+  const listingsInitialError =
+    query.isError && !listingsHasConfirmedData && !query.isFetching;
+  const listingsRefreshFailed =
+    listingsHasConfirmedData && query.isError && !query.isFetching;
+  return {
+    listingsHasConfirmedData,
+    listingsInitialLoading,
+    listingsInitialError,
+    listingsFetching:
+      query.isFetching && listingsHasConfirmedData && !listingsRefreshFailed,
+    listingsRefreshFailed,
+  };
+}
 
 /**
  * Compare the saved draft version to the last confirmed Shopify sync timestamp.
@@ -134,6 +193,9 @@ function baseSyncedView(
     storefrontUrl,
     adminUrl,
     hasUnsentShopifyChanges: hasUnsent,
+    statusNote: "none",
+    statusNoteMessage: null,
+    showListingsRetry: false,
   };
 }
 
@@ -177,18 +239,71 @@ function visibilitySyncedView(
   );
 }
 
-/**
- * Single frontend authority for draft vs Shopify lifecycle presentation.
- *
- * Visibility is confirmed only when `onlineStorePublished === true`. Listing
- * existence, handles, external IDs, and green styling never imply "live".
- */
-export function deriveProductLifecycle(
+function withStatusNote(
+  view: ProductLifecycleView,
+  note: ShopifyStatusNote,
+  message: string | null,
+  showRetry: boolean,
+): ProductLifecycleView {
+  return {
+    ...view,
+    statusNote: note,
+    statusNoteMessage: message,
+    showListingsRetry: showRetry || view.showListingsRetry,
+  };
+}
+
+function loadingView(): ProductLifecycleView {
+  return {
+    kind: "loading",
+    badgeLabel: "Checking Shopify status…",
+    supportingCopy: "Loading store listing information.",
+    hasSyncedListing: false,
+    onlineStorePublished: null,
+    storefrontUrl: null,
+    adminUrl: null,
+    hasUnsentShopifyChanges: false,
+    statusNote: "none",
+    statusNoteMessage: null,
+    showListingsRetry: false,
+  };
+}
+
+function unavailableView(): ProductLifecycleView {
+  return {
+    kind: "unavailable",
+    badgeLabel: "Shopify status unavailable",
+    supportingCopy: "We could not load Shopify status for this product.",
+    hasSyncedListing: false,
+    onlineStorePublished: null,
+    storefrontUrl: null,
+    adminUrl: null,
+    hasUnsentShopifyChanges: false,
+    statusNote: "none",
+    statusNoteMessage: null,
+    showListingsRetry: true,
+  };
+}
+
+function normalizeListingsInput(input: DeriveProductLifecycleInput): ListingsQueryLifecycleFlags {
+  const hasConfirmed = input.listingsHasConfirmedData ?? false;
+  return {
+    listingsHasConfirmedData: hasConfirmed,
+    listingsInitialLoading:
+      input.listingsInitialLoading ??
+      (input.listingsLoading === true && !hasConfirmed),
+    listingsInitialError:
+      input.listingsInitialError ??
+      (input.listingsError === true && !hasConfirmed),
+    listingsFetching: input.listingsFetching ?? false,
+    listingsRefreshFailed: input.listingsRefreshFailed ?? false,
+  };
+}
+
+function deriveConfirmedLifecycle(
   input: DeriveProductLifecycleInput,
 ): ProductLifecycleView {
   const {
-    listingsLoading = false,
-    listingsError = false,
     syncedListing,
     publishResult,
     preferPublishOverlay = false,
@@ -197,23 +312,6 @@ export function deriveProductLifecycle(
     publishPending = false,
     publishFailed = false,
   } = input;
-
-  if (listingsLoading && !publishResult && !syncedListing) {
-    return {
-      kind: "loading",
-      badgeLabel: "Checking Shopify status…",
-      supportingCopy: "Loading store listing information.",
-      hasSyncedListing: false,
-      onlineStorePublished: null,
-      storefrontUrl: null,
-      adminUrl: null,
-      hasUnsentShopifyChanges: false,
-    };
-  }
-
-  if (listingsError && !publishResult && !syncedListing) {
-    return unavailableView();
-  }
 
   if (publishPending) {
     return {
@@ -225,6 +323,9 @@ export function deriveProductLifecycle(
       storefrontUrl: null,
       adminUrl: null,
       hasUnsentShopifyChanges: false,
+      statusNote: "none",
+      statusNoteMessage: null,
+      showListingsRetry: false,
     };
   }
 
@@ -238,6 +339,9 @@ export function deriveProductLifecycle(
       storefrontUrl: null,
       adminUrl: null,
       hasUnsentShopifyChanges: false,
+      statusNote: "none",
+      statusNoteMessage: null,
+      showListingsRetry: false,
     };
   }
 
@@ -254,6 +358,9 @@ export function deriveProductLifecycle(
       storefrontUrl: null,
       adminUrl: null,
       hasUnsentShopifyChanges: false,
+      statusNote: "none",
+      statusNoteMessage: null,
+      showListingsRetry: false,
     };
   }
 
@@ -293,15 +400,70 @@ export function deriveProductLifecycle(
   return visibilitySyncedView(online, storefrontUrl, adminUrl);
 }
 
-function unavailableView(): ProductLifecycleView {
-  return {
-    kind: "unavailable",
-    badgeLabel: "Shopify status unavailable",
-    supportingCopy: "We could not load Shopify status for this product.",
-    hasSyncedListing: false,
-    onlineStorePublished: null,
-    storefrontUrl: null,
-    adminUrl: null,
-    hasUnsentShopifyChanges: false,
-  };
+/**
+ * Single frontend authority for draft vs Shopify lifecycle presentation.
+ *
+ * Visibility is confirmed only when `onlineStorePublished === true`. Listing
+ * existence, handles, external IDs, and green styling never imply "live".
+ */
+export function deriveProductLifecycle(
+  input: DeriveProductLifecycleInput,
+): ProductLifecycleView {
+  const listings = normalizeListingsInput(input);
+  const {
+    syncedListing,
+    publishResult,
+    preferPublishOverlay = false,
+  } = input;
+
+  const hasOverlayListing = Boolean(
+    preferPublishOverlay && publishResult,
+  );
+
+  if (
+    listings.listingsInitialLoading &&
+    !listings.listingsHasConfirmedData &&
+    !syncedListing &&
+    !hasOverlayListing
+  ) {
+    return loadingView();
+  }
+
+  if (
+    listings.listingsInitialError &&
+    !listings.listingsHasConfirmedData &&
+    !hasOverlayListing
+  ) {
+    return unavailableView();
+  }
+
+  if (
+    !listings.listingsHasConfirmedData &&
+    !syncedListing &&
+    !hasOverlayListing
+  ) {
+    return loadingView();
+  }
+
+  const core = deriveConfirmedLifecycle(input);
+
+  if (listings.listingsFetching && listings.listingsHasConfirmedData) {
+    return withStatusNote(
+      core,
+      "refreshing",
+      REFRESHING_SHOPIFY_STATUS_COPY,
+      false,
+    );
+  }
+
+  if (listings.listingsRefreshFailed && listings.listingsHasConfirmedData) {
+    return withStatusNote(
+      core,
+      "refresh_failed",
+      REFRESH_FAILED_SHOPIFY_STATUS_COPY,
+      true,
+    );
+  }
+
+  return core;
 }

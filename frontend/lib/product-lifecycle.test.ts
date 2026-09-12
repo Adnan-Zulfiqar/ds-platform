@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   compareDraftToShopifySync,
   CONSERVATIVE_SHOPIFY_SYNC_COPY,
+  deriveListingsQueryLifecycleFlags,
   deriveProductLifecycle,
   hasUnsentShopifyChanges,
+  REFRESH_FAILED_SHOPIFY_STATUS_COPY,
+  REFRESHING_SHOPIFY_STATUS_COPY,
 } from "@/lib/product-lifecycle";
 import type { StoreListing } from "@/types/api";
 
@@ -183,8 +186,11 @@ describe("deriveProductLifecycle — sync authority", () => {
 });
 
 describe("deriveProductLifecycle — baseline states", () => {
-  it("returns draft when no listing exists", () => {
-    const view = deriveProductLifecycle({ syncedListing: null });
+  it("returns draft when no listing exists after confirmed empty response", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: null,
+      listingsHasConfirmedData: true,
+    });
     expect(view.kind).toBe("draft_not_on_shopify");
   });
 
@@ -209,17 +215,19 @@ describe("deriveProductLifecycle — baseline states", () => {
   it("returns unavailable when listing load failed", () => {
     const view = deriveProductLifecycle({
       syncedListing: null,
-      listingsError: true,
+      listingsInitialError: true,
     });
     expect(view.kind).toBe("unavailable");
+    expect(view.showListingsRetry).toBe(true);
   });
 
   it("returns loading without inventing a positive state", () => {
     const view = deriveProductLifecycle({
       syncedListing: null,
-      listingsLoading: true,
+      listingsInitialLoading: true,
     });
     expect(view.kind).toBe("loading");
+    expect(view.badgeLabel).toBe("Checking Shopify status…");
   });
 
   it("shows visibility setup when synced but onlineStorePublished is false", () => {
@@ -262,5 +270,208 @@ describe("deriveProductLifecycle — baseline states", () => {
     });
     expect(withOverlay.hasSyncedListing).toBe(true);
     expect(withOverlay.onlineStorePublished).toBe(true);
+  });
+});
+
+describe("deriveListingsQueryLifecycleFlags", () => {
+  it("treats undefined data as unconfirmed initial loading while fetching", () => {
+    const flags = deriveListingsQueryLifecycleFlags({
+      isPending: true,
+      isFetching: true,
+      isError: false,
+      isRefetchError: false,
+      data: undefined,
+    });
+    expect(flags.listingsHasConfirmedData).toBe(false);
+    expect(flags.listingsInitialLoading).toBe(true);
+    expect(flags.listingsInitialError).toBe(false);
+  });
+
+  it("treats empty array as confirmed success", () => {
+    const flags = deriveListingsQueryLifecycleFlags({
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      isRefetchError: false,
+      data: [],
+    });
+    expect(flags.listingsHasConfirmedData).toBe(true);
+    expect(flags.listingsInitialLoading).toBe(false);
+  });
+
+  it("treats initial error only when no data and not fetching", () => {
+    const flags = deriveListingsQueryLifecycleFlags({
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      isRefetchError: false,
+      data: undefined,
+    });
+    expect(flags.listingsInitialError).toBe(true);
+  });
+
+  it("treats error with cached data as refresh failure", () => {
+    const flags = deriveListingsQueryLifecycleFlags({
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      isRefetchError: true,
+      data: [syncedListing()],
+    });
+    expect(flags.listingsRefreshFailed).toBe(true);
+    expect(flags.listingsInitialError).toBe(false);
+    expect(flags.listingsFetching).toBe(false);
+  });
+});
+
+describe("deriveProductLifecycle — listings loading and error truth", () => {
+  const confirmedEmpty = { listingsHasConfirmedData: true, syncedListing: null };
+
+  it("shows checking on initial load without confirmed data", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: null,
+      listingsInitialLoading: true,
+    });
+    expect(view.kind).toBe("loading");
+    expect(view.badgeLabel).toBe("Checking Shopify status…");
+  });
+
+  it("shows unavailable on initial error without cached listing", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: null,
+      listingsInitialError: true,
+    });
+    expect(view.kind).toBe("unavailable");
+    expect(view.badgeLabel).toBe("Shopify status unavailable");
+    expect(view.showListingsRetry).toBe(true);
+  });
+
+  it("shows draft only after confirmed empty listings response", () => {
+    const view = deriveProductLifecycle(confirmedEmpty);
+    expect(view.kind).toBe("draft_not_on_shopify");
+    expect(view.badgeLabel).toBe("Draft — not on Shopify");
+  });
+
+  it("never maps API error to draft", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: null,
+      listingsInitialError: true,
+    });
+    expect(view.kind).not.toBe("draft_not_on_shopify");
+  });
+
+  it("preserves synced badge while refreshing cached listing", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({ onlineStorePublished: true }),
+      listingsHasConfirmedData: true,
+      listingsFetching: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("visible_on_shop");
+    expect(view.statusNote).toBe("refreshing");
+    expect(view.statusNoteMessage).toBe(REFRESHING_SHOPIFY_STATUS_COPY);
+  });
+
+  it("preserves visible badge when refresh fails with cached visibility true", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({
+        onlineStorePublished: true,
+        lastSyncedAt: syncedAt,
+      }),
+      listingsHasConfirmedData: true,
+      listingsRefreshFailed: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("visible_on_shop");
+    expect(view.statusNoteMessage).toBe(REFRESH_FAILED_SHOPIFY_STATUS_COPY);
+    expect(view.showListingsRetry).toBe(true);
+  });
+
+  it("preserves added badge when refresh fails with unknown visibility", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({ onlineStorePublished: null }),
+      listingsHasConfirmedData: true,
+      listingsRefreshFailed: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("added_to_shopify");
+    expect(view.statusNoteMessage).toBe(REFRESH_FAILED_SHOPIFY_STATUS_COPY);
+  });
+
+  it("retry recovery to empty listings shows draft", () => {
+    const view = deriveProductLifecycle({
+      ...confirmedEmpty,
+      listingsInitialError: false,
+    });
+    expect(view.kind).toBe("draft_not_on_shopify");
+  });
+
+  it("retry recovery to synced listing shows added to Shopify", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({ onlineStorePublished: null }),
+      listingsHasConfirmedData: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("added_to_shopify");
+  });
+
+  it("retry recovery with visibility true shows visible on shop", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({
+        onlineStorePublished: true,
+        lastSyncedAt: syncedAt,
+      }),
+      listingsHasConfirmedData: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("visible_on_shop");
+  });
+
+  it("preserves unsaved changes during refresh failure", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing(),
+      listingsHasConfirmedData: true,
+      listingsRefreshFailed: true,
+      dirty: true,
+      draftUpdatedAt: syncedAt,
+    });
+    expect(view.kind).toBe("unsaved_changes");
+    expect(view.statusNoteMessage).toBe(REFRESH_FAILED_SHOPIFY_STATUS_COPY);
+  });
+
+  it("preserves saved-not-sent during refresh failure", () => {
+    const view = deriveProductLifecycle({
+      syncedListing: syncedListing({ lastSyncedAt: syncedAt }),
+      listingsHasConfirmedData: true,
+      listingsRefreshFailed: true,
+      draftUpdatedAt: "2026-09-12T11:00:00.000Z",
+      dirty: false,
+    });
+    expect(view.kind).toBe("changes_not_sent");
+    expect(view.statusNoteMessage).toBe(REFRESH_FAILED_SHOPIFY_STATUS_COPY);
+  });
+
+  it("never emits Up to date on Shopify across loading and error paths", () => {
+    const scenarios = [
+      deriveProductLifecycle({
+        syncedListing: null,
+        listingsInitialLoading: true,
+      }),
+      deriveProductLifecycle({
+        syncedListing: null,
+        listingsInitialError: true,
+      }),
+      deriveProductLifecycle(confirmedEmpty),
+      deriveProductLifecycle({
+        syncedListing: syncedListing(),
+        listingsHasConfirmedData: true,
+        listingsRefreshFailed: true,
+        draftUpdatedAt: syncedAt,
+      }),
+    ];
+    for (const view of scenarios) {
+      expect(view.badgeLabel).not.toMatch(/up to date on shopify/i);
+      expect(view.supportingCopy).not.toMatch(/up to date on shopify/i);
+    }
   });
 });
