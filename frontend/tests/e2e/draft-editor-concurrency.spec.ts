@@ -397,7 +397,9 @@ test.describe("Draft editor — conflict resolution (M2A acceptance pass)", () =
     await page.getByTestId("draft-title-input").fill("Accessible announcement check");
     await visibleTestId(page, "save-draft").click();
 
-    const banner = page.getByRole("alert").filter({ hasText: /changed elsewhere/i });
+    const banner = page
+      .getByRole("alert")
+      .filter({ hasText: /Someone else saved this product/i });
     await expect(banner).toBeVisible();
   });
 
