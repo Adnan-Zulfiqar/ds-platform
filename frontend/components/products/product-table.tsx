@@ -177,25 +177,21 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
               <TableRow
                 key={product.id}
                 data-testid={rowTestId}
-                className={
-                  variant === "drafts"
-                    ? "cursor-pointer hover:bg-muted/40"
-                    : undefined
-                }
-                onClick={
-                  variant === "drafts"
-                    ? () => {
-                        router.push(href);
-                      }
-                    : undefined
-                }
+                className="cursor-pointer hover:bg-muted/40"
+                onClick={() => {
+                  router.push(href);
+                }}
               >
                 <TableCell>
                   <Link
                     href={href}
                     onClick={(event) => event.stopPropagation()}
                     className="flex h-10 w-10 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground"
-                    aria-label={`Edit ${product.title}`}
+                    aria-label={
+                      variant === "drafts"
+                        ? `Edit ${product.title}`
+                        : `View ${product.title}`
+                    }
                   >
                     <Package className="h-4 w-4" aria-hidden="true" />
                   </Link>
@@ -204,9 +200,9 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
                   <Link
                     href={href}
                     onClick={(event) => event.stopPropagation()}
-                    className="line-clamp-2 font-medium text-foreground underline-offset-4 hover:underline"
+                    className="line-clamp-2 font-medium text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     data-testid={
-                      variant === "drafts" ? "draft-title-link" : undefined
+                      variant === "drafts" ? "draft-title-link" : "product-title-link"
                     }
                   >
                     {product.title}
@@ -216,8 +212,15 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
                   </span>
                 </TableCell>
                 <TableCell>
-                  <Badge variant={STATUS_VARIANT[product.status]}>
-                    {product.status}
+                  <Badge
+                    variant={
+                      variant === "products" ? "default" : STATUS_VARIANT[product.status]
+                    }
+                    data-testid={
+                      variant === "products" ? "product-listing-status" : undefined
+                    }
+                  >
+                    {variant === "products" ? "Added to Shopify" : product.status}
                   </Badge>
                 </TableCell>
                 <TableCell>{formatPrice(product)}</TableCell>
