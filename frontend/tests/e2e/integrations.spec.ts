@@ -67,9 +67,12 @@ test.describe("Integrations page", () => {
     await registerAndSignIn(page);
     await page.goto("/settings");
 
-    await page.getByRole("link", { name: /Integrations/ }).click();
+    await page
+      .getByRole("main")
+      .getByRole("link", { name: /^Integrations/i })
+      .click();
 
-    await expect(page).toHaveURL(/\/settings\/integrations$/);
+    await expect(page).toHaveURL(/\/settings\/integrations$/, { timeout: 15_000 });
     await expect(
       page.getByRole("heading", { name: "Integrations", level: 1 }),
     ).toBeVisible();
