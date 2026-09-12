@@ -207,8 +207,7 @@ export function ProductEditorHeader({
   };
 
   const title = product.title || "Untitled draft";
-  const isLiveOnStore =
-    lifecycleView.hasSyncedListing && lifecycleView.hasUnsentShopifyChanges;
+  const isLiveOnStore = lifecycleView.hasSyncedListing;
   const lifecycleBadge = lifecycleView.badgeLabel;
 
   return (
