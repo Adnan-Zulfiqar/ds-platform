@@ -200,19 +200,20 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
     await openReview(page);
     await selectDemoStore(page);
     await page.getByTestId("publish-to-store").click();
-    await expect(page.getByTestId("publish-error")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId("publish-error")).not.toContainText(/\{"/);
-    await expect(page.getByTestId("publish-error")).toContainText(
-      /couldn’t save|could not save|not published/i,
+    await expect(page.getByTestId("publish-save-failure")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("publish-save-failure")).toContainText(
+      /couldn.t save your changes, so nothing was published/i,
     );
     await shot(page, "08-save-failure");
 
     // 10 — dirty after a failed save: stay on Review & publish (title field is
     // on Product details). Assert no success claim and keep the failure summary.
     await expect(page.getByTestId("publish-ok")).toHaveCount(0);
-    await expect(page.getByTestId("publish-error")).toBeVisible();
-    await expect(page.getByTestId("publish-error")).toContainText(
-      /couldn’t save|could not save|not published/i,
+    await expect(page.getByTestId("publish-save-failure")).toBeVisible();
+    await expect(page.getByTestId("publish-save-failure")).toContainText(
+      /couldn.t save your changes, so nothing was published/i,
     );
     await shot(page, "10-dirty-after-save");
   });
@@ -235,9 +236,12 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
     await openReview(page);
     await selectDemoStore(page);
     await page.getByTestId("publish-to-store").click();
-    await expect(page.getByTestId("publish-error")).toContainText(/changed somewhere else/i, {
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible({
       timeout: 15_000,
     });
+    await expect(page.getByTestId("publish-conflict-pointer")).toContainText(
+      /Fix the editing conflict above first/i,
+    );
     await shot(page, "09-conflict-409");
 
     await openMockedEditor(page);

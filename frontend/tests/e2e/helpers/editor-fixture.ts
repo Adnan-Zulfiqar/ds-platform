@@ -276,6 +276,40 @@ export async function openMockedEditor(
     });
   });
 
+  // App shell queries — mock so mocked-editor runs do not hit a real API origin.
+  await page.route("**/api/v1/products/workspace-counts", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        drafts: 0,
+        published: 0,
+        archived: 0,
+        total: 0,
+      }),
+    }),
+  );
+  await page.route("**/api/v1/notifications/unread-count", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ count: 0 }),
+    }),
+  );
+  await page.route("**/api/v1/notifications**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        page: 1,
+        size: 8,
+        total: 0,
+        totalPages: 0,
+      }),
+    }),
+  );
+
   await page.route("**/api/v1/integrations/shopify/publish-readiness", async (route) => {
     const postData = route.request().postDataJSON() as {
       productId?: string;

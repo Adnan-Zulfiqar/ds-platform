@@ -52,7 +52,9 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("product-editor-header")).toBeVisible();
     await expect(page.getByRole("link", { name: /Back to drafts/i })).toBeVisible();
     await expect(page.getByTestId("product-editor-title")).toBeVisible();
-    await expect(page.getByTestId("product-lifecycle")).toHaveText("Draft");
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Draft — not on Shopify",
+    );
     await expect(page.getByTestId("draft-save-state")).toContainText(
       /Draft saved — not live|Unsaved changes/,
     );
@@ -769,8 +771,11 @@ test.describe("UX-L2A editor foundation — save failure", () => {
     await page.locator("#draft-title").fill("Conflict title");
     await visibleTestId(page, "save-draft").click();
     await expect(page.getByTestId("draft-save-state")).toContainText(
-      /Someone else saved this product/i,
+      "Editing conflict — see above",
       { timeout: 15_000 },
+    );
+    await expect(page.getByTestId("draft-conflict-banner")).toContainText(
+      /Someone else saved this product/i,
     );
   });
 });
@@ -798,7 +803,9 @@ test.describe("UX-L2A editor foundation — live listing copy", () => {
     };
     await openMockedEditor(page, { listings: [listing] });
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("product-lifecycle")).toHaveText("Published");
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Visible on your shop",
+    );
     await expect(page.getByTestId("draft-save-state")).toContainText(
       /Changes saved as a draft — your live product has not changed/,
     );

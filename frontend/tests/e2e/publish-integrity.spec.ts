@@ -100,7 +100,7 @@ test.describe("UX-L2B save-before-publish integrity", () => {
       timeout: 10_000,
     });
     await expect(page.getByTestId("publish-save-failure")).toContainText(
-      /couldn’t save your changes/i,
+      /couldn.t save your changes, so nothing was published/i,
     );
     expect(publishCalls).toBe(0);
     expect(page.url()).toContain("tab=publishing");
@@ -146,10 +146,11 @@ test.describe("UX-L2B save-before-publish integrity", () => {
     await openReview(page);
     await selectDemoStore(page);
     await page.getByTestId("publish-to-store").click();
-    await expect(page.getByTestId("publish-save-failure")).toContainText(
-      /changed somewhere else/i,
+    await expect(page.getByTestId("publish-conflict-pointer")).toContainText(
+      /Fix the editing conflict above first/i,
       { timeout: 10_000 },
     );
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible();
     await expect(page.getByText(/Reload latest version|Review my changes/i).first()).toBeVisible();
     expect(publishCalls).toBe(0);
   });

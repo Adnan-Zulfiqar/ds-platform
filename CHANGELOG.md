@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **UX-L2C — live-state clarity and calm completion journey (on
+  `feature/ux-l2c-live-state-clarity`, not merged).** Frontend-only seller
+  clarity: authoritative lifecycle labels (`Draft — not on Shopify`, `Added to
+  Shopify`, `Visible on your shop` only when `onlineStorePublished === true`),
+  plain-language blocker sections, single conflict authority, redesigned
+  post-publish success with collapsed publish form, `/products/[productId]`
+  summary page, and Products table navigation. No migration; Alembic head
+  remains ``0032``. Not independently accepted; not merged or deployed.
+
 ### Fixed
 
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
