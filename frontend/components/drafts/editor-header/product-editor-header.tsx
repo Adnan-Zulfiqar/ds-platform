@@ -29,11 +29,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { ProductDetail, SeoScore, StoreListing } from "@/types/api";
+import type { ProductDetail, SeoScore, ShopifyPublishResult, StoreListing } from "@/types/api";
 import type { Store } from "@/services/stores";
 import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
+import { deriveProductLifecycle } from "@/lib/product-lifecycle";
 
 interface ProductEditorHeaderProps {
+  productId: string;
   product: ProductDetail;
   activeTab: EditorTab;
   onTabChange: (tab: EditorTab) => void;
@@ -43,6 +45,7 @@ interface ProductEditorHeaderProps {
   publishPending: boolean;
   publishFailed: boolean;
   listing: StoreListing | null;
+  publishResult?: ShopifyPublishResult | null;
   /** Workspace Shopify stores — used for connect guidance, not publication authority. */
   shopifyStores: Store[];
   storesPending: boolean;
@@ -61,42 +64,26 @@ interface ProductEditorHeaderProps {
   onViewHistory: () => void;
 }
 
-function deriveLifecycle(params: {
-  productStatus: string;
-  publishPending: boolean;
-  publishFailed: boolean;
-  listing: StoreListing | null;
-}): "Draft" | "Publishing" | "Published" | "Publish failed" | "Archived" {
-  if (params.productStatus === "archived") return "Archived";
-  if (params.publishPending) return "Publishing";
-  if (params.publishFailed || params.listing?.status === "error") {
-    return "Publish failed";
-  }
-  if (params.listing?.status === "synced") return "Published";
-  return "Draft";
-}
-
 function derivePublishKind(params: {
   publishPending: boolean;
   publishFailed: boolean;
-  listing: StoreListing | null;
+  hasSyncedListing: boolean;
   dirty: boolean;
-  /** Client checklist item count — same gate as pre-L2A (all items). */
   issueCount: number;
+  preferProductSummary?: boolean;
 }): PublishActionKind {
   if (params.publishPending) return "publishing";
-  if (params.publishFailed || params.listing?.status === "error") return "retry";
-  if (params.listing?.status === "synced") {
-    return params.dirty ? "push_updates" : "view_store";
+  if (params.publishFailed) return "retry";
+  if (params.hasSyncedListing) {
+    if (params.dirty) return "review_changes";
+    return params.preferProductSummary ? "view_product" : "view_store";
   }
-  // Presentation advice only changes the CTA label to Review N items.
-  // It must not invent Required/Recommended or hard-disable publishing —
-  // channel checks remain authoritative on the Review & publish tab.
   if (params.issueCount > 0) return "review_items";
   return "publish";
 }
 
 export function ProductEditorHeader({
+  productId,
   product,
   activeTab,
   onTabChange,
@@ -106,6 +93,7 @@ export function ProductEditorHeader({
   publishPending,
   publishFailed,
   listing,
+  publishResult = null,
   shopifyStores,
   storesPending,
   storesError,
@@ -123,19 +111,29 @@ export function ProductEditorHeader({
   onViewHistory,
 }: ProductEditorHeaderProps) {
   const featuredImage = product.images[0]?.url ?? null;
-  const lifecycle = deriveLifecycle({
-    productStatus: product.status,
+  const lifecycleView = deriveProductLifecycle({
+    syncedListing: listing,
+    publishResult,
     publishPending,
     publishFailed,
-    listing,
+    dirty,
   });
   const issueCount = readiness.items.length;
   const publishKind = derivePublishKind({
     publishPending,
     publishFailed,
-    listing,
+    hasSyncedListing: lifecycleView.hasSyncedListing,
     dirty,
     issueCount,
+    preferProductSummary: false,
+  });
+  const mobilePublishKind = derivePublishKind({
+    publishPending,
+    publishFailed,
+    hasSyncedListing: lifecycleView.hasSyncedListing,
+    dirty,
+    issueCount,
+    preferProductSummary: true,
   });
   const supplierKind = deriveSupplierSyncKind({
     lastSyncedAt: product.lastSyncedAt,
@@ -200,7 +198,8 @@ export function ProductEditorHeader({
   };
 
   const title = product.title || "Untitled draft";
-  const isLiveOnStore = listing?.status === "synced";
+  const isLiveOnStore = lifecycleView.hasSyncedListing;
+  const lifecycleBadge = lifecycleView.badgeLabel;
 
   return (
     <>
@@ -277,17 +276,22 @@ export function ProductEditorHeader({
                 <span
                   className={cn(
                     "inline-flex rounded-md border px-2 py-0.5 text-xs font-medium",
-                    lifecycle === "Published" &&
+                    lifecycleView.kind === "visible_on_shop" &&
                       "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
-                    lifecycle === "Draft" && "border-border bg-muted text-foreground",
-                    lifecycle === "Publish failed" &&
+                    lifecycleView.kind === "draft_not_on_shopify" &&
+                      "border-border bg-muted text-foreground",
+                    lifecycleView.kind === "publish_failed" &&
                       "border-destructive/30 bg-destructive/10 text-destructive",
-                    lifecycle === "Publishing" &&
+                    lifecycleView.kind === "publishing" &&
                       "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300",
+                    (lifecycleView.kind === "added_to_shopify" ||
+                      lifecycleView.kind === "visibility_setup_needed" ||
+                      lifecycleView.kind === "changes_not_sent") &&
+                      "border-sky-500/30 bg-sky-500/10 text-sky-900 dark:text-sky-200",
                   )}
                   data-testid="product-lifecycle"
                 >
-                  {lifecycle}
+                  {lifecycleBadge}
                 </span>
                 <SaveStateIndicator
                   dirty={dirty}
@@ -342,12 +346,14 @@ export function ProductEditorHeader({
       </header>
 
       <MobileEditorActionBar
+        productId={productId}
         saving={saving}
         saveDisabled={!dirty && saveState !== "error"}
-        publishKind={publishKind}
+        publishKind={mobilePublishKind}
         issueCount={issueCount}
         disabledPublishReason={disabledPublishReason}
         storefrontUrl={listing?.storefrontUrl}
+        hasSyncedListing={lifecycleView.hasSyncedListing}
         onPreview={onPreview}
         onSave={onSave}
         onPublish={onPublish}

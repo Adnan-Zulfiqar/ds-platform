@@ -59,7 +59,7 @@ import {
   invalidatePublishReadiness,
   usePublishReadiness,
 } from "@/services/publish-readiness";
-import { useOptimizeProduct } from "@/services/products";
+import { productKeys, useOptimizeProduct } from "@/services/products";
 import { useStores } from "@/services/stores";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -225,6 +225,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
+  const conflictBannerRef = useRef<HTMLDivElement | null>(null);
   // The server's latest version as of the moment the conflict was detected.
   // Captured separately from `data` so it can be shown next to the
   // merchant's still-untouched local fields without overwriting either.
@@ -521,6 +522,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    *
    * `dirty` is deliberately left `true` -- the merchant's work genuinely
    * is unsaved, and the header must keep saying so. */
+  useEffect(() => {
+    if (conflictPhase === "detected") {
+      conflictBannerRef.current?.focus();
+    }
+  }, [conflictPhase]);
+
   async function enterConflict(staleToken: string | null) {
     setConflictLocalSnapshot(captureEditableSnapshot());
     setConflictStaleToken(staleToken);
@@ -760,11 +767,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         const saveResult = await handleSave();
         if (!saveResult.ok) {
           setPublishSaveFailure(saveResult.reason);
-          if (saveResult.reason === "conflict") {
-            setPublishError(
-              "This draft changed somewhere else. Review the latest version before publishing.",
-            );
-          } else {
+          if (saveResult.reason !== "conflict") {
             setPublishError(
               "We couldn’t save your changes. Your product was not published. Review the changes and try again.",
             );
@@ -795,6 +798,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       void queryClient.invalidateQueries({
         queryKey: draftKeys.listings(productId),
       });
+      void queryClient.invalidateQueries({
+        queryKey: productKeys.detail(productId),
+      });
+      void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
       invalidatePublishReadiness(queryClient, productId);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -804,9 +811,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           );
           return;
         }
-        setPublishError(
-          "This draft changed somewhere else. Review the latest version before publishing.",
-        );
         await enterConflict(savedUpdatedAt);
         return;
       }
@@ -930,6 +934,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   return (
     <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
       <ProductEditorHeader
+        productId={productId}
         product={{ ...data, title: title || data.title }}
         activeTab={tab}
         onTabChange={selectTab}
@@ -939,6 +944,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         publishPending={publishPending}
         publishFailed={Boolean(publishError)}
         listing={syncedListing}
+        publishResult={publishResult}
         shopifyStores={shopifyStores}
         storesPending={storesQuery.isPending}
         storesError={storesQuery.isError}
@@ -987,40 +993,38 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       {isConflicted ? (
         <Alert
           variant="destructive"
-          role="alert"
+          tabIndex={-1}
+          ref={conflictBannerRef}
           data-testid="draft-conflict-banner"
         >
           <AlertDescription className="space-y-3">
             <p>
-              This draft was changed elsewhere since you opened it. Saving
-              now would risk overwriting that change, so it was not applied,
-              and autosave is paused until you choose what to do next.
+              Someone else saved this product while you were editing. Your
+              latest changes were not applied, and autosave is paused until you
+              choose what to do.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
                 onClick={handleRequestReload}
                 data-testid="conflict-reload-latest"
               >
-                Reload latest version
+                Reload latest
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
                 onClick={() => void handleOpenReview()}
                 data-testid="conflict-review-mine"
               >
                 Review my changes
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Reloading discards what you typed and replaces it with the
-              latest saved version. Reviewing shows both versions side by
-              side before you decide.
-            </p>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -1465,6 +1469,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               publishPending={publishPending}
               publishResult={publishResult}
               syncedListing={syncedListing}
+              hasEditingConflict={isConflicted}
               onPublish={() => void handlePublish()}
               onOpenSection={(next) => selectTab(next)}
               onContinueEditing={() => selectTab("overview")}
@@ -1519,6 +1524,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           shopifyStores={shopifyStores}
           storesPending={storesQuery.isPending}
           storesError={storesQuery.isError}
+          hasServerBlockers={
+            tab === "publishing" &&
+            (publishReadinessQuery.data?.blockers.length ?? 0) > 0
+          }
           open={inspectorOpen}
           onClose={() => setInspectorOpen(false)}
           onOpenTab={selectTab}
@@ -1531,6 +1540,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           shopifyStores={shopifyStores}
           storesPending={storesQuery.isPending}
           storesError={storesQuery.isError}
+          hasServerBlockers={
+            tab === "publishing" &&
+            (publishReadinessQuery.data?.blockers.length ?? 0) > 0
+          }
           open={inspectorOpen}
           onClose={() => setInspectorOpen(false)}
           onOpenTab={(next) => {

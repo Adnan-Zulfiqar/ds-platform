@@ -14,7 +14,9 @@ export type PublishActionKind =
   | "review_items"
   | "publishing"
   | "view_store"
+  | "view_product"
   | "push_updates"
+  | "review_changes"
   | "retry";
 
 export type PublishActionIntent = "navigate" | "publish";
@@ -25,6 +27,7 @@ interface PublishActionProps {
   disabledReason?: string | null;
   storefrontUrl?: string | null;
   adminUrl?: string | null;
+  productHref?: string | null;
   onPublish: () => void;
   className?: string;
   size?: "default" | "sm";
@@ -45,8 +48,12 @@ function labelFor(
         return "Publishing…";
       case "view_store":
         return "View in store";
-      case "retry":
+      case "view_product":
+        return "View product";
+      case "review_changes":
       case "push_updates":
+        return "Review changes";
+      case "retry":
       case "publish":
         return issueCount > 0
           ? `Review ${issueCount} item${issueCount === 1 ? "" : "s"}`
@@ -63,8 +70,11 @@ function labelFor(
       return "Publishing…";
     case "view_store":
       return "View in store";
+    case "view_product":
+      return "View product";
+    case "review_changes":
     case "push_updates":
-      return "Push updates";
+      return "Review changes";
     case "retry":
       return "Try publishing again";
     default:
@@ -78,6 +88,7 @@ export function PublishAction({
   disabledReason,
   storefrontUrl,
   adminUrl,
+  productHref,
   onPublish,
   className,
   size = "default",
@@ -98,6 +109,10 @@ export function PublishAction({
       onClick={() => {
         if (kind === "view_store" && storefrontUrl) {
           window.open(storefrontUrl, "_blank", "noopener,noreferrer");
+          return;
+        }
+        if (kind === "view_product" && productHref) {
+          window.location.assign(productHref);
           return;
         }
         onPublish();

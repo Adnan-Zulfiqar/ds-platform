@@ -1,38 +1,72 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2, Copy, ExternalLink, Store } from "lucide-react";
+import { CheckCircle2, ChevronDown, ExternalLink } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  deriveProductLifecycle,
+  type ProductLifecycleView,
+} from "@/lib/product-lifecycle";
+import { externalLinkRel, isTrustedShopifyHttpsUrl } from "@/lib/external-link";
 import type { ShopifyPublishResult, StoreListing } from "@/types/api";
 
 interface DraftPostPublishPanelProps {
+  productId: string;
+  storeName?: string | null;
   listing?: StoreListing | null;
   publishResult?: ShopifyPublishResult | null;
   onContinueEditing?: () => void;
+  onReviewChanges?: () => void;
+}
+
+function headlineFor(lifecycle: ProductLifecycleView): string {
+  switch (lifecycle.kind) {
+    case "visible_on_shop":
+      return "Your product is visible on your shop";
+    case "visibility_setup_needed":
+      return "Your product was added to Shopify";
+    case "added_to_shopify":
+      return "Your product was added to Shopify";
+    default:
+      return "Your product was added to Shopify";
+  }
 }
 
 export function DraftPostPublishPanel({
+  productId,
+  storeName,
   listing,
   publishResult,
   onContinueEditing,
+  onReviewChanges,
 }: DraftPostPublishPanelProps) {
-  const storefrontUrl =
-    publishResult?.storefrontUrl ?? listing?.storefrontUrl ?? null;
-  const adminUrl = publishResult?.adminUrl ?? listing?.adminUrl ?? null;
-  const online =
-    publishResult?.onlineStorePublished ?? listing?.onlineStorePublished;
-  const hasListing = Boolean(listing || publishResult);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const lifecycle = deriveProductLifecycle({
+    syncedListing: listing ?? null,
+    publishResult,
+  });
 
-  if (!hasListing) return null;
+  if (!listing && !publishResult) return null;
 
-  async function copyUrl(url: string) {
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // clipboard may be unavailable in some browsers
-    }
-  }
+  const trustedStorefront = isTrustedShopifyHttpsUrl(lifecycle.storefrontUrl)
+    ? lifecycle.storefrontUrl
+    : null;
+  const trustedAdmin = isTrustedShopifyHttpsUrl(lifecycle.adminUrl)
+    ? lifecycle.adminUrl
+    : null;
+
+  const primaryHref = `/products/${productId}`;
+  const showViewInShop = lifecycle.kind === "visible_on_shop" && trustedStorefront;
+  const primaryIsExternal = showViewInShop;
+
+  const externalId =
+    publishResult?.externalProductId ?? listing?.externalProductId ?? null;
+  const handle =
+    publishResult?.externalHandle ?? listing?.externalHandle ?? null;
+  const shopDomain =
+    publishResult?.shopDomain ?? listing?.shopDomain ?? null;
 
   return (
     <div
@@ -40,80 +74,122 @@ export function DraftPostPublishPanel({
       data-testid="post-publish-success"
     >
       <div className="flex items-start gap-3">
-        <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-600" />
-        <div className="flex-1 space-y-3">
+        <CheckCircle2
+          className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400"
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1 space-y-3">
           <div>
-            <h3 className="font-semibold">Product published successfully</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              External ID{" "}
-              {publishResult?.externalProductId ?? listing?.externalProductId}
-              {publishResult?.externalHandle || listing?.externalHandle
-                ? ` · handle ${publishResult?.externalHandle ?? listing?.externalHandle}`
-                : null}
-            </p>
+            <h3 className="font-semibold text-foreground">{headlineFor(lifecycle)}</h3>
+            {storeName ? (
+              <p className="mt-1 text-sm text-muted-foreground">Store: {storeName}</p>
+            ) : null}
+            <p className="mt-1 text-sm text-muted-foreground">{lifecycle.supportingCopy}</p>
+            {lifecycle.kind === "visibility_setup_needed" ? (
+              <p className="mt-2 text-sm text-amber-800 dark:text-amber-300">
+                Finish setup in Shopify to show this product on your online shop. You
+                may need to reconnect Shopify if your store permissions changed.
+              </p>
+            ) : null}
           </div>
 
-          {online === false ? (
-            <p className="text-sm text-amber-700 dark:text-amber-400">
-              Created in Shopify, but not visible on the Online Store. Use
-              Manage in Shopify to publish to the Online Store channel. Full
-              channel publication may require{" "}
-              <code className="text-xs">write_publications</code> after
-              reauthorization.
-            </p>
-          ) : null}
-
-          {online == null && !storefrontUrl ? (
-            <p className="text-sm text-muted-foreground">
-              Online Store visibility is unverified. Manage in Shopify is
-              available; View in Store appears only when a storefront URL is
-              confirmed.
-            </p>
-          ) : null}
-
           <div className="flex flex-wrap gap-2">
-            {storefrontUrl && online !== false ? (
-              <Button asChild size="sm">
-                <a href={storefrontUrl} target="_blank" rel="noreferrer">
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  View in Store
+            {primaryIsExternal && trustedStorefront ? (
+              <Button asChild size="sm" className="min-h-11">
+                <a
+                  href={trustedStorefront}
+                  target="_blank"
+                  rel={externalLinkRel()}
+                  aria-label="View in your shop (opens in a new tab)"
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+                  View in your shop
+                </a>
+              </Button>
+            ) : (
+              <Button asChild size="sm" className="min-h-11">
+                <Link href={primaryHref}>View in Products</Link>
+              </Button>
+            )}
+
+            {trustedAdmin ? (
+              <Button asChild size="sm" variant="outline" className="min-h-11">
+                <a
+                  href={trustedAdmin}
+                  target="_blank"
+                  rel={externalLinkRel()}
+                  aria-label="Open Shopify (opens in a new tab)"
+                >
+                  Open Shopify
                 </a>
               </Button>
             ) : null}
-            {adminUrl ? (
-              <Button asChild size="sm" variant="outline">
-                <a href={adminUrl} target="_blank" rel="noreferrer">
-                  <Store className="mr-2 h-4 w-4" />
-                  Manage in Shopify
-                </a>
-              </Button>
-            ) : null}
-            {storefrontUrl ? (
+
+            {onReviewChanges ? (
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                onClick={() => void copyUrl(storefrontUrl)}
+                variant="ghost"
+                className="min-h-11"
+                onClick={onReviewChanges}
               >
-                <Copy className="mr-2 h-4 w-4" />
-                Copy Product URL
+                Continue editing
+              </Button>
+            ) : onContinueEditing ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="min-h-11"
+                onClick={onContinueEditing}
+              >
+                Continue editing
               </Button>
             ) : null}
-            <Button asChild size="sm" variant="outline">
-              <Link href="/products">View in DropPilot Products</Link>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={onContinueEditing}
-            >
-              Continue Editing
-            </Button>
-            <Button asChild size="sm" variant="ghost">
-              <Link href="/drafts">Publish Another Product</Link>
-            </Button>
           </div>
+
+          {(externalId || handle || shopDomain) && (
+            <div>
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setDetailsOpen((open) => !open)}
+                aria-expanded={detailsOpen}
+                data-testid="post-publish-details-toggle"
+              >
+                <ChevronDown
+                  className={detailsOpen ? "h-4 w-4 rotate-180 transition-transform" : "h-4 w-4 transition-transform"}
+                  aria-hidden="true"
+                />
+                Details
+              </button>
+              {detailsOpen ? (
+                <dl
+                  className="mt-2 space-y-1 rounded-md border border-border/80 bg-background/80 p-3 text-xs text-muted-foreground"
+                  data-testid="post-publish-details"
+                >
+                  {shopDomain ? (
+                    <>
+                      <dt className="font-medium text-foreground">Shop</dt>
+                      <dd>{shopDomain}</dd>
+                    </>
+                  ) : null}
+                  {externalId ? (
+                    <>
+                      <dt className="mt-2 font-medium text-foreground">Shopify product ID</dt>
+                      <dd>{externalId}</dd>
+                    </>
+                  ) : null}
+                  {handle ? (
+                    <>
+                      <dt className="mt-2 font-medium text-foreground">URL handle</dt>
+                      <dd>{handle}</dd>
+                    </>
+                  ) : null}
+                </dl>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </div>
