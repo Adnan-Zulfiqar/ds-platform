@@ -1,0 +1,60 @@
+name: Agent-managed task
+description: Define one bounded task for the ChatGPT manager and worker agents.
+title: "[Agent Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ChatGPT manages the task, Claude develops, and Cursor diagnoses. Production actions always require the owner.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: Describe the seller or business outcome in plain language.
+      placeholder: A seller can understand and complete...
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Name the exact phase, surfaces, and code boundaries.
+      placeholder: UX-L2D; frontend editor only...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable outcomes and exact evidence required.
+      placeholder: |
+        - [ ] Behaviour...
+        - [ ] Tests...
+    validations:
+      required: true
+  - type: textarea
+    id: forbidden
+    attributes:
+      label: Forbidden actions
+      description: Add task-specific restrictions. The permanent restrictions below still apply.
+      value: |
+        - No merge, deployment, migration, production data, production `.env`, or real provider contact.
+        - Never push directly to `main` or `develop`.
+        - Stop after this phase and report anything not executed.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: State the focused and regression checks that must run.
+      placeholder: Lint, typecheck, build, focused tests, full suite...
+    validations:
+      required: true
+  - type: checkboxes
+    id: approval
+    attributes:
+      label: Owner boundary
+      options:
+        - label: I understand that merging and all production actions remain owner decisions.
+          required: true

@@ -1,0 +1,3 @@
+# Cursor publishes matching SDK and bridge releases. Keep this exact pin until a
+# reviewed bridge update changes it together with its verification evidence.
+cursor-sdk==1.0.31
