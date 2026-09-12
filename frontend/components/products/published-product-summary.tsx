@@ -100,6 +100,7 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
     syncedListing,
     listingsError: listingsQuery.isError,
     listingsLoading: listingsQuery.isPending,
+    draftUpdatedAt: product.updatedAt,
   });
 
   const featuredImage = product.images[0]?.url ?? null;

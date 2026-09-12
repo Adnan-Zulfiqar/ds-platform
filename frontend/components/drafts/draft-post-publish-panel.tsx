@@ -17,6 +17,8 @@ interface DraftPostPublishPanelProps {
   storeName?: string | null;
   listing?: StoreListing | null;
   publishResult?: ShopifyPublishResult | null;
+  preferPublishOverlay?: boolean;
+  draftUpdatedAt?: string | null;
   onContinueEditing?: () => void;
   onReviewChanges?: () => void;
 }
@@ -39,6 +41,8 @@ export function DraftPostPublishPanel({
   storeName,
   listing,
   publishResult,
+  preferPublishOverlay = false,
+  draftUpdatedAt = null,
   onContinueEditing,
   onReviewChanges,
 }: DraftPostPublishPanelProps) {
@@ -46,6 +50,8 @@ export function DraftPostPublishPanel({
   const lifecycle = deriveProductLifecycle({
     syncedListing: listing ?? null,
     publishResult,
+    preferPublishOverlay,
+    draftUpdatedAt,
   });
 
   if (!listing && !publishResult) return null;

@@ -46,6 +46,8 @@ interface ProductEditorHeaderProps {
   publishFailed: boolean;
   listing: StoreListing | null;
   publishResult?: ShopifyPublishResult | null;
+  preferPublishOverlay?: boolean;
+  draftUpdatedAt?: string | null;
   /** Workspace Shopify stores — used for connect guidance, not publication authority. */
   shopifyStores: Store[];
   storesPending: boolean;
@@ -69,13 +71,14 @@ function derivePublishKind(params: {
   publishFailed: boolean;
   hasSyncedListing: boolean;
   dirty: boolean;
+  hasUnsentShopifyChanges: boolean;
   issueCount: number;
   preferProductSummary?: boolean;
 }): PublishActionKind {
   if (params.publishPending) return "publishing";
   if (params.publishFailed) return "retry";
   if (params.hasSyncedListing) {
-    if (params.dirty) return "review_changes";
+    if (params.dirty || params.hasUnsentShopifyChanges) return "review_changes";
     return params.preferProductSummary ? "view_product" : "view_store";
   }
   if (params.issueCount > 0) return "review_items";
@@ -94,6 +97,8 @@ export function ProductEditorHeader({
   publishFailed,
   listing,
   publishResult = null,
+  preferPublishOverlay = false,
+  draftUpdatedAt = null,
   shopifyStores,
   storesPending,
   storesError,
@@ -114,6 +119,8 @@ export function ProductEditorHeader({
   const lifecycleView = deriveProductLifecycle({
     syncedListing: listing,
     publishResult,
+    preferPublishOverlay,
+    draftUpdatedAt,
     publishPending,
     publishFailed,
     dirty,
@@ -124,6 +131,7 @@ export function ProductEditorHeader({
     publishFailed,
     hasSyncedListing: lifecycleView.hasSyncedListing,
     dirty,
+    hasUnsentShopifyChanges: lifecycleView.hasUnsentShopifyChanges,
     issueCount,
     preferProductSummary: false,
   });
@@ -132,6 +140,7 @@ export function ProductEditorHeader({
     publishFailed,
     hasSyncedListing: lifecycleView.hasSyncedListing,
     dirty,
+    hasUnsentShopifyChanges: lifecycleView.hasUnsentShopifyChanges,
     issueCount,
     preferProductSummary: true,
   });
@@ -198,7 +207,8 @@ export function ProductEditorHeader({
   };
 
   const title = product.title || "Untitled draft";
-  const isLiveOnStore = lifecycleView.hasSyncedListing;
+  const isLiveOnStore =
+    lifecycleView.hasSyncedListing && lifecycleView.hasUnsentShopifyChanges;
   const lifecycleBadge = lifecycleView.badgeLabel;
 
   return (

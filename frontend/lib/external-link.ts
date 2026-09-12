@@ -10,6 +10,9 @@ export function isTrustedShopifyHttpsUrl(url: string | null | undefined): url is
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return false;
+    if (parsed.username || parsed.password) return false;
+    if (parsed.port && parsed.port !== "443") return false;
+    if (parsed.hostname === "myshopify.com") return false;
     return SHOPIFY_HOST_PATTERN.test(parsed.hostname);
   } catch {
     return false;

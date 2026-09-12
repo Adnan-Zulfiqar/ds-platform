@@ -747,6 +747,18 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, title, description, seoTitle, seoDescription, slug, tags]);
 
+  // Clear ephemeral publish overlay once listings refetch with authoritative sync time.
+  useEffect(() => {
+    if (!publishResult || listingsQuery.isFetching) return;
+    const synced =
+      listingsQuery.data?.find((row) => row.status === "synced") ??
+      listingsQuery.data?.[0] ??
+      null;
+    if (synced?.status === "synced" && synced.lastSyncedAt) {
+      setPublishResult(null);
+    }
+  }, [publishResult, listingsQuery.isFetching, listingsQuery.data]);
+
   async function handlePublish() {
     setPublishError(null);
     setPublishOk(null);
@@ -869,6 +881,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
     null;
+  const draftUpdatedAt = savedUpdatedAt ?? data?.updatedAt ?? null;
+  const preferPublishOverlay = Boolean(
+    publishResult && (listingsQuery.isFetching || !syncedListing?.lastSyncedAt),
+  );
 
   // Every editable field where the merchant's rejected value differs from
   // the server's latest. Both sides come from the snapshots frozen when the
@@ -945,6 +961,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         publishFailed={Boolean(publishError)}
         listing={syncedListing}
         publishResult={publishResult}
+        preferPublishOverlay={preferPublishOverlay}
+        draftUpdatedAt={draftUpdatedAt}
         shopifyStores={shopifyStores}
         storesPending={storesQuery.isPending}
         storesError={storesQuery.isError}
@@ -1431,6 +1449,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               }))}
               storeId={publishStoreId}
               dirty={dirty}
+              draftUpdatedAt={draftUpdatedAt}
+              preferPublishOverlay={preferPublishOverlay}
               onStoreChange={(next) => {
                 setPublishStoreId(next);
                 setPublishSaveFailure(null);

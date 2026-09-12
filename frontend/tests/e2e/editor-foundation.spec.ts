@@ -784,6 +784,7 @@ test.describe("UX-L2A editor foundation — live listing copy", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
   test("live store save wording when listing is synced", async ({ page }) => {
+    const syncedAt = "2026-09-12T10:00:00.000Z";
     const listing: StoreListing = {
       id: "66666666-6666-4666-8666-666666666666",
       storeId: "77777777-7777-4777-8777-777777777777",
@@ -796,15 +797,18 @@ test.describe("UX-L2A editor foundation — live listing copy", () => {
       adminUrl: "https://demo-shop.myshopify.com/admin/products/1",
       onlineStorePublished: true,
       status: "synced",
-      lastSyncedAt: new Date().toISOString(),
+      lastSyncedAt: syncedAt,
       lastError: null,
-      publishedAt: new Date().toISOString(),
+      publishedAt: syncedAt,
       lastFailedSyncAt: null,
     };
-    await openMockedEditor(page, { listings: [listing] });
+    await openMockedEditor(page, {
+      product: buildSyntheticProduct({ updatedAt: syncedAt }),
+      listings: [listing],
+    });
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("product-lifecycle")).toHaveText(
-      "Visible on your shop",
+      "Up to date on Shopify",
     );
     await expect(page.getByTestId("draft-save-state")).toContainText(
       /Changes saved as a draft — your live product has not changed/,

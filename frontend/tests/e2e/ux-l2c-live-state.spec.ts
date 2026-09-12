@@ -2,7 +2,7 @@
  * UX-L2C — lifecycle clarity, calm conflict, post-publish journey.
  * Hermetic mocked routes only.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 
 import {
@@ -17,6 +17,10 @@ import { captureEvidenceScreenshot } from "./helpers/screenshot-evidence";
 import type { StoreListing } from "@/types/api";
 
 const UX_L2C_SHOT_ROOT = resolveSuiteShotRoot("ux-l2c-live-state", ["UX_L2C_SHOT_ROOT"]);
+
+function visibleTestId(page: Page, testId: string): Locator {
+  return page.locator(`[data-testid="${testId}"]:visible`).first();
+}
 
 function syncedListing(
   overrides: Partial<StoreListing> = {},
@@ -88,8 +92,12 @@ test.describe("UX-L2C lifecycle and calm completion", () => {
   });
 
   test("added to Shopify without visibility proof never says Live", async ({ page }) => {
+    const syncedAt = "2026-09-12T10:00:00.000Z";
     await openMockedEditor(page, {
-      listings: [syncedListing({ onlineStorePublished: null })],
+      product: buildSyntheticProduct({ updatedAt: syncedAt }),
+      listings: [
+        syncedListing({ onlineStorePublished: null, lastSyncedAt: syncedAt }),
+      ],
     });
     await expect(page.getByTestId("product-lifecycle")).toHaveText("Added to Shopify");
     await expect(page.getByText(/Live on Shopify/i)).toHaveCount(0);
@@ -100,17 +108,141 @@ test.describe("UX-L2C lifecycle and calm completion", () => {
   });
 
   test("visible on shop only when onlineStorePublished is true", async ({ page }) => {
+    const syncedAt = "2026-09-12T10:00:00.000Z";
     await openMockedEditor(page, {
+      product: buildSyntheticProduct({ updatedAt: syncedAt }),
       listings: [
         syncedListing({
           onlineStorePublished: true,
+          lastSyncedAt: syncedAt,
           storefrontUrl: "https://demo.myshopify.com/products/lamp",
         }),
       ],
     });
     await expect(page.getByTestId("product-lifecycle")).toHaveText(
-      "Visible on your shop",
+      "Up to date on Shopify",
     );
+  });
+
+  test("reload preserves saved-not-sent after autosave", async ({ page }) => {
+    const publishedAt = "2026-09-12T10:00:00.000Z";
+    const savedAt = "2026-09-12T11:00:00.000Z";
+    const product = buildSyntheticProduct({ updatedAt: publishedAt, title: "Published title" });
+    const savedProduct = {
+      ...product,
+      title: "Edited after publish",
+      updatedAt: savedAt,
+    };
+    await openMockedEditor(page, {
+      product,
+      listings: [
+        syncedListing({
+          lastSyncedAt: publishedAt,
+          onlineStorePublished: null,
+        }),
+      ],
+    });
+    await page.unroute(`**/api/v1/drafts/${product.id}**`);
+    await page.route(`**/api/v1/drafts/${product.id}**`, async (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      if (url.includes("/listings")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            syncedListing({ lastSyncedAt: publishedAt, onlineStorePublished: null }),
+          ]),
+        });
+      }
+      if (method === "PATCH") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(savedProduct),
+        });
+      }
+      if (method === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(savedProduct),
+        });
+      }
+      return route.continue();
+    });
+    await page.locator("#draft-title").fill("Edited after publish");
+    // Autosave completes the save; manual Save may already be hidden when dirty clears.
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Changes saved in DropPilot — not sent to Shopify",
+      { timeout: 15_000 },
+    );
+    await page.reload();
+    await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Changes saved in DropPilot — not sent to Shopify",
+    );
+    await openReview(page);
+    await expect(page.getByTestId("publish-to-store")).toHaveText("Update Shopify");
+  });
+
+  test("autosaved edit after publish shows saved-not-sent and Update Shopify", async ({
+    page,
+  }) => {
+    const publishedAt = "2026-09-12T10:00:00.000Z";
+    const savedAt = "2026-09-12T11:00:00.000Z";
+    const product = buildSyntheticProduct({ updatedAt: publishedAt, title: "Published title" });
+    await openMockedEditor(page, {
+      product,
+      listings: [
+        syncedListing({
+          lastSyncedAt: publishedAt,
+          onlineStorePublished: null,
+        }),
+      ],
+    });
+    await page.unroute(`**/api/v1/drafts/${product.id}**`);
+    await page.route(`**/api/v1/drafts/${product.id}**`, async (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      if (url.includes("/listings")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            syncedListing({ lastSyncedAt: publishedAt, onlineStorePublished: null }),
+          ]),
+        });
+      }
+      if (method === "PATCH") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...product,
+            title: "Edited after publish",
+            updatedAt: savedAt,
+          }),
+        });
+      }
+      if (method === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(product),
+        });
+      }
+      return route.continue();
+    });
+    await page.locator("#draft-title").fill("Edited after publish");
+    await visibleTestId(page, "save-draft").click();
+    await expect(page.getByTestId("product-lifecycle")).toHaveText(
+      "Changes saved in DropPilot — not sent to Shopify",
+      { timeout: 15_000 },
+    );
+    await openReview(page);
+    await expect(page.getByTestId("publish-to-store")).toHaveText("Update Shopify");
+    await expect(page.getByText(/Up to date on Shopify/i)).toHaveCount(0);
   });
 
   test("conflict shows one alert and blocks publish", async ({ page }) => {

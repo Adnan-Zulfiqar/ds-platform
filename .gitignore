@@ -16,6 +16,8 @@ node_modules/
 .next/
 .next-r6/
 .next-r7/
+.next-l2c/
+.next-l2c-r1/
 evidence/
 out/
 next-env.d.ts

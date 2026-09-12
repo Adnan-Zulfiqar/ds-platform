@@ -21,7 +21,20 @@ production release.
   summary page, and Products table navigation. No migration; Alembic head
   remains ``0032``. Not independently accepted; not merged or deployed.
 
+- **UX-L2C-R1 — lifecycle truth repair and regression closure (on
+  `feature/ux-l2c-live-state-clarity`, not merged).** Separates dirty (browser),
+  saved-in-DropPilot, and sent-to-Shopify states using `updatedAt` vs
+  `lastSyncedAt`; never treats `dirty === false` as “up to date on Shopify”.
+  `onlineStorePublished` remains server-authoritative only. Adds external-link
+  security unit tests, product-route tenant isolation E2E, reload-persistence
+  proof, and isolated R1 regression stack (8130/3130). No migration; Alembic
+  head ``0032``. Not independently accepted; not merged or deployed.
+
 ### Fixed
+
+- **UX-L2C-R1 — Rules of Hooks violation in draft editor.** Moved publish
+  overlay cleanup `useEffect` before conditional returns so mocked and live
+  editor routes no longer hit the error boundary (`Something went wrong`).
 
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
   `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run

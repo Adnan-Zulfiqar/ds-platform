@@ -12,6 +12,7 @@ import {
   editorTabForSection,
   sellerSectionLabel,
 } from "@/lib/editor-section-labels";
+import { hasUnsentShopifyChanges } from "@/lib/product-lifecycle";
 import type {
   ShopifyPublishCheckItem,
   ShopifyPublishReadiness,
@@ -41,6 +42,8 @@ type ReviewPublishPanelProps = {
   storeId: string;
   onStoreChange: (storeId: string) => void;
   dirty: boolean;
+  draftUpdatedAt: string | null;
+  preferPublishOverlay?: boolean;
   readiness: ShopifyPublishReadiness | undefined;
   readinessStatus: "idle" | "pending" | "error" | "success";
   readinessFetching: boolean;
@@ -111,6 +114,8 @@ export function ReviewPublishPanel({
   storeId,
   onStoreChange,
   dirty,
+  draftUpdatedAt,
+  preferPublishOverlay = false,
   readiness,
   readinessStatus,
   readinessFetching,
@@ -139,9 +144,19 @@ export function ReviewPublishPanel({
     (readinessStatus === "pending" ||
       (readinessFetching && readinessStatus !== "error"));
   const checkUnavailable = hasStore && !dirty && readinessStatus === "error";
-  const hasPostPublishSuccess = Boolean(publishResult || syncedListing?.status === "synced");
+  const hasPostPublishSuccess = Boolean(
+    (preferPublishOverlay && publishResult) || syncedListing?.status === "synced",
+  );
+  const unsentShopifyChanges = hasUnsentShopifyChanges(
+    draftUpdatedAt,
+    syncedListing?.lastSyncedAt ?? null,
+  );
   const collapsePublishForm =
-    hasPostPublishSuccess && !dirty && !publishPending && !saveFailureReason;
+    hasPostPublishSuccess &&
+    !dirty &&
+    !unsentShopifyChanges &&
+    !publishPending &&
+    !saveFailureReason;
   const selectedStoreName =
     stores.find((store) => store.id === storeId)?.name ?? null;
 
@@ -151,7 +166,9 @@ export function ReviewPublishPanel({
     !checkUnavailable &&
     !saveFailureReason &&
     !hasEditingConflict &&
-    (dirty || (Boolean(readiness?.canPublish) && blockers.length === 0));
+    (dirty ||
+      unsentShopifyChanges ||
+      (Boolean(readiness?.canPublish) && blockers.length === 0));
 
   useEffect(() => {
     if (hasEditingConflict) return;
@@ -174,7 +191,7 @@ export function ReviewPublishPanel({
     statusMessage = `${blockers.length} ${
       blockers.length === 1 ? "thing" : "things"
     } blocking publish`;
-  } else if (dirty && hasPostPublishSuccess) {
+  } else if ((dirty || unsentShopifyChanges) && hasPostPublishSuccess) {
     statusMessage = "You have changes that are not on Shopify yet.";
   } else if (dirty) {
     statusMessage = "We’ll save your latest changes before publishing.";
@@ -198,6 +215,8 @@ export function ReviewPublishPanel({
           storeName={selectedStoreName}
           listing={syncedListing}
           publishResult={publishResult}
+          preferPublishOverlay={preferPublishOverlay}
+          draftUpdatedAt={draftUpdatedAt}
           onContinueEditing={onContinueEditing}
           onReviewChanges={() => onOpenSection("overview")}
         />
@@ -209,7 +228,7 @@ export function ReviewPublishPanel({
           data-testid="publish-form-collapsed"
         >
           <p>
-            {dirty
+            {dirty || unsentShopifyChanges
               ? "Review your changes below, then update Shopify when you are ready."
               : "Use Update Shopify below when you make new edits."}
           </p>
@@ -357,7 +376,7 @@ export function ReviewPublishPanel({
           )}
           {publishPending
             ? "Publishing…"
-            : hasPostPublishSuccess && dirty
+            : hasPostPublishSuccess && (dirty || unsentShopifyChanges)
               ? "Update Shopify"
               : "Publish to Store"}
         </Button>
