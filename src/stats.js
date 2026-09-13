@@ -3,8 +3,13 @@
  *
  * @param {number[]} values
  * @returns {number}
+ * @throws {RangeError} If `values` is empty.
  */
 export function mean(values) {
+  if (values.length === 0) {
+    throw new RangeError("mean() requires at least one value");
+  }
+
   let total = 0;
   for (const value of values) {
     total += value;
@@ -17,8 +22,13 @@ export function mean(values) {
  *
  * @param {number[]} values
  * @returns {number}
+ * @throws {RangeError} If `values` is empty.
  */
 export function median(values) {
+  if (values.length === 0) {
+    throw new RangeError("median() requires at least one value");
+  }
+
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
 
