@@ -328,7 +328,11 @@ export async function registerAndSignIn(
 
     await page.getByRole("button", { name: "Create account" }).click();
     try {
-      await page.waitForURL(/\/dashboard/, { timeout: 20_000 });
+      // Pathname only — `/login?next=%2Fdashboard` must not count as success.
+      await page.waitForURL(
+        (url) => url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"),
+        { timeout: 20_000 },
+      );
       return candidate;
     } catch {
       if (page.isClosed()) {
@@ -374,8 +378,13 @@ export async function registerViaApiAndSignIn(
       await page.goto("/login");
       await page.getByLabel("Email").fill(candidate.email);
       await page.getByLabel("Password", { exact: true }).fill(candidate.password);
-      await page.getByRole("button", { name: "Sign in" }).click();
-      await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+      // exact: the Google GSI control's accessible name also contains "Sign in".
+      await page.getByRole("button", { name: "Sign in", exact: true }).click();
+      // Pathname only — `/login?next=%2Fdashboard` must not count as success.
+      await page.waitForURL(
+        (url) => url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"),
+        { timeout: 30_000 },
+      );
       return candidate;
     }
 

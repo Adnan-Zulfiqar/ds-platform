@@ -69,7 +69,10 @@ test.describe("AuthProvider still mounts where a session is needed", () => {
 
     await registerAndSignIn(page);
     await page.goto("/dashboard");
-    await expect(page).toHaveURL(/\/dashboard/);
+    // Pathname only — `/login?next=%2Fdashboard` must not count as success.
+    await expect(page).toHaveURL(
+      (url) => url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"),
+    );
     // Settle the shell before reloading. Without this the reload can race the
     // first paint, which fails for timing reasons rather than session ones.
     await expect(
@@ -81,7 +84,9 @@ test.describe("AuthProvider still mounts where a session is needed", () => {
     const calls = trackAuthCalls(page);
     await page.reload();
 
-    await expect(page).toHaveURL(/\/dashboard/);
+    await expect(page).toHaveURL(
+      (url) => url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"),
+    );
     await expect(
       page.getByRole("button", { name: "Account menu" }),
     ).toBeVisible({ timeout: 30000 });
@@ -111,7 +116,10 @@ test.describe("Protected routes are still enforced", () => {
 
     // `replace`, not `push` — back must not return to an authenticated screen.
     await page.goBack();
-    await expect(page).not.toHaveURL(/\/dashboard/);
+    // Pathname only — `/login?next=%2Fdashboard` is still a login page.
+    await expect(page).not.toHaveURL(
+      (url) => url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/"),
+    );
   });
 });
 

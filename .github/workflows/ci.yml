@@ -595,7 +595,12 @@ jobs:
       # suite fails on `getByTestId('google-sign-in')`. Not a real Cloud client.
       GOOGLE_OAUTH_CLIENT_ID: 1000000000000-ci-playwright.apps.googleusercontent.com
       NEXT_PUBLIC_GOOGLE_CLIENT_ID: 1000000000000-ci-playwright.apps.googleusercontent.com
-      CORS_ORIGINS: http://localhost:3000
+      # Frontend and API must share the 127.0.0.1 host. Playwright's default
+      # http://localhost:3000 → http://127.0.0.1:8000 is cross-site, so the
+      # SameSite=Lax refresh cookie is not sent on credentialed fetches and
+      # every hard navigation looks logged-out (Account menu never appears).
+      E2E_BASE_URL: http://127.0.0.1:3000
+      CORS_ORIGINS: http://127.0.0.1:3000
       LOG_JSON_OUTPUT: "false"
       NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
       NEXT_PUBLIC_ENVIRONMENT: local

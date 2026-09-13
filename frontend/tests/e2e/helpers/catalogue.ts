@@ -204,6 +204,9 @@ export async function signInWithAccount(
   account: TestAccount,
   nextPath: string = "/dashboard",
 ): Promise<void> {
+  const { blockGoogleIdentityScript } = await import("./auth");
+  await blockGoogleIdentityScript(page);
+
   const loginUrl =
     nextPath === "/dashboard"
       ? "/login"
@@ -211,12 +214,17 @@ export async function signInWithAccount(
   await page.goto(loginUrl);
   await page.getByLabel("Email").fill(account.email);
   await page.getByLabel("Password", { exact: true }).fill(account.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  const expected =
-    nextPath === "/dashboard"
-      ? /\/dashboard/
-      : new RegExp(nextPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  await page.waitForURL(expected, { timeout: 30_000 });
+  // exact: the Google GSI control's accessible name also contains "Sign in".
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.waitForURL(
+    (url) => {
+      if (nextPath === "/dashboard") {
+        return url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/");
+      }
+      return url.pathname === nextPath || url.pathname.startsWith(`${nextPath}/`);
+    },
+    { timeout: 30_000 },
+  );
 }
 
 export { TEST_PASSWORD };
