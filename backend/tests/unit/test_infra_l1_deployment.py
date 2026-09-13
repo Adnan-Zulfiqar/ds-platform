@@ -392,13 +392,27 @@ class TestSecretsStayOutOfEveryArtefact:
             assert f"${{{variable}:-" not in text, f"{variable} has a default"
             assert f"${{{variable}:?" in text, f"{variable} is not mandatory"
 
+    #: The scanner requires these assignments to be blank rather than a
+    #: `CHANGE-ME` placeholder, since a placeholder that merely looks like a
+    #: secret is still a string an eager reviewer could ship as one.
+    SCANNER_REQUIRED_BLANK = {
+        "SECURITY_ENCRYPTION_KEYS",
+        "SHOPIFY_API_KEY",
+        "SHOPIFY_API_SECRET",
+        "ALIEXPRESS_APP_SECRET",
+    }
+
     def test_the_environment_template_contains_no_real_value(self) -> None:
         text = APP_ENV_EXAMPLE.read_text(encoding="utf-8")
         for line in text.splitlines():
             if not line or line.startswith("#") or "=" not in line:
                 continue
             name, _, value = line.partition("=")
-            if name.strip() in {
+            stripped_name = name.strip()
+            if stripped_name in self.SCANNER_REQUIRED_BLANK:
+                assert value == "", f"{name} must be blank, not a placeholder"
+                continue
+            if stripped_name in {
                 "ENVIRONMENT",
                 "POSTGRES_PORT",
                 "POSTGRES_DB",
