@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 import yaml
@@ -395,7 +395,7 @@ class TestSecretsStayOutOfEveryArtefact:
     #: The scanner requires these assignments to be blank rather than a
     #: `CHANGE-ME` placeholder, since a placeholder that merely looks like a
     #: secret is still a string an eager reviewer could ship as one.
-    SCANNER_REQUIRED_BLANK = {
+    SCANNER_REQUIRED_BLANK: ClassVar[set[str]] = {
         "SECURITY_ENCRYPTION_KEYS",
         "SHOPIFY_API_KEY",
         "SHOPIFY_API_SECRET",
