@@ -60,6 +60,10 @@ def main() -> None:
         connection.ensure_connection(max_retries=3)
     print("broker connection: ok")
 
+    # conf.imports are loaded by the worker CLI path; a plain script must
+    # import them explicitly before inspecting the local task registry.
+    celery_app.loader.import_default_modules()
+
     registered = set(celery_app.tasks.keys())
     missing = [name for name in REQUIRED_TASKS if name not in registered]
     if missing:

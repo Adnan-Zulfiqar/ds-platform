@@ -346,7 +346,7 @@ jobs:
           celery -A app.workers.celery_app.celery_app worker \
             --loglevel=info \
             --concurrency=1 \
-            --queues=celery,integrations \
+            --queues=default,integrations \
             > /tmp/celery-worker.log 2>&1 &
           echo $! > /tmp/celery-worker.pid
           # Wait until the worker answers inspect ping.
