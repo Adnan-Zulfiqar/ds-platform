@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import psycopg
+from cryptography.fernet import Fernet
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND = REPO_ROOT / "backend"
@@ -123,6 +124,10 @@ def main() -> None:
 
     if env_filename:
         app_secret = secrets.token_urlsafe(32)
+        # Generated fresh per run rather than a fixed published key: this stack
+        # is torn down at the end of the review, so nothing needs to decrypt
+        # data written by a previous run.
+        encryption_key = Fernet.generate_key().decode()
         google_id = f"synthetic-r7-review-{random_token(6)}.apps.googleusercontent.com"
         lines = [
             "ENVIRONMENT=local",
@@ -139,7 +144,7 @@ def main() -> None:
             f"SECURITY_SECRET_KEY={app_secret}",
             "SECURITY_COOKIE_SECURE=false",
             "SECURITY_RATE_LIMIT_ENABLED=false",
-            "SECURITY_ENCRYPTION_KEYS=dGVzdC1rZXktMS1ORVZFUi1VU0UtSU4tUFJPRC0hISE=",
+            f"SECURITY_ENCRYPTION_KEYS={encryption_key}",
             f"CORS_ORIGINS=http://127.0.0.1:{frontend_port}",
             "SHOPIFY_API_KEY=synthetic-r7-review-shopify-client-id",
             "SHOPIFY_API_SECRET=synthetic-r7-review-shopify-client-secret-not-real",

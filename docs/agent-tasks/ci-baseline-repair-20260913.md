@@ -23,3 +23,16 @@ Do not edit `scripts/check_secrets.py` to silence findings. Do not add allowlist
 
 ## Verification
 Trusted CI is authoritative. At minimum the security scanner, backend lint/format/mypy/migrations/pytest, and existing frontend checks must be allowed to run after the bridge pushes the patch.
+
+## Implementation note (retry on head `210176a`)
+- `deploy/lightsail/app.env.example`: blanked the four flagged assignments
+  (`SECURITY_ENCRYPTION_KEYS`, `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`,
+  `ALIEXPRESS_APP_SECRET`) while leaving every surrounding comment intact.
+- `scripts/r7_provision_stack.py`: replaced the committed published test
+  Fernet key with `Fernet.generate_key()`, generated once per run and used
+  only for the disposable reviewer stack's env file.
+- `backend/tests/__init__.py`: added so pytest's default import mode roots
+  the `tests` package at `backend/` instead of `backend/tests`. That is what
+  makes `tests.environment` (imported by `conftest.py`) resolve regardless of
+  which files an editable install exposes on `sys.path`. `conftest.py` itself
+  did not need to change.
