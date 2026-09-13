@@ -55,6 +55,9 @@ jobs:
           ChatGPT manager: inspect the exact [workflow run](${RUN_URL}) and PR
           diff, then choose the next supervised step. This wake-up does not
           accept, merge, deploy, or contact production.
+
+          Owner: if ChatGPT has not resumed, comment "review results". The
+          ChatGPT webhook supports human comments, not guaranteed bot wake-ups.
           EOF
           )"
           gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "${body}"

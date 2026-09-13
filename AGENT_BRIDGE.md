@@ -13,7 +13,9 @@ This control plane keeps GitHub as the only shared state between the agents:
 
 GitHub stores the task contract, commits, CI evidence, worker reports, and final
 decision. A trusted workflow posts a bounded PR comment when application CI
-finishes, which wakes the ChatGPT manager. Agents do not call one another
+finishes. ChatGPT's webhook supports human comments; bot comments are not a
+guaranteed wake-up. If the manager has not resumed, the owner comments
+"review results" on the PR. Agents do not call one another
 directly and do not share local credentials.
 
 ```mermaid
@@ -146,7 +148,9 @@ contains no deployment workflow.
 Application CI completion is bridged back into this loop by
 `agent-manager-wakeup.yml`. It accepts only the repository's `CI` workflow for
 the exact current SHA of one open, draft, same-repository `[Agent]` PR. Its
-comment is a wake-up signal, not an acceptance decision.
+comment records completion, not an acceptance decision. The owner may need to
+comment "review results" to trigger the human-comment webhook. Fully unattended
+CI-to-manager continuation is not verified in V1.
 
 ## Security boundary
 
