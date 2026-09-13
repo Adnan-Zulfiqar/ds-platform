@@ -1,0 +1,315 @@
+name: Agent bridge - Claude developer
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-claude-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.actor == 'Adnan-Zulfiqar' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      checkout_ref: ${{ steps.context.outputs.checkout_ref }}
+      has_patch: ${{ steps.patch.outputs.has_patch }}
+      head_ref: ${{ steps.context.outputs.head_ref }}
+      pr_number: ${{ steps.context.outputs.pr_number }}
+
+    steps:
+      # Comment workflows are loaded from the default branch. Keep this first
+      # checkout credential-free and copy the trusted validators before the
+      # worker-authored branch replaces the workspace.
+      - name: Check out trusted bridge policy
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve and validate agent PR
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "${RUNNER_TEMP}/pr.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            > "${RUNNER_TEMP}/pr-files.json"
+          python scripts/agent_bridge/validate_event.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --worker claude \
+            --pr-json "${RUNNER_TEMP}/pr.json" \
+            --files-json "${RUNNER_TEMP}/pr-files.json" \
+            --github-output "${GITHUB_OUTPUT}" \
+            --request-output "${RUNNER_TEMP}/claude-request.txt"
+
+          mkdir -p "${RUNNER_TEMP}/agent-bridge-policy"
+          cp scripts/agent_bridge/validate_event.py \
+            scripts/agent_bridge/validate_patch.py \
+            "${RUNNER_TEMP}/agent-bridge-policy/"
+
+      - name: Build trusted Claude instruction
+        env:
+          BASE_SHA: ${{ steps.context.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.context.outputs.checkout_ref }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/claude-prompt.txt" <<EOF
+          You are the implementation worker for DropPilot AI PR #${PR_NUMBER}.
+          The validated base SHA is ${BASE_SHA}; the validated head is ${HEAD_SHA}.
+
+          Read CLAUDE.md completely, then implement only the PR's Manager task,
+          Scope, and Acceptance criteria. Preserve every Forbidden action.
+
+          Security boundary:
+          - Work only in this checkout. Do not commit, push, merge, deploy, or
+            contact production or real providers.
+          - Do not read or create real .env files, credentials, tokens, customer
+            data, build artefacts, logs, or evidence directories.
+          - Do not modify .github, CLAUDE/AGENTS/MCP configuration, git metadata,
+            hooks, attributes, submodules, or scripts/agent_bridge.
+          - Shell, network, MCP, and subagent tools are intentionally unavailable.
+            Make source/test/doc edits only; trusted CI runs after the patch is
+            validated and pushed by a separate job.
+          - Report checks as not run. Never claim acceptance, merge, deployment,
+            or production readiness.
+
+          Owner's precise request follows:
+          EOF
+          cat "${RUNNER_TEMP}/claude-request.txt" >> "${RUNNER_TEMP}/claude-prompt.txt"
+
+      - name: Require Claude credential
+        env:
+          CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "${CLAUDE_TOKEN:-}" ]; then
+            echo "::error::Add CLAUDE_CODE_OAUTH_TOKEN as a repository Actions secret."
+            exit 1
+          fi
+
+      - name: Check out exact validated PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.context.outputs.checkout_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a checkout race
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ steps.context.outputs.checkout_ref }}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error::PR head moved after validation; comment again on the new head."
+            exit 1
+          fi
+          base="${{ steps.context.outputs.base_sha }}"
+          if [ "$(git merge-base HEAD "${base}")" != "${base}" ]; then
+            echo "::error::Agent branch must contain the current develop base."
+            exit 1
+          fi
+
+      # Exact upstream commit pin. Claude has no GitHub write token, OIDC token,
+      # shell, network, MCP, or subagent tool in this job.
+      - name: Run local-only Claude developer
+        uses: anthropics/claude-code-base-action@935fb86e3d3e9aa4bf665896e778208ffee8ae7a
+        with:
+          prompt_file: ${{ runner.temp }}/claude-prompt.txt
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          settings: |
+            {
+              "permissions": {
+                "allow": ["Read", "Glob", "Grep", "Edit", "Write"],
+                "deny": ["Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task"]
+              }
+            }
+          claude_args: >-
+            --bare
+            --no-session-persistence
+            --disable-slash-commands
+            --strict-mcp-config
+            --mcp-config '{"mcpServers":{}}'
+            --max-turns 30
+            --tools "Read,Glob,Grep,Edit,Write"
+            --allowedTools "Read,Glob,Grep,Edit,Write"
+
+      - name: Validate and package the local patch
+        id: patch
+        env:
+          CLAUDE_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          EXPECTED_HEAD: ${{ steps.context.outputs.checkout_ref }}
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "has_patch=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          python "${RUNNER_TEMP}/agent-bridge-policy/validate_patch.py" \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --expected-head "${EXPECTED_HEAD}" \
+            --patch-out "${RUNNER_TEMP}/claude.patch" \
+            --forbidden-secret-env CLAUDE_TOKEN
+          (cd "${RUNNER_TEMP}" && sha256sum claude.patch > claude.patch.sha256)
+          echo "has_patch=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload validated patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/claude.patch
+            ${{ runner.temp }}/claude.patch.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    needs: prepare
+    if: needs.prepare.outputs.has_patch == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+
+    steps:
+      - name: Require isolated branch-push credential
+        env:
+          PUSH_TOKEN: ${{ secrets.AGENT_BRANCH_PUSH_TOKEN }}
+        run: |
+          if [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error::Add AGENT_BRANCH_PUSH_TOKEN as a repository Actions secret."
+            exit 1
+          fi
+
+      - name: Check out trusted bridge policy
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Revalidate agent PR
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "${RUNNER_TEMP}/pr.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            > "${RUNNER_TEMP}/pr-files.json"
+          python scripts/agent_bridge/validate_event.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --worker claude \
+            --pr-json "${RUNNER_TEMP}/pr.json" \
+            --files-json "${RUNNER_TEMP}/pr-files.json" \
+            --github-output "${GITHUB_OUTPUT}"
+
+          mkdir -p "${RUNNER_TEMP}/agent-bridge-policy"
+          cp scripts/agent_bridge/validate_event.py \
+            scripts/agent_bridge/validate_patch.py \
+            "${RUNNER_TEMP}/agent-bridge-policy/"
+
+      - name: Refuse a head that moved during preparation
+        run: |
+          if [ "${{ needs.prepare.outputs.checkout_ref }}" != \
+               "${{ steps.context.outputs.checkout_ref }}" ]; then
+            echo "::error::PR head changed while Claude was working; discard this patch."
+            exit 1
+          fi
+
+      # This job never executes PR-controlled code. The short-lived PAT is used
+      # only by checkout/push so its commit triggers the existing application CI.
+      - name: Check out validated feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.context.outputs.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.AGENT_BRANCH_PUSH_TOKEN }}
+
+      - name: Verify branch has not moved
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ needs.prepare.outputs.checkout_ref }}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error::Feature branch moved before patch application."
+            exit 1
+          fi
+
+      - name: Download validated patch
+        uses: actions/download-artifact@v4
+        with:
+          name: claude-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-patch
+
+      - name: Apply, revalidate, and push only to the feature branch
+        id: push
+        env:
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.checkout_ref }}
+          HEAD_REF: ${{ steps.context.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/worker-patch"
+          sha256sum -c claude.patch.sha256
+          cd "${GITHUB_WORKSPACE}"
+          git apply --index --binary --whitespace=error-all \
+            "${RUNNER_TEMP}/worker-patch/claude.patch"
+          python "${RUNNER_TEMP}/agent-bridge-policy/validate_patch.py" \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --expected-head "${EXPECTED_HEAD}" \
+            --patch-out "${RUNNER_TEMP}/rebuilt.patch"
+          cmp "${RUNNER_TEMP}/worker-patch/claude.patch" "${RUNNER_TEMP}/rebuilt.patch"
+
+          mkdir -p "${RUNNER_TEMP}/empty-git-hooks"
+          git config user.name "Claude developer (supervised)"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -c core.hooksPath="${RUNNER_TEMP}/empty-git-hooks" \
+            commit -m "fix(agent): apply supervised Claude patch"
+          git -c core.hooksPath="${RUNNER_TEMP}/empty-git-hooks" push \
+            --force-with-lease="refs/heads/${HEAD_REF}:${EXPECTED_HEAD}" \
+            origin "HEAD:refs/heads/${HEAD_REF}"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Post bounded handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body \
+            "Claude produced a policy-validated patch at \`${{ steps.push.outputs.commit_sha }}\`. Existing CI is the authority for verification. Nothing was merged or deployed."
+
+  report-no-change:
+    needs: prepare
+    if: needs.prepare.outputs.has_patch == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Report no patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body \
+            "Claude completed without a source patch. No branch, merge, deployment, or production change was made."

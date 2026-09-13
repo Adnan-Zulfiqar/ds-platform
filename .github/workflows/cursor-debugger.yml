@@ -1,0 +1,159 @@
+name: Agent bridge - Cursor debugger
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-cursor-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  debug:
+    if: >-
+      github.actor == 'Adnan-Zulfiqar' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/cursor-debug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+
+    steps:
+      - name: Check out trusted bridge code
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve and validate agent PR
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "${RUNNER_TEMP}/pr.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            > "${RUNNER_TEMP}/pr-files.json"
+          python scripts/agent_bridge/validate_event.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --worker cursor \
+            --pr-json "${RUNNER_TEMP}/pr.json" \
+            --files-json "${RUNNER_TEMP}/pr-files.json" \
+            --github-output "${GITHUB_OUTPUT}" \
+            --request-output "${RUNNER_TEMP}/cursor-request.txt"
+
+      - name: Collect bounded CI context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          gh pr checks "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+            > "${RUNNER_TEMP}/ci-context.txt" 2>&1 || true
+          python - "${RUNNER_TEMP}/ci-context.txt" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          data = path.read_bytes()[:64000]
+          path.write_bytes(data)
+          PY
+
+      # Keep the trusted bridge checkout at the workspace root. The PR lives in
+      # a child directory and its git credentials are not persisted.
+      - name: Check out exact validated PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.context.outputs.checkout_ref }}
+          path: review-target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare trusted base-to-head patch
+        run: |
+          set -euo pipefail
+          actual="$(git -C review-target rev-parse HEAD)"
+          expected="${{ steps.context.outputs.checkout_ref }}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error::Review checkout does not match the validated PR head."
+            exit 1
+          fi
+          base="${{ steps.context.outputs.base_sha }}"
+          if [ "$(git -C review-target merge-base HEAD "${base}")" != "${base}" ]; then
+            echo "::error::Agent branch must contain the current develop base."
+            exit 1
+          fi
+          mkdir -p review-target/.agent-bridge
+          git -C review-target diff --no-ext-diff --unified=40 \
+            "${{ steps.context.outputs.base_sha }}...${{ steps.context.outputs.checkout_ref }}" \
+            > review-target/.agent-bridge/pr.diff
+          size="$(wc -c < review-target/.agent-bridge/pr.diff)"
+          if [ "${size}" -gt 524288 ]; then
+            echo "::error::PR patch exceeds 512 KiB; split the task before Cursor review."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: scripts/agent_bridge/requirements.txt
+
+      - name: Install pinned Cursor SDK
+        run: python -m pip install --disable-pip-version-check --no-input -r scripts/agent_bridge/requirements.txt
+
+      - name: Run read-only Cursor debugger
+        id: cursor
+        continue-on-error: true
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          python scripts/agent_bridge/run_cursor_debugger.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --pr-number "${{ steps.context.outputs.pr_number }}" \
+            --base-sha "${{ steps.context.outputs.base_sha }}" \
+            --head-sha "${{ steps.context.outputs.checkout_ref }}" \
+            --request-file "${RUNNER_TEMP}/cursor-request.txt" \
+            --ci-context-file "${RUNNER_TEMP}/ci-context.txt" \
+            --workspace "${GITHUB_WORKSPACE}/review-target" \
+            --output "${RUNNER_TEMP}/cursor-report.md"
+
+      - name: Verify debugger did not mutate the PR checkout
+        if: always()
+        run: |
+          set -euo pipefail
+          git -C review-target status --porcelain --untracked-files=all \
+            | grep -v '^?? \.agent-bridge/' \
+            > "${RUNNER_TEMP}/unexpected-cursor-changes.txt" || true
+          if [ -s "${RUNNER_TEMP}/unexpected-cursor-changes.txt" ]; then
+            echo "::error::Cursor debugger changed the read-only review checkout."
+            cat "${RUNNER_TEMP}/unexpected-cursor-changes.txt"
+            exit 1
+          fi
+
+      - name: Post debugger report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          if [ ! -s "${RUNNER_TEMP}/cursor-report.md" ]; then
+            printf '%s\n' \
+              '## Cursor debugger report' \
+              '' \
+              'Debugger failed before it produced a report. Inspect this workflow run.' \
+              > "${RUNNER_TEMP}/cursor-report.md"
+          fi
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+            --body-file "${RUNNER_TEMP}/cursor-report.md"
+
+      - name: Fail if debugger did not complete
+        if: steps.cursor.outcome == 'failure'
+        run: exit 1
