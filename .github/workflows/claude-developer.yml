@@ -138,7 +138,9 @@ jobs:
               }
             }
           claude_args: >-
-            --bare
+            --safe-mode
+            --restricted
+            --permission-prompts none
             --no-session-persistence
             --disable-slash-commands
             --strict-mcp-config

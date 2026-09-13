@@ -19,7 +19,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("contents: write", apply)
         self.assertIn("AGENT_BRANCH_PUSH_TOKEN", apply)
 
-    def test_claude_uses_bare_restricted_base_action(self) -> None:
+    def test_claude_uses_oauth_compatible_restricted_base_action(self) -> None:
         workflow = (ROOT / ".github/workflows/claude-developer.yml").read_text(
             encoding="utf-8"
         )
@@ -29,7 +29,11 @@ class WorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("anthropics/claude-code-action@", workflow)
-        self.assertIn("--bare", workflow)
+        self.assertNotIn("--bare", workflow)
+        self.assertIn("--safe-mode", workflow)
+        self.assertIn("--restricted", workflow)
+        self.assertIn("--permission-prompts none", workflow)
+        self.assertIn("claude_code_oauth_token:", workflow)
         self.assertIn('--tools "Read,Glob,Grep,Edit,Write"', workflow)
         self.assertIn("--mcp-config '{\"mcpServers\":{}}'", workflow)
         self.assertNotIn('tools "default"', workflow)
