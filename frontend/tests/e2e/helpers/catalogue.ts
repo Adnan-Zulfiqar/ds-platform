@@ -216,12 +216,19 @@ export async function signInWithAccount(
   await page.getByLabel("Password", { exact: true }).fill(account.password);
   // exact: the Google GSI control's accessible name also contains "Sign in".
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Parse nextPath so `/drafts/:id?tab=description` compares pathname + query
+  // correctly — a raw pathname===nextPath check never matches when a query is present.
+  const expected = new URL(nextPath, "http://e2e.invalid");
   await page.waitForURL(
     (url) => {
-      if (nextPath === "/dashboard") {
-        return url.pathname === "/dashboard" || url.pathname.startsWith("/dashboard/");
+      const pathOk =
+        url.pathname === expected.pathname ||
+        url.pathname.startsWith(`${expected.pathname}/`);
+      if (!pathOk) return false;
+      for (const [key, value] of expected.searchParams) {
+        if (url.searchParams.get(key) !== value) return false;
       }
-      return url.pathname === nextPath || url.pathname.startsWith(`${nextPath}/`);
+      return true;
     },
     { timeout: 30_000 },
   );
