@@ -173,12 +173,13 @@ jobs:
         if: steps.patch.outputs.has_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: claude-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          name: claude-patch-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/claude.patch
             ${{ runner.temp }}/claude.patch.sha256
           retention-days: 1
           if-no-files-found: error
+          overwrite: true
 
   apply:
     needs: prepare
@@ -260,7 +261,7 @@ jobs:
       - name: Download validated patch
         uses: actions/download-artifact@v4
         with:
-          name: claude-patch-${{ github.run_id }}-${{ github.run_attempt }}
+          name: claude-patch-${{ github.run_id }}
           path: ${{ runner.temp }}/worker-patch
 
       - name: Apply, revalidate, and push only to the feature branch
@@ -291,14 +292,29 @@ jobs:
             origin "HEAD:refs/heads/${HEAD_REF}"
           echo "commit_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
-      - name: Post bounded handoff
+      - name: Prepare bounded handoff
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "Claude produced a policy-validated patch at \`${{ steps.push.outputs.commit_sha }}\`. Existing CI is the authority for verification. Nothing was merged or deployed." \
+            > "${RUNNER_TEMP}/claude-handoff.md"
+          cat "${RUNNER_TEMP}/claude-handoff.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload bounded handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-handoff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-handoff.md
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Post bounded handoff when GitHub permits it
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
         run: |
-          printf '%s\n' \
-            "Claude produced a policy-validated patch at \`${{ steps.push.outputs.commit_sha }}\`. Existing CI is the authority for verification. Nothing was merged or deployed." \
-            > "${RUNNER_TEMP}/claude-handoff.md"
+          set -euo pipefail
           gh api --method POST --silent \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --field body=@"${RUNNER_TEMP}/claude-handoff.md"
@@ -312,14 +328,29 @@ jobs:
       issues: write
       contents: read
     steps:
-      - name: Report no patch
+      - name: Prepare no-patch report
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "Claude completed without a source patch. No branch, merge, deployment, or production change was made." \
+            > "${RUNNER_TEMP}/claude-no-change.md"
+          cat "${RUNNER_TEMP}/claude-no-change.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload no-patch report
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-no-change-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-no-change.md
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Post no-patch report when GitHub permits it
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
         run: |
-          printf '%s\n' \
-            "Claude completed without a source patch. No branch, merge, deployment, or production change was made." \
-            > "${RUNNER_TEMP}/claude-no-change.md"
+          set -euo pipefail
           gh api --method POST --silent \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --field body=@"${RUNNER_TEMP}/claude-no-change.md"
