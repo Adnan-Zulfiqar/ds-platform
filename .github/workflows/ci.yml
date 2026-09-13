@@ -589,6 +589,12 @@ jobs:
       EBAY_CLIENT_ID: DropPilo-CiOnlyNo-PRD-000000000-00000000
       EBAY_CLIENT_SECRET: PRD-ci-only-not-a-real-ebay-certificate-id
       EBAY_REDIRECT_URI_NAME: DropPilot-CiOnly-RuName
+      # Synthetic Google OAuth web client id (same value on backend + frontend).
+      # AUTH-G1 Playwright stubs `accounts.google.com/gsi/client` and never
+      # contacts Google; without a client id the button renders nothing and the
+      # suite fails on `getByTestId('google-sign-in')`. Not a real Cloud client.
+      GOOGLE_OAUTH_CLIENT_ID: 1000000000000-ci-playwright.apps.googleusercontent.com
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: 1000000000000-ci-playwright.apps.googleusercontent.com
       CORS_ORIGINS: http://localhost:3000
       LOG_JSON_OUTPUT: "false"
       NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
