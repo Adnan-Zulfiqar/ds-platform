@@ -48,7 +48,7 @@ jobs:
           RUN_ID: ${{ steps.context.outputs.run_id }}
           RUN_URL: ${{ steps.context.outputs.run_url }}
         run: |
-          body="$(cat <<EOF
+          cat > "${RUNNER_TEMP}/agent-ci-wakeup.md" <<EOF
           <!-- agent-ci-wakeup:${RUN_ID}:${RUN_ATTEMPT} -->
           Agent CI completed for head \`${HEAD_SHA}\`: **${CONCLUSION}**.
 
@@ -59,5 +59,6 @@ jobs:
           Owner: if ChatGPT has not resumed, comment "review results". The
           ChatGPT webhook supports human comments, not guaranteed bot wake-ups.
           EOF
-          )"
-          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          gh api --method POST --silent \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --field body=@"${RUNNER_TEMP}/agent-ci-wakeup.md"

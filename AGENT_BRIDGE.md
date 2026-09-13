@@ -136,6 +136,12 @@ Cursor step receives no GitHub token; a later step posts its report. Cursor may
 diagnose, but it cannot run commands, edit, commit, push, merge, deploy, read
 process secrets, or contact real providers.
 
+Worker handoffs and CI notices use GitHub's REST issue-comments endpoint for
+the PR conversation with the existing `issues: write` permission. They do not
+use `gh pr comment` (GraphQL), which rejected the initial smoke report with
+`Resource not accessible by integration`. This correction does not add PR
+write permission to either worker.
+
 ### 5. Manager decision loop
 
 The manager compares Claude's claims with the diff, CI, Cursor findings, the

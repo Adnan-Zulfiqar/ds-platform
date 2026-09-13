@@ -296,8 +296,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
         run: |
-          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body \
-            "Claude produced a policy-validated patch at \`${{ steps.push.outputs.commit_sha }}\`. Existing CI is the authority for verification. Nothing was merged or deployed."
+          printf '%s\n' \
+            "Claude produced a policy-validated patch at \`${{ steps.push.outputs.commit_sha }}\`. Existing CI is the authority for verification. Nothing was merged or deployed." \
+            > "${RUNNER_TEMP}/claude-handoff.md"
+          gh api --method POST --silent \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --field body=@"${RUNNER_TEMP}/claude-handoff.md"
 
   report-no-change:
     needs: prepare
@@ -313,5 +317,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
         run: |
-          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body \
-            "Claude completed without a source patch. No branch, merge, deployment, or production change was made."
+          printf '%s\n' \
+            "Claude completed without a source patch. No branch, merge, deployment, or production change was made." \
+            > "${RUNNER_TEMP}/claude-no-change.md"
+          gh api --method POST --silent \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --field body=@"${RUNNER_TEMP}/claude-no-change.md"

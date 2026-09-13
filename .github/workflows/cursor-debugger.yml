@@ -151,8 +151,11 @@ jobs:
               'Debugger failed before it produced a report. Inspect this workflow run.' \
               > "${RUNNER_TEMP}/cursor-report.md"
           fi
-          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-            --body-file "${RUNNER_TEMP}/cursor-report.md"
+          # REST issue comments accept issues:write for PR conversations.
+          # gh pr comment uses GraphQL and needs broader PR write permission.
+          gh api --method POST --silent \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --field body=@"${RUNNER_TEMP}/cursor-report.md"
 
       - name: Fail if debugger did not complete
         if: steps.cursor.outcome == 'failure'

@@ -54,6 +54,30 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(workflow.count("persist-credentials: false"), 2)
 
+    def test_reporters_use_rest_comments_with_existing_issue_permission(self) -> None:
+        for name, report_count in (
+            ("claude-developer.yml", 2),
+            ("cursor-debugger.yml", 1),
+            ("agent-manager-wakeup.yml", 1),
+        ):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("issues: write", workflow)
+                self.assertNotIn("pull-requests: write", workflow)
+                self.assertNotIn('gh pr comment "', workflow)
+                self.assertEqual(
+                    workflow.count("gh api --method POST --silent"), report_count
+                )
+                self.assertEqual(
+                    workflow.count(
+                        '"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"'
+                    ),
+                    report_count,
+                )
+                self.assertEqual(workflow.count("--field body=@"), report_count)
+
 
 if __name__ == "__main__":
     unittest.main()
