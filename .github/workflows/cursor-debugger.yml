@@ -66,8 +66,6 @@ jobs:
           path.write_bytes(data)
           PY
 
-      # Keep the trusted bridge checkout at the workspace root. The PR lives in
-      # a child directory and its git credentials are not persisted.
       - name: Check out exact validated PR head
         uses: actions/checkout@v6
         with:
@@ -126,6 +124,7 @@ jobs:
             --output "${RUNNER_TEMP}/cursor-report.md"
 
       - name: Verify debugger did not mutate the PR checkout
+        id: readonly
         if: always()
         run: |
           set -euo pipefail
@@ -138,12 +137,10 @@ jobs:
             exit 1
           fi
 
-      - name: Post debugger report
+      - name: Preserve debugger report
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
         run: |
+          set -euo pipefail
           if [ ! -s "${RUNNER_TEMP}/cursor-report.md" ]; then
             printf '%s\n' \
               '## Cursor debugger report' \
@@ -151,12 +148,29 @@ jobs:
               'Debugger failed before it produced a report. Inspect this workflow run.' \
               > "${RUNNER_TEMP}/cursor-report.md"
           fi
-          # REST issue comments accept issues:write for PR conversations.
-          # gh pr comment uses GraphQL and needs broader PR write permission.
+          cat "${RUNNER_TEMP}/cursor-report.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload debugger report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cursor-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cursor-report.md
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Post debugger report when GitHub permits it
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
           gh api --method POST --silent \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --field body=@"${RUNNER_TEMP}/cursor-report.md"
 
-      - name: Fail if debugger did not complete
-        if: steps.cursor.outcome == 'failure'
+      - name: Fail if debugger or read-only guard failed
+        if: always() && (steps.cursor.outcome == 'failure' || steps.readonly.outcome == 'failure')
         run: exit 1
