@@ -1,0 +1,60 @@
+name: Agent bridge - manager CI wake-up
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  notify:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check out trusted bridge policy
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve exact open agent PR
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            > "${RUNNER_TEMP}/open-prs.json"
+          python scripts/agent_bridge/validate_ci_wakeup.py \
+            --event "${GITHUB_EVENT_PATH}" \
+            --open-prs "${RUNNER_TEMP}/open-prs.json" \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Wake ChatGPT manager through the PR webhook
+        if: steps.context.outputs.matched == 'true'
+        env:
+          CONCLUSION: ${{ steps.context.outputs.conclusion }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.context.outputs.checkout_ref }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          RUN_ATTEMPT: ${{ steps.context.outputs.run_attempt }}
+          RUN_ID: ${{ steps.context.outputs.run_id }}
+          RUN_URL: ${{ steps.context.outputs.run_url }}
+        run: |
+          body="$(cat <<EOF
+          <!-- agent-ci-wakeup:${RUN_ID}:${RUN_ATTEMPT} -->
+          Agent CI completed for head \`${HEAD_SHA}\`: **${CONCLUSION}**.
+
+          ChatGPT manager: inspect the exact [workflow run](${RUN_URL}) and PR
+          diff, then choose the next supervised step. This wake-up does not
+          accept, merge, deploy, or contact production.
+          EOF
+          )"
+          gh pr comment "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "${body}"

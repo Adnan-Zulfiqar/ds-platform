@@ -12,8 +12,9 @@ This control plane keeps GitHub as the only shared state between the agents:
   every production action.
 
 GitHub stores the task contract, commits, CI evidence, worker reports, and final
-decision. Agents do not call one another directly and do not share local
-credentials.
+decision. A trusted workflow posts a bounded PR comment when application CI
+finishes, which wakes the ChatGPT manager. Agents do not call one another
+directly and do not share local credentials.
 
 ```mermaid
 flowchart TD
@@ -141,6 +142,11 @@ repository constitution, and the task's acceptance criteria.
 
 Merge and deployment are separate decisions. This bridge never auto-merges and
 contains no deployment workflow.
+
+Application CI completion is bridged back into this loop by
+`agent-manager-wakeup.yml`. It accepts only the repository's `CI` workflow for
+the exact current SHA of one open, draft, same-repository `[Agent]` PR. Its
+comment is a wake-up signal, not an acceptance decision.
 
 ## Security boundary
 
