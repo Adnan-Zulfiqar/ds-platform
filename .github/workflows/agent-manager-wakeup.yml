@@ -37,17 +37,16 @@ jobs:
             --open-prs "${RUNNER_TEMP}/open-prs.json" \
             --github-output "${GITHUB_OUTPUT}"
 
-      - name: Wake ChatGPT manager through the PR webhook
+      - name: Prepare manager wake-up record
         if: steps.context.outputs.matched == 'true'
         env:
           CONCLUSION: ${{ steps.context.outputs.conclusion }}
-          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.context.outputs.checkout_ref }}
-          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
           RUN_ATTEMPT: ${{ steps.context.outputs.run_attempt }}
           RUN_ID: ${{ steps.context.outputs.run_id }}
           RUN_URL: ${{ steps.context.outputs.run_url }}
         run: |
+          set -euo pipefail
           cat > "${RUNNER_TEMP}/agent-ci-wakeup.md" <<EOF
           <!-- agent-ci-wakeup:${RUN_ID}:${RUN_ATTEMPT} -->
           Agent CI completed for head \`${HEAD_SHA}\`: **${CONCLUSION}**.
@@ -59,6 +58,25 @@ jobs:
           Owner: if ChatGPT has not resumed, comment "review results". The
           ChatGPT webhook supports human comments, not guaranteed bot wake-ups.
           EOF
+          cat "${RUNNER_TEMP}/agent-ci-wakeup.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload manager wake-up record
+        if: steps.context.outputs.matched == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-manager-wakeup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-ci-wakeup.md
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Wake ChatGPT manager through the PR webhook when GitHub permits it
+        if: steps.context.outputs.matched == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
           gh api --method POST --silent \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --field body=@"${RUNNER_TEMP}/agent-ci-wakeup.md"
