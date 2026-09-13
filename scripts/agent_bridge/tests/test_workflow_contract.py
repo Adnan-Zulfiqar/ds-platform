@@ -48,11 +48,42 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIn('origin "HEAD:refs/heads/${HEAD_REF}"', workflow)
 
+    def test_claude_patch_artifact_is_stable_across_run_attempts(self) -> None:
+        workflow = (ROOT / ".github/workflows/claude-developer.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(workflow.count("name: claude-patch-${{ github.run_id }}\n"), 2)
+        self.assertNotIn(
+            "claude-patch-${{ github.run_id }}-${{ github.run_attempt }}", workflow
+        )
+        self.assertIn("overwrite: true", workflow)
+
     def test_cursor_checkouts_do_not_persist_credentials(self) -> None:
         workflow = (ROOT / ".github/workflows/cursor-debugger.yml").read_text(
             encoding="utf-8"
         )
         self.assertEqual(workflow.count("persist-credentials: false"), 2)
+
+    def test_worker_reports_are_preserved_before_best_effort_comments(self) -> None:
+        for name in ("claude-developer.yml", "cursor-debugger.yml"):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("GITHUB_STEP_SUMMARY", workflow)
+                self.assertIn("actions/upload-artifact@v4", workflow)
+                self.assertIn("continue-on-error: true", workflow)
+
+    def test_cursor_transport_cannot_hide_worker_or_readonly_failure(self) -> None:
+        workflow = (ROOT / ".github/workflows/cursor-debugger.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("id: cursor", workflow)
+        self.assertIn("id: readonly", workflow)
+        self.assertIn(
+            "steps.cursor.outcome == 'failure' || steps.readonly.outcome == 'failure'",
+            workflow,
+        )
 
     def test_reporters_use_rest_comments_with_existing_issue_permission(self) -> None:
         for name, report_count in (
@@ -77,6 +108,15 @@ class WorkflowContractTests(unittest.TestCase):
                     report_count,
                 )
                 self.assertEqual(workflow.count("--field body=@"), report_count)
+                self.assertGreaterEqual(workflow.count("continue-on-error: true"), 1)
+
+    def test_manager_wakeup_preserves_record_when_comment_transport_fails(self) -> None:
+        workflow = (ROOT / ".github/workflows/agent-manager-wakeup.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GITHUB_STEP_SUMMARY", workflow)
+        self.assertIn("actions/upload-artifact@v4", workflow)
+        self.assertIn("continue-on-error: true", workflow)
 
 
 if __name__ == "__main__":
