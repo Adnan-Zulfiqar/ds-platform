@@ -19,7 +19,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("contents: write", apply)
         self.assertIn("AGENT_BRANCH_PUSH_TOKEN", apply)
 
-    def test_claude_uses_bare_restricted_base_action(self) -> None:
+    def test_claude_uses_oauth_compatible_restricted_base_action(self) -> None:
         workflow = (ROOT / ".github/workflows/claude-developer.yml").read_text(
             encoding="utf-8"
         )
@@ -29,7 +29,11 @@ class WorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("anthropics/claude-code-action@", workflow)
-        self.assertIn("--bare", workflow)
+        self.assertNotIn("--bare", workflow)
+        self.assertIn("--safe-mode", workflow)
+        self.assertIn("--restricted", workflow)
+        self.assertIn("--permission-prompts none", workflow)
+        self.assertIn("claude_code_oauth_token:", workflow)
         self.assertIn('--tools "Read,Glob,Grep,Edit,Write"', workflow)
         self.assertIn("--mcp-config '{\"mcpServers\":{}}'", workflow)
         self.assertNotIn('tools "default"', workflow)
@@ -49,6 +53,30 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(workflow.count("persist-credentials: false"), 2)
+
+    def test_reporters_use_rest_comments_with_existing_issue_permission(self) -> None:
+        for name, report_count in (
+            ("claude-developer.yml", 2),
+            ("cursor-debugger.yml", 1),
+            ("agent-manager-wakeup.yml", 1),
+        ):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("issues: write", workflow)
+                self.assertNotIn("pull-requests: write", workflow)
+                self.assertNotIn('gh pr comment "', workflow)
+                self.assertEqual(
+                    workflow.count("gh api --method POST --silent"), report_count
+                )
+                self.assertEqual(
+                    workflow.count(
+                        '"repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"'
+                    ),
+                    report_count,
+                )
+                self.assertEqual(workflow.count("--field body=@"), report_count)
 
 
 if __name__ == "__main__":

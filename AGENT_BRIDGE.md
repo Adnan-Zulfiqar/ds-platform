@@ -104,13 +104,19 @@ artefacts, GitHub workflows, agent instruction/configuration files, bridge
 self-modification, and PRs over 100 files before a worker is contacted.
 
 Claude receives a maximum of 30 turns and a 45-minute job timeout. Claude Code
-runs in bare mode with its actual `--tools` inventory restricted to
+runs with `--safe-mode --restricted --permission-prompts none` and its actual `--tools` inventory restricted to
 read/search/edit/write: no shell, network, hooks, skills, plugins, MCP,
 subagent, GitHub token, or OIDC token. Claude cannot commit or push. A separate trusted job accepts only a
 regular UTF-8 text patch of at most 100 files / 2 MB, rechecks the exact PR SHA,
 refuses secrets and protected paths, applies it in a fresh checkout, and pushes
 with `--force-with-lease` to that validated feature branch only. Existing CI,
 not Claude's prose, performs verification.
+
+Safe mode preserves OAuth authentication while disabling discovered customizations.
+Restricted mode confines file tools to the working directories and excludes user
+and project settings. Do not replace these flags with `--bare`: bare mode ignores
+subscription OAuth credentials. The pinned action installs Claude Code 2.1.269,
+which supports these flags. Hosted runners must have no custom managed policies.
 
 ### 4. Ask Cursor to diagnose
 
@@ -129,6 +135,12 @@ not persisted and a post-run check fails if any unexpected file changed. The
 Cursor step receives no GitHub token; a later step posts its report. Cursor may
 diagnose, but it cannot run commands, edit, commit, push, merge, deploy, read
 process secrets, or contact real providers.
+
+Worker handoffs and CI notices use GitHub's REST issue-comments endpoint for
+the PR conversation with the existing `issues: write` permission. They do not
+use `gh pr comment` (GraphQL), which rejected the initial smoke report with
+`Resource not accessible by integration`. This correction does not add PR
+write permission to either worker.
 
 ### 5. Manager decision loop
 
