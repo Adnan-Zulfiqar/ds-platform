@@ -145,7 +145,7 @@ jobs:
             --disable-slash-commands
             --strict-mcp-config
             --mcp-config '{"mcpServers":{}}'
-            --max-turns 30
+            --max-turns 60
             --tools "Read,Glob,Grep,Edit,Write"
             --allowedTools "Read,Glob,Grep,Edit,Write"
 
