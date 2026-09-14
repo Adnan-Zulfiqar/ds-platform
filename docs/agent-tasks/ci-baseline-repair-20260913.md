@@ -111,3 +111,92 @@ backup drill, Compose guard, merge, deploy, production, credentials — remain i
 - F-4 (Info): the `celery_app.py` comment's "until 5.7" is a forward claim; resolved versions are
   Celery 5.6.3 / Kombu 5.6.2 / amqp 5.3.1, in which both settings exist with default `False`.
 - F-5 (Info): CI `rabbitmq:4-alpine` vs deployment `rabbitmq:4.0-alpine`.
+
+## Phase 1 execution record — DP-PH1-03 … DP-PH1-09 (2026-09-14)
+
+**Worker mode (DP-PH1-03).** Claude Code in the owner's workspace, worktree `C:\dspph1` on
+`fix/ci-baseline-security-pytest`. Isolated ports `3137` (frontend) and `8137` (API origin,
+build-inlined; no backend was run). Test ports `3000`/`8000`/`8001` were observed occupied by
+unrelated owner processes and were not touched. No `.env` read; `frontend/.env.local` is
+synthetic and git-ignored. No local PostgreSQL, Redis or broker: the backend needs credentials
+this worker must not read, so every backend-dependent check is evidenced by trusted CI only.
+
+**Guard verification (DP-PH1-04).** `scripts/check_secrets.py` byte-identical to `develop`;
+`deploy/lightsail/app.env.example` carries exactly the four scanner-required blank values;
+`scripts/r7_provision_stack.py` generates the Fernet key per run; the deployment test's
+`SCANNER_REQUIRED_BLANK` names the same four keys; `ci.yml` keeps the PG17 client step and the
+deterministic Compose probe (`RABBITMQ_PASSWORD` placeholder, `POSTGRES_PASSWORD` unset, asserts
+the non-zero exit and the message); `docker-compose.yml` keeps all six `:?` guards.
+
+**F-1 mechanism, refined (DP-PH1-05).** The GIS button issues `POST /api/v1/auth/google/nonce`
+*before* it injects `<script src="https://accounts.google.com/gsi/client">`. With a backend up
+(CI) the nonce succeeds and the script request follows; without one (a backend-less local run)
+the nonce fails, the button settles on "unavailable", and Google is never contacted. This is why
+F-1 was invisible locally and only real in CI. The fixture
+`frontend/tests/e2e/fixtures/provider-isolation.ts` therefore routes `accounts.google.com/**` on
+the **browser context** (popups inherit it), fulfilling an empty script, and is imported by
+`auth-provider-boundary`, `auth`, `smoke` and `terms`. `auth-g1.spec.ts` and `csp.spec.ts` keep
+their own page-level Google stubs, which Playwright evaluates before context routes. The
+regression `provider-isolation.spec.ts` stubs only the nonce endpoint so it reaches the script
+step hermetically; its negative control targets a same-origin sentinel path, never a real
+provider. What it proves: the route layer answered the request (`fulfilled-local`/`aborted`)
+and the real library never executed (`window.google` undefined). What it does not measure:
+socket-level egress.
+
+Local evidence (standalone build, `127.0.0.1:3137`, no backend, both Playwright projects):
+`provider-isolation` 10/10; `auth`, `smoke`, `terms`, `csp`, `auth-provider-boundary`,
+`auth-g1`, `api-isolation` together 252 passed / 46 skipped / 0 failed — every skip reads
+"Backend API is not reachable" (`auth-g1` 28, `csp` 10, `auth-provider-boundary` 8). The
+first draft of the regression failed 8/10 locally for two reasons that are recorded here
+because they changed the design: (a) the nonce precondition above; (b) the sentinel guard was
+built as `<url>/**`, which never matches the exact URL — it now routes the exact sentinel URL.
+
+**Affected-flow verification (DP-PH1-06).** Hermetic parts verified locally as above.
+Backend-dependent parts (`auth-provider-boundary` boundary cases, `auth-g1` Google flows, CSP
+under a live API) are verified only by the authoritative CI run on the final SHA; see the
+Phase 1 report.
+
+**F-2 evidence (DP-PH1-07).** `playwright.config.ts` adds `list` and `json`
+(`test-results/playwright-results.json`) reporters under `CI`. `ci.yml` uploads
+`frontend/playwright-report` and `frontend/test-results` on `always()` under
+`playwright-report-<sha>-run<run_id>-attempt<attempt>` with `if-no-files-found: warn`. Known
+limits, stated rather than hidden: the workflow runs Playwright twice (the 18-test
+`seed-harness` pre-step, then the suite) and Playwright clears `test-results/` per run, so the
+artifact carries the *suite* run only — the pre-step is evidenced by the job log's `list`
+output and its exit code; CI runs `--project=chromium` only, so the `mobile-chrome` project is
+local-only evidence; a warn-level empty upload is not a pass — the Playwright step's exit code
+gates the job.
+
+**Celery evidence statement (DP-PH1-08).**
+- Resolved versions: `celery==5.6.3`, `kombu==5.6.2`, `amqp==5.3.1` (pinned in
+  `backend/requirements/runtime.txt` and `dev.txt`). CI broker `rabbitmq:4-alpine` resolved to
+  **RabbitMQ 4.3.5 / Erlang 27.3.4.17** (digest `sha256:3486d982…bbabd`, run 34785118939).
+  Deployment: Lightsail `rabbitmq:4.0-alpine` (minor pin), local `rabbitmq:4-management-alpine`
+  (floating).
+- Failure that was repaired: run 34762683334, both the broker job and the Compose smoke, failed
+  on `Queue.declare: (541) INTERNAL_ERROR - Feature transient_nonexcl_queues is deprecated.` —
+  Celery's pidbox control and event queues are declared transient and non-exclusive by
+  default, which RabbitMQ 4.3.5 refuses.
+- Change: `control_queue_exclusive=True` and `event_queue_exclusive=True` in
+  `app/workers/celery_app.py` (settings exist in Celery 5.6 with default `False`; Celery guards
+  against setting `*_durable` together with `*_exclusive`). Queue mapping:
+  `task_default_queue="default"`; CI worker consumes `default,integrations` — the earlier
+  `celery` queue name matched nothing and tasks sat unconsumed.
+- Executed checks (CI, head `1f4dc5d2`): worker start with `--queues=default,integrations`;
+  `inspect ping` readiness through the broker; `scripts/verify_celery_broker.py` — broker
+  connection ok, 6 required tasks registered, 13 beat entries resolve to registered tasks,
+  `workers.health` executed with `ok`, then `inventory.sync`, `pricing.recalculate`,
+  `orders.sync_all`, `orders.cleanup` executed end-to-end (5 tasks in total); Compose smoke:
+  `docker compose exec worker celery inspect ping` answered via the broker.
+- Runtime effect: these are application settings, not CI-only. On the next deployment every
+  worker's pidbox control queue and every event receiver's queue is declared exclusive
+  (deleted when its connection closes; not shareable across connections).
+- Unverified and deferred to the safe-staging phase: more than one concurrent worker
+  (mingle/gossip and `inspect` across workers); worker restart/reconnect under the new
+  declarations; any external event consumer (Flower, `celery events`); behaviour on RabbitMQ
+  4.0.x as pinned for Lightsail; the beat process. The single-worker CI drill does not stand
+  in for these.
+
+**Documentation freeze (DP-PH1-09).** `CHANGELOG.md` `[Unreleased] → Fixed` Phase 1 entry;
+`PROJECT_ROADMAP.md` Phase 1 row and "Last updated"; ledger `phase-1-progress.md`. Unrelated
+UX-L2B lines untouched.
