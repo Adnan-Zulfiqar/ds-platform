@@ -65,3 +65,49 @@ Ubuntu runner invoked `pg_dump` 16.15. PostgreSQL correctly aborted with
 Run `34762526996` proved two details before the full suite could run:
 - Ubuntu 24.04 runner sources could not locate `postgresql-client-17` directly, so the workflow must configure the official PGDG repository first. PostgreSQL's official Ubuntu instructions support Noble and publish PostgreSQL 17 client packages.
 - The secret scanner still passed. The Compose guard failed only because both `POSTGRES_PASSWORD` and `RABBITMQ_PASSWORD` were removed, Compose reported the missing RabbitMQ password first, and the probe asserted that the first diagnostic contain `POSTGRES_PASSWORD`. The corrected probe must isolate the PostgreSQL-password assertion rather than relax it.
+
+## Contract amendment on head `1f4dc5d2` — owner adopted 2026-09-14
+Authoritative CI on the last in-contract head `ddfce552` (run `34762683334`) exposed two latent
+downstream failures once the upstream gates were green: the Celery broker job and the compose
+smoke both failed with RabbitMQ `Queue.declare (541) INTERNAL_ERROR - Feature transient_nonexcl_queues
+is deprecated` (the floating `rabbitmq:4-alpine` tag now denies that feature by default), and the
+CI worker consumed queue `celery` while `task_default_queue` is `default`, so the execution checks
+could never complete. The Playwright job then exposed cross-site `localhost`/`127.0.0.1` refresh-cookie
+loss and a GSI/password "Sign in" selector ambiguity. On the PR base those downstream jobs were
+*skipped* because Security and Backend failed first; the original acceptance criterion "downstream
+CI all pass" was therefore unachievable within the original file list.
+
+These were fixed by commits `51d6d277`, `333efdb6`, `d930eafb`, `a298fb44` and `1f4dc5d2`, pushed
+directly by Cursor Agent outside the agent bridge's read-only Cursor role and its workflow-path
+refusal. The owner adopted them on 2026-09-14 with that route disclosed; no further bypass is
+authorized.
+
+**Superseded only for the adopted change set and the Phase 1 closure paths named in the PR body:**
+- "Do not modify application source" is superseded solely for `backend/app/workers/celery_app.py`
+  adding `control_queue_exclusive=True` and `event_queue_exclusive=True`. These are application
+  runtime settings, not CI-only: on the next deployment every worker's pidbox control queue and
+  every event receiver's queue becomes exclusive to its connection. Single-worker CI verifies
+  declaration, `inspect ping` and end-to-end execution of five real tasks; multi-worker,
+  restart/reconnect and external-monitor behavior are unverified and gated to the later
+  safe-staging phase. Deployment currently pins `rabbitmq:4.0-alpine`, which still permits the
+  deprecated feature, so production does not yet require the change.
+- "Workflow changes remain limited to these two CI-environment corrections" is superseded solely
+  for the named `ci.yml` hunks (`default,integrations` queue selection; synthetic Google/Shopify
+  values; `127.0.0.1` origins/CORS/callbacks; report upload on cancellation) plus the Phase 1
+  F-2 report-publication change.
+- The Scope file list is widened to the PR body's 12-file table plus the Phase 1 closure paths.
+
+All other prohibitions — scanner, allowlists, triggers, permissions, migrations, dependency ranges,
+backup drill, Compose guard, merge, deploy, production, credentials — remain in force unchanged.
+
+**Independent-review findings carried into Phase 1 (DP-P00-02, 2026-09-14):**
+- F-1 (Medium): with the synthetic Google client id configured, `auth-provider-boundary.spec.ts`,
+  `auth.spec.ts`, `smoke.spec.ts` and `terms.spec.ts` load `accounts.google.com/gsi/client` for
+  real; no global interception exists. Closed by Phase 1 task DP-PH1-05.
+- F-2 (Low): the CI `github` reporter prints skip totals only and the report uploads only on
+  failure/cancel, so the composition of the 9 skips is not independently visible. Closed by
+  DP-PH1-07.
+- F-3 (Low): PGDG signing key trusted via HTTPS + `Signed-By`, no fingerprint pin. Accepted.
+- F-4 (Info): the `celery_app.py` comment's "until 5.7" is a forward claim; resolved versions are
+  Celery 5.6.3 / Kombu 5.6.2 / amqp 5.3.1, in which both settings exist with default `False`.
+- F-5 (Info): CI `rabbitmq:4-alpine` vs deployment `rabbitmq:4.0-alpine`.
