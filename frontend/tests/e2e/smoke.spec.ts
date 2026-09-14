@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/provider-isolation";
 
 /**
  * Smoke tests for the application shell.
