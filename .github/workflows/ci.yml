@@ -701,12 +701,19 @@ jobs:
         working-directory: frontend
         run: npx playwright test --project=chromium
 
+      # Published on success too (DP-P00-02 F-2): the `github` reporter prints
+      # totals only, so without the artifact a green run cannot show *which*
+      # tests skipped or why. The name carries SHA/run/attempt so evidence is
+      # tied to an exact execution and re-runs cannot collide. On an early
+      # cancellation no report may exist; that is reported, not treated as a
+      # pass — the Playwright step's own exit code is what gates the job.
       - name: Upload Playwright report
-        if: failure() || cancelled()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}
           path: |
             frontend/playwright-report
             frontend/test-results
           retention-days: 7
+          if-no-files-found: warn
