@@ -236,12 +236,19 @@ export function deriveShopifyState(input: EditorLifecycleInput): ShopifyState {
   const listing = deriveListingLifecycle(input.listings);
   const overlay = publishOverlayActive(input);
   const links = overlay ? { ...EMPTY_LINKS } : fromListing(listing);
+  // A failed or running refresh of cached listings is reported next to
+  // whatever state the cache supports — including the publish-response
+  // overlay, whose refetch is exactly the one most likely to be in flight.
   const base = {
     ...links,
     refreshing: listing.refreshing,
     refreshFailed: listing.refreshFailed,
-    note: null as string | null,
-    retry: false,
+    note: listing.refreshFailed
+      ? "Couldn’t refresh Shopify status — showing the last known state."
+      : listing.refreshing
+        ? "Refreshing Shopify status…"
+        : null,
+    retry: listing.refreshFailed,
   };
 
   if (input.productStatus === "archived") {
@@ -306,6 +313,8 @@ export function deriveShopifyState(input: EditorLifecycleInput): ShopifyState {
       label: "Checking Shopify status…",
       detail: "Loading store listing information.",
       tone: "neutral",
+      note: null,
+      retry: false,
     };
   }
   if (listing.kind === "unavailable") {
@@ -315,20 +324,14 @@ export function deriveShopifyState(input: EditorLifecycleInput): ShopifyState {
       label: "Shopify status unavailable",
       detail: "We could not load Shopify status for this product.",
       tone: "warning",
+      note: null,
       retry: true,
     };
   }
 
-  const note = listing.refreshFailed
-    ? "Couldn’t refresh Shopify status — showing the last known state."
-    : listing.refreshing
-      ? "Refreshing Shopify status…"
-      : null;
-  const withNote = { ...base, note, retry: listing.refreshFailed };
-
   if (listing.kind === "not-published") {
     return {
-      ...withNote,
+      ...base,
       kind: "not-on-shopify",
       label: "Not on Shopify",
       detail: "This draft is saved in DropPilot and has not been sent to a store.",
@@ -339,7 +342,7 @@ export function deriveShopifyState(input: EditorLifecycleInput): ShopifyState {
   const unsent = draftNewerThanSync(input.draftUpdatedAt, listing.listing?.lastSyncedAt);
   if (unsent === true) {
     return {
-      ...withNote,
+      ...base,
       unsentChanges: true,
       kind: "changes-not-sent",
       label: "Changes not sent to Shopify",
@@ -348,7 +351,7 @@ export function deriveShopifyState(input: EditorLifecycleInput): ShopifyState {
       tone: "warning",
     };
   }
-  return visibilityState(listing.onlineStorePublished, { ...withNote, unsentChanges: unsent });
+  return visibilityState(listing.onlineStorePublished, { ...base, unsentChanges: unsent });
 }
 
 export function deriveSaveState(input: Pick<EditorLifecycleInput, "dirty" | "saveState" | "conflict">): SaveStateView {

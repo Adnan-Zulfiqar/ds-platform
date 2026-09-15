@@ -309,6 +309,21 @@ describe("deriveShopifyState — publishing and the publish-result overlay", () 
     expect(state.kind).toBe("visibility-setup-needed");
   });
 
+  it("a failed refetch after the publish keeps the overlay and says the refresh failed", () => {
+    const publishedAt = T0;
+    const state = deriveShopifyState(
+      input([], {
+        publishResult: publishResult({ onlineStorePublished: true }),
+        publishResultAt: publishedAt,
+        listings: { data: [], isPending: false, isFetching: false, isError: true, dataUpdatedAt: publishedAt - 5_000 },
+      }),
+    );
+    expect(state.kind).toBe("visible-on-shop");
+    expect(state.refreshFailed).toBe(true);
+    expect(state.note).toMatch(/couldn.t refresh/i);
+    expect(state.retry).toBe(true);
+  });
+
   it("the overlay never claims visibility the response did not confirm", () => {
     const state = deriveShopifyState(
       input([], {

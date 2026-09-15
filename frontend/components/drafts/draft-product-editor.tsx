@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Loader2 } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
@@ -238,7 +238,26 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   // restores focus to the control that opened them -- fighting that would
   // be focus theft on every phase change.
   const conflictBannerRef = useRef<HTMLDivElement | null>(null);
+  const conflictReloadButtonRef = useRef<HTMLButtonElement | null>(null);
+  const conflictReviewButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousConflictPhaseRef = useRef(conflictPhase);
+  // Both conflict dialogs are controlled and have no `DialogTrigger`, so
+  // Radix's default close behaviour (focus the trigger) had nowhere to go
+  // and focus fell to `<body>`. Return it to the banner button that opened
+  // the dialog while the conflict is still open; once it is resolved the
+  // banner is gone, so land on the field the merchant was editing or, on
+  // another tab, on that tab.
+  const returnFocusAfterConflictDialog = (
+    event: Event,
+    opener: RefObject<HTMLButtonElement | null>,
+  ) => {
+    event.preventDefault();
+    const target =
+      opener.current ??
+      document.querySelector<HTMLElement>('[data-testid="draft-title-input"]') ??
+      document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    target?.focus();
+  };
   useEffect(() => {
     const previous = previousConflictPhaseRef.current;
     previousConflictPhaseRef.current = conflictPhase;
@@ -1055,6 +1074,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 variant="outline"
                 size="sm"
                 className="min-h-11"
+                ref={conflictReloadButtonRef}
                 onClick={handleRequestReload}
                 data-testid="conflict-reload-latest"
               >
@@ -1065,6 +1085,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 variant="outline"
                 size="sm"
                 className="min-h-11"
+                ref={conflictReviewButtonRef}
                 onClick={() => void handleOpenReview()}
                 data-testid="conflict-review-mine"
               >
@@ -1086,7 +1107,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           if (!open) handleCancelReloadConfirm();
         }}
       >
-        <DialogContent data-testid="conflict-reload-confirm-dialog">
+        <DialogContent
+          data-testid="conflict-reload-confirm-dialog"
+          onCloseAutoFocus={(event) =>
+            returnFocusAfterConflictDialog(event, conflictReloadButtonRef)
+          }
+        >
           <DialogHeader>
             <DialogTitle>Discard your changes and reload?</DialogTitle>
             <DialogDescription>
@@ -1125,6 +1151,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <DialogContent
           className="max-w-2xl"
           data-testid="conflict-review-dialog"
+          onCloseAutoFocus={(event) =>
+            returnFocusAfterConflictDialog(event, conflictReviewButtonRef)
+          }
         >
           <DialogHeader>
             <DialogTitle>Review the conflicting changes</DialogTitle>
@@ -1519,7 +1548,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               publishOk={publishOk}
               publishPending={publishPending}
               publishResult={publishResult}
-              syncedListing={syncedListing}
+              shopify={lifecycle.shopify}
+              hasEditingConflict={isConflicted}
               onPublish={() => void handlePublish()}
               onOpenSection={(next) => selectTab(next)}
               onContinueEditing={() => selectTab("overview")}
