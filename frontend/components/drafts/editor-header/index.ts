@@ -16,10 +16,8 @@ export {
 export { ProductIdentity } from "@/components/drafts/editor-header/product-identity";
 export { ProductMetrics } from "@/components/drafts/editor-header/product-metrics";
 export { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
-export {
-  PublishAction,
-  type PublishActionKind,
-} from "@/components/drafts/editor-header/publish-action";
+export { PublishAction } from "@/components/drafts/editor-header/publish-action";
+export { ShopifyStatus } from "@/components/drafts/editor-header/shopify-status";
 export {
   estimateMarginPercent,
   formatSupplierSyncedAt,

@@ -26,6 +26,7 @@ import {
 } from "@/components/drafts/editor-header/product-editor-tabs";
 import { PublishChecklist } from "@/components/drafts/editor-header/publish-checklist";
 import { formatSupplierSyncedAt, readinessFor } from "@/components/drafts/editor-header/readiness";
+import { deriveEditorLifecycle } from "@/lib/editor-lifecycle";
 import {
   DESCRIPTION_MAX_LENGTH,
   RichTextDescriptionEditor,
@@ -187,6 +188,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishOk, setPublishOk] = useState<string | null>(null);
   const [publishResult, setPublishResult] =
     useState<ShopifyPublishResult | null>(null);
+  // When `publishResult` arrived. The lifecycle layer lets the response
+  // stand in for the listings cache only while the cache is older than
+  // this, so the header says "Added to Shopify" the instant the publish
+  // returns and hands over to the server row as soon as it is refetched.
+  const [publishResultAt, setPublishResultAt] = useState<number | null>(null);
   const [publishSaveFailure, setPublishSaveFailure] =
     useState<PublishSaveFailureReason | null>(null);
   const publishInFlightRef = useRef(false);
@@ -225,6 +231,21 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
+  // Focus target for the moment a conflict is detected (UX-L2D-05,
+  // adapted from the reviewed historical branch). Only the `none ->
+  // detected` transition moves focus: returning from the review dialog or
+  // the reload confirmation also lands on "detected", and Radix already
+  // restores focus to the control that opened them -- fighting that would
+  // be focus theft on every phase change.
+  const conflictBannerRef = useRef<HTMLDivElement | null>(null);
+  const previousConflictPhaseRef = useRef(conflictPhase);
+  useEffect(() => {
+    const previous = previousConflictPhaseRef.current;
+    previousConflictPhaseRef.current = conflictPhase;
+    if (previous === "none" && conflictPhase === "detected") {
+      conflictBannerRef.current?.focus();
+    }
+  }, [conflictPhase]);
   // The server's latest version as of the moment the conflict was detected.
   // Captured separately from `data` so it can be shown next to the
   // merchant's still-untouched local fields without overwriting either.
@@ -790,6 +811,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         },
       );
       setPublishResult(result);
+      setPublishResultAt(Date.now());
       setPublishOk(result.message || "Publish completed.");
       void refetch();
       void queryClient.invalidateQueries({
@@ -865,6 +887,34 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
     null;
+  // One derivation for every surface that talks about state -- header,
+  // save indicator, primary action, mobile bar, post-publish panel, Review
+  // & publish. `savedUpdatedAt` is the version the server last confirmed,
+  // which is the only "saved draft" timestamp that can be compared with a
+  // listing's `lastSyncedAt`.
+  const lifecycle = deriveEditorLifecycle({
+    productStatus: data.status,
+    dirty,
+    saveState,
+    conflict: isConflicted,
+    publishPending,
+    publishFailed: Boolean(publishError),
+    publishResult,
+    publishResultAt,
+    listings: {
+      data: listingsQuery.data,
+      isPending: listingsQuery.isPending,
+      isFetching: listingsQuery.isFetching,
+      isError: listingsQuery.isError,
+      dataUpdatedAt: listingsQuery.dataUpdatedAt,
+    },
+    draftUpdatedAt: savedUpdatedAt,
+    issueCount: readiness.items.length,
+  });
+  const focusConflictBanner = () => {
+    conflictBannerRef.current?.scrollIntoView({ block: "center" });
+    conflictBannerRef.current?.focus();
+  };
 
   // Every editable field where the merchant's rejected value differs from
   // the server's latest. Both sides come from the snapshots frozen when the
@@ -930,20 +980,18 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   return (
     <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
       <ProductEditorHeader
+        productId={productId}
         product={{ ...data, title: title || data.title }}
         activeTab={tab}
         onTabChange={selectTab}
+        lifecycle={lifecycle}
         dirty={dirty}
-        saveState={saveState}
         saving={updateDraft.isPending || saveState === "saving"}
-        publishPending={publishPending}
-        publishFailed={Boolean(publishError)}
-        listing={syncedListing}
+        listingsRetrying={listingsQuery.isFetching && listingsQuery.data === undefined}
         shopifyStores={shopifyStores}
         storesPending={storesQuery.isPending}
         storesError={storesQuery.isError}
         seoScore={seoScoreQuery.data}
-        readiness={readiness}
         refreshing={refreshDraft.isPending}
         optimizing={optimizeProduct.isPending}
         inspectorOpen={inspectorOpen}
@@ -951,6 +999,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         onPreview={() => setPreviewOpen(true)}
         onSave={() => void handleSave()}
         onPublish={() => selectTab("publishing")}
+        onResolveConflict={focusConflictBanner}
+        onRetryListings={() => void listingsQuery.refetch()}
         onRefresh={() => void refreshDraft.mutateAsync()}
         onOptimize={() => optimizeProduct.mutate({})}
         onViewHistory={() => setHistoryOpen(true)}
@@ -988,6 +1038,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <Alert
           variant="destructive"
           role="alert"
+          ref={conflictBannerRef}
+          tabIndex={-1}
+          className="scroll-mt-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-testid="draft-conflict-banner"
         >
           <AlertDescription className="space-y-3">
@@ -1001,6 +1054,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
                 onClick={handleRequestReload}
                 data-testid="conflict-reload-latest"
               >
@@ -1010,6 +1064,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
                 onClick={() => void handleOpenReview()}
                 data-testid="conflict-review-mine"
               >

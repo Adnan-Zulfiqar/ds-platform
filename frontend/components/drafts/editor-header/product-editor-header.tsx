@@ -11,14 +11,9 @@ import {
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
 import { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
-import type { PublishActionKind } from "@/components/drafts/editor-header/publish-action";
-import {
-  type ReadinessSummary,
-} from "@/components/drafts/editor-header/readiness";
-import {
-  SaveStateIndicator,
-  type SaveState,
-} from "@/components/drafts/editor-header/save-state-indicator";
+import { SaveStateIndicator } from "@/components/drafts/editor-header/save-state-indicator";
+import { ShopifyStatus } from "@/components/drafts/editor-header/shopify-status";
+import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
 import { deriveSupplierSyncKind } from "@/components/drafts/editor-header/supplier-sync-status";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,27 +23,26 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
-import type { ProductDetail, SeoScore, StoreListing } from "@/types/api";
+import type { EditorLifecycle } from "@/lib/editor-lifecycle";
 import type { Store } from "@/services/stores";
-import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
+import type { ProductDetail, SeoScore } from "@/types/api";
 
 interface ProductEditorHeaderProps {
+  productId: string;
   product: ProductDetail;
   activeTab: EditorTab;
   onTabChange: (tab: EditorTab) => void;
+  /** Everything the header says about state comes from here — see `lib/editor-lifecycle.ts`. */
+  lifecycle: EditorLifecycle;
   dirty: boolean;
-  saveState: SaveState;
   saving: boolean;
-  publishPending: boolean;
-  publishFailed: boolean;
-  listing: StoreListing | null;
+  /** A listings request is being retried after an unavailable status. */
+  listingsRetrying: boolean;
   /** Workspace Shopify stores — used for connect guidance, not publication authority. */
   shopifyStores: Store[];
   storesPending: boolean;
   storesError: boolean;
   seoScore: SeoScore | null | undefined;
-  readiness: ReadinessSummary;
   refreshing: boolean;
   optimizing: boolean;
   inspectorOpen: boolean;
@@ -56,61 +50,37 @@ interface ProductEditorHeaderProps {
   onPreview: () => void;
   onSave: () => void;
   onPublish: () => void;
+  onResolveConflict: () => void;
+  onRetryListings: () => void;
   onRefresh: () => void;
   onOptimize: () => void;
   onViewHistory: () => void;
 }
 
-function deriveLifecycle(params: {
-  productStatus: string;
-  publishPending: boolean;
-  publishFailed: boolean;
-  listing: StoreListing | null;
-}): "Draft" | "Publishing" | "Published" | "Publish failed" | "Archived" {
-  if (params.productStatus === "archived") return "Archived";
-  if (params.publishPending) return "Publishing";
-  if (params.publishFailed || params.listing?.status === "error") {
-    return "Publish failed";
-  }
-  if (params.listing?.status === "synced") return "Published";
-  return "Draft";
-}
-
-function derivePublishKind(params: {
-  publishPending: boolean;
-  publishFailed: boolean;
-  listing: StoreListing | null;
-  dirty: boolean;
-  /** Client checklist item count — same gate as pre-L2A (all items). */
-  issueCount: number;
-}): PublishActionKind {
-  if (params.publishPending) return "publishing";
-  if (params.publishFailed || params.listing?.status === "error") return "retry";
-  if (params.listing?.status === "synced") {
-    return params.dirty ? "push_updates" : "view_store";
-  }
-  // Presentation advice only changes the CTA label to Review N items.
-  // It must not invent Required/Recommended or hard-disable publishing —
-  // channel checks remain authoritative on the Review & publish tab.
-  if (params.issueCount > 0) return "review_items";
-  return "publish";
-}
-
+/**
+ * The sticky editor header: identity, one status row, actions, sections.
+ *
+ * The status row is three facts that live in different places and are
+ * therefore never contradictory: where the product stands on Shopify (the
+ * badge), where the merchant's edits are (the save indicator), and which
+ * store is involved (the store label). Before UX-L2D-05 the row could read
+ * "Draft · Draft saved — not live" under a "Published successfully" panel,
+ * because each element ran its own predicate; now all of them read the
+ * lifecycle object the editor derives once.
+ */
 export function ProductEditorHeader({
+  productId,
   product,
   activeTab,
   onTabChange,
+  lifecycle,
   dirty,
-  saveState,
   saving,
-  publishPending,
-  publishFailed,
-  listing,
+  listingsRetrying,
   shopifyStores,
   storesPending,
   storesError,
   seoScore,
-  readiness,
   refreshing,
   optimizing,
   inspectorOpen,
@@ -118,39 +88,30 @@ export function ProductEditorHeader({
   onPreview,
   onSave,
   onPublish,
+  onResolveConflict,
+  onRetryListings,
   onRefresh,
   onOptimize,
   onViewHistory,
 }: ProductEditorHeaderProps) {
   const featuredImage = product.images[0]?.url ?? null;
-  const lifecycle = deriveLifecycle({
-    productStatus: product.status,
-    publishPending,
-    publishFailed,
-    listing,
-  });
-  const issueCount = readiness.items.length;
-  const publishKind = derivePublishKind({
-    publishPending,
-    publishFailed,
-    listing,
-    dirty,
-    issueCount,
-  });
+  const { shopify, save, next } = lifecycle;
   const supplierKind = deriveSupplierSyncKind({
     lastSyncedAt: product.lastSyncedAt,
     lastSyncError: product.lastSyncError,
     refreshing,
   });
-  const storeLabel = deriveStoreStatusLabel({
-    storesPending,
-    storesError,
-    shopifyStores,
-    listing,
-  });
-
-  // Advisory checklist items never disable the CTA — there is no tooltip reason.
-  const disabledPublishReason: string | null = null;
+  // While this session's publish response stands in for the listings cache
+  // there is no listing row yet, but the shop is known from the response.
+  const storeLabel =
+    !shopify.listing && shopify.hasSyncedListing
+      ? (shopify.shopDomain ?? "Connected store")
+      : deriveStoreStatusLabel({
+          storesPending,
+          storesError,
+          shopifyStores,
+          listing: shopify.listing,
+        });
 
   const openSupplier = () => {
     if (product.externalUrl) {
@@ -173,19 +134,18 @@ export function ProductEditorHeader({
     onGoHistoryTab: () => onTabChange("history"),
   };
 
+  const saveDisabled = !dirty && save.kind !== "save-error";
   const actionsProps = {
+    productId,
     saving,
-    saveDisabled: !dirty && saveState !== "error",
-    dirty,
-    publishKind,
-    issueCount,
-    disabledPublishReason,
-    storefrontUrl: listing?.storefrontUrl,
-    adminUrl: listing?.adminUrl,
+    saveDisabled,
+    action: next,
+    adminUrl: shopify.adminUrl,
     ...menuProps,
     onPreview,
     onSave,
     onPublish,
+    onResolveConflict,
   };
 
   const tabIndicators = {
@@ -200,7 +160,10 @@ export function ProductEditorHeader({
   };
 
   const title = product.title || "Untitled draft";
-  const isLiveOnStore = listing?.status === "synced";
+  // A product on Shopify is listed under Products; its editor should lead
+  // back there rather than to Drafts, where it no longer appears.
+  const backHref = shopify.hasSyncedListing ? "/products" : "/drafts";
+  const backLabel = shopify.hasSyncedListing ? "Back to products" : "Back to drafts";
 
   return (
     <>
@@ -216,9 +179,9 @@ export function ProductEditorHeader({
               className="mt-1 hidden h-11 shrink-0 gap-1.5 px-2 text-muted-foreground md:inline-flex"
               asChild
             >
-              <Link href="/drafts">
+              <Link href={backHref}>
                 <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-                Back to drafts
+                {backLabel}
               </Link>
             </Button>
             <Button
@@ -227,7 +190,7 @@ export function ProductEditorHeader({
               className="mt-1 h-11 w-11 shrink-0 md:hidden"
               asChild
             >
-              <Link href="/drafts" aria-label="Back to drafts">
+              <Link href={backHref} aria-label={backLabel}>
                 <ArrowLeft className="h-4 w-4" aria-hidden="true" />
               </Link>
             </Button>
@@ -274,27 +237,12 @@ export function ProductEditorHeader({
                 className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"
                 data-testid="product-status-group"
               >
-                <span
-                  className={cn(
-                    "inline-flex rounded-md border px-2 py-0.5 text-xs font-medium",
-                    lifecycle === "Published" &&
-                      "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
-                    lifecycle === "Draft" && "border-border bg-muted text-foreground",
-                    lifecycle === "Publish failed" &&
-                      "border-destructive/30 bg-destructive/10 text-destructive",
-                    lifecycle === "Publishing" &&
-                      "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300",
-                  )}
-                  data-testid="product-lifecycle"
-                >
-                  {lifecycle}
-                </span>
-                <SaveStateIndicator
-                  dirty={dirty}
-                  saveState={saveState}
-                  isLiveOnStore={isLiveOnStore}
-                  onRetry={onSave}
+                <ShopifyStatus
+                  state={shopify}
+                  onRetry={onRetryListings}
+                  retryInFlight={listingsRetrying}
                 />
+                <SaveStateIndicator save={save} onRetry={onSave} />
                 <span
                   className="truncate text-xs text-muted-foreground"
                   data-testid="product-editor-store"
@@ -342,15 +290,14 @@ export function ProductEditorHeader({
       </header>
 
       <MobileEditorActionBar
+        productId={productId}
         saving={saving}
-        saveDisabled={!dirty && saveState !== "error"}
-        publishKind={publishKind}
-        issueCount={issueCount}
-        disabledPublishReason={disabledPublishReason}
-        storefrontUrl={listing?.storefrontUrl}
+        saveDisabled={saveDisabled}
+        action={next}
         onPreview={onPreview}
         onSave={onSave}
         onPublish={onPublish}
+        onResolveConflict={onResolveConflict}
       />
     </>
   );
