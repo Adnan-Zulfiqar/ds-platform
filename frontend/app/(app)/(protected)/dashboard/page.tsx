@@ -1,213 +1,220 @@
 "use client";
 
+import { AttentionPanel } from "@/components/home/attention-panel";
+import { CatalogueSummary } from "@/components/home/catalogue-summary";
+import { ChannelStatus } from "@/components/home/channel-status";
+import { EmptyWorkspace } from "@/components/home/empty-workspace";
 import {
-  Bot,
-  DollarSign,
-  Package,
-  ShoppingCart,
-  Store,
-  Warehouse,
-} from "lucide-react";
-import Link from "next/link";
-import type { ComponentType } from "react";
-
-import { OrderStatisticsCards } from "@/components/orders/order-statistics-cards";
-import { OrdersChart } from "@/components/dashboard/charts/orders-chart";
-import { ProductPerformanceChart } from "@/components/dashboard/charts/product-performance-chart";
-import { SalesChart } from "@/components/dashboard/charts/sales-chart";
-import { ChartContainer } from "@/components/dashboard/chart-container";
-import { StatCard } from "@/components/dashboard/stat-card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { ErrorState } from "@/components/ui/error-state";
+  deriveAttentionItems,
+  deriveNextStep,
+  isEmptyWorkspace,
+  summariseChannels,
+} from "@/components/home/home-rules";
+import { BlockError, BlockSkeleton, HomeSection } from "@/components/home/home-section";
+import { NextStepCard } from "@/components/home/next-step-card";
+import { RecentActivity } from "@/components/home/recent-activity";
+import { RecentDrafts } from "@/components/home/recent-drafts";
+import { ImportProductDialog } from "@/components/products/import-product-dialog";
 import { PageHeader } from "@/components/ui/page-header";
-import { formatMoney } from "@/lib/utils";
 import { useAuth } from "@/providers/auth-provider";
+import { useDrafts } from "@/services/drafts";
 import {
-  toProductPerformance,
-  toSalesSeries,
-  useDashboard,
-} from "@/services/dashboard";
+  useAliExpressStatus,
+  useEbayStatus,
+  useShopifyStatus,
+} from "@/services/integrations";
+import { useNotifications } from "@/services/notifications";
+import { useOrderStatistics } from "@/services/orders";
+import { useProductImports, useProductWorkspaceCounts } from "@/services/products";
 
 /**
- * Dashboard — live analytics from GET /analytics/dashboard.
+ * Home — the merchant's operations page (UX-L2D-03).
  *
- * Order synchronisation cards remain a dedicated live row; charts and headline
- * metrics now share the same backend analytics payload. Empty series render as
- * empty states rather than invented sample data.
+ * Answers, in this order: what needs attention, what to do next, how big the
+ * catalogue is, what was being worked on, whether channels are healthy, and
+ * what happened recently. Every block reads an endpoint that already exists;
+ * the derivations live in `components/home/home-rules.ts`.
+ *
+ * Reporting (revenue, charts, period selection) lives on `/analytics`. It
+ * used to be duplicated here as fourteen metric cards with revenue labelled
+ * `USD` regardless of the workspace — Home now shows no monetary figure,
+ * because the analytics revenue is a sum across orders in mixed currencies
+ * with no currency in the payload, and no label would be true.
+ *
+ * **Layout.** One column up to `xl`; from 1280px the attention list, next
+ * step and recent drafts take two thirds and the summaries a third. A
+ * three-column split at 1024px left the rail too narrow to read.
+ *
+ * **Error isolation.** Each block owns its query. A block that fails shows a
+ * local error with its own retry; the others render normally. Only the two
+ * inputs the page cannot reason without — workspace counts and Shopify /
+ * AliExpress status — gate the empty-workspace decision, and while they load
+ * the page keeps its shape with skeletons rather than jumping.
  */
-
-export default function DashboardPage() {
+export default function HomePage() {
   const { identity } = useAuth();
   const firstName = identity?.user.firstName;
-  const { data, isLoading, isError, refetch } = useDashboard("30d");
 
-  const stats: Array<{
-    key: string;
-    label: string;
-    value: string;
-    icon: ComponentType<{ className?: string }>;
-  }> = data
-    ? [
-        {
-          key: "revenue",
-          label: "Revenue",
-          value: formatMoney(data.revenue, "USD"),
-          icon: DollarSign,
-        },
-        {
-          key: "orders",
-          label: "Orders",
-          value: String(data.orderCount),
-          icon: ShoppingCart,
-        },
-        {
-          key: "products",
-          label: "Products",
-          value: String(data.productCount),
-          icon: Package,
-        },
-        {
-          key: "stores",
-          label: "Stores",
-          value: `${data.connectedStoreCount}/${data.storeCount}`,
-          icon: Store,
-        },
-        {
-          key: "inventory",
-          label: "Inventory units",
-          value: String(data.inventoryUnits),
-          icon: Warehouse,
-        },
-        {
-          key: "automation",
-          label: "Automation runs (7d)",
-          value: `${data.automationRuns7d} (${data.automationFailures7d} failed)`,
-          icon: Bot,
-        },
-      ]
-    : [];
+  const counts = useProductWorkspaceCounts();
+  const shopify = useShopifyStatus();
+  const aliexpress = useAliExpressStatus();
+  const ebay = useEbayStatus();
+  const recentDrafts = useDrafts({ size: 5, sortBy: "updated_at", sortDir: "desc" });
+  const recentImports = useProductImports({ size: 10 });
+  const orderStatistics = useOrderStatistics();
+  const notifications = useNotifications({ page: 1, size: 5 });
+
+  const channels = summariseChannels({
+    shopify: shopify.data,
+    aliexpress: aliexpress.data,
+    ebay: ebay.data,
+  });
+  const channelsPending = shopify.isPending || aliexpress.isPending || ebay.isPending;
+  const channelsError = shopify.isError || aliexpress.isError || ebay.isError;
+
+  const empty = isEmptyWorkspace({ counts: counts.data, channels });
+
+  const attention = deriveAttentionItems({
+    channels,
+    recentImports: recentImports.data?.items,
+    recentDrafts: recentDrafts.data?.items,
+    orderStatistics: orderStatistics.data,
+    notifications: notifications.data?.items,
+  });
+  const attentionPending =
+    channelsPending ||
+    recentImports.isPending ||
+    recentDrafts.isPending ||
+    orderStatistics.isPending ||
+    notifications.isPending;
+
+  const nextStep = deriveNextStep({
+    channels,
+    counts: counts.data,
+    recentDrafts: recentDrafts.data?.items,
+  });
+
+  const retryChannels = () => {
+    void shopify.refetch();
+    void aliexpress.refetch();
+    void ebay.refetch();
+  };
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={firstName ? `Welcome back, ${firstName}` : "Dashboard"}
+        title={firstName ? `Welcome back, ${firstName}` : "Home"}
         description={
           identity
-            ? `Here is what is happening at ${identity.tenant.name}.`
-            : "Overview of your store performance."
+            ? `What needs your attention at ${identity.tenant.name}, and what to do next.`
+            : "What needs your attention, and what to do next."
         }
+        // The setup checklist carries its own import step; two identical
+        // primary buttons on an otherwise empty page would compete.
+        actions={empty === true ? undefined : <ImportProductDialog />}
       />
 
-      <section aria-label="Live order status" className="space-y-2">
-        <h2 className="text-lg font-semibold">Order synchronisation</h2>
-        <OrderStatisticsCards />
-      </section>
-
-      {isError ? (
-        <ErrorState
-          title="Could not load analytics"
-          description="The dashboard could not reach the analytics API."
-          onRetry={() => void refetch()}
-        />
+      {empty === undefined ? (
+        // Counts and channel status decide which Home this is; until they
+        // arrive, hold the space rather than draw one layout and swap it.
+        counts.isError || shopify.isError || aliexpress.isError ? (
+          <BlockError
+            what="your workspace"
+            onRetry={() => {
+              void counts.refetch();
+              retryChannels();
+            }}
+          />
+        ) : (
+          <div className="grid gap-6 xl:grid-cols-3" data-testid="home-loading">
+            <div className="space-y-6 xl:col-span-2">
+              <BlockSkeleton rows={1} rowHeight="h-12" />
+              <BlockSkeleton rows={1} rowHeight="h-24" />
+              <BlockSkeleton rows={3} />
+            </div>
+            <div className="space-y-6">
+              <BlockSkeleton rows={3} rowHeight="h-16" />
+              <BlockSkeleton rows={3} rowHeight="h-14" />
+            </div>
+          </div>
+        )
+      ) : empty ? (
+        <EmptyWorkspace channels={channels} />
       ) : (
-        <>
-          <section
-            aria-label="Key metrics"
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-          >
-            {(isLoading ? Array.from({ length: 6 }, (_, i) => i) : stats).map(
-              (stat) =>
-                typeof stat === "number" ? (
-                  <StatCard key={stat} label="Loading" value="—" loading />
-                ) : (
-                  <StatCard
-                    key={stat.key}
-                    label={stat.label}
-                    value={stat.value}
-                    icon={stat.icon}
-                    loading={isLoading}
-                  />
-                ),
-            )}
-          </section>
+        <div className="grid gap-6 xl:grid-cols-3">
+          <div className="space-y-6 xl:col-span-2">
+            <HomeSection id="home-attention" title="Needs attention">
+              <AttentionPanel items={attention} pending={attentionPending} />
+            </HomeSection>
 
-          <section aria-label="Sales overview">
-            <ChartContainer
-              title="Sales overview"
-              description="Revenue and profit for the selected period."
-              height={320}
-            >
-              {data && data.salesSeries.length > 0 ? (
-                <SalesChart data={toSalesSeries(data.salesSeries)} />
-              ) : isLoading ? null : (
-                <EmptyState
-                  className="border-0"
-                  title="No sales data yet"
-                  description="Import orders to see revenue over time."
-                />
-              )}
-            </ChartContainer>
-          </section>
+            <NextStepCard step={nextStep} />
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <ChartContainer
-              title="Orders"
-              description="Fulfilment outcomes for the selected period."
-              height={300}
+            <HomeSection
+              id="home-continue"
+              title="Continue working"
+              link={{ href: "/drafts", label: "All drafts" }}
             >
-              {data && data.ordersSeries.length > 0 ? (
-                <OrdersChart data={data.ordersSeries} />
-              ) : isLoading ? null : (
-                <EmptyState
-                  className="border-0"
-                  title="No order series yet"
-                  description="Order outcomes appear after synchronisation."
-                />
+              {recentDrafts.isPending ? (
+                <BlockSkeleton rows={3} />
+              ) : recentDrafts.isError ? (
+                <BlockError what="your recent drafts" onRetry={() => void recentDrafts.refetch()} />
+              ) : (
+                <RecentDrafts drafts={recentDrafts.data.items} />
               )}
-            </ChartContainer>
-
-            <ChartContainer
-              title="Top products"
-              description="Best sellers by units sold."
-              height={300}
-            >
-              {data && data.topProducts.length > 0 ? (
-                <ProductPerformanceChart
-                  data={toProductPerformance(data.topProducts)}
-                />
-              ) : isLoading ? null : (
-                <EmptyState
-                  className="border-0"
-                  title="No product performance yet"
-                  description="Top products appear once orders include line items."
-                />
-              )}
-            </ChartContainer>
+            </HomeSection>
           </div>
 
-          {data && data.recentActivity.length > 0 && (
-            <section aria-label="Recent activity" className="space-y-3">
-              <h2 className="text-lg font-semibold">Recent activity</h2>
-              <ul className="divide-y rounded-md border">
-                {data.recentActivity.map((item, index) => (
-                  <li key={`${item.kind}-${item.occurredAt}-${index}`} className="px-4 py-3">
-                    {item.href ? (
-                      <Link
-                        href={item.href}
-                        className="text-sm font-medium hover:underline"
-                      >
-                        {item.title}
-                      </Link>
-                    ) : (
-                      <p className="text-sm font-medium">{item.title}</p>
-                    )}
-                    <p className="text-xs text-muted-foreground">{item.kind}</p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-        </>
+          <div className="space-y-6">
+            <HomeSection id="home-catalogue" title="Your catalogue">
+              {counts.isError ? (
+                <BlockError what="your catalogue counts" onRetry={() => void counts.refetch()} />
+              ) : (
+                <CatalogueSummary
+                  drafts={counts.data?.drafts}
+                  products={counts.data?.products}
+                  ordersAwaitingFulfilment={
+                    orderStatistics.isError
+                      ? null
+                      : orderStatistics.data?.pendingFulfillment
+                  }
+                />
+              )}
+            </HomeSection>
+
+            <HomeSection
+              id="home-channels"
+              title="Channels"
+              link={{ href: "/settings/integrations", label: "Integrations" }}
+            >
+              {channelsError && channels.length === 0 ? (
+                <BlockError what="channel status" onRetry={retryChannels} />
+              ) : channelsPending && channels.length === 0 ? (
+                <BlockSkeleton rows={3} rowHeight="h-14" />
+              ) : (
+                <>
+                  <ChannelStatus channels={channels} />
+                  {channelsError && (
+                    <BlockError what="one channel's status" onRetry={retryChannels} />
+                  )}
+                </>
+              )}
+            </HomeSection>
+
+            <HomeSection
+              id="home-activity"
+              title="Recent activity"
+              link={{ href: "/notifications", label: "View all" }}
+            >
+              {notifications.isPending ? (
+                <BlockSkeleton rows={3} rowHeight="h-14" />
+              ) : notifications.isError ? (
+                <BlockError what="recent activity" onRetry={() => void notifications.refetch()} />
+              ) : (
+                <RecentActivity notifications={notifications.data.items} />
+              )}
+            </HomeSection>
+          </div>
+        </div>
       )}
     </div>
   );
