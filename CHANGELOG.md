@@ -10,6 +10,32 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **UX-L2D-01 — Phase 2 baseline and UX audit (on `feature/ux-l2d-dashboard`,
+  stacked on the accepted Phase 1 SHA `c0092da6`; not merged).** Documentation
+  only: `docs/ux/ux-l2d-01-baseline.md` records the repository baseline, the
+  frontend architecture, a screen inventory, 15 findings (one Critical: every
+  link on `/products` 404s because the accepted tree has no
+  `/products/[productId]` route), the proposed job-based information
+  architecture, design-system direction, Home/Drafts/editor proposals and the
+  UX-L2D-02…07 backlog. The programme was renamed from UX-L2C to **UX-L2D**
+  because `feature/ux-l2c-live-state-clarity` already carries unmerged
+  historical UX-L2C work; that branch is subject to **UX-L2D-GATE-04**, a
+  mandatory behaviourally verified review before UX-L2D-04, and the Critical
+  finding stays open until the gate resolves ownership. No application code
+  changed.
+
+### Changed
+
+- **Documentation state corrections.** UX-L2B is present in `develop`
+  (`a543b029` is the tip of `feature/ux-l2b-publish-integrity`); earlier
+  entries below describing it as "not merged" predate that fast-forward.
+  Phase 1 (`c0092da6`) was independently accepted by Cursor on 2026-09-15
+  (`PASS — PHASE 1 MAY CLOSE`); PR #7 remains a draft and is **not** merged.
+  Historical UX-L2C (`feature/ux-l2c-live-state-clarity`, `ece8322`) exists
+  remotely, unmerged and not independently accepted.
+
 ### Fixed
 
 - **Phase 1 — Git/CI baseline and PR #7 closure (on
@@ -37,8 +63,9 @@ production release.
   RabbitMQ 4.3.5, which denies the deprecated `transient_nonexcl_queues`
   declaration and is what exposed the failure; the Lightsail pin
   `rabbitmq:4.0-alpine` and the local `rabbitmq:4-management-alpine` tag have
-  not been exercised against the new settings outside CI. Not independently
-  accepted; not merged; not deployed; UX-L2C not started.
+  not been exercised against the new settings outside CI. Independently
+  accepted by Cursor on 2026-09-15 (`PASS — PHASE 1 MAY CLOSE`) at
+  `c0092da6`; PR #7 still draft, not merged; not deployed.
 
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
   `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run
