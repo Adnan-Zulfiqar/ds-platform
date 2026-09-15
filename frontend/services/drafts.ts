@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
+import { toListParams } from "@/services/list-query";
 import type {
   DraftPricingApplyPayload,
   DraftPricingWorkspace,
@@ -38,7 +39,7 @@ export const draftKeys = {
 
 async function fetchDrafts(query: ListQuery): Promise<Page<Product>> {
   const { data } = await apiClient.get<Page<Product>>("/drafts", {
-    params: query,
+    params: toListParams(query),
   });
   return data;
 }
