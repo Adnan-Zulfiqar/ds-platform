@@ -12,6 +12,30 @@ production release.
 
 ### Added
 
+- **UX-L2D-04 — Catalogue, Drafts and the product page (on
+  `feature/ux-l2d-dashboard`, not merged).** Closes the UX-L2D-01 Critical:
+  `/products/[productId]` exists, adapted from the reviewed historical UX-L2C
+  page (UX-L2D-GATE-04) — reads `GET /products/{id}` and
+  `GET /drafts/{id}/listings`, sends a product with no synced listing to the
+  draft editor instead of showing it as published, answers a non-UUID path
+  as "Product not found" without calling the API, renders missing and
+  foreign ids identically, strips description HTML to text and links out
+  only to HTTPS `*.myshopify.com` URLs the server supplied. Products rows
+  navigate and say "Published" (the list endpoint's own predicate), not a
+  hard-coded Shopify lifecycle. Drafts and Products gain server-side search
+  (`q`), sort (`sort_by`/`sort_dir` — the wire names the API reads), paging
+  from the server's `meta`, URL-synchronised state (refresh, Back/Forward,
+  shareable links, safe fallbacks for bad values), distinct empty /
+  no-results / out-of-range / error states, one labelled primary action per
+  row with icon-only secondary actions, and a card list below `md`.
+  `lib/listing-lifecycle.ts` and `lib/external-link.ts` are the listing
+  authority and link allowlist; `useDraftListings` takes the reviewed
+  `retry: false` / `refetchOnMount: "always"`. No lifecycle/AI/readiness
+  filter (no API parameter) and no thumbnails (no list-row image field) —
+  both recorded as backend dependencies. Vitest deferred; coverage is
+  Playwright (`catalogue.spec.ts`, backend-less) plus the adapted
+  backend-gated `product-route-isolation.spec.ts`.
+
 - **UX-L2D-03 — Home (on `feature/ux-l2d-dashboard`, not merged).** The
   analytics wall (fourteen metric cards, three charts, revenue hard-coded to
   `USD`) is replaced by an operations page built only from endpoints that

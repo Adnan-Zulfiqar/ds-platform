@@ -296,6 +296,46 @@ Not a checklist item — several decisions above exist for it.
 
 ---
 
+## Catalogue and the product page
+
+`/drafts` and `/products` share one component, `components/products/product-table.tsx`
+(UX-L2D-04). The backend decides membership — a product with a `synced`
+`StoreListing` is a Product, otherwise a Draft — and the pages differ only in
+wording, the primary action (`Edit` / `View`) and where a row leads.
+
+**The URL is the list state.** `components/catalogue/catalogue-query.ts` reads
+`q`, `sort` and `page` from the search params, validates each against what
+the API accepts (sort values are the backend's `sortable_fields`; anything
+else falls back to the default), and writes them back — `replace` while a
+search is typed, `push` for sort and page changes — so a refresh, a shared
+link and Back/Forward all reproduce the list. Search is the server's `q`
+(title, external id, supplier name); sort travels as `sort_by`/`sort_dir`
+through `services/list-query.ts`; pages come from the server's `meta`. There
+is no lifecycle, AI-status or readiness filter because the API has no such
+parameter, and a client-side filter over one page would hide matching rows
+on other pages. Thumbnails wait for an image field on the list row.
+
+Row status is only what the list response can vouch for: a Products row is
+"Published" because the endpoint only returns products with a synced
+listing; the store, visibility and sync details need one listings request
+per product and live on the product page, never as one request per table
+row. Below `md` the table becomes a card list so the primary action is never
+behind a horizontal scroll.
+
+`/products/[productId]` (`components/products/published-product-summary.tsx`)
+reads `GET /products/{id}` and `GET /drafts/{id}/listings`, adapted from the
+reviewed historical UX-L2C page under UX-L2D-GATE-04 with two changes: a
+product whose listings confirm **no synced listing is a draft and is sent to
+`/drafts/{id}`** rather than shown as published, and a path segment that is
+not a UUID is answered by the route as "Product not found" with no request
+made. Missing and foreign-tenant ids read identically (the API answers 404,
+never 403). `lib/listing-lifecycle.ts` is the single authority for
+"checking / unavailable / not published / added to Shopify / visible on your
+shop" — visibility only on `onlineStorePublished === true`, and a failed
+listings request is *unavailable*, never *not published*. Outbound links go
+through `lib/external-link.ts`: HTTPS on `*.myshopify.com` only, taken from
+the server, never built from a handle. Descriptions render as text.
+
 ## Home
 
 `/dashboard` is the merchant's operations page (UX-L2D-03), not a report. It

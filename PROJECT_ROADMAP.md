@@ -23,8 +23,8 @@ Last updated: 2026-09-15
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
 | Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Independently accepted at `c0092da6`** (Cursor `PASS — PHASE 1 MAY CLOSE`, 2026-09-15; CI run 34846601320 10/10) — PR #7 still draft, **not merged**; Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
-| UX-L2C (historical) | Live-state clarity and calm completion journey | 🚧 **`origin/feature/ux-l2c-live-state-clarity` (`ece8322`)** — unmerged; not independently accepted; reviewed under UX-L2D-GATE-04 before any UX-L2D-04 work |
-| UX-L2D | Dashboard design programme (renamed from UX-L2C) | 🚧 **UX-L2D-01 accepted; -02 shell accepted; -03 Home implemented on `feature/ux-l2d-dashboard`, stacked on `c0092da6`** — next: mandatory UX-L2D-GATE-04 review of historical UX-L2C before -04 Drafts; then -05 editor shell; -06 integrations; -07 polish. Not merged; production undeployed |
+| UX-L2C (historical) | Live-state clarity and calm completion journey | 🔍 **`origin/feature/ux-l2c-live-state-clarity` (`ece8322`)** — unmerged; reviewed under UX-L2D-GATE-04 (cleared 2026-09-15): selected pieces adapted into UX-L2D-04 (product page, lifecycle subset, external-link allowlist, listings query options, route-isolation spec); the rest deferred to -05/-06 or superseded |
+| UX-L2D | Dashboard design programme (renamed from UX-L2C) | 🚧 **-01, -02, -03 accepted; GATE-04 cleared; -04 Catalogue/Drafts/product page implemented on `feature/ux-l2d-dashboard`, stacked on `c0092da6`** — `/products/[productId]` Critical closed; next -05 editor shell; -06 integrations; -07 polish. Not merged; production undeployed |
 
 ---
 
