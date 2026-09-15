@@ -72,7 +72,10 @@ export function PublishAction({
       <Button
         size={size}
         variant="outline"
-        className={cn("border-destructive/40 text-destructive hover:text-destructive", className)}
+        className={cn(
+          "border-destructive/40 text-destructive hover:text-destructive dark:border-red-400/40 dark:text-red-300 dark:hover:text-red-200",
+          className,
+        )}
         onClick={onResolveConflict ?? onPublish}
         {...shared}
       >

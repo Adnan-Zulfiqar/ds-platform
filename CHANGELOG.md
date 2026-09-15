@@ -12,6 +12,32 @@ production release.
 
 ### Added
 
+- **UX-L2D-05 — Product editor lifecycle clarity (on
+  `feature/ux-l2d-dashboard`, not merged).** One pure derivation
+  (`lib/editor-lifecycle.ts`, composing the UX-L2D-04 listing authority) now
+  drives the header badge, save indicator, primary action, mobile bar,
+  post-publish panel and Review & publish. Vocabulary: Not on Shopify /
+  Added to Shopify / Visible on your shop (only on
+  `onlineStorePublished === true`) / Changes not sent to Shopify (only when
+  the saved draft is provably newer than `lastSyncedAt`) / Sending to
+  Shopify… / Publish failed / Shopify status unavailable; save state reads
+  Unsaved changes / Saving… / Saved in DropPilot / Couldn't save / Saving
+  paused. "Draft — not live" and "your live product has not changed" are
+  gone (UX-L2D-01 F-4). Header controls navigate (Review & publish, Update
+  Shopify, View product, Resolve conflict); only the panel publishes, and
+  it separates "Validation passed" from "Published to Shopify". The
+  section strip gains edge fades, chevrons and scroll-to-selected (F-9);
+  the header's inline actions move to `xl` so 1024 keeps a readable title;
+  the mobile bar gives the primary action the width. Conflict UX is
+  presentation-only: banner focus on the `none → detected` transition,
+  dialogs return focus on close, manual Save withdrawn and publishing
+  disabled with the reason while a conflict is open — `expectedUpdatedAt`,
+  409 handling, the phases and the autosave gate are unchanged. Vitest is
+  added for the pure lifecycle modules (`npm run test:unit`, 46 tests, not
+  run by CI); Playwright `editor-lifecycle.spec.ts` (30 × 2 projects,
+  backend-less) covers the rendered states; `editor-fixture.ts` gains
+  listings/publish responders only.
+
 - **UX-L2D-04 — Catalogue, Drafts and the product page (on
   `feature/ux-l2d-dashboard`, not merged).** Closes the UX-L2D-01 Critical:
   `/products/[productId]` exists, adapted from the reviewed historical UX-L2C

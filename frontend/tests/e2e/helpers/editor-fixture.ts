@@ -1,6 +1,12 @@
 import type { Page } from "@playwright/test";
 
-import type { AuthResponse, ProductDetail, SeoScore, StoreListing } from "@/types/api";
+import type {
+  AuthResponse,
+  ProductDetail,
+  SeoScore,
+  ShopifyPublishResult,
+  StoreListing,
+} from "@/types/api";
 
 import { resolveSuiteShotRoot } from "./evidence-paths";
 import { blockGoogleIdentityScript } from "./auth";
@@ -155,6 +161,53 @@ export function emptyListings(): StoreListing[] {
   return [];
 }
 
+/**
+ * A synced listing for the demo draft, with every URL on the trusted host.
+ *
+ * `lastSyncedAt` defaults to a minute from now so it is later than the
+ * `updatedAt` of any `buildSyntheticProduct()` created in the same test —
+ * the default pairing reads as "on Shopify, nothing newer saved". Tests
+ * that want "changes not sent" pass explicit timestamps.
+ */
+export function syncedDemoListing(overrides: Partial<StoreListing> = {}): StoreListing {
+  const now = new Date(Date.now() + 60_000).toISOString();
+  return {
+    id: "66666666-6666-4666-8666-666666666666",
+    storeId: DEMO_STORE_ID,
+    productId: DEMO_PRODUCT_ID,
+    externalProductId: "8123456789",
+    externalHandle: "wireless-desk-lamp",
+    externalGraphqlId: "gid://shopify/Product/8123456789",
+    shopDomain: "demo-shop.myshopify.com",
+    storefrontUrl: "https://demo-shop.myshopify.com/products/wireless-desk-lamp",
+    adminUrl: "https://demo-shop.myshopify.com/admin/products/8123456789",
+    onlineStorePublished: null,
+    status: "synced",
+    lastSyncedAt: now,
+    lastError: null,
+    publishedAt: null,
+    lastFailedSyncAt: null,
+    ...overrides,
+  };
+}
+
+/** The publish response the backend returns for the demo draft. */
+export function demoPublishResult(overrides: Partial<ShopifyPublishResult> = {}): ShopifyPublishResult {
+  return {
+    message: "Published.",
+    listingId: "66666666-6666-4666-8666-666666666666",
+    externalProductId: "8123456789",
+    externalHandle: "wireless-desk-lamp",
+    externalGraphqlId: "gid://shopify/Product/8123456789",
+    shopDomain: "demo-shop.myshopify.com",
+    storefrontUrl: null,
+    adminUrl: "https://demo-shop.myshopify.com/admin/products/8123456789",
+    onlineStorePublished: null,
+    updated: true,
+    ...overrides,
+  };
+}
+
 export const DEMO_STORE_ID = "55555555-5555-4555-8555-555555555555";
 
 export function mockShopifyStoresResponse() {
@@ -240,6 +293,22 @@ export async function openMockedEditor(
     patchDelayMs?: number;
     /** Per-attempt PATCH override (1-based). Falls back to patchStatus/patchBody. */
     patchResponder?: (attempt: number) => { status: number; body?: unknown };
+    /**
+     * Listings variants (UX-L2D-05, selectively adapted from the historical
+     * fixture): hold the response, fail it, or answer per attempt (1-based)
+     * so status, retry and refresh-failure states can be reached honestly.
+     */
+    listingsDelayMs?: number;
+    listingsHttpStatus?: number;
+    listingsResponder?: (attempt: number) => { status: number; body?: StoreListing[] } | null;
+    /**
+     * Answer `POST /integrations/shopify/publish`. On a 2xx the served
+     * listings become the publish result's listing from then on — the way
+     * the real backend persists `StoreListing` before responding — so the
+     * refetch the editor triggers sees what the publish reported. When
+     * omitted the endpoint is not mocked (tests may route it themselves).
+     */
+    publishResponder?: (attempt: number) => { status: number; body?: unknown; delayMs?: number };
   } = {},
 ): Promise<ProductDetail> {
   const product = options.product ?? buildSyntheticProduct();
@@ -247,6 +316,10 @@ export async function openMockedEditor(
   const seoScore = options.seoScore ?? demoSeoScore();
   const auth = mockAuthResponse();
   let patchAttempts = 0;
+  let listingsAttempts = 0;
+  let publishAttempts = 0;
+  // Mutable so a mocked publish can move the "server" to a synced state.
+  let servedListings = listings;
 
   await blockGoogleIdentityScript(page);
 
@@ -362,10 +435,26 @@ export async function openMockedEditor(
     const method = route.request().method();
 
     if (url.includes("/listings")) {
+      if (options.listingsDelayMs && options.listingsDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, options.listingsDelayMs));
+      }
+      listingsAttempts += 1;
+      const responded = options.listingsResponder?.(listingsAttempts);
+      const status = responded?.status ?? options.listingsHttpStatus ?? 200;
+      const ok = status >= 200 && status < 300;
       return route.fulfill({
-        status: 200,
+        status,
         contentType: "application/json",
-        body: JSON.stringify(listings),
+        body: JSON.stringify(
+          ok
+            ? (responded?.body ?? servedListings)
+            : {
+                code: "internal_error",
+                message: "Could not load listings.",
+                details: [],
+                requestId: "req-ux-l2d-05",
+              },
+        ),
       });
     }
     if (url.includes("/seo-score")) {
@@ -422,6 +511,48 @@ export async function openMockedEditor(
       body: JSON.stringify(product),
     });
   });
+
+  if (options.publishResponder) {
+    await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
+      publishAttempts += 1;
+      const responded = options.publishResponder!(publishAttempts);
+      if (responded.delayMs && responded.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, responded.delayMs));
+      }
+      const ok = responded.status >= 200 && responded.status < 300;
+      if (ok) {
+        const result = (responded.body ?? demoPublishResult()) as ShopifyPublishResult;
+        servedListings = [
+          syncedDemoListing({
+            id: result.listingId,
+            externalProductId: result.externalProductId,
+            externalHandle: result.externalHandle,
+            externalGraphqlId: result.externalGraphqlId,
+            shopDomain: result.shopDomain,
+            storefrontUrl: result.storefrontUrl,
+            adminUrl: result.adminUrl,
+            onlineStorePublished: result.onlineStorePublished,
+            lastSyncedAt: new Date().toISOString(),
+          }),
+        ];
+      }
+      return route.fulfill({
+        status: responded.status,
+        contentType: "application/json",
+        body: JSON.stringify(
+          responded.body ??
+            (ok
+              ? demoPublishResult()
+              : {
+                  code: "publish_failed",
+                  message: "Shopify rejected the product.",
+                  details: [],
+                  requestId: "req-ux-l2d-05",
+                }),
+        ),
+      });
+    });
+  }
 
   await page.goto(`/drafts/${product.id}`);
   return product;

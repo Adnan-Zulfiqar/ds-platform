@@ -793,7 +793,10 @@ test.describe("UX-L2A editor foundation — synced listing copy", () => {
       adminUrl: "https://demo-shop.myshopify.com/admin/products/1",
       onlineStorePublished: true,
       status: "synced",
-      lastSyncedAt: new Date().toISOString(),
+      // Later than the synthetic product's `updatedAt` (created inside
+      // `openMockedEditor`), so the pair reads as synced rather than as
+      // "changes not sent" by a few milliseconds.
+      lastSyncedAt: new Date(Date.now() + 60_000).toISOString(),
       lastError: null,
       publishedAt: new Date().toISOString(),
       lastFailedSyncAt: null,

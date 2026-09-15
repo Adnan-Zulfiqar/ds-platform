@@ -336,6 +336,67 @@ listings request is *unavailable*, never *not published*. Outbound links go
 through `lib/external-link.ts`: HTTPS on `*.myshopify.com` only, taken from
 the server, never built from a handle. Descriptions render as text.
 
+## The product editor's lifecycle
+
+The editor (`components/drafts/draft-product-editor.tsx`) says three things
+about a product, and each comes from a different place — so they sit side by
+side and never have to hedge each other (UX-L2D-05):
+
+| Axis | Says | Evidence |
+|---|---|---|
+| Shopify state (the header badge) | Not on Shopify · Added to Shopify · Visible on your shop · Changes not sent to Shopify · Sending to Shopify… · Publish failed · Shopify status unavailable · Checking… | listing rows, this session's publish request/response |
+| Save state | Unsaved changes · Saving… · Saved in DropPilot · Couldn't save · Saving paused (conflict) | the editor's own `dirty` / `saveState` / conflict phase |
+| Next action | Review & publish · Review N items · Update Shopify · View product · Try publishing again · Resolve conflict | derived from the two above |
+
+All three are derived once per render by `lib/editor-lifecycle.ts`, a pure
+function over explicit inputs, and read by the header, the save indicator,
+the primary action, the mobile bar, the post-publish panel and Review &
+publish. It composes `lib/listing-lifecycle.ts` (the UX-L2D-04 authority
+the product page and catalogue use) rather than re-deriving listing facts.
+The derivation table lives in that module's header comment; the rules that
+matter most:
+
+- **"Visible on your shop" needs `onlineStorePublished === true`.** `false`
+  is "Added to Shopify" with a visibility-setup note (Shopify holds it as a
+  draft); `null` is "Added to Shopify" with visibility unconfirmed.
+- **`lastSyncedAt` only proves "changes not sent".** Price and inventory
+  pushes advance it too, so a saved draft *older* than the last sync is still
+  only "Added"/"Visible" — nothing ever reads "up to date" or "live".
+- **A failed listings request is "unavailable", with a retry.** A failed
+  *refresh* of cached listings keeps the last known state and adds a note;
+  neither is ever presented as "not on Shopify".
+- **The publish response stands in for the listings cache only while the
+  cache predates it** (`dataUpdatedAt` vs the response time). Once the
+  editor's post-publish refetch lands, the server row wins, including when it
+  disagrees.
+- **A listing row with `status === "error"` and no synced row is "Publish
+  failed"**; the provider's `lastError` text is never shown.
+
+Header controls only navigate; the Review & publish panel's button is the
+one that publishes. The panel distinguishes "Validation passed" (the server's
+readiness check on the saved draft) from "Published to Shopify" (a listing),
+and reads "Update Shopify" once a listing exists. Blocker sections use
+`lib/editor-section-labels.ts` so the merchant sees the editor's section
+names, not the API's keys.
+
+The M2A concurrency protocol is untouched by all of this: `expectedUpdatedAt`
+on every save, 409 → conflict phases (`detected → reload-confirm | reviewing`),
+autosave frozen for every phase but `none`, reload-latest and review paths.
+UX-L2D-05 changed only presentation around it — the banner takes focus on the
+`none → detected` transition (not on every phase change), its dialogs return
+focus when they close, manual Save is withdrawn while a conflict is open, and
+publishing is disabled with the reason stated.
+
+The section strip scrolls sideways with edge fades, chevrons from `md`, and
+the selected tab scrolled into view (a deep link to `?tab=publishing` lands
+on Review & publish at 1024). Below `md` the fixed action bar holds Save (only
+while there is something to save), an icon-only Preview and the primary
+action; the sticky header above keeps the badge and save state visible.
+
+`lib/*.test.ts` are Vitest unit tests for the pure lifecycle modules
+(`npm run test:unit`, `environment: "node"`). They are **not run by CI** in
+this milestone; Playwright remains the executed coverage there.
+
 ## Home
 
 `/dashboard` is the merchant's operations page (UX-L2D-03), not a report. It
