@@ -1,75 +1,58 @@
 "use client";
 
-import { AlertCircle, Link2, Loader2, Unlink } from "lucide-react";
+import { AlertCircle, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
 import { useState } from "react";
 
+import { ChannelCard, ChannelFacts, formatChannelDate } from "@/components/integrations/channel-card";
+import { DisconnectDialog } from "@/components/integrations/disconnect-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api-client";
+import { deriveAliExpressChannel } from "@/lib/channel-state";
+import { useAuth } from "@/providers/auth-provider";
 import {
   useAliExpressStatus,
   useConnectAliExpress,
   useDisconnectAliExpress,
 } from "@/services/integrations";
-import type { AliExpressConnection, IntegrationStatus } from "@/types/api";
 
 /**
- * AliExpress connection card.
+ * AliExpress supplier connection.
  *
  * Merchants authorize DropPilot's platform AliExpress application. They never
  * enter an app key or secret — those live in server environment configuration.
  *
- * Status is always the server's. It is never inferred optimistically from the
- * fact that a connect flow was started.
+ * Status is always the server's. It is never inferred from the fact that a
+ * connect flow was started. The status endpoint cannot say whether the server
+ * has app credentials at all, so "Setup unavailable" is only known once a
+ * connect attempt is refused for that reason — and from then on the card says
+ * so instead of offering a button that would fail again.
  */
 
-const STATUS_LABELS: Record<IntegrationStatus, string> = {
-  pending: "Awaiting authorization",
-  connected: "Connected",
-  expired: "Reconnection required",
-  error: "Connection error",
-};
+/** The backend's own phrasing for a missing platform app (a 422 on connect). */
+const NOT_CONFIGURED = /not configured on this server/i;
 
-function StatusBadge({ connection }: { connection: AliExpressConnection | null }) {
-  if (!connection) {
-    return <Badge variant="secondary">Not connected</Badge>;
-  }
-
-  const variant =
-    connection.status === "connected" && !connection.isTokenExpired
-      ? "success"
-      : connection.status === "pending"
-        ? "warning"
-        : "destructive";
-
-  return <Badge variant={variant}>{STATUS_LABELS[connection.status]}</Badge>;
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return "Never";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
+const DISCONNECT_CONSEQUENCES = [
+  "The stored AliExpress authorization for this workspace is deleted.",
+  "Product imports and order placement through AliExpress stop until you reconnect.",
+  "Products already imported into DropPilot are kept.",
+];
 
 export function AliExpressCard() {
-  const { data, isPending, isError, refetch } = useAliExpressStatus();
+  const { hasRole } = useAuth();
+  const canManage = hasRole("owner") || hasRole("admin");
+  const statusQuery = useAliExpressStatus();
   const connect = useConnectAliExpress();
   const disconnect = useDisconnectAliExpress();
+  const [setupUnavailable, setSetupUnavailable] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
 
-  const connection = data?.connection ?? null;
+  const channel = deriveAliExpressChannel(statusQuery, { setupUnavailable });
+  const connection = statusQuery.data?.connection ?? null;
+  const loading = channel.kind === "checking";
+  const busy = connect.isPending || disconnect.isPending;
 
   async function handleConnect() {
     setActionError(null);
@@ -78,131 +61,130 @@ export function AliExpressCard() {
       // Full navigation: destination is AliExpress, outside this application.
       window.location.assign(authorization.authorizationUrl);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 422 && NOT_CONFIGURED.test(error.message)) {
+        // The server named its environment variables; the merchant cannot act
+        // on them, so the card switches to the operator-facing state instead.
+        setSetupUnavailable(true);
+        return;
+      }
       setActionError(
-        error instanceof ApiError
-          ? error.message
-          : "Could not start the connection. Please try again.",
+        error instanceof ApiError ? error.message : "Could not start the connection. Please try again.",
       );
     }
   }
 
-  return (
-    <Card>
-      <CardHeader className="flex-row items-start justify-between space-y-0 gap-4">
-        <div className="min-w-0 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle className="text-base">AliExpress</CardTitle>
-            {isPending ? (
-              <Skeleton className="h-5 w-24 rounded-full" />
-            ) : (
-              <StatusBadge connection={connection} />
-            )}
-          </div>
-          <CardDescription>
-            Source products and automate order fulfilment through the AliExpress
-            Open Platform. DropPilot uses its own developer application — you only
-            approve access for your seller account.
-          </CardDescription>
-        </div>
-      </CardHeader>
+  async function confirmDisconnect() {
+    setDisconnectError(null);
+    try {
+      await disconnect.mutateAsync();
+      setDisconnectOpen(false);
+    } catch (error) {
+      setDisconnectError(
+        error instanceof ApiError ? error.message : "Could not disconnect. Please try again.",
+      );
+    }
+  }
 
-      <CardContent className="space-y-4">
-        {isError && (
+  const connectLabel =
+    channel.actions.includes("continue")
+      ? "Continue on AliExpress"
+      : channel.actions.includes("reconnect")
+        ? "Reconnect"
+        : "Connect AliExpress";
+  const connectPrimary = channel.kind !== "connected";
+
+  return (
+    <>
+      <ChannelCard
+        id="aliexpress"
+        name="AliExpress"
+        description="Source products and automate order fulfilment through the AliExpress Open Platform. DropPilot uses its own developer application — you only approve access for your seller account."
+        state={channel}
+        loading={loading}
+        readOnly={!loading && !canManage && channel.kind !== "unavailable"}
+        readOnlyHint="Your role can view this connection. Ask an administrator to make changes."
+        actions={
+          channel.kind === "unavailable" ? (
+            <Button variant="outline" className="min-h-11 sm:min-h-9" onClick={() => void statusQuery.refetch()}>
+              <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+              Try again
+            </Button>
+          ) : channel.actions.length > 0 ? (
+            <>
+              <Button
+                variant={connectPrimary ? "default" : "outline"}
+                className="min-h-11 sm:min-h-9"
+                onClick={() => void handleConnect()}
+                disabled={busy}
+              >
+                {connect.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <Link2 className="mr-2 h-4 w-4" aria-hidden="true" />
+                )}
+                {connect.isPending ? "Connecting…" : connectLabel}
+              </Button>
+              {channel.actions.includes("disconnect") ? (
+                <Button
+                  variant="ghost"
+                  className="min-h-11 sm:min-h-9"
+                  onClick={() => {
+                    setDisconnectError(null);
+                    setDisconnectOpen(true);
+                  }}
+                  disabled={busy}
+                >
+                  <Unlink className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Disconnect
+                </Button>
+              ) : null}
+            </>
+          ) : undefined
+        }
+      >
+        {channel.kind === "unavailable" ? (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription className="flex items-center justify-between gap-3">
-              <span>Could not load the connection status.</span>
-              <Button variant="outline" size="sm" onClick={() => void refetch()}>
-                Retry
-              </Button>
-            </AlertDescription>
+            <AlertDescription>Could not load the connection status.</AlertDescription>
           </Alert>
-        )}
+        ) : null}
 
-        {actionError && (
+        {actionError ? (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{actionError}</AlertDescription>
           </Alert>
-        )}
+        ) : null}
 
-        {connection?.lastError && (
-          <Alert variant="destructive">
+        {/* The backend's curated explanation (its exception catalogue, never
+            upstream text), shown only in the states where it adds something. */}
+        {channel.message ? (
+          <Alert variant={channel.kind === "reconnect-required" ? "destructive" : "warning"}>
             <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{connection.lastError}</AlertDescription>
+            <AlertDescription>{channel.message}</AlertDescription>
           </Alert>
-        )}
+        ) : null}
 
-        {isPending ? (
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-48" />
-            <Skeleton className="h-4 w-40" />
-          </div>
-        ) : connection ? (
-          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-            <div className="flex justify-between gap-2 sm:block">
-              <dt className="text-muted-foreground">Connected</dt>
-              <dd>{formatDate(connection.connectedAt)}</dd>
-            </div>
-            <div className="flex justify-between gap-2 sm:block">
-              <dt className="text-muted-foreground">Last sync</dt>
-              <dd>{formatDate(connection.lastSyncAt)}</dd>
-            </div>
-            <div className="flex justify-between gap-2 sm:block">
-              <dt className="text-muted-foreground">Token expires</dt>
-              <dd>{formatDate(connection.tokenExpiresAt)}</dd>
-            </div>
-          </dl>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Click Connect to authorize DropPilot on AliExpress. You will sign in
-            with your AliExpress seller account — no developer credentials needed.
-          </p>
-        )}
-      </CardContent>
+        {connection && channel.kind !== "setup-unavailable" ? (
+          <ChannelFacts
+            items={[
+              { label: "Connected", value: formatChannelDate(connection.connectedAt) },
+              { label: "Last sync", value: formatChannelDate(connection.lastSyncAt) },
+            ]}
+          />
+        ) : null}
+      </ChannelCard>
 
-      <CardFooter className="gap-2">
-        {connection ? (
-          <>
-            <Button
-              variant="outline"
-              onClick={() => void handleConnect()}
-              disabled={connect.isPending || disconnect.isPending}
-            >
-              {connect.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Link2 className="h-4 w-4" />
-              )}
-              Reconnect
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => void disconnect.mutateAsync()}
-              disabled={disconnect.isPending || connect.isPending}
-            >
-              {disconnect.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Unlink className="h-4 w-4" />
-              )}
-              Disconnect
-            </Button>
-          </>
-        ) : (
-          <Button
-            onClick={() => void handleConnect()}
-            disabled={isPending || connect.isPending}
-          >
-            {connect.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Link2 className="h-4 w-4" />
-            )}
-            {connect.isPending ? "Connecting..." : "Connect AliExpress"}
-          </Button>
-        )}
-      </CardFooter>
-    </Card>
+      <DisconnectDialog
+        id="aliexpress"
+        open={disconnectOpen}
+        onOpenChange={setDisconnectOpen}
+        provider="AliExpress"
+        consequences={DISCONNECT_CONSEQUENCES}
+        pending={disconnect.isPending}
+        error={disconnectError}
+        onConfirm={() => void confirmDisconnect()}
+      />
+    </>
   );
 }
