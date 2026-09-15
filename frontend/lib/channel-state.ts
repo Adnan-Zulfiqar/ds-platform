@@ -118,7 +118,7 @@ export function deriveShopifyConnection(connection: ShopifyConnection): ShopifyC
         ...base,
         ...state(
           "needs-attention",
-          "DropPilot could not confirm this store's Shopify webhooks on its most recent attempt. Product, inventory and order updates may be missed until setup completes. Your store stays connected — you do not need to disconnect.",
+          "Webhook setup is incomplete — product, inventory and order updates may be missed until it completes.",
         ),
         webhookLabel: "Webhooks incomplete",
         actions: ["retry-webhooks", "disconnect"],

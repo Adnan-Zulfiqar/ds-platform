@@ -1,15 +1,15 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 import { AliExpressCard } from "@/components/integrations/aliexpress-card";
+import { ChannelOverview } from "@/components/integrations/channel-overview";
 import { EbayCard } from "@/components/integrations/ebay-card";
 import { ShopifyCard } from "@/components/integrations/shopify-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -137,11 +137,12 @@ const EBAY_CALLBACK: Record<
   },
 };
 
-const PLANNED_PROVIDERS = [
-  { name: "WooCommerce", description: "Sync your WordPress storefront." },
-  { name: "Etsy", description: "Reach Etsy buyers with the same catalogue." },
-  { name: "TikTok Shop", description: "Sell through TikTok's marketplace." },
-] as const;
+/**
+ * Channels the product intends to add. One line, not three cards: a card
+ * invites a click, and nothing here can be clicked. Recorded so the intent is
+ * visible without pretending anything is connectable.
+ */
+const PLANNED_PROVIDERS = ["WooCommerce", "Etsy", "TikTok Shop"] as const;
 
 function CallbackBanner() {
   const searchParams = useSearchParams();
@@ -177,7 +178,7 @@ export default function IntegrationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Integrations"
-        description="Connect the suppliers and sales channels this workspace sells through."
+        description="Connect, repair and disconnect the suppliers and sales channels this workspace sells through. This is the one place a connection is authorized."
       />
 
       {/* Connecting a channel hands marketplace data to this application, and a
@@ -198,6 +199,8 @@ export default function IntegrationsPage() {
       <Suspense fallback={null}>
         <CallbackBanner />
       </Suspense>
+
+      <ChannelOverview />
 
       <section aria-label="Suppliers" className="space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -221,29 +224,34 @@ export default function IntegrationsPage() {
           <EbayCard />
         </Suspense>
 
-        <Alert>
-          <Info className="h-4 w-4" />
-          <AlertDescription>
-            Additional sales channels remain planned. Shopify and eBay are
-            available when the server has that provider&apos;s app credentials
-            configured.
-          </AlertDescription>
-        </Alert>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {PLANNED_PROVIDERS.map((provider) => (
-            <Card key={provider.name} className="opacity-60">
-              <CardHeader>
-                <div className="flex flex-wrap items-center gap-2">
-                  <CardTitle className="text-base">{provider.name}</CardTitle>
-                  <Badge variant="secondary">Coming soon</Badge>
-                </div>
-                <CardDescription>{provider.description}</CardDescription>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
+        <p
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground"
+          data-testid="planned-channels"
+        >
+          <Badge variant="secondary">Coming soon</Badge>
+          <span>
+            Planned channels:{" "}
+            {PLANNED_PROVIDERS.map((name, index) => (
+              <span key={name}>
+                {index > 0 ? ", " : ""}
+                {name}
+              </span>
+            ))}
+            . Nothing here can be connected yet.
+          </span>
+        </p>
       </section>
+
+      <p className="text-sm text-muted-foreground">
+        Looking for a store you disconnected, or the products linked to each store?{" "}
+        <Link
+          className="font-medium underline underline-offset-4 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          href="/stores"
+        >
+          Store records
+        </Link>{" "}
+        lists every store this workspace has known.
+      </p>
     </div>
   );
 }
