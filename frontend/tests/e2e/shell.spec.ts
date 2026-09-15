@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { isApiReachable, registerAndSignIn } from "./helpers/auth";
+import { NAV_SECTIONS, PLANNED_NAV_ITEMS } from "../../lib/navigation";
 
 /**
  * Application shell tests.
@@ -40,26 +41,27 @@ test.describe("Sidebar", () => {
     const nav = page.getByRole("navigation", { name: "Main navigation" });
     await expect(nav).toBeVisible();
 
-    for (const section of [
-      "Main",
-      "Product Management",
-      "Sales",
-      "Stores",
-      "Analytics",
-      "System",
-    ]) {
-      // Matched by role, not text: several section names ("Stores",
-      // "Analytics") are also link labels inside the same landmark, so a text
-      // query would be ambiguous.
-      await expect(nav.getByRole("heading", { name: section })).toBeVisible();
+    // Driven by the manifest rather than a copied list, so a section renamed
+    // in `lib/navigation.ts` cannot leave this test asserting stale labels.
+    // Matched by role, not text: a section name can also be a link label
+    // inside the same landmark, so a text query would be ambiguous.
+    for (const section of NAV_SECTIONS) {
+      if (!section.label) continue;
+      await expect(nav.getByRole("heading", { name: section.label })).toBeVisible();
     }
+    // Settings is pinned in its own landmark so it survives short viewports.
+    await expect(
+      page
+        .getByRole("navigation", { name: "Secondary navigation" })
+        .getByRole("link", { name: "Settings" }),
+    ).toBeVisible();
   });
 
   test("marks the current route as active", async ({ page }) => {
     await signIn(page);
 
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await expect(nav.getByRole("link", { name: "Dashboard" })).toHaveAttribute(
+    await expect(nav.getByRole("link", { name: "Home" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -78,16 +80,18 @@ test.describe("Sidebar", () => {
     );
   });
 
-  test("unbuilt destinations are disabled, not links", async ({ page }) => {
+  test("planned destinations are not offered as navigation", async ({ page }) => {
     /**
-     * The property that keeps navigation from ever reaching a 404: a
-     * `coming-soon` item must not be a link at all.
+     * A placeholder in primary navigation advertises a capability the product
+     * does not have (UX-L2D-02). Planned entries stay in the manifest for their
+     * copy, and never render as a link or as a "coming soon" row; the routes
+     * that do exist keep answering by URL.
      */
     await signIn(page);
-    const nav = page.getByRole("navigation", { name: "Main navigation" });
-
-    await expect(nav.getByRole("link", { name: "Suppliers" })).toHaveCount(0);
-    await expect(nav.getByText("Suppliers")).toBeVisible();
+    for (const planned of PLANNED_NAV_ITEMS) {
+      await expect(page.getByRole("link", { name: planned.label })).toHaveCount(0);
+      await expect(page.getByRole("navigation").getByText(planned.label)).toHaveCount(0);
+    }
   });
 
   test("collapses and expands, persisting across reload", async ({ page }) => {
@@ -108,7 +112,7 @@ test.describe("Sidebar", () => {
     // visible label is gone — a tooltip alone would leave touch users with an
     // unlabelled icon.
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
   });
 });
 

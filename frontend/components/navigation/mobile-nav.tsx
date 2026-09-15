@@ -4,7 +4,8 @@ import { Menu } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect } from "react";
 
-import { SidebarNav } from "@/components/navigation/sidebar-nav";
+import { NavScrollRegion } from "@/components/navigation/nav-scroll-region";
+import { SidebarFooterNav, SidebarNav } from "@/components/navigation/sidebar-nav";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -76,8 +77,13 @@ export function MobileNav() {
             </SheetDescription>
           </SheetHeader>
 
-          <div className="h-[calc(100%-4rem)] overflow-y-auto">
-            <SidebarNav onNavigate={() => setOpen(false)} />
+          <div className="flex h-[calc(100%-4rem)] flex-col">
+            <NavScrollRegion surface="background">
+              <SidebarNav onNavigate={() => setOpen(false)} />
+            </NavScrollRegion>
+            <div className="shrink-0 border-t">
+              <SidebarFooterNav onNavigate={() => setOpen(false)} />
+            </div>
           </div>
         </SheetContent>
       </Sheet>

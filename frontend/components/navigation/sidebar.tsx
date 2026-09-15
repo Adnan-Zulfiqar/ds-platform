@@ -3,7 +3,8 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
 
-import { SidebarNav } from "@/components/navigation/sidebar-nav";
+import { NavScrollRegion } from "@/components/navigation/nav-scroll-region";
+import { SidebarFooterNav, SidebarNav } from "@/components/navigation/sidebar-nav";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -55,10 +56,16 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* The nav scrolls independently, so a long list never pushes the collapse
-          control off the bottom of the viewport. */}
-      <div className="flex-1 overflow-y-auto">
+      {/* The nav scrolls independently, so a long list never pushes Settings or
+          the collapse control off the bottom of the viewport; the region fades
+          the edge that hides items, so a short viewport is never mistaken for
+          a short list. */}
+      <NavScrollRegion>
         <SidebarNav collapsed={collapsed} />
+      </NavScrollRegion>
+
+      <div className="shrink-0 border-t">
+        <SidebarFooterNav collapsed={collapsed} />
       </div>
 
       <div className={cn("shrink-0 border-t p-2", collapsed && "flex justify-center")}>

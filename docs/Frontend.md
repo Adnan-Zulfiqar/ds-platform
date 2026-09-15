@@ -145,12 +145,28 @@ avoids mobile browsers mismeasuring the viewport as their address bar collapses.
 that group is protected by default — the safe thing happens without anyone
 remembering to do it.
 
+**The page gutter lives in the layout, not the page** (UX-L2D-02). The same
+layout wraps every page in `PageContainer` (`components/ui/page-container.tsx`:
+`p-4 sm:p-6`, centred, capped at the `2xl` screen width). Pages own their
+vertical rhythm and nothing else; before this, each page carried or forgot its
+own padding, and Drafts, Products, Import history and the editor rendered flush
+against the sidebar while their neighbours had a gutter.
+
 ---
 
 ## Navigation
 
 `lib/navigation.ts` is the single source of truth. The desktop sidebar, the
-mobile drawer, and the top bar's current-page label all read from it.
+mobile drawer, and the top bar's breadcrumb all read from it.
+
+Sections are merchant jobs, not subsystems (UX-L2D-02): Home · Catalogue
+(Drafts, Products, Import history) · Sales · Channels (Integrations, Stores) ·
+Automation (Rules, Pricing, Inventory, Global rules) · Reports. Settings is
+pinned below the scrolling list (`NAV_FOOTER_ITEMS`) so it stays reachable at
+any viewport height; the list itself scrolls inside `NavScrollRegion`, which
+fades whichever edge is hiding items. Items whose href is a prefix of other
+items' hrefs (`/dashboard`, `/settings`) carry `exact: true` so the parent does
+not light up on a child.
 
 Each item carries a `status`:
 
@@ -160,7 +176,11 @@ Each item carries a `status`:
 
 A `coming-soon` item is **not** a disabled link or button. A disabled
 interactive element is still reachable by keyboard and then does nothing, which
-is more confusing than an element that was never interactive.
+is more confusing than an element that was never interactive. Since UX-L2D-02
+no such item is in the primary manifest: planned destinations (Suppliers,
+Customers) live in `PLANNED_NAV_ITEMS`, not in the sidebar, because a
+placeholder in primary navigation advertises a capability the product does not
+have. `/customers` still serves its `ComingSoon` page by URL.
 
 Desktop and mobile render the same `SidebarNav` component. Duplicating the list
 into a separate mobile component is the usual approach and the usual source of a
@@ -293,10 +313,11 @@ naming.
 
 ## Known limitations
 
-1. **Global search and the help centre are non-functional.** Both render as
-   disabled controls with explanatory tooltips. Search needs an index of
-   products and orders that do not exist; help has no content. Visible so the
-   layout is final, disabled so they are honest.
+1. **Global search and the help centre do not exist yet.** Until UX-L2D-02
+   they rendered as permanently disabled top-bar controls; two dead buttons in
+   the most prominent bar read as broken rather than unfinished, so they are
+   gone until the features arrive. Search needs an index of products and
+   orders that does not exist; help has no content.
 
 2. **The notification centre has no source.** The panel and store are real and
    genuinely empty. A fake unread badge would train users to ignore the badge.

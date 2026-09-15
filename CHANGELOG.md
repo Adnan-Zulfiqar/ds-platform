@@ -12,6 +12,22 @@ production release.
 
 ### Added
 
+- **UX-L2D-02 — application shell (on `feature/ux-l2d-dashboard`, not
+  merged).** `PageContainer` applied once in `(protected)/layout.tsx` gives
+  every page the same gutter and a centred `2xl` maximum width; Drafts,
+  Products, Import history and the editor no longer render flush against the
+  sidebar (UX-L2D-01 F-5). Navigation is re-grouped by merchant job — Home ·
+  Catalogue · Sales · Channels · Automation · Reports — with Settings pinned
+  beneath a scrolling list that fades the edge hiding items, so nothing falls
+  below the fold at laptop heights (F-7); planned destinations leave the
+  sidebar; the top bar drops its two permanently disabled placeholder controls
+  and shows a section › page breadcrumb. Backend-less regression
+  `ux-l2d-shell.spec.ts` (gutters at 1440/1024/390, manifest completeness,
+  every href resolves, breadcrumb, sidebar at 900 and 640 px, drawer, dark
+  mode). No backend, auth, concurrency, integrations or historical UX-L2C code
+  changed; the `/products/[productId]` Critical stays open for
+  UX-L2D-GATE-04.
+
 - **UX-L2D-01 — Phase 2 baseline and UX audit (on `feature/ux-l2d-dashboard`,
   stacked on the accepted Phase 1 SHA `c0092da6`; not merged).** Documentation
   only: `docs/ux/ux-l2d-01-baseline.md` records the repository baseline, the
