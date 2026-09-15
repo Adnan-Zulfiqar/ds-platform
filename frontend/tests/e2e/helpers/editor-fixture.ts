@@ -268,6 +268,52 @@ export async function openMockedEditor(
     route.fulfill({ status: 204, body: "" }),
   );
 
+  // The three requests the application shell makes on every protected page,
+  // whichever page it is: the sidebar's workspace counts (the desktop rail is
+  // mounted at every viewport, merely hidden below `md`) and the bell menu's
+  // unread count and first page. Without a backend they are refused, and the
+  // refusal lands in the console as `net::ERR_FAILED`, which the
+  // console-clean assertions in the editor suites rightly treat as an error.
+  // Answered exactly — by pathname, not by prefix — so nothing else the
+  // editor does is intercepted by accident.
+  await page.route(
+    (url) => url.pathname.endsWith("/api/v1/products/workspace-counts"),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ drafts: 1, products: 0 }),
+      }),
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/api/v1/notifications/unread-count"),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ unread: 0 }),
+      }),
+  );
+  await page.route(
+    (url) => url.pathname.endsWith("/api/v1/notifications"),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [],
+          meta: {
+            page: 1,
+            size: 8,
+            totalItems: 0,
+            totalPages: 0,
+            hasNext: false,
+            hasPrevious: false,
+          },
+        }),
+      }),
+  );
+
   await page.route("**/api/v1/stores**", async (route) => {
     return route.fulfill({
       status: 200,
