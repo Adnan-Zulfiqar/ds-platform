@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { Store as StoreIcon } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { ChannelStatusBadge } from "@/components/integrations/channel-status-badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,26 +16,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { deriveStoreRecordState, PLATFORM_LABEL } from "@/lib/channel-state";
 import { formatDateTime } from "@/lib/utils";
-import { useStores, type StoreStatus } from "@/services/stores";
+import { useStores, type Store } from "@/services/stores";
 
-function statusVariant(
-  status: StoreStatus,
-): "default" | "secondary" | "destructive" | "success" | "warning" | "outline" {
-  switch (status) {
-    case "connected":
-      return "success";
-    case "syncing":
-      return "warning";
-    case "error":
-      return "destructive";
-    case "disconnected":
-      return "secondary";
-    default:
-      return "outline";
-  }
-}
-
+/**
+ * Store records as a table from `md`, a card list below it.
+ *
+ * Status words come from the shared channel vocabulary, never the raw enum;
+ * the old "Health" column is gone because `healthScore` is a counter the
+ * backend nudges up and down on sync outcomes, with no meaning a merchant
+ * could act on. Rows do not carry actions of their own: authorization is
+ * managed under Integrations, and the row says so.
+ */
 export function StoreTable() {
   const { data, isLoading, isError, refetch } = useStores({
     page: 1,
@@ -43,59 +38,114 @@ export function StoreTable() {
   });
 
   if (isError) {
-    return (
-      <ErrorState title="Could not load stores" onRetry={() => void refetch()} />
-    );
+    return <ErrorState title="Could not load stores" onRetry={() => void refetch()} />;
   }
 
   if (isLoading) {
-    return <Skeleton className="h-48 w-full" />;
+    return <Skeleton className="h-48 w-full" data-testid="stores-loading" />;
   }
 
   const stores = data?.items ?? [];
   if (stores.length === 0) {
     return (
-      <EmptyState
-        icon={StoreIcon}
-        title="No stores yet"
-        description="Add a sales channel to track sync health and per-store settings."
-      />
+      <div data-testid="stores-empty">
+        <EmptyState
+          icon={StoreIcon}
+          title="No stores yet"
+          description="Connect a Shopify store under Integrations. It appears here once authorized."
+          action={
+            <Button asChild>
+              <Link href="/settings/integrations">Go to Integrations</Link>
+            </Button>
+          }
+        />
+      </div>
     );
   }
 
   return (
-    <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Platform</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Health</TableHead>
-            <TableHead>Last sync</TableHead>
-            <TableHead>Last activity</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {stores.map((store) => (
-            <TableRow key={store.id}>
-              <TableCell>
-                <div className="font-medium">{store.name}</div>
-                <div className="text-xs text-muted-foreground">{store.slug}</div>
-              </TableCell>
-              <TableCell className="capitalize">
-                {store.platform.replaceAll("_", " ")}
-              </TableCell>
-              <TableCell>
-                <Badge variant={statusVariant(store.status)}>{store.status}</Badge>
-              </TableCell>
-              <TableCell>{store.healthScore}</TableCell>
-              <TableCell>{formatDateTime(store.lastSyncAt)}</TableCell>
-              <TableCell>{formatDateTime(store.lastActivityAt)}</TableCell>
+    <div data-testid="stores" className="space-y-4">
+      <div className="hidden overflow-x-auto rounded-md border md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Store</TableHead>
+              <TableHead>Platform</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Last sync</TableHead>
+              <TableHead>Last activity</TableHead>
+              <TableHead>
+                <span className="sr-only">Manage</span>
+              </TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {stores.map((store) => {
+              const state = deriveStoreRecordState(store);
+              return (
+                <TableRow key={store.id} data-testid="store-row">
+                  <TableCell>
+                    <div className="font-medium">{store.name}</div>
+                    <div className="max-w-[28ch] truncate text-xs text-muted-foreground" title={store.storefrontUrl ?? store.slug}>
+                      {store.storefrontUrl?.replace(/^https?:\/\//, "") ?? store.slug}
+                    </div>
+                  </TableCell>
+                  <TableCell>{PLATFORM_LABEL[store.platform] ?? store.platform}</TableCell>
+                  <TableCell>
+                    <ChannelStatusBadge state={state} data-testid="store-status" />
+                    <p className="mt-1 max-w-[36ch] text-xs text-muted-foreground">{state.detail}</p>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">{formatDateTime(store.lastSyncAt)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{formatDateTime(store.lastActivityAt)}</TableCell>
+                  <TableCell className="text-right">
+                    <ManageLink store={store} />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      <ul className="space-y-3 md:hidden" data-testid="store-cards">
+        {stores.map((store) => {
+          const state = deriveStoreRecordState(store);
+          return (
+            <li key={store.id} className="rounded-md border p-3" data-testid="store-card">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium">{store.name}</p>
+                  <p className="break-all text-xs text-muted-foreground">
+                    {PLATFORM_LABEL[store.platform] ?? store.platform} ·{" "}
+                    {store.storefrontUrl?.replace(/^https?:\/\//, "") ?? store.slug}
+                  </p>
+                </div>
+                <ChannelStatusBadge state={state} />
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">{state.detail}</p>
+              <dl className="mt-2 grid grid-cols-2 gap-x-4 text-xs">
+                <dt className="text-muted-foreground">Last sync</dt>
+                <dd>{formatDateTime(store.lastSyncAt)}</dd>
+                <dt className="text-muted-foreground">Last activity</dt>
+                <dd>{formatDateTime(store.lastActivityAt)}</dd>
+              </dl>
+              <div className="mt-3">
+                <ManageLink store={store} />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
+  );
+}
+
+function ManageLink({ store }: { store: Store }) {
+  return (
+    <Button asChild variant="outline" size="sm" className="min-h-11 md:min-h-9">
+      <Link href="/settings/integrations" aria-label={`Manage ${store.name} under Integrations`}>
+        Manage
+      </Link>
+    </Button>
   );
 }

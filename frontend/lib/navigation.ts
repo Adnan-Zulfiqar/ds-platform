@@ -153,7 +153,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         label: "Stores",
         icon: Store,
         status: "ready",
-        description: "Per-store connection health and sync settings.",
+        description: "Store records: last sync and activity for every store the workspace has known.",
       },
     ],
   },

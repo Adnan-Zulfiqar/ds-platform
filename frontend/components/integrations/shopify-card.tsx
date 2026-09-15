@@ -1,28 +1,15 @@
 "use client";
 
-import {
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  Link2,
-  Loader2,
-  RefreshCw,
-  Unlink,
-} from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { ChannelCard, formatChannelDate } from "@/components/integrations/channel-card";
+import { ChannelStatusBadge } from "@/components/integrations/channel-status-badge";
+import { DisconnectDialog } from "@/components/integrations/disconnect-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -33,8 +20,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api-client";
+import { deriveShopifyChannel, type ShopifyConnectionState } from "@/lib/channel-state";
 import { useAuth } from "@/providers/auth-provider";
 import {
   useClaimShopifyInstall,
@@ -43,45 +30,7 @@ import {
   useReconcileShopifyWebhooks,
   useShopifyStatus,
 } from "@/services/integrations";
-import type { ShopifyConnection, ShopifyWebhookReconcileResult } from "@/types/api";
-
-function formatDate(value: string | null): string {
-  if (!value) return "Never";
-  return new Date(value).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-function statusLabel(status: string): string {
-  switch (status) {
-    case "connected":
-      return "Connected";
-    case "error":
-      return "Error";
-    case "pending":
-      return "Pending";
-    case "disconnected":
-      return "Disconnected";
-    default:
-      return status;
-  }
-}
-
-function statusVariant(
-  status: string,
-): "success" | "destructive" | "secondary" | "warning" {
-  switch (status) {
-    case "connected":
-      return "success";
-    case "error":
-      return "destructive";
-    case "pending":
-      return "warning";
-    default:
-      return "secondary";
-  }
-}
+import type { ShopifyWebhookReconcileResult } from "@/types/api";
 
 /** Client-side hint only — server still normalises and validates. */
 function normaliseShopInput(raw: string): string {
@@ -102,37 +51,39 @@ function unresolvedCount(result: ShopifyWebhookReconcileResult): number {
   ).length;
 }
 
+const DISCONNECT_CONSEQUENCES = [
+  "DropPilot's access token and webhooks for this store are removed at Shopify.",
+  "The store stays listed under Stores as Disconnected; products and listings recorded in DropPilot are kept.",
+  "Products already on Shopify stay on Shopify — nothing is deleted from your store.",
+  "You can reconnect the same store later from this page.",
+];
+
 function ConnectionRow({
-  connection,
-  onDisconnect,
-  onReconnect,
-  onRetryWebhooks,
+  row,
+  canManage,
   disconnecting,
   reconnecting,
   retrying,
   retryResult,
   retryError,
-  canManage,
-  disconnectError,
+  onDisconnect,
+  onReconnect,
+  onRetryWebhooks,
 }: {
-  connection: ShopifyConnection;
-  onDisconnect: (storeId: string) => void;
-  onReconnect: (shopDomain: string) => void;
-  onRetryWebhooks: (storeId: string) => void;
+  row: ShopifyConnectionState;
+  canManage: boolean;
   disconnecting: boolean;
   reconnecting: boolean;
   retrying: boolean;
   retryResult: ShopifyWebhookReconcileResult | null;
   retryError: string | null;
-  canManage: boolean;
-  disconnectError: string | null;
+  onDisconnect: () => void;
+  onReconnect: () => void;
+  onRetryWebhooks: () => void;
 }) {
+  const { connection } = row;
   const busy = disconnecting || reconnecting || retrying;
-  const canReconnect = connection.status !== "connected";
-  // Derived by the API from the same timestamp it returns, so the card cannot
-  // reach a different verdict than the server did. This is the fix for a store
-  // rendering as fully connected while no webhook had ever been registered.
-  const degraded = connection.webhookHealth === "degraded";
+  const degraded = row.webhookLabel === "Webhooks incomplete";
   const statusRef = useRef<HTMLDivElement | null>(null);
 
   // Move focus to the outcome once a retry settles, so a keyboard or screen
@@ -145,61 +96,52 @@ function ConnectionRow({
   }, [retryResult, retryError]);
 
   return (
-    <div className="rounded-md border p-3 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-medium">{connection.shopDomain}</p>
-          <p className="text-muted-foreground">
-            Connected: {formatDate(connection.connectedAt)}
-          </p>
-          <p className="text-muted-foreground">
-            Last sync: {formatDate(connection.lastSyncAt)}
-          </p>
-          {connection.webhooksRegisteredAt ? (
-            <p className="text-muted-foreground">
-              Webhooks last confirmed:{" "}
-              {formatDate(connection.webhooksRegisteredAt)}
-            </p>
-          ) : null}
+    <div className="rounded-md border p-3 text-sm" data-testid={`shopify-connection-${connection.storeId}`}>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="break-all font-medium">{connection.shopDomain}</p>
+          <p className="mt-1 text-muted-foreground">{row.detail}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* "Last confirmed", never "active". DropPilot cannot observe a
               subscription Shopify deletes on its own, so the honest claim is
-              about the last successful confirmation and its date — which the
-              line above carries — not about live provider state. */}
-          {degraded ? (
-            <Badge variant="warning">Webhooks incomplete</Badge>
-          ) : connection.webhookHealth === "healthy" ? (
-            <Badge variant="success">Webhooks last confirmed</Badge>
+              about the last successful confirmation and its date. */}
+          {row.webhookLabel ? (
+            <Badge variant={degraded ? "warning" : "success"}>{row.webhookLabel}</Badge>
           ) : null}
-          <Badge variant={statusVariant(connection.status)}>
-            {statusLabel(connection.status)}
-          </Badge>
+          <ChannelStatusBadge state={row} data-testid={`shopify-connection-status-${connection.storeId}`} />
         </div>
+      </div>
+
+      <div className="mt-2 space-y-0.5 text-muted-foreground">
+        <p>Connected: {formatChannelDate(connection.connectedAt)}</p>
+        <p>Last sync: {formatChannelDate(connection.lastSyncAt)}</p>
+        {connection.webhooksRegisteredAt ? (
+          <p>Webhooks last confirmed: {formatChannelDate(connection.webhooksRegisteredAt)}</p>
+        ) : null}
       </div>
 
       {degraded ? (
         <Alert variant="warning" className="mt-3">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            DropPilot could not confirm this store&rsquo;s Shopify webhooks on
-            its most recent attempt.{" "}
-            <strong>Product, inventory and order updates may be missed</strong>{" "}
-            until setup completes. Your store stays connected — you do not need
-            to disconnect.
+            DropPilot could not confirm this store&rsquo;s Shopify webhooks on its most recent attempt.{" "}
+            <strong>Product, inventory and order updates may be missed</strong> until setup completes. Your store
+            stays connected — you do not need to disconnect.
           </AlertDescription>
         </Alert>
       ) : null}
 
       {/* One live region per connection. Polite rather than assertive: this
-          reports the outcome of something the user just asked for, so it should
-          not interrupt what they are already reading. */}
+          reports the outcome of something the user just asked for, so it
+          should not interrupt what they are already reading. */}
       <div
         ref={statusRef}
         role="status"
         aria-live="polite"
         tabIndex={-1}
-        className="mt-2 outline-none"
+        id={`shopify-webhook-status-${connection.storeId}`}
+        className="mt-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
         data-testid={`shopify-webhook-status-${connection.storeId}`}
       >
         {retrying ? (
@@ -208,72 +150,53 @@ function ConnectionRow({
           <p className="text-destructive">{retryError}</p>
         ) : retryResult?.healthy ? (
           <p className="text-success">
-            <CheckCircle2 className="mr-1 inline h-4 w-4" />
+            <CheckCircle2 className="mr-1 inline h-4 w-4" aria-hidden="true" />
             Webhook setup confirmed
-            {retryResult.webhooksRegisteredAt
-              ? ` at ${formatDate(retryResult.webhooksRegisteredAt)}`
-              : ""}
-            . {retryResult.createdCount} created.
+            {retryResult.webhooksRegisteredAt ? ` at ${formatChannelDate(retryResult.webhooksRegisteredAt)}` : ""}.{" "}
+            {retryResult.createdCount} created.
           </p>
         ) : retryResult ? (
           <p className="text-warning">
-            Webhook setup is still incomplete — {unresolvedCount(retryResult)} of{" "}
-            {retryResult.topics.length} topics unconfirmed. Try again in a
-            moment; nothing was duplicated.
+            Webhook setup is still incomplete — {unresolvedCount(retryResult)} of {retryResult.topics.length} topics
+            unconfirmed. Try again in a moment; nothing was duplicated.
           </p>
         ) : null}
       </div>
 
-      {connection.lastError ? (
-        <p className="mt-2 text-destructive">{connection.lastError}</p>
-      ) : null}
-      {disconnectError ? (
-        <p className="mt-2 text-destructive">{disconnectError}</p>
-      ) : null}
-
       {canManage ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          {degraded ? (
+          {row.actions.includes("retry-webhooks") ? (
             <Button
               variant="default"
               size="sm"
+              className="min-h-11 sm:min-h-9"
               disabled={busy}
               aria-describedby={`shopify-webhook-status-${connection.storeId}`}
-              onClick={() => onRetryWebhooks(connection.storeId)}
+              onClick={onRetryWebhooks}
             >
               {retrying ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
               )}
               Retry webhook setup
             </Button>
           ) : null}
-          {canReconnect ? (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => onReconnect(connection.shopDomain)}
-            >
+          {row.actions.includes("reconnect") ? (
+            <Button variant={row.kind === "reconnect-required" ? "default" : "outline"} size="sm" className="min-h-11 sm:min-h-9" disabled={busy} onClick={onReconnect}>
               {reconnecting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
               )}
               Reconnect
             </Button>
           ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => onDisconnect(connection.storeId)}
-          >
+          <Button variant="outline" size="sm" className="min-h-11 sm:min-h-9" disabled={busy} onClick={onDisconnect}>
             {disconnecting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
             ) : (
-              <Unlink className="mr-2 h-4 w-4" />
+              <Unlink className="mr-2 h-4 w-4" aria-hidden="true" />
             )}
             Disconnect
           </Button>
@@ -295,22 +218,20 @@ export function ShopifyCard() {
   const searchParams = useSearchParams();
   const { hasRole } = useAuth();
   const canManage = hasRole("owner") || hasRole("admin");
-  const { data, isPending, isError, refetch } = useShopifyStatus();
+  const statusQuery = useShopifyStatus();
+  const channel = deriveShopifyChannel(statusQuery);
   const connect = useConnectShopify();
   const claim = useClaimShopifyInstall();
   const disconnect = useDisconnectShopify();
   const reconcile = useReconcileShopifyWebhooks();
   const [retryTarget, setRetryTarget] = useState<string | null>(null);
-  const [retryResults, setRetryResults] = useState<
-    Record<string, ShopifyWebhookReconcileResult>
-  >({});
+  const [retryResults, setRetryResults] = useState<Record<string, ShopifyWebhookReconcileResult>>({});
   const [retryErrors, setRetryErrors] = useState<Record<string, string>>({});
   const [shop, setShop] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [disconnectErrors, setDisconnectErrors] = useState<Record<string, string>>(
-    {},
-  );
+  const [disconnectTarget, setDisconnectTarget] = useState<ShopifyConnectionState | null>(null);
+  const [disconnectError, setDisconnectError] = useState<string | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [claimStarted, setClaimStarted] = useState(false);
 
@@ -327,24 +248,20 @@ export function ShopifyCard() {
       return;
     }
     const result = await connect.mutateAsync({ shop: normalised });
+    // Full navigation: the destination is Shopify's consent page.
     window.location.assign(result.authorizationUrl);
   }
 
-  async function handleDisconnect(storeId: string) {
-    setDisconnectErrors((previous) => {
-      const { [storeId]: _removed, ...rest } = previous;
-      return rest;
-    });
+  async function confirmDisconnect() {
+    if (!disconnectTarget) return;
+    setDisconnectError(null);
     try {
-      await disconnect.mutateAsync(storeId);
+      await disconnect.mutateAsync(disconnectTarget.connection.storeId);
+      setDisconnectTarget(null);
     } catch (error) {
-      setDisconnectErrors((previous) => ({
-        ...previous,
-        [storeId]:
-          error instanceof ApiError
-            ? error.message
-            : "Could not disconnect this store.",
-      }));
+      setDisconnectError(
+        error instanceof ApiError ? error.message : "Could not disconnect this store. Please try again.",
+      );
     }
   }
 
@@ -386,11 +303,7 @@ export function ShopifyCard() {
     try {
       await startOAuth(shop);
     } catch (error) {
-      setFormError(
-        error instanceof ApiError
-          ? error.message
-          : "Could not start Shopify connection.",
-      );
+      setFormError(error instanceof ApiError ? error.message : "Could not start Shopify connection.");
     }
   }
 
@@ -419,66 +332,50 @@ export function ShopifyCard() {
     }
   }, [prefillShop, shopifyFlag]);
 
-  if (isPending) {
-    return <Skeleton className="h-64 w-full rounded-lg" />;
-  }
-
-  if (isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          Could not load Shopify status.{" "}
-          <button type="button" className="underline" onClick={() => void refetch()}>
-            Retry
-          </button>
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  const connections = data?.connections ?? [];
-  const configured = data?.configured ?? false;
-  const connectedCount = connections.filter((c) => c.status === "connected").length;
-  const degradedCount = connections.filter(
-    (c) => c.webhookHealth === "degraded",
-  ).length;
   const connecting = connect.isPending || claim.isPending;
+  const loading = channel.kind === "checking";
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle>Shopify</CardTitle>
-          {/* A store whose webhooks were never confirmed is not "connected" in
-              any sense a merchant cares about, so the summary badge refuses to
-              say so while one is degraded. */}
-          <Badge
-            variant={
-              degradedCount ? "warning" : connectedCount ? "success" : "secondary"
-            }
-          >
-            {degradedCount
-              ? `${degradedCount} needs webhook setup`
-              : connectedCount
-                ? `${connectedCount} connected`
-                : connections.length
-                  ? "Needs attention"
-                  : "Not connected"}
-          </Badge>
-        </div>
-        <CardDescription>
-          Connect a Shopify store to publish products and import orders. You only
-          enter the store domain — never an API key or token.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {!configured ? (
-          <Alert>
-            <AlertDescription>
-              Shopify OAuth is not configured on this server. Ask your DropPilot
-              operator to enable the Shopify app credentials.
-            </AlertDescription>
+    <>
+      <ChannelCard
+        id="shopify"
+        name="Shopify"
+        description="Publish products to a Shopify store and receive its inventory and order updates. You only enter the store domain — never an API key or token."
+        state={channel}
+        loading={loading}
+        readOnly={!loading && !canManage && channel.kind !== "unavailable" && channel.connections.length === 0}
+        readOnlyHint="Your role can view Shopify connections. Ask an administrator to connect a store."
+        actions={
+          channel.kind === "unavailable" ? (
+            <Button variant="outline" className="min-h-11 sm:min-h-9" onClick={() => void statusQuery.refetch()}>
+              <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+              Try again
+            </Button>
+          ) : canManage ? (
+            <Button
+              className="min-h-11 sm:min-h-9"
+              onClick={() => {
+                setFormError(null);
+                if (prefillShop) setShop(prefillShop);
+                setDialogOpen(true);
+              }}
+              disabled={!channel.canConnect || connecting}
+              aria-describedby={channel.kind === "setup-unavailable" ? "channel-shopify-detail" : undefined}
+            >
+              {connecting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              ) : (
+                <Link2 className="mr-2 h-4 w-4" aria-hidden="true" />
+              )}
+              {channel.connections.length > 0 ? "Connect another store" : "Connect Shopify"}
+            </Button>
+          ) : undefined
+        }
+      >
+        {channel.kind === "unavailable" ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Could not load Shopify status.</AlertDescription>
           </Alert>
         ) : null}
 
@@ -491,7 +388,7 @@ export function ShopifyCard() {
 
         {shopifyFlag === "claim_needed" && claim.isPending ? (
           <Alert>
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
             <AlertDescription>
               Continuing Shopify install
               {claimShop ? ` for ${claimShop}` : ""}…
@@ -499,35 +396,27 @@ export function ShopifyCard() {
           </Alert>
         ) : null}
 
-        {connections.length === 0 && configured ? (
-          <p className="text-sm text-muted-foreground">
-            No Shopify stores linked to this workspace yet.
-          </p>
-        ) : null}
-
-        {connections.map((connection) => (
+        {channel.connections.map((row) => (
           <ConnectionRow
-            key={connection.id}
-            connection={connection}
+            key={row.connection.id}
+            row={row}
             canManage={canManage}
-            disconnecting={disconnect.isPending}
+            disconnecting={disconnect.isPending && disconnectTarget?.connection.storeId === row.connection.storeId}
             reconnecting={connect.isPending}
-            retrying={retryTarget === connection.storeId}
-            retryResult={retryResults[connection.storeId] ?? null}
-            retryError={retryErrors[connection.storeId] ?? null}
-            onRetryWebhooks={(storeId) => {
-              void handleRetryWebhooks(storeId);
+            retrying={retryTarget === row.connection.storeId}
+            retryResult={retryResults[row.connection.storeId] ?? null}
+            retryError={retryErrors[row.connection.storeId] ?? null}
+            onRetryWebhooks={() => {
+              void handleRetryWebhooks(row.connection.storeId);
             }}
-            disconnectError={disconnectErrors[connection.storeId] ?? null}
-            onDisconnect={(storeId) => {
-              void handleDisconnect(storeId);
+            onDisconnect={() => {
+              setDisconnectError(null);
+              setDisconnectTarget(row);
             }}
-            onReconnect={(shopDomain) => {
-              void startOAuth(shopDomain).catch((error: unknown) => {
+            onReconnect={() => {
+              void startOAuth(row.connection.shopDomain).catch((error: unknown) => {
                 setFormError(
-                  error instanceof ApiError
-                    ? error.message
-                    : "Could not start Shopify reconnection.",
+                  error instanceof ApiError ? error.message : "Could not start Shopify reconnection.",
                 );
               });
             }}
@@ -535,37 +424,19 @@ export function ShopifyCard() {
         ))}
 
         {formError && !dialogOpen ? (
-          <p className="text-sm text-destructive">{formError}</p>
+          <p className="text-sm text-destructive" role="alert">
+            {formError}
+          </p>
         ) : null}
-      </CardContent>
-      <CardFooter>
-        <Button
-          onClick={() => {
-            setFormError(null);
-            if (prefillShop) {
-              setShop(prefillShop);
-            }
-            setDialogOpen(true);
-          }}
-          disabled={!configured || connecting}
-        >
-          {connecting ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Link2 className="mr-2 h-4 w-4" />
-          )}
-          Connect Shopify
-        </Button>
-      </CardFooter>
+      </ChannelCard>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Connect Shopify store</DialogTitle>
             <DialogDescription>
-              Enter your <span className="font-medium">*.myshopify.com</span> admin
-              domain. DropPilot redirects you to Shopify to approve access — you
-              never paste API keys or tokens here.
+              Enter your <span className="font-medium">*.myshopify.com</span> admin domain. DropPilot redirects
+              you to Shopify to approve access — you never paste API keys or tokens here.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
@@ -584,24 +455,41 @@ export function ShopifyCard() {
               }}
             />
             <p className="text-xs text-muted-foreground">
-              From Shopify Admin → Settings → Domains. Custom domains like
-              store.com will not work.
+              From Shopify Admin → Settings → Domains. Custom domains like store.com will not work.
             </p>
-            {formError ? <p className="text-sm text-destructive">{formError}</p> : null}
+            {formError ? (
+              <p className="text-sm text-destructive" role="alert">
+                {formError}
+              </p>
+            ) : null}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" className="min-h-11 sm:min-h-9" onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
-            <Button disabled={connecting} onClick={() => void handleDialogConnect()}>
+            <Button className="min-h-11 sm:min-h-9" disabled={connecting} onClick={() => void handleDialogConnect()}>
               {connecting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               ) : null}
               Continue to Shopify
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </Card>
+
+      <DisconnectDialog
+        id="shopify"
+        open={disconnectTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDisconnectTarget(null);
+        }}
+        provider="Shopify"
+        identity={disconnectTarget?.connection.shopDomain ?? null}
+        consequences={DISCONNECT_CONSEQUENCES}
+        pending={disconnect.isPending}
+        error={disconnectError}
+        onConfirm={() => void confirmDisconnect()}
+      />
+    </>
   );
 }

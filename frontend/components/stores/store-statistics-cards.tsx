@@ -36,7 +36,7 @@ export function StoreStatisticsCards() {
         loading={isLoading}
       />
       <StatCard
-        label="With errors"
+        label="Needs attention"
         value={String(data?.withErrors ?? 0)}
         icon={AlertTriangle}
         loading={isLoading}
