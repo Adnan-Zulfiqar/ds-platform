@@ -45,7 +45,7 @@ export function SaveStateIndicator({ save, onRetry, className }: SaveStateIndica
     <>
       <span
         className={cn(
-          "inline-flex max-w-full flex-wrap items-center gap-1.5 text-xs font-medium",
+          "inline-flex max-w-full items-center gap-1.5 text-xs font-medium",
           save.tone === "warning" && "text-amber-700 dark:text-amber-400",
           save.tone === "danger" && "text-destructive",
           save.tone === "success" && "text-emerald-700 dark:text-emerald-400",

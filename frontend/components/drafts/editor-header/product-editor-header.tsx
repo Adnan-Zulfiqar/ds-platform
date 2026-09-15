@@ -134,7 +134,10 @@ export function ProductEditorHeader({
     onGoHistoryTab: () => onTabChange("history"),
   };
 
-  const saveDisabled = !dirty && save.kind !== "save-error";
+  // No manual Save while a conflict is open: `handleSave` refuses it anyway
+  // (M2A), and a button that silently does nothing reads as broken. The
+  // banner holds the only two actions that can move things forward.
+  const saveDisabled = (!dirty && save.kind !== "save-error") || save.kind === "conflict";
   const actionsProps = {
     productId,
     saving,
@@ -267,9 +270,12 @@ export function ProductEditorHeader({
               </div>
             </div>
 
+            {/* Inline from `xl`: at 1024–1279 with the sidebar open the
+                identity column is ~500px and an inline action row squeezed
+                the title to one word per line. */}
             <ProductEditorActions
               {...actionsProps}
-              className="hidden shrink-0 lg:flex"
+              className="hidden shrink-0 xl:flex"
             />
             <div className="md:hidden">
               <ProductActionsMenu {...menuProps} />
@@ -278,7 +284,7 @@ export function ProductEditorHeader({
 
           <ProductEditorActions
             {...actionsProps}
-            className="hidden md:flex lg:hidden"
+            className="hidden md:flex xl:hidden"
           />
 
           <ProductEditorTabs
