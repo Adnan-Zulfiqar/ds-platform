@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -60,6 +61,8 @@ export function useProducts(
   return useQuery({
     queryKey: productKeys.list(query),
     queryFn: () => fetchProducts(query),
+    // See `useDrafts`: keep the current page visible while the next loads.
+    placeholderData: keepPreviousData,
   });
 }
 

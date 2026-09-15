@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -50,6 +51,9 @@ export function useDrafts(
   return useQuery({
     queryKey: draftKeys.list(query),
     queryFn: () => fetchDrafts(query),
+    // A search, sort or page change keeps the current rows on screen until
+    // the next page arrives instead of collapsing the table to a skeleton.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -259,6 +263,13 @@ export function useDraftListings(
       return data;
     },
     enabled: Boolean(productId),
+    // Listing status is shown as "unavailable" with an explicit Try again
+    // when this fails; silent retries would delay that truth and hide the
+    // failure behind a spinner (selectively integrated from the reviewed
+    // historical UX-L2C change, UX-L2D-GATE-04).
+    retry: false,
+    // Show cached status at once, then confirm it against the server.
+    refetchOnMount: "always",
   });
 }
 
