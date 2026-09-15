@@ -12,6 +12,29 @@ production release.
 
 ### Added
 
+- **UX-L2D-06 — Channels / Integrations (on `feature/ux-l2d-dashboard`,
+  not merged).** `/settings/integrations` is the canonical connect, repair
+  and disconnect surface; `/stores` becomes a supporting record view
+  (`MAKE INTEGRATIONS CANONICAL; KEEP STORES AS SUPPORTING ROUTE`). One
+  connection-state vocabulary (`lib/channel-state.ts`, 28 Vitest scenarios)
+  maps the real status payloads — Shopify `configured`/`status`/
+  `webhookHealth`, AliExpress computed `connected`/`isTokenExpired`, eBay
+  `configured`/`connected`/`needsReconnect`/`reconnectReason`, `Store.status`
+  — to Checking · Status unavailable · Setup unavailable · Not connected ·
+  Awaiting authorization · Connected · Needs attention · Reconnect required.
+  Shared `ChannelCard`/`ChannelStatusBadge`/`DisconnectDialog`; a channel
+  overview strip; disconnect confirmations that state the backend's actual
+  consequences; role-aware cards (viewers see state, not buttons that 403);
+  Shopify's raw `lastError` no longer rendered; AliExpress "not configured"
+  422 becomes an operator-facing state instead of env-var names. The manual
+  "Add store" dialog is removed from the merchant UI (it created unauthorised
+  `pending` rows that surfaced in the editor's store list); `/stores` keeps
+  its route, drops the unexplained health number, and links every row to
+  Integrations. Backend-less `channels.spec.ts` (25 × 2 projects) covers
+  every state; `integrations.spec.ts` gets the historical main-scoped
+  selector and the confirm step. Backend dependency recorded: AliExpress
+  status has no `configured` flag.
+
 - **UX-L2D-05 — Product editor lifecycle clarity (on
   `feature/ux-l2d-dashboard`, not merged).** One pure derivation
   (`lib/editor-lifecycle.ts`, composing the UX-L2D-04 listing authority) now

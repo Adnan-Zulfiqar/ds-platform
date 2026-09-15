@@ -431,6 +431,52 @@ in Phase 6; the analytics charts it fed now live on `/analytics` against
 
 ---
 
+## Channels: Integrations and Stores
+
+`/settings/integrations` is the one place a channel is authorized, repaired
+or disconnected (UX-L2D-06). `/stores` is a supporting record view. The
+decision, from the implementation rather than from taste: only Integrations
+can start an OAuth flow (`POST /integrations/{provider}/connect`), read the
+provider's own status endpoint, retry Shopify webhooks or delete a
+connection; `/stores` reads `GET /stores`, whose rows outlive a disconnect
+(the backend deletes the `ShopifyConnection` but keeps the `Store` row with
+its products and listings) and whose sync flags nothing consumes. The manual
+"Add store" that used to sit on `/stores` is gone from the merchant UI: it
+created a `pending` store row with no authorization, which then appeared in
+the editor's store list and could never publish. The `POST /stores` endpoint
+is untouched.
+
+**One vocabulary.** `lib/channel-state.ts` maps the fields each status
+endpoint returns to Checking · Status unavailable · Setup unavailable · Not
+connected · Awaiting authorization · Connected · Needs attention · Reconnect
+required, with the actions each state supports; every card, the overview
+strip and the store-record list read from it. The evidence for each state
+is in that module's header. Rules worth knowing:
+
+- A row's existence is never "connected": AliExpress and eBay `connected`
+  are the server's computed booleans; a Shopify store whose webhooks were
+  never confirmed is "Needs attention" (`webhookHealth === "degraded"`).
+- Shopify's `lastError` is `str(exc)` from the sync path and is never
+  rendered; AliExpress's `lastError` comes from the backend's exception
+  catalogue and is shown; eBay's `reconnectReason` is a machine code mapped
+  to a sentence here.
+- "Setup unavailable" means the server lacks the provider's app credentials
+  — an operator's job, so the card says so and offers no button that would
+  fail. Shopify and eBay report this in `configured`; AliExpress has no such
+  flag and the card learns it only when `POST /connect` answers 422
+  (recorded as a backend dependency).
+- Disconnect always confirms, and the dialog lists what the backend really
+  does: access removed at the provider, store row kept as Disconnected,
+  products and listings in DropPilot kept, nothing deleted from the store.
+- Connect/disconnect/retry are admin-only on the server (`RequireAdmin`);
+  other roles see the state and a read-only note instead of buttons that
+  would 403.
+
+Planned channels (WooCommerce, Etsy, TikTok Shop) are named in one line, not
+rendered as cards, so nothing invites a click that goes nowhere. Adding a
+real channel is a new `derive*` in `channel-state.ts`, a card built on
+`ChannelCard`, and a row in the overview.
+
 ## Known limitations
 
 1. **Global search and the help centre do not exist yet.** Until UX-L2D-02
