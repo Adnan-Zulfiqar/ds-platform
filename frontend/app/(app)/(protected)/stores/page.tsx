@@ -9,7 +9,7 @@ export const metadata: Metadata = { title: "Connected Stores" };
 
 export default function StoresPage() {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Connected Stores"
         description="Sales channels, connection health, and per-store sync settings."

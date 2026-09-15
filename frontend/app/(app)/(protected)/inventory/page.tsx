@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Inventory" };
 
 export default function InventoryPage() {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Inventory"
         description="Stock levels synchronised from AliExpress, with last-sync timestamps."

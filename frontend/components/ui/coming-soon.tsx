@@ -25,7 +25,7 @@ interface ComingSoonProps {
  */
 export function ComingSoon({ title, description, planned }: ComingSoonProps) {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader title={title} description={description} />
 
       <EmptyState

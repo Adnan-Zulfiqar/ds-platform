@@ -42,7 +42,7 @@ export default function AnalyticsPage() {
   const { data, isLoading, isError, refetch } = useDashboard(period);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Analytics"
         description="Revenue, orders, inventory, sync activity, and automation health."

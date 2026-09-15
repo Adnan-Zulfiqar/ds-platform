@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: "Automation" };
 
 export default function AutomationPage() {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Automation"
         description="Schedule inventory sync, pricing, and order refresh. Runs execute in the background only."

@@ -48,7 +48,7 @@ export default function ShipmentsPage() {
   const items = [...shipped, ...deliveredItems];
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Shipment Tracking"
         description="In-transit and delivered orders. Open an order for carrier events and timeline."
