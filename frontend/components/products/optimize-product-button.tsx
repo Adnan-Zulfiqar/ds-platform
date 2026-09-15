@@ -4,39 +4,52 @@ import { Loader2, Sparkles } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOptimizeProduct } from "@/services/products";
 
-/**
- * Trigger AI optimisation for one product.
- *
- * A single button, not a form — Phase 9 stage 3 keeps the UI to a foundation
- * (button, status, history) rather than a full editor with tone/keyword
- * controls. Uses `StubProvider`: no real `AI_PROVIDER` is configured on this
- * platform yet, so every result is deterministic, obviously-synthetic text.
- */
-export function OptimizeProductButton({ productId }: { productId: string }) {
+export function OptimizeProductButton({
+  productId,
+  compact = false,
+}: {
+  productId: string;
+  /**
+   * Icon only, named for assistive technology and explained by a tooltip.
+   * The catalogue rows use this so the primary action stays the only
+   * labelled button in the row (UX-L2D-04).
+   */
+  compact?: boolean;
+}) {
   const optimize = useOptimizeProduct(productId);
+  const label = optimize.isPending ? "Optimizing…" : "Optimize with AI";
+
+  const button = (
+    <Button
+      size={compact ? "icon" : "sm"}
+      variant={compact ? "ghost" : "outline"}
+      className={compact ? "h-9 w-9" : undefined}
+      onClick={() => optimize.mutate({})}
+      disabled={optimize.isPending}
+      aria-label={compact ? label : undefined}
+    >
+      {optimize.isPending ? (
+        <Loader2 className={compact ? "h-4 w-4 animate-spin" : "mr-2 h-4 w-4 animate-spin"} aria-hidden="true" />
+      ) : (
+        <Sparkles className={compact ? "h-4 w-4" : "mr-2 h-4 w-4"} aria-hidden="true" />
+      )}
+      {!compact && label}
+    </Button>
+  );
 
   return (
     <div className="space-y-2">
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => optimize.mutate({})}
-        disabled={optimize.isPending}
-      >
-        {optimize.isPending ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-            Optimizing…
-          </>
-        ) : (
-          <>
-            <Sparkles className="mr-2 h-4 w-4" aria-hidden="true" />
-            Optimize with AI
-          </>
-        )}
-      </Button>
+      {compact ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
+      ) : (
+        button
+      )}
 
       {optimize.isError ? (
         <Alert variant="destructive">

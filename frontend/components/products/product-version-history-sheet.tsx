@@ -14,6 +14,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useActivateProductVersion, useProductVersions } from "@/services/products";
 import type { ProductVersion } from "@/types/api";
@@ -129,6 +130,7 @@ export function ProductVersionHistorySheet({
   open: openProp,
   onOpenChange,
   hideTrigger = false,
+  compact = false,
 }: {
   productId: string;
   productTitle: string;
@@ -137,6 +139,8 @@ export function ProductVersionHistorySheet({
   onOpenChange?: (open: boolean) => void;
   /** When true, no permanent History button is rendered. */
   hideTrigger?: boolean;
+  /** Icon-only trigger, named "History" for assistive technology (catalogue rows). */
+  compact?: boolean;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = openProp ?? uncontrolledOpen;
@@ -144,7 +148,18 @@ export function ProductVersionHistorySheet({
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      {hideTrigger ? null : (
+      {hideTrigger ? null : compact ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <SheetTrigger asChild>
+              <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="History">
+                <History className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </SheetTrigger>
+          </TooltipTrigger>
+          <TooltipContent>Version history</TooltipContent>
+        </Tooltip>
+      ) : (
         <SheetTrigger asChild>
           <Button size="sm" variant="ghost">
             <History className="mr-2 h-4 w-4" aria-hidden="true" />

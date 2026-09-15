@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import { ImportProductDialog } from "@/components/products/import-product-dialog";
 import { ProductTable } from "@/components/products/product-table";
 import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export const metadata: Metadata = { title: "Drafts" };
 
@@ -20,7 +22,11 @@ export default function DraftsPage() {
         description="Imported products awaiting review and Publish to Store."
         actions={<ImportProductDialog />}
       />
-      <ProductTable variant="drafts" />
+      {/* The table reads its search/sort/page state from the URL, which
+          needs a Suspense boundary above any `useSearchParams` consumer. */}
+      <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+        <ProductTable variant="drafts" />
+      </Suspense>
     </div>
   );
 }
