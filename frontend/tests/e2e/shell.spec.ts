@@ -269,25 +269,22 @@ test.describe("User menu", () => {
   });
 });
 
-test.describe("Dashboard", () => {
+test.describe("Home", () => {
   test.use({ viewport: VIEWPORTS.desktop });
 
-  test("renders the heading and every live stat card", async ({ page }) => {
+  test("a new workspace is offered the setup steps, not a wall of zeros", async ({ page }) => {
+    // UX-L2D-03: a freshly registered account has no channel and no draft,
+    // so Home shows the three-step setup from real integration status and
+    // workspace counts. No metric cards, no analytics, no currency label.
     await signIn(page);
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-
-    const metrics = page.getByRole("region", { name: "Key metrics" });
-    for (const label of [
-      "Revenue",
-      "Orders",
-      "Products",
-      "Stores",
-      "Inventory units",
-      "Automation runs (7d)",
-    ]) {
-      await expect(metrics.getByText(label, { exact: true })).toBeVisible();
-    }
+    await expect(page.getByRole("heading", { level: 2, name: "Set up your workspace" })).toBeVisible();
+    await expect(page.getByTestId("empty-workspace").getByRole("listitem")).toHaveCount(3);
+    await expect(page.getByRole("region", { name: "Key metrics" })).toHaveCount(0);
+    const main = page.locator("#main-content");
+    await expect(main.getByText(/USD/)).toHaveCount(0);
+    await expect(main.getByText(/Revenue/)).toHaveCount(0);
   });
 
   test("does not present invented sample-data figures", async ({ page }) => {
@@ -296,12 +293,13 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("Sample data")).toHaveCount(0);
   });
 
-  test("renders chart sections for live analytics", async ({ page }) => {
+  test("reporting sections still render on Analytics", async ({ page }) => {
+    // The chart sections moved from Home to Reports in UX-L2D-03; the
+    // coverage moves with them. Matched by role: "Orders" is also a nav
+    // link. Empty tenants show empty states rather than Recharts — headings
+    // prove the sections mounted.
     await signIn(page);
-
-    // Matched by role: "Orders" is also a nav link and a stat card label, so a
-    // text query resolves to three elements. Empty tenants show empty states
-    // rather than Recharts — headings prove the sections mounted.
+    await page.goto("/analytics");
     for (const title of ["Sales overview", "Orders", "Top products"]) {
       await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
     }

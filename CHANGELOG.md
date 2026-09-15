@@ -12,6 +12,27 @@ production release.
 
 ### Added
 
+- **UX-L2D-03 — Home (on `feature/ux-l2d-dashboard`, not merged).** The
+  analytics wall (fourteen metric cards, three charts, revenue hard-coded to
+  `USD`) is replaced by an operations page built only from endpoints that
+  exist: a needs-attention list (expired or degraded channels, failed imports,
+  failed AI optimisation on recent drafts, order-sync failures, unread failure
+  notifications), a single rule-based next step, three catalogue tiles from
+  `workspace-counts` and `orders/statistics`, the five most recently edited
+  drafts (`GET /drafts?sort_by=updated_at`), channel status as word plus
+  sentence, and recent notifications. A workspace with nothing connected and
+  nothing imported gets a three-step setup instead of zeros. Home shows no
+  monetary figure: the analytics revenue sums mixed-currency orders with no
+  currency in the payload, so no label is true (that caveat now sits on
+  Reports as a known limitation). No "ready to publish" count is shown — a
+  per-draft server check with no aggregate remains a backend dependency.
+  `services/list-query.ts` translates `sortBy`/`sortDir` to the `sort_by`/
+  `sort_dir` names the API reads (drafts, products, imports previously sent
+  camelCase and were silently unsorted). `openMockedEditor` answers the
+  shell's three requests so the editor suites run without a backend. Charts,
+  stat cards and order-sync cards remain on `/analytics` and `/orders`. The
+  `/products/[productId]` Critical stays open for UX-L2D-GATE-04.
+
 - **UX-L2D-02 — application shell (on `feature/ux-l2d-dashboard`, not
   merged).** `PageContainer` applied once in `(protected)/layout.tsx` gives
   every page the same gutter and a centred `2xl` maximum width; Drafts,

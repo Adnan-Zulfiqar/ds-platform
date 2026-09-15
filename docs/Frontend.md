@@ -296,18 +296,37 @@ Not a checklist item — several decisions above exist for it.
 
 ---
 
-## Mock data
+## Home
 
-`lib/mock/dashboard-data.ts` is quarantined: nothing outside the dashboard
-imports it, and every export is prefixed `MOCK_`.
+`/dashboard` is the merchant's operations page (UX-L2D-03), not a report. It
+answers, in order: what needs attention, what to do next, how big the
+catalogue is, what was being worked on, whether channels are healthy, and what
+happened recently. Every block reads an endpoint that already exists —
+workspace counts, the three integration status endpoints, `GET /drafts` sorted
+by `updated_at`, recent imports, order statistics, notifications — and each
+block owns its query, so one failed request shows a local error with its own
+retry while the rest render.
 
-**The dashboard renders a visible banner stating the figures are placeholders.**
-A dashboard that looks authoritative and is not is worse than an empty one.
+The derivations are pure functions in `components/home/home-rules.ts`:
+channel summaries (a word plus a sentence, never a coloured dot), the
+attention list (most severe first, each item linking to the page that fixes
+it), and the single next step, decided by ordered rules — no usable Shopify
+store → connect one; AliExpress not usable → connect it; no drafts → import
+the first product; otherwise continue the latest draft. It is not called a
+recommendation because nothing is inferred.
 
-Migration when the endpoint lands: add fetchers to `services/dashboard.ts`, swap
-the imports in the dashboard page, delete the mock module. A surviving `MOCK_`
-reference anywhere means the migration is incomplete — which is the point of the
-naming.
+**What Home deliberately does not show.** A "ready to publish" count:
+readiness is a per-draft server check with no aggregate, so any count would be
+a guess (a backend dependency). Money: the analytics revenue figure sums
+`Order.total_amount` across orders in mixed currencies with no FX and no
+currency in the payload, so no single label would be true; it stays on
+Reports, where that caveat still applies (see Known limitations). A workspace
+with nothing connected and nothing imported gets the three-step setup instead
+of zero-valued tiles.
+
+The former mock module (`lib/mock/dashboard-data.ts`, `MOCK_*`) was removed
+in Phase 6; the analytics charts it fed now live on `/analytics` against
+`GET /analytics/dashboard`.
 
 ---
 
@@ -322,7 +341,11 @@ naming.
 2. **The notification centre has no source.** The panel and store are real and
    genuinely empty. A fake unread badge would train users to ignore the badge.
 
-3. **Every dashboard figure is mock data.** See above.
+3. **Reports revenue has no currency.** `GET /analytics/dashboard` sums
+   `Order.total_amount` across orders whose `currency` differs, with no FX
+   and no currency field in the payload; `/analytics` still labels it `USD`.
+   Home shows no monetary figure for that reason. Correcting Reports needs a
+   backend contract (per-currency totals or a converted figure).
 
 4. **`/settings` has no editable fields.** The account details it would show are
    already in the user menu; a read-only form that cannot save would look
