@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures/provider-isolation";
-import { catalogueWorld, mockCatalogueApi, PUBLISHED_ID } from "./helpers/catalogue-fixture";
+import { catalogueRows, catalogueWorld, mockCatalogueApi, PUBLISHED_ID } from "./helpers/catalogue-fixture";
 import {
   aliExpressConnection,
   channelsWorld,
@@ -65,7 +65,7 @@ const SCREENS: Screen[] = [
     open: async (page) => {
       await mockCatalogueApi(page, catalogueWorld());
       await page.goto("/drafts");
-      await expect(page.getByTestId("draft-row").locator("visible=true").first()).toBeVisible({ timeout: 30_000 });
+      await expect(catalogueRows(page, "draft").first()).toBeVisible({ timeout: 30_000 });
     },
     primary: (page) => page.getByTestId("catalogue-search"),
   },
@@ -74,9 +74,9 @@ const SCREENS: Screen[] = [
     open: async (page) => {
       await mockCatalogueApi(page, catalogueWorld());
       await page.goto("/products");
-      await expect(page.getByTestId("product-row").locator("visible=true").first()).toBeVisible({ timeout: 30_000 });
+      await expect(catalogueRows(page, "product").first()).toBeVisible({ timeout: 30_000 });
     },
-    primary: (page) => page.getByTestId("product-title-link").locator("visible=true").first(),
+    primary: (page) => catalogueRows(page, "product").first().getByTestId("product-title-link"),
   },
   {
     id: "product-detail",
@@ -307,8 +307,8 @@ test.describe("Hardening — cross-app journeys", () => {
 
     await page.getByRole("link", { name: "Back to Products" }).click();
     await expect(page).toHaveURL(/\/products$/);
-    await expect(page.getByTestId("product-row").locator("visible=true")).toHaveCount(1, { timeout: 30_000 });
-    await expect(page.getByTestId("product-listing-status").locator("visible=true")).toHaveText("Published");
+    await expect(catalogueRows(page, "product")).toHaveCount(1, { timeout: 30_000 });
+    await expect(catalogueRows(page, "product").first().getByTestId("product-listing-status")).toHaveText("Published");
   });
 
   test("Journey 4: editing a published product distinguishes Saved in DropPilot from sent to Shopify", async ({ page }) => {

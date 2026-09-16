@@ -1,4 +1,4 @@
-import type { Page, Route } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import type { Page as ApiPage, Product, ProductDetail, StoreListing } from "@/types/api";
 
@@ -33,6 +33,23 @@ export interface CatalogueWorld {
 
 const now = Date.now();
 const iso = (offsetMs = 0) => new Date(now + offsetMs).toISOString();
+
+/**
+ * The catalogue renders every item twice — a table row from Tailwind's `lg`
+ * (1024px) and a card below it — and CSS decides which one shows. Each has
+ * its own test id (`draft-row`/`draft-card`, `product-row`/`product-card`),
+ * so a test asks for the representation its viewport renders instead of
+ * filtering by visibility, and a count of 1 means one item, not one item
+ * drawn twice.
+ */
+export const CATALOGUE_CARD_BREAKPOINT = 1024;
+
+export type CatalogueKind = "draft" | "product";
+
+export function catalogueRows(page: Page, kind: CatalogueKind): Locator {
+  const width = page.viewportSize()?.width ?? CATALOGUE_CARD_BREAKPOINT;
+  return page.getByTestId(width >= CATALOGUE_CARD_BREAKPOINT ? `${kind}-row` : `${kind}-card`);
+}
 
 export const PUBLISHED_ID = "aaaaaaaa-bbbb-4ccc-8ddd-000000000901";
 export const PUBLISHED_HIDDEN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-000000000902";

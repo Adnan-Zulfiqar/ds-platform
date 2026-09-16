@@ -96,8 +96,12 @@ test.describe("Product optimization foundation (mocked catalogue)", () => {
     await mockProductList(page, "not_optimized");
     await page.goto("/products");
 
-    await expect(page.getByTestId("product-row")).toHaveCount(1);
-    await expect(page.getByTestId("ai-status-badge")).toHaveText("Not optimized");
+    // `product-row` is the table row only (the phone card is `product-card`
+    // since the UX-L2D-07 remediation), so one product is exactly one row;
+    // the badge is read inside that row because the card carries its own.
+    const row = page.getByTestId("product-row");
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("ai-status-badge")).toHaveText("Not optimized");
     await expect(
       page.getByRole("button", { name: "Optimize with AI" }),
     ).toBeVisible();
@@ -179,8 +183,9 @@ test.describe("Product optimization foundation (live seed)", () => {
     await signInWithAccount(page, seeded.account);
     await page.goto("/drafts");
 
-    await expect(page.getByTestId("draft-row")).toHaveCount(1);
-    await expect(page.getByTestId("ai-status-badge")).toHaveText("Not optimized");
+    const row = page.getByTestId("draft-row");
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("ai-status-badge")).toHaveText("Not optimized");
 
     const optimizeResponse = page.waitForResponse(
       (r) => r.url().includes("/optimize") && r.request().method() === "POST",
@@ -188,7 +193,7 @@ test.describe("Product optimization foundation (live seed)", () => {
     await page.getByRole("button", { name: "Optimize with AI" }).click();
     expect((await optimizeResponse).status()).toBe(201);
 
-    await expect(page.getByTestId("ai-status-badge")).toHaveText("Optimized", {
+    await expect(row.getByTestId("ai-status-badge")).toHaveText("Optimized", {
       timeout: 15_000,
     });
 

@@ -8,6 +8,7 @@ import {
   MISSING_ID,
   PUBLISHED_HIDDEN_ID,
   PUBLISHED_ID,
+  catalogueRows,
   catalogueWorld,
   mockCatalogueApi,
 } from "./helpers/catalogue-fixture";
@@ -55,13 +56,17 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
     const log = await mockCatalogueApi(page, catalogueWorld());
     await page.goto("/drafts");
 
-    await expect(page.getByTestId("draft-row").locator("visible=true")).toHaveCount(25);
+    await expect(catalogueRows(page, "draft")).toHaveCount(25);
+    // Desktop renders the table: rows are visible, the phone cards are not,
+    // and the two never share an identity (one item is never counted twice).
+    await expect(page.getByTestId("draft-row").first()).toBeVisible();
+    await expect(page.getByTestId("draft-card").first()).toBeHidden();
     await expect(page.getByTestId("pagination-summary")).toContainText("Showing 1–25 of 60 drafts · page 1 of 3");
     await expect(page.getByTestId("pagination-previous")).toBeDisabled();
     await expect(page.getByTestId("pagination-next")).toBeEnabled();
 
     // Default order is most recently updated first; #60 was updated last.
-    await expect(page.getByTestId("draft-title-link").locator("visible=true").first()).toContainText("#60");
+    await expect(catalogueRows(page, "draft").first().getByTestId("draft-title-link")).toContainText("#60");
 
     // Wire names, not camelCase: the API ignores `sortBy`.
     const first = log.requests.find((r) => r.path === "/drafts");
@@ -85,7 +90,7 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
     await expect(page).toHaveURL(/\/drafts\?page=3$/);
     await expect(page.getByTestId("pagination-summary")).toContainText("Showing 51–60 of 60 drafts · page 3 of 3");
     await expect(page.getByTestId("pagination-next")).toBeDisabled();
-    await expect(page.getByTestId("draft-row").locator("visible=true")).toHaveCount(10);
+    await expect(catalogueRows(page, "draft")).toHaveCount(10);
 
     // Back/forward drive the list, not just the address bar.
     await page.goBack();
@@ -98,7 +103,7 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
   test("search is server-side, debounced, and lands in the URL without history spam", async ({ page }) => {
     const log = await mockCatalogueApi(page, catalogueWorld());
     await page.goto("/drafts");
-    await expect(page.getByTestId("draft-row").locator("visible=true")).toHaveCount(25);
+    await expect(catalogueRows(page, "draft")).toHaveCount(25);
 
     const before = log.requests.filter((r) => r.path === "/drafts").length;
     const historyBefore = await page.evaluate(() => window.history.length);
@@ -132,7 +137,7 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
     expect(last?.search).toContain("sort_by=title");
     expect(last?.search).toContain("sort_dir=asc");
     expect(last?.search).toContain("page=1");
-    await expect(page.getByTestId("draft-title-link").locator("visible=true").first()).toContainText("Bluetooth Sleep Headband");
+    await expect(catalogueRows(page, "draft").first().getByTestId("draft-title-link")).toContainText("Bluetooth Sleep Headband");
   });
 
   test("refresh restores search, sort and page from the URL", async ({ page }) => {
@@ -166,7 +171,7 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
   test("row status is words, the primary action is Edit, and rows navigate", async ({ page }) => {
     await mockCatalogueApi(page, catalogueWorld());
     await page.goto("/drafts?sort=created_at%3Aasc");
-    const rows = page.getByTestId("draft-row").locator("visible=true");
+    const rows = catalogueRows(page, "draft");
     await expect(rows.first().getByTestId("draft-status")).toHaveText("Draft");
     // #8 is the supplier-unavailable one.
     await expect(rows.nth(7).getByTestId("draft-status")).toHaveText("Unavailable");
@@ -201,7 +206,7 @@ test.describe("Drafts — empty, no results, error", () => {
     await shoot(page, "desktop-light-drafts-no-results");
     await page.getByTestId("catalogue-no-results").getByRole("button", { name: "Clear search" }).click();
     await expect(page).toHaveURL(/\/drafts$/);
-    await expect(page.getByTestId("draft-row").locator("visible=true")).toHaveCount(25);
+    await expect(catalogueRows(page, "draft")).toHaveCount(25);
   });
 
   test("an API failure shows an error with retry and recovers", async ({ page }) => {
@@ -216,7 +221,7 @@ test.describe("Drafts — empty, no results, error", () => {
     await shoot(page, "desktop-light-drafts-error");
     world.fail.clear();
     await page.getByRole("button", { name: /Try again|Retry/ }).click();
-    await expect(page.getByTestId("draft-row").locator("visible=true")).toHaveCount(25);
+    await expect(catalogueRows(page, "draft")).toHaveCount(25);
   });
 });
 
@@ -228,7 +233,9 @@ test.describe("Drafts — phone", () => {
     await page.goto("/drafts");
     await expect(page.getByTestId("catalogue-cards")).toBeVisible();
     await expect(page.locator("table")).toBeHidden();
-    const first = page.getByTestId("draft-row").locator("visible=true").first();
+    await expect(page.getByTestId("draft-card")).toHaveCount(25);
+    await expect(page.getByTestId("draft-row").first()).toBeHidden();
+    const first = catalogueRows(page, "draft").first();
     const edit = first.getByRole("link", { name: /^Edit / });
     await expect(edit).toBeVisible();
     const box = await edit.boundingBox();
@@ -245,7 +252,7 @@ test.describe("Products — list and row navigation", () => {
   test("rows say Published, name View, and land on the product page", async ({ page }) => {
     const log = await mockCatalogueApi(page, catalogueWorld());
     await page.goto("/products");
-    const rows = page.getByTestId("product-row").locator("visible=true");
+    const rows = catalogueRows(page, "product");
     await expect(rows).toHaveCount(2);
     await expect(rows.first().getByTestId("product-listing-status")).toHaveText("Published");
     await expect(page.getByText("Added to Shopify")).toHaveCount(0);
@@ -261,7 +268,7 @@ test.describe("Products — list and row navigation", () => {
   test("the title link and the row body both navigate", async ({ page }) => {
     await mockCatalogueApi(page, catalogueWorld());
     await page.goto("/products?sort=title%3Aasc");
-    const rows = page.getByTestId("product-row").locator("visible=true");
+    const rows = catalogueRows(page, "product");
     await rows.first().getByTestId("product-title-link").click();
     await expect(page).toHaveURL(new RegExp(`/products/${PUBLISHED_HIDDEN_ID}$`));
     await page.goBack();
@@ -410,7 +417,7 @@ test.describe("Product page — phone and dark", () => {
         await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(true);
         await shoot(page, `${name}-dark-product`);
         await page.goto("/drafts");
-        await expect(page.getByTestId("draft-row").locator("visible=true").first()).toBeVisible();
+        await expect(catalogueRows(page, "draft").first()).toBeVisible();
         await shoot(page, `${name}-dark-drafts`);
       } finally {
         await context.close();

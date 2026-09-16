@@ -117,6 +117,7 @@ const COPY = {
     noun: "drafts",
     nouns: ["draft", "drafts"] as [string, string],
     rowTestId: "draft-row",
+    cardTestId: "draft-card",
     titleTestId: "draft-title-link",
     action: "Edit",
     actionIcon: Pencil,
@@ -127,6 +128,7 @@ const COPY = {
     noun: "products",
     nouns: ["product", "products"] as [string, string],
     rowTestId: "product-row",
+    cardTestId: "product-card",
     titleTestId: "product-title-link",
     action: "View",
     actionIcon: Eye,
@@ -423,7 +425,10 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
         </Table>
       </div>
 
-      {/* Phone: one card per row, the primary action always on screen. */}
+      {/* Phone: one card per row, the primary action always on screen. Both
+          representations are in the DOM (CSS decides which one shows), so
+          the card carries its own test identity: a `*-row` is always the
+          table row, a `*-card` always the card. */}
       <ul
         className={cn("space-y-3 lg:hidden", busy && "opacity-70 transition-opacity")}
         data-testid="catalogue-cards"
@@ -433,7 +438,7 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
           return (
             <li
               key={product.id}
-              data-testid={copy.rowTestId}
+              data-testid={copy.cardTestId}
               className="rounded-lg border bg-card p-4"
               onClick={navigateOnRowClick(href)}
             >
