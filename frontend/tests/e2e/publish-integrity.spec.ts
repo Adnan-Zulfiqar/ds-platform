@@ -103,7 +103,10 @@ test.describe("UX-L2B save-before-publish integrity", () => {
       /couldn’t save your changes/i,
     );
     expect(publishCalls).toBe(0);
-    expect(page.url()).toContain("tab=publishing");
+    // `selectTab` uses `router.replace`, which commits the URL asynchronously;
+    // read it with a waiting assertion, not synchronously (UX-L2D-07 — this
+    // was the known `:76` race, reproduced 0/6 on the untouched Phase 1 tree).
+    await expect(page).toHaveURL(/tab=publishing/);
   });
 
   test("dirty draft + save network failure → zero publish calls", async ({ page }) => {

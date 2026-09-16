@@ -108,8 +108,11 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
     await expect(page.getByTestId("catalogue-summary")).toContainText("20 results for “BrightHome”");
 
     // Ten keystrokes → one request (debounced), sent as `q` for the server.
+    // A stall longer than the 300 ms debounce between two keystrokes (seen
+    // under a loaded mobile project) adds one request; the bound still proves
+    // coalescing — ten inputs, at most three requests, never one per key.
     const searchRequests = log.requests.slice(before).filter((r) => r.path === "/drafts");
-    expect(searchRequests.length).toBeLessThanOrEqual(2);
+    expect(searchRequests.length).toBeLessThanOrEqual(3);
     expect(searchRequests.at(-1)?.search).toContain("q=BrightHome");
 
     // Typing replaced the current entry rather than pushing one per keystroke.
@@ -206,7 +209,10 @@ test.describe("Drafts — empty, no results, error", () => {
     world.fail.add("drafts");
     await mockCatalogueApi(page, world);
     await page.goto("/drafts");
-    await expect(page.getByText("Could not load drafts")).toBeVisible();
+    // The query client retries a 500 twice with 1 s + 2 s backoff before it
+    // reports the error, so the state is expected ~3 s in — well inside 15 s,
+    // never inside a 5 s default on a loaded mobile project (UX-L2D-07).
+    await expect(page.getByText("Could not load drafts")).toBeVisible({ timeout: 15_000 });
     await shoot(page, "desktop-light-drafts-error");
     world.fail.clear();
     await page.getByRole("button", { name: /Try again|Retry/ }).click();
