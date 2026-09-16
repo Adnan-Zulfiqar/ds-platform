@@ -110,7 +110,7 @@ export function summariseChannels(input: {
         id: "shopify",
         label: "Shopify",
         state: "not-configured",
-        detail: "Shopify is not configured on this server.",
+        detail: "Shopify cannot be connected on this server yet — ask your DropPilot operator.",
         usable: false,
       });
     } else if (connected === 0) {
@@ -183,7 +183,7 @@ export function summariseChannels(input: {
         id: "ebay",
         label: "eBay",
         state: "not-configured",
-        detail: "eBay is not configured on this server.",
+        detail: "eBay cannot be connected on this server yet — ask your DropPilot operator.",
         usable: false,
       });
     } else if (input.ebay.connected) {

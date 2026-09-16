@@ -128,7 +128,7 @@ export function ApplicationBehaviourPanel({
           </li>
           <li>
             <strong>Published products are never repriced automatically.</strong>{" "}
-            A product with a live channel listing is skipped by every automatic
+            A product that is already on Shopify is skipped by every automatic
             path, and is skipped again if it is submitted to a bulk application.
           </li>
           <li>

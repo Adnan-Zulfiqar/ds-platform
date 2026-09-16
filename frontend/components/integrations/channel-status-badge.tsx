@@ -33,7 +33,9 @@ export function ChannelStatusBadge({ state, className, ...rest }: ChannelStatusB
   return (
     <Badge
       variant={VARIANT[state.tone]}
-      className={cn("gap-1 whitespace-nowrap", className)}
+      // No colour transition: a status that blends from grey to green (or
+      // amber to red) for 150 ms shows a state that never existed.
+      className={cn("gap-1 whitespace-nowrap transition-none", className)}
       data-kind={state.kind}
       {...rest}
     >

@@ -224,7 +224,7 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
             <EmptyState
               icon={Package}
               title="No published products yet"
-              description="Products appear here after a successful Publish to Store. Imported drafts live under Drafts until then."
+              description="Products appear here after a successful Publish to Store. Imported drafts stay under Drafts until then."
               action={
                 <Button asChild>
                   <Link href="/drafts">Go to Drafts</Link>
@@ -359,7 +359,10 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
           nine columns cannot fit and the card list takes over. */}
       <div
         className={cn(
-          "hidden overflow-x-auto rounded-md border md:block",
+          // Table from `lg`, cards below (UX-L2D-07 moved this up from `md`):
+          // at 768 the expanded sidebar leaves ~490px, and a six-column table
+          // put the primary action behind a sideways scroll.
+          "hidden overflow-x-auto rounded-md border lg:block",
           busy && "opacity-70 transition-opacity",
         )}
       >
@@ -422,7 +425,7 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
 
       {/* Phone: one card per row, the primary action always on screen. */}
       <ul
-        className={cn("space-y-3 md:hidden", busy && "opacity-70 transition-opacity")}
+        className={cn("space-y-3 lg:hidden", busy && "opacity-70 transition-opacity")}
         data-testid="catalogue-cards"
       >
         {data.items.map((product) => {

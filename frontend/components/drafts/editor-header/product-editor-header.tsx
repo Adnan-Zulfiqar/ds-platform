@@ -131,7 +131,6 @@ export function ProductEditorHeader({
     onOptimize,
     onOpenAliExpress: openSupplier,
     onViewHistory,
-    onGoHistoryTab: () => onTabChange("history"),
   };
 
   // No manual Save while a conflict is open: `handleSave` refuses it anyway

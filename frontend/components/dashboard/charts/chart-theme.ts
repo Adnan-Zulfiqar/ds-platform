@@ -66,24 +66,26 @@ export const TOOLTIP_STYLE = {
   boxShadow: "0 4px 12px rgb(0 0 0 / 0.08)",
 } as const;
 
-/** Compact currency, e.g. `$47.2k`. Full precision belongs in the tooltip. */
-export function formatCurrencyCompact(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
+/**
+ * Monetary amounts as plain numbers — deliberately without a currency symbol.
+ *
+ * `GET /analytics/dashboard` returns revenue and profit with no currency
+ * field, and a workspace can sell through stores in different currencies, so
+ * any symbol here would be a guess (the previous "$" was one). Until the
+ * contract carries a currency, the figures are shown as recorded and the
+ * page says so (UX-L2D-07; BACKEND DEPENDENCY — ANALYTICS CURRENCY).
+ */
+export function formatAmountCompact(value: number): string {
+  return new Intl.NumberFormat(undefined, {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-export function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+export function formatAmount(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
 }
 
 export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+  return new Intl.NumberFormat(undefined).format(value);
 }

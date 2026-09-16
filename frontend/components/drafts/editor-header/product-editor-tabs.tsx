@@ -11,6 +11,12 @@ import {
 import { useScrollEdges } from "@/hooks/use-scroll-edges";
 import { cn } from "@/lib/utils";
 
+/**
+ * The editor's sections. Every entry renders a real panel: the "AI tools"
+ * and "History" placeholders that used to sit here (UX-L2D-07 removed them)
+ * only pointed at the More menu, where the real actions — Improve with AI
+ * tools and Version history — still live.
+ */
 export const EDITOR_TABS = [
   "overview",
   "description",
@@ -20,9 +26,7 @@ export const EDITOR_TABS = [
   "inventory",
   "shipping",
   "seo",
-  "ai-studio",
   "publishing",
-  "history",
 ] as const;
 
 export type EditorTab = (typeof EDITOR_TABS)[number];
@@ -37,9 +41,7 @@ export const EDITOR_TAB_LABEL: Record<EditorTab, string> = {
   inventory: "Stock",
   shipping: "Shipping",
   seo: "Search & SEO",
-  "ai-studio": "AI tools",
   publishing: "Review & publish",
-  history: "History",
 };
 
 export type EditorNavGroupId = "product" | "selling" | "improve" | "publish";
@@ -62,7 +64,7 @@ export const EDITOR_NAV_GROUPS: {
   {
     id: "improve",
     label: "Improve",
-    tabs: ["seo", "ai-studio"],
+    tabs: ["seo"],
   },
   {
     id: "publish",
@@ -70,9 +72,6 @@ export const EDITOR_NAV_GROUPS: {
     tabs: ["publishing"],
   },
 ];
-
-/** History stays reachable from More actions; it is not a primary equal tab. */
-export const EDITOR_SECONDARY_TABS: EditorTab[] = ["history"];
 
 export function isEditorTab(value: string | null): value is EditorTab {
   return value !== null && (EDITOR_TABS as readonly string[]).includes(value);
@@ -271,11 +270,13 @@ export function ProductEditorTabs({
         )}
       />
 
-      {/* Pointer affordance from `md` up. Keyboard users have Arrow/Home/End. */}
+      {/* Pointer affordance from `md` up, kept out of the tab order because
+          keyboard users already have Arrow/Home/End on the tablist. Named all
+          the same: a control with no name is a defect whatever its tabindex. */}
       <button
         type="button"
         tabIndex={-1}
-        aria-hidden="true"
+        aria-label="Scroll sections left"
         onClick={() => scrollBy(-1)}
         className={cn(
           "absolute left-0 top-1/2 hidden h-11 w-8 -translate-y-1/2 items-center justify-center rounded-md border bg-background/95 text-muted-foreground shadow-sm hover:text-foreground md:flex",
@@ -283,12 +284,12 @@ export function ProductEditorTabs({
         )}
         data-testid="editor-tabs-scroll-left"
       >
-        <ChevronLeft className="h-4 w-4" />
+        <ChevronLeft className="h-4 w-4" aria-hidden="true" />
       </button>
       <button
         type="button"
         tabIndex={-1}
-        aria-hidden="true"
+        aria-label="Scroll sections right"
         onClick={() => scrollBy(1)}
         className={cn(
           "absolute right-0 top-1/2 hidden h-11 w-8 -translate-y-1/2 items-center justify-center rounded-md border bg-background/95 text-muted-foreground shadow-sm hover:text-foreground md:flex",
@@ -296,7 +297,7 @@ export function ProductEditorTabs({
         )}
         data-testid="editor-tabs-scroll-right"
       >
-        <ChevronRight className="h-4 w-4" />
+        <ChevronRight className="h-4 w-4" aria-hidden="true" />
       </button>
     </div>
   );

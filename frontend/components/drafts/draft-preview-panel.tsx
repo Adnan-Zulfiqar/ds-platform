@@ -78,8 +78,8 @@ export function DraftPreviewPanel({
         <SheetHeader>
           <SheetTitle>Draft Preview</SheetTitle>
           <SheetDescription>
-            DropPilot representation of this draft — not a live Shopify
-            storefront.
+            How DropPilot holds this draft — not how Shopify will render it on
+            your shop.
           </SheetDescription>
         </SheetHeader>
 

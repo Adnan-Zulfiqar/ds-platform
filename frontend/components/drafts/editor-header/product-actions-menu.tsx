@@ -19,7 +19,6 @@ interface ProductActionsMenuProps {
   onOptimize: () => void;
   onOpenAliExpress: () => void;
   onViewHistory: () => void;
-  onGoHistoryTab: () => void;
 }
 
 /**
@@ -36,7 +35,6 @@ export function ProductActionsMenu({
   onOptimize,
   onOpenAliExpress,
   onViewHistory,
-  onGoHistoryTab,
 }: ProductActionsMenuProps) {
   return (
     <DropdownMenu>
@@ -72,10 +70,7 @@ export function ProductActionsMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => onViewHistory()}>
-          View recent activity
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onGoHistoryTab()}>
-          Open full history
+          Version history
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

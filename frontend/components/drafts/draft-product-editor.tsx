@@ -20,7 +20,6 @@ import {
   ProductEditorHeaderSkeleton,
 } from "@/components/drafts/editor-header/product-editor-header";
 import {
-  EDITOR_TAB_LABEL,
   isEditorTab,
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
@@ -140,16 +139,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const updateDraft = useUpdateDraft(productId);
   const refreshDraft = useRefreshDraft(productId);
   const optimizeProduct = useOptimizeProduct(productId);
+  // Store guidance copy and the Review & publish store list. Read once per
+  // mount (React Query's staleTime), not polled: UX-L2D-07 removed a 15 s
+  // interval that re-requested the list for every open editor to catch a
+  // connect/disconnect made in another tab — a rare event a reload handles,
+  // at the cost of four requests a minute per tab. Publication authority was
+  // never here; the server's readiness check is what gates publishing.
   const storesQuery = useStores({ size: 50 });
-  const refetchStores = storesQuery.refetch;
-  // Refresh store list so connect/disconnect in another tab updates chrome copy.
-  // Does not affect publication authority (server readiness does).
-  useEffect(() => {
-    const handle = window.setInterval(() => {
-      void refetchStores();
-    }, 15_000);
-    return () => window.clearInterval(handle);
-  }, [refetchStores]);
 
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
@@ -1576,25 +1572,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             <DraftShippingPanel productId={productId} product={data} />
           ) : null}
 
-          {tab !== "overview" &&
-          tab !== "description" &&
-          tab !== "seo" &&
-          tab !== "publishing" &&
-          tab !== "media" &&
-          tab !== "variants" &&
-          tab !== "pricing" &&
-          tab !== "inventory" &&
-          tab !== "shipping" ? (
-            <section className="rounded-lg border border-dashed p-8 text-center">
-              <h2 className="text-lg font-semibold">{EDITOR_TAB_LABEL[tab]}</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {tab === "ai-studio" &&
-                  "Use Improve with AI tools from More actions for now. Side-by-side proposal studio is Stage 6."}
-                {tab === "history" &&
-                  "Use View recent activity in More actions for AI version restore. Full edit timeline is Stage 6."}
-              </p>
-            </section>
-          ) : null}
         </div>
 
         <PublishChecklist

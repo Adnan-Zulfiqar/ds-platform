@@ -110,7 +110,9 @@ test.describe("Home — populated workspace", () => {
     await expect(page.getByTestId("channel-shopify")).toHaveAttribute("data-state", "connected");
     await expect(page.getByTestId("channel-shopify")).toContainText("Connected");
     await expect(page.getByTestId("channel-aliexpress")).toContainText("Connected");
-    await expect(page.getByTestId("channel-ebay")).toContainText("Not configured");
+    // The Integrations vocabulary (UX-L2D-06): the server has no eBay app
+    // credentials, which only an operator can change.
+    await expect(page.getByTestId("channel-ebay")).toContainText("Setup unavailable");
     await expect(page.getByRole("link", { name: "Manage Shopify" })).toHaveAttribute(
       "href",
       "/settings/integrations",

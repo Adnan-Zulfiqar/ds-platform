@@ -270,10 +270,10 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
               href={adminUrl}
               target="_blank"
               rel={EXTERNAL_LINK_REL}
-              aria-label="Open in Shopify admin (opens in a new tab)"
+              aria-label="Manage in Shopify (opens in a new tab)"
               data-testid="admin-link"
             >
-              Open in Shopify
+              Manage in Shopify
             </a>
           </Button>
         )}

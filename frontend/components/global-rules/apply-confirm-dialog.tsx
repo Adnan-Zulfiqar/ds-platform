@@ -126,8 +126,8 @@ export function ApplyConfirmDialog({
           </p>
           <p className="mt-2">
             <strong>Published products and Shopify are untouched.</strong> A
-            product with a live listing is recorded as skipped; no request is
-            made to any sales channel.
+            product that is already on Shopify is recorded as skipped; no request
+            is made to any sales channel.
           </p>
         </Callout>
 

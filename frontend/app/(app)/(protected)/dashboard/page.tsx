@@ -62,7 +62,10 @@ export default function HomePage() {
   const recentDrafts = useDrafts({ size: 5, sortBy: "updated_at", sortDir: "desc" });
   const recentImports = useProductImports({ size: 10 });
   const orderStatistics = useOrderStatistics();
-  const notifications = useNotifications({ page: 1, size: 5 });
+  // The same page the top bar's bell already fetches (page 1, size 8), so
+  // Home adds no second request for the same list; five are shown.
+  const notifications = useNotifications({ page: 1, size: 8 });
+  const recentNotifications = notifications.data?.items.slice(0, 5);
 
   const channels = summariseChannels({
     shopify: shopify.data,
@@ -79,7 +82,7 @@ export default function HomePage() {
     recentImports: recentImports.data?.items,
     recentDrafts: recentDrafts.data?.items,
     orderStatistics: orderStatistics.data,
-    notifications: notifications.data?.items,
+    notifications: recentNotifications,
   });
   const attentionPending =
     channelsPending ||
@@ -210,7 +213,7 @@ export default function HomePage() {
               ) : notifications.isError ? (
                 <BlockError what="recent activity" onRetry={() => void notifications.refetch()} />
               ) : (
-                <RecentActivity notifications={notifications.data.items} />
+                <RecentActivity notifications={recentNotifications ?? []} />
               )}
             </HomeSection>
           </div>

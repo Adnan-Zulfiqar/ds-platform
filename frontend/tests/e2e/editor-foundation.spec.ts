@@ -91,7 +91,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       page.getByRole("menuitem", { name: /Refresh supplier information/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: /View recent activity/i }),
+      page.getByRole("menuitem", { name: /Version history/i }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
   });
@@ -226,45 +226,34 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByText(/"code":\s*"validation_error"/)).toHaveCount(0);
   });
 
-  test("More menu History actions have distinct labels and destinations", async ({
+  test("More menu opens Version history, and offers no placeholder sections", async ({
     page,
   }) => {
     await openMockedEditor(page);
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 
-    // selectTab uses router.replace, so History does not push a stack frame.
-    // Seed a known prior entry; Back must return here — not to a previous tab.
-    await page.evaluate(() => {
-      const here = window.location.href;
-      window.history.replaceState(window.history.state, "", "/drafts?e2e-back-target=1");
-      window.history.pushState(window.history.state, "", here);
-    });
-
     const more = visibleTestId(page, "product-actions-menu");
     await more.focus();
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByRole("menuitem", { name: /^View recent activity$/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: /^Open full history$/i }),
-    ).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Version history$/i })).toBeVisible();
+    // UX-L2D-07: the "Open full history" and "AI tools" placeholders that
+    // announced Stage 6 work are gone from merchant-facing navigation.
+    await expect(page.getByRole("menuitem", { name: /Open full history/i })).toHaveCount(0);
     await shot(page, "1440x900-history-menu-labels.png");
 
-    await page.getByRole("menuitem", { name: /^View recent activity$/i }).click();
+    await page.getByRole("menuitem", { name: /^Version history$/i }).click();
     await expect(page.getByRole("dialog", { name: /Version history/i })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: /Version history/i })).toHaveCount(0);
+    await expect(more).toBeFocused();
 
-    await more.click();
-    await page.getByRole("menuitem", { name: /^Open full history$/i }).click();
-    await expect(page).toHaveURL(/[?&]tab=history/);
-    await expect(page.getByRole("heading", { name: /^History$/i })).toBeVisible();
-    await shot(page, "1440x900-full-history-section.png");
-
-    await page.goBack();
-    await expect(page).toHaveURL(/e2e-back-target=1/);
-    await expect(page.getByRole("heading", { name: /^History$/i })).toHaveCount(0);
+    await expect(page.getByTestId("editor-tab-ai-studio")).toHaveCount(0);
+    await expect(page.getByTestId("editor-tab-history")).toHaveCount(0);
+    // A stale deep link to a removed section lands on Product details.
+    await page.goto(`/drafts/${DEMO_PRODUCT_ID}?tab=history`);
+    await expect(page.getByTestId("editor-tab-overview")).toHaveAttribute("aria-selected", "true", {
+      timeout: 30_000,
+    });
   });
 
   test("long title stays two lines and does not hide actions", async ({

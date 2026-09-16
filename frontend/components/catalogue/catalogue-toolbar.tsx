@@ -69,7 +69,7 @@ export function CatalogueToolbar({ state, noun, totalItems, busy }: CatalogueToo
         : `${totalItems.toLocaleString()} ${totalItems === 1 ? noun.replace(/s$/, "") : noun}`;
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" data-testid="catalogue-toolbar">
+    <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between" data-testid="catalogue-toolbar">
       <form
         role="search"
         className="flex w-full max-w-md items-end gap-2"

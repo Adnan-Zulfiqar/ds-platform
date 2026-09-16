@@ -23,7 +23,6 @@ interface ProductEditorActionsProps {
   onOptimize: () => void;
   onOpenAliExpress: () => void;
   onViewHistory: () => void;
-  onGoHistoryTab: () => void;
   className?: string;
 }
 
@@ -44,7 +43,6 @@ export function ProductEditorActions({
   onOptimize,
   onOpenAliExpress,
   onViewHistory,
-  onGoHistoryTab,
   className,
 }: ProductEditorActionsProps) {
   return (
@@ -96,7 +94,6 @@ export function ProductEditorActions({
         onOptimize={onOptimize}
         onOpenAliExpress={onOpenAliExpress}
         onViewHistory={onViewHistory}
-        onGoHistoryTab={onGoHistoryTab}
       />
     </div>
   );

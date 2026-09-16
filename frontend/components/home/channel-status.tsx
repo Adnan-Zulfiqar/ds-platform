@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, CircleDashed, MinusCircle, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 
+import { CHANNEL_LABEL } from "@/lib/channel-state";
 import { cn } from "@/lib/utils";
 
 import type { ChannelState, ChannelSummary } from "./home-rules";
@@ -11,11 +12,13 @@ interface ChannelStatusProps {
   channels: ChannelSummary[];
 }
 
+// The words are the channel vocabulary Integrations uses (UX-L2D-06), so a
+// merchant reads the same state here and there.
 const STATE: Record<ChannelState, { label: string; icon: LucideIcon; className: string }> = {
-  connected: { label: "Connected", icon: CheckCircle2, className: "text-success" },
-  "needs-attention": { label: "Needs attention", icon: AlertTriangle, className: "text-warning" },
-  "not-connected": { label: "Not connected", icon: CircleDashed, className: "text-muted-foreground" },
-  "not-configured": { label: "Not configured", icon: MinusCircle, className: "text-muted-foreground" },
+  connected: { label: CHANNEL_LABEL.connected, icon: CheckCircle2, className: "text-success" },
+  "needs-attention": { label: CHANNEL_LABEL["needs-attention"], icon: AlertTriangle, className: "text-warning" },
+  "not-connected": { label: CHANNEL_LABEL["not-connected"], icon: CircleDashed, className: "text-muted-foreground" },
+  "not-configured": { label: CHANNEL_LABEL["setup-unavailable"], icon: MinusCircle, className: "text-muted-foreground" },
 };
 
 /**
