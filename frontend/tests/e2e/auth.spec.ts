@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/provider-isolation";
 
 import { acceptLegal } from "./helpers/auth";
 
@@ -24,7 +24,7 @@ test.describe("Login page", () => {
     await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
     await expect(page.getByLabel("Email")).toBeVisible();
     await expect(page.getByLabel("Password")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
   });
 
   test("offers remember me and forgot password", async ({ page }) => {
@@ -40,7 +40,7 @@ test.describe("Login page", () => {
   test("requires both fields", async ({ page }) => {
     // `noValidate` is set on the form, so these come from Zod rather than from
     // the browser's native validation — which is the behaviour we want to test.
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page.getByText("Email address is required")).toBeVisible();
     await expect(page.getByText("Password is required")).toBeVisible();
@@ -49,7 +49,7 @@ test.describe("Login page", () => {
   test("rejects a malformed email address", async ({ page }) => {
     await page.getByLabel("Email").fill("not-an-email");
     await page.getByLabel("Password").fill("something");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page.getByText("Enter a valid email address")).toBeVisible();
   });
@@ -62,7 +62,7 @@ test.describe("Login page", () => {
      */
     await page.getByLabel("Email").fill("user@example.com");
     await page.getByLabel("Password").fill("short");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page.getByText(/must be at least 12 characters/i)).toHaveCount(0);
   });
@@ -192,7 +192,7 @@ test.describe("Accessibility", () => {
 
   test("validation errors are announced", async ({ page }) => {
     await page.goto("/login");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     // role="alert" is what makes the failure announced rather than silently
     // rendered.
@@ -201,7 +201,7 @@ test.describe("Accessibility", () => {
 
   test("invalid fields are marked for assistive technology", async ({ page }) => {
     await page.goto("/login");
-    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
 
     await expect(page.getByLabel("Email")).toHaveAttribute("aria-invalid", "true");
   });

@@ -62,6 +62,14 @@ celery_app.conf.update(
     # forever with no diagnostic.
     broker_connection_retry_on_startup=True,
     broker_connection_max_retries=10,
+    # RabbitMQ 4.x rejects transient non-exclusive queues by default
+    # (`transient_nonexcl_queues`). Celery's control/event (pidbox) queues
+    # used that pattern until 5.7; declare them exclusive so workers can
+    # mingle/inspect against RabbitMQ 4 without re-enabling the deprecated
+    # broker feature. Exclusive matches pidbox's per-connection lifecycle.
+    # Added in Celery 5.6; do not set both *_durable and *_exclusive.
+    control_queue_exclusive=True,
+    event_queue_exclusive=True,
     # Task modules the worker must import to register them. A task that is
     # defined but never imported by the worker fails at call time with
     # "unregistered task", which is a confusing error to debug.

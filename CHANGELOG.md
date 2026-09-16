@@ -12,6 +12,34 @@ production release.
 
 ### Fixed
 
+- **Phase 1 — Git/CI baseline and PR #7 closure (on
+  `fix/ci-baseline-security-pytest`, not merged).** Owner-adopted the bounded
+  12-file baseline repair (scanner-required blank template secrets, per-run R7
+  Fernet key, `tests/__init__.py`, exact blank-secret assertion, PostgreSQL 17
+  client parity, deterministic Compose password probe, Celery
+  `control_queue_exclusive`/`event_queue_exclusive`, broker-verification module
+  loading, `default,integrations` CI worker queue, exact "Sign in" and
+  pathname/query auth assertions, `127.0.0.1` FE/API origins) and closed two
+  independent-review findings. F-1: a context-level Playwright fixture
+  (`tests/e2e/fixtures/provider-isolation.ts`) now fulfils
+  `accounts.google.com/**` locally for `auth-provider-boundary`, `auth`,
+  `smoke` and `terms`, with a regression and a same-origin negative control
+  (`provider-isolation.spec.ts`); Google-auth (`auth-g1`) and CSP coverage keep
+  their own stubs. F-2: CI adds `list` + `json` reporters and publishes the
+  Playwright report on success as well as failure, named by SHA/run/attempt,
+  so skip identities and reasons are inspectable from a green run. **Runtime
+  note:** the two Celery settings are application configuration, not CI-only —
+  every worker's pidbox control queue and every event receiver's queue becomes
+  exclusive on the next deployment. Single-worker CI verifies declaration,
+  `inspect ping` and end-to-end execution of five tasks; multi-worker,
+  restart/reconnect and external-monitor behaviour are unverified and gated to
+  the safe-staging phase. CI's floating `rabbitmq:4-alpine` resolved to
+  RabbitMQ 4.3.5, which denies the deprecated `transient_nonexcl_queues`
+  declaration and is what exposed the failure; the Lightsail pin
+  `rabbitmq:4.0-alpine` and the local `rabbitmq:4-management-alpine` tag have
+  not been exercised against the new settings outside CI. Not independently
+  accepted; not merged; not deployed; UX-L2C not started.
+
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
   `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run
   failures with harness/env corrections (not UX-L2B redesign): DB-seeded editor

@@ -17,7 +17,20 @@ export default defineConfig({
   // timeout flakes that look like real failures.
   workers: process.env.CI ? 1 : undefined,
 
-  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : [["list"]],
+  // CI keeps the GitHub annotations and the HTML report, and adds two things a
+  // reviewer needs when the run is *green*: `list` prints every test line to
+  // the job log — including the `-` skip marker and reason — and `json`
+  // writes a machine-readable record (spec, title, project, status, skip
+  // annotation, retries) that the workflow uploads on success as well as
+  // failure. Totals alone were the DP-P00-02 F-2 evidence gap.
+  reporter: process.env.CI
+    ? [
+        ["github"],
+        ["list"],
+        ["json", { outputFile: "test-results/playwright-results.json" }],
+        ["html", { open: "never" }],
+      ]
+    : [["list"]],
 
   use: {
     baseURL: BASE_URL,

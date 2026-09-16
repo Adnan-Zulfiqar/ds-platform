@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-09-06
+Last updated: 2026-09-14
 
 ## Status
 
@@ -22,6 +22,7 @@ Last updated: 2026-09-06
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | 🚧 **R4 clean live-API Chromium on `feature/ux-l2b-publish-integrity`** — not merged; not independently accepted; production undeployed; UX-L2C not started |
+| Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | 🚧 **On `fix/ci-baseline-security-pytest`** — owner-adopted 12-file repair + F-1 Google test isolation + F-2 CI skip evidence; awaiting final-SHA CI and Cursor independent review; not merged; Celery multi-worker/restart drill deferred to safe-staging |
 
 ---
 

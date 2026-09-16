@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/provider-isolation";
 
 /**
  * LEGAL-T1 — the public Terms page.
