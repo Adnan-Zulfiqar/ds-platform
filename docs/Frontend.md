@@ -319,7 +319,7 @@ Row status is only what the list response can vouch for: a Products row is
 "Published" because the endpoint only returns products with a synced
 listing; the store, visibility and sync details need one listings request
 per product and live on the product page, never as one request per table
-row. Below `md` the table becomes a card list so the primary action is never
+row. Below `lg` the table becomes a card list so the primary action is never
 behind a horizontal scroll.
 
 `/products/[productId]` (`components/products/published-product-summary.tsx`)
@@ -393,9 +393,10 @@ on Review & publish at 1024). Below `md` the fixed action bar holds Save (only
 while there is something to save), an icon-only Preview and the primary
 action; the sticky header above keeps the badge and save state visible.
 
-`lib/*.test.ts` are Vitest unit tests for the pure lifecycle modules
-(`npm run test:unit`, `environment: "node"`). They are **not run by CI** in
-this milestone; Playwright remains the executed coverage there.
+`lib/*.test.ts` are Vitest unit tests for the pure lifecycle and channel-state
+modules (`npm run test:unit`, `environment: "node"`). They run locally and are
+**not a GitHub CI gate**; Playwright remains the executed coverage there.
+Whether Vitest becomes a required gate is a Phase 2 acceptance decision.
 
 ## Home
 
@@ -476,6 +477,44 @@ Planned channels (WooCommerce, Etsy, TikTok Shop) are named in one line, not
 rendered as cards, so nothing invites a click that goes nowhere. Adding a
 real channel is a new `derive*` in `channel-state.ts`, a card built on
 `ChannelCard`, and a row in the overview.
+
+## Hardening decisions (UX-L2D-07)
+
+The last Phase 2 milestone was a pass over everything above rather than a
+feature. Decisions worth knowing when reading the code:
+
+- **Placeholders are gone from merchant-facing navigation.** The editor's
+  `AI tools` section only pointed at the More menu, and `History` announced
+  Stage 6 work; both were removed. The real actions remain in the More menu
+  (`Improve with AI tools`, `Version history`). A stale `?tab=` deep link to
+  either lands on Product details.
+- **Analytics money has no currency symbol.** `GET /analytics/dashboard`
+  reports totals across stores with no currency field, so the revenue tile
+  and the sales chart show plain numbers and the page says why. Nothing
+  guesses a currency (BACKEND DEPENDENCY — ANALYTICS CURRENCY).
+- **One channel vocabulary everywhere.** Home's channel rows read their
+  words from `lib/channel-state.ts`, so "Setup unavailable" means the same
+  thing on Home and on Integrations.
+- **"live" is not a status word.** The last copy that used it for a synced
+  listing ("Draft saved — not live", "live channel listing") was reworded;
+  the Global rules "Live Preview" tab keeps its name because it means a
+  preview that updates as you type, not a storefront state.
+- **Catalogue cards from `lg` down** (was `md`): at 768 the expanded sidebar
+  leaves too little width for a six-column table with its action reachable.
+- **Status badges do not animate** between colours; the skip link's target
+  (`main#main-content`) is focusable; the editor's section-strip chevrons are
+  named.
+- **Test hardening**: the two known timing-sensitive assertions
+  (`publish-integrity` reading `page.url()` synchronously after
+  `router.replace`; `catalogue` expecting an error state inside the query
+  client's retry backoff) wait for the state instead of racing it.
+- **Dead code removed** after checking references: the L2A-era
+  `ProductMetrics`, `ProductIdentity`, `ProductEditorBreadcrumb`,
+  `SupplierSyncStatus` components, `estimateMarginPercent`, `useMounted`.
+
+`docs/ux/ux-l2d-phase-2-status.md` records the frozen branch state, the
+backend dependencies and the CI checks still required before Phase 2 can be
+accepted.
 
 ## Known limitations
 

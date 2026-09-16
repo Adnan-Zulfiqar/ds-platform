@@ -12,6 +12,23 @@ production release.
 
 ### Added
 
+- **UX-L2D-07 — Cross-app hardening (on `feature/ux-l2d-dashboard`, not
+  merged; Phase 2 implementation complete, pending independent review and CI
+  verification).** Journey, accessibility, responsive (1440/1280/1024/768/390,
+  light and dark), vocabulary, dead-UX and performance pass over the accepted
+  UX-L2D-01…06 work. Removed the editor's `AI tools` and `History`
+  placeholder sections (real actions stay in the More menu); neutralised the
+  hard-coded `$`/USD on Analytics (figures shown as recorded — BACKEND
+  DEPENDENCY — ANALYTICS CURRENCY); aligned Home's channel words with the
+  Integrations vocabulary; reworded the last ambiguous "live" copy;
+  catalogue cards from `lg`; named section-strip chevrons; focusable
+  skip-link target; non-animating status badges; Home shares the bell's
+  notifications request; the editor no longer polls the store list every
+  15 s; deleted unreferenced L2A-era header components and helpers. Two
+  timing-sensitive assertions made deterministic. New
+  `ux-l2d-hardening.spec.ts` (semantics, keyboard reachability, the
+  visual matrix, cross-app journeys). Vitest 74/74 locally, not a CI gate.
+
 - **UX-L2D-06 — Channels / Integrations (on `feature/ux-l2d-dashboard`,
   not merged).** `/settings/integrations` is the canonical connect, repair
   and disconnect surface; `/stores` becomes a supporting record view

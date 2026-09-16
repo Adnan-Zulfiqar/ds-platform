@@ -309,6 +309,14 @@ export async function openMockedEditor(
      * omitted the endpoint is not mocked (tests may route it themselves).
      */
     publishResponder?: (attempt: number) => { status: number; body?: unknown; delayMs?: number };
+    /**
+     * Also answer the Products side of the journey (UX-L2D-07):
+     * `GET /products/{id}` with the draft, and `GET /products` with the draft
+     * once its served listing is synced — the same predicate the backend's
+     * Products list applies — so a publish can be followed to the product
+     * page and the Products list without a backend.
+     */
+    productsResponder?: boolean;
   } = {},
 ): Promise<ProductDetail> {
   const product = options.product ?? buildSyntheticProduct();
@@ -511,6 +519,33 @@ export async function openMockedEditor(
       body: JSON.stringify(product),
     });
   });
+
+  if (options.productsResponder) {
+    await page.route((url) => /\/api\/v1\/products(\?.*)?$/.test(url.pathname + url.search) && !url.pathname.endsWith("/workspace-counts"), async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const published = servedListings.some((row) => row.status === "synced");
+      const items = published
+        ? [(() => {
+            // A list row is the detail minus its nested collections.
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { variants, images, description, supplierDescription, supplierTitle, supplierBrand, ...row } = product;
+            return row;
+          })()]
+        : [];
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items,
+          meta: { page: 1, size: 25, totalItems: items.length, totalPages: 1, hasNext: false, hasPrevious: false },
+        }),
+      });
+    });
+    await page.route((url) => url.pathname.endsWith(`/api/v1/products/${product.id}`), async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(product) });
+    });
+  }
 
   if (options.publishResponder) {
     await page.route("**/api/v1/integrations/shopify/publish", async (route) => {
