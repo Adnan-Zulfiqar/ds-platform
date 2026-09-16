@@ -84,7 +84,10 @@ describe("deriveShopifyConnection", () => {
     expect(s.kind).toBe("needs-attention");
     expect(s.webhookLabel).toBe("Webhooks incomplete");
     expect(s.actions).toEqual(["retry-webhooks", "disconnect"]);
-    expect(s.detail).toMatch(/updates may be missed/i);
+    expect(s.detail).toBe("Webhook setup for this store did not complete.");
+    // The consequence belongs to the card's warning alert alone; the row
+    // must not repeat it (one status, one consequence).
+    expect(s.detail).not.toMatch(/updates may be missed/i);
   });
 
   it("an errored store never shows the raw provider text", () => {

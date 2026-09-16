@@ -114,12 +114,13 @@ export function deriveShopifyConnection(connection: ShopifyConnection): ShopifyC
 
   if (connection.status === "connected") {
     if (degraded) {
+      // The row states the condition once; the card's warning alert carries
+      // the consequence ("updates may be missed") and the reassurance. The
+      // two used to say the same sentence, which read as two problems and
+      // broke strict text lookups (Phase 2 CI).
       return {
         ...base,
-        ...state(
-          "needs-attention",
-          "Webhook setup is incomplete — product, inventory and order updates may be missed until it completes.",
-        ),
+        ...state("needs-attention", "Webhook setup for this store did not complete."),
         webhookLabel: "Webhooks incomplete",
         actions: ["retry-webhooks", "disconnect"],
       };

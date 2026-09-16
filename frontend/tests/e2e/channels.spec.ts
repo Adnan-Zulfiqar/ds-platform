@@ -150,7 +150,12 @@ test.describe("Channels — Shopify", () => {
     const card = shopifyCard(page);
     await expect(card.getByTestId("channel-shopify-status")).toHaveText("1 needs webhook setup");
     await expect(card.getByText("Webhooks incomplete")).toBeVisible();
-    await expect(card.getByText(/Product, inventory and order updates may be missed/i).first()).toBeVisible();
+    await expect(card.getByText("Webhook setup for this store did not complete.")).toBeVisible();
+    // The consequence is stated exactly once — in the warning alert, not
+    // again in the row detail (a strict locator must resolve to one element).
+    const consequence = card.getByText(/Product, inventory and order updates may be missed/i);
+    await expect(consequence).toHaveCount(1);
+    await expect(consequence).toBeVisible();
     await expect(card.getByText(/Webhooks last confirmed:/)).toHaveCount(0);
     expect(log.requests.filter((r) => r.path.endsWith("/webhooks/reconcile"))).toHaveLength(0);
     await shot(page, "1440-light-shopify-webhooks-degraded");

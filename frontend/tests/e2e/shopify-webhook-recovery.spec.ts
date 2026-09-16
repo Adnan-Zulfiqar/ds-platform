@@ -254,8 +254,16 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     ).toBeVisible();
     await expect(shopify.getByText("Webhooks incomplete")).toBeVisible();
     await expect(
-      shopify.getByText(/Product, inventory and order updates may be missed/i),
+      shopify.getByText("Webhook setup for this store did not complete."),
     ).toBeVisible();
+    // One status line, one consequence: the warning below must be the only
+    // place the consequence is stated (a duplicate broke this strict locator
+    // in the Phase 2 CI run).
+    const consequence = shopify.getByText(
+      /Product, inventory and order updates may be missed/i,
+    );
+    await expect(consequence).toHaveCount(1);
+    await expect(consequence).toBeVisible();
     // The header summary must not claim a clean connection.
     await expect(shopify.getByText("1 needs webhook setup")).toBeVisible();
     await expect(shopify.getByText("1 connected")).toHaveCount(0);
@@ -454,8 +462,14 @@ test.describe("Shopify card — connected but webhook-degraded (mocked API)", ()
     await expect(
       shopify.getByText(/Product, inventory and order updates may be missed/i),
     ).toBeVisible();
-    await expect(shopify.getByText("Read only")).toBeVisible();
-    await expect(shopify.getByText(/Ask an administrator/i)).toBeVisible();
+    // Scoped to this store's connection row: since UX-L2D-06 the eBay card
+    // shares the Sales channels region and shows its own "Read only" badge
+    // to a viewer, so the region-wide lookup would resolve to two elements.
+    const connection = shopify.getByTestId(`shopify-connection-${STORE_ID}`);
+    await expect(connection.getByText("Read only")).toBeVisible();
+    await expect(
+      connection.getByText(/Ask an administrator to retry webhook setup/i),
+    ).toBeVisible();
 
     await expect(retryButton(page)).toHaveCount(0);
     await expect(

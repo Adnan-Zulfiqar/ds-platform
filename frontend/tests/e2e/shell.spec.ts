@@ -295,13 +295,18 @@ test.describe("Home", () => {
 
   test("reporting sections still render on Analytics", async ({ page }) => {
     // The chart sections moved from Home to Reports in UX-L2D-03; the
-    // coverage moves with them. Matched by role: "Orders" is also a nav
-    // link. Empty tenants show empty states rather than Recharts — headings
-    // prove the sections mounted.
+    // coverage moves with them. Each section is a `ChartContainer` whose
+    // title is an h3 inside the page's `main`; scoped there because the
+    // sidebar also has an h2 "Sales" (its navigation group) and "Orders" is
+    // a nav link. Empty tenants show empty states rather than Recharts —
+    // the headings prove the sections mounted. The section is titled
+    // "Sales", not "Sales overview" (that was Home's old heading — the
+    // Phase 2 CI run caught the wrong name here).
     await signIn(page);
     await page.goto("/analytics");
-    for (const title of ["Sales overview", "Orders", "Top products"]) {
-      await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    const main = page.getByRole("main");
+    for (const title of ["Sales", "Orders", "Top products"]) {
+      await expect(main.getByRole("heading", { level: 3, name: title, exact: true })).toBeVisible();
     }
   });
 });
