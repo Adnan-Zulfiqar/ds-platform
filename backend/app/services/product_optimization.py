@@ -209,7 +209,27 @@ class ProductOptimizationService(BaseService):
             "brand": product.brand or "",
             "features": features,
             "tone": tone,
+            "keywords": _keywords_for_prompt(product),
         }
+
+
+def _keywords_for_prompt(product: Product) -> str:
+    """The `{{keywords}}` value for `seo_optimizer`, from what the merchant
+    already recorded — never generated here.
+
+    First non-empty source wins: `search_topics` (the planning-topics list
+    Stage 3 added for exactly this use), then `tags`, then the legacy
+    `meta_keywords` free text. Lists are joined the way
+    `integrations/shopify/sync.py` already joins `tags`. The result is
+    always a string, so `keywords` is never a *missing* variable —
+    `MissingPromptVariablesError` stays reserved for a template whose
+    variable genuinely was not supplied.
+    """
+    for values in (product.search_topics, product.tags):
+        cleaned = [value.strip() for value in values or [] if value and value.strip()]
+        if cleaned:
+            return ", ".join(cleaned)
+    return (product.meta_keywords or "").strip()
 
 
 def _first_failure(
