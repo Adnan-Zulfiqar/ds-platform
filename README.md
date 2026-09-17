@@ -2,13 +2,18 @@
 
 A multi-tenant SaaS platform for dropshipping automation.
 
-> **Status: Phase 2 — foundation, authentication, and application shell.**
-> There are no business features yet: no marketplace integrations, no product
-> import, no orders, no billing. What exists is the architecture those features
-> will be built on, a working multi-tenant authentication system, and the SaaS
-> interface shell they will render into. Dashboard figures are placeholder data
-> and the UI says so. See [Known limitations](#known-limitations) before
-> deploying anything.
+> **Status: Phases 0–8.1 complete; Phase 9 in progress; Phase 1 (Git/CI) and
+> Phase 2 (UX-L2D) merged into `develop`.** Foundation, authentication,
+> application shell, AliExpress integration, product import, order
+> management, the operations platform, production hardening and the Shopify
+> channel are complete; AI product optimisation (Phase 9) is in progress; an
+> eBay seller connection exists (EBAY-C1) but nothing is published to eBay
+> yet. The Git/CI baseline (Phase 1, PR #7) and the UX-L2D dashboard
+> programme (Phase 2, PR #9) were merged into `develop` on 2026-09-16 and
+> 2026-09-17. `develop` is ahead of `main`; none of this is deployed to
+> production. There is no subscription billing.
+> [PROJECT_ROADMAP.md](PROJECT_ROADMAP.md) is the authoritative status; see
+> [Known limitations](#known-limitations) before deploying anything.
 
 ## Stack
 
@@ -70,7 +75,9 @@ For running the services without Docker, see
 
 ## Verification
 
-Every check below passes as of the end of Phase 0.
+Both commands run in CI on every push to `main` or `develop` and on every
+pull request targeting them. Last green on `develop` at `b52b223`
+(run 35191388324, 2026-09-17).
 
 ```bash
 cd backend && ruff check . && ruff format --check . && mypy app && pytest
@@ -101,13 +108,17 @@ discovered late.
 5. **No breached-password check, and no multi-factor authentication.** Both
    should land before live customer accounts exist.
 
-6. **Docker images have not been built.** The Dockerfiles and Compose file are
-   unverified — Docker is not installed on the development machine. The CI
-   pipeline builds all three images, so the first pipeline run is the real test.
+6. **Docker images are built and smoke-tested in CI, not published.** Every
+   run builds the backend, frontend and worker images, validates the Compose
+   configuration and runs a full-stack Compose smoke job; the build step is
+   `push: false`, so no image reaches a registry from CI. Publishing belongs
+   to a deploy workflow, and none exists in `.github/workflows` yet.
 
-7. **Playwright tests have not been executed.** The specs are written and the
-   config is in place, but no browser binaries were installed. Run
-   `npx playwright install` then `npm run test:e2e`.
+7. **Playwright runs as a CI gate, not a local one.** The full suite runs in
+   the `Frontend — Playwright e2e` job against a real backend (722 passed /
+   0 failed / 9 skipped on `develop` at `b52b223`). Locally, backend-gated
+   specs skip without an API and seed database, and Vitest
+   (`npm run test:unit`) is local only — it is not a CI gate.
 
 8. **Rate limiting fails open.** If Redis is unavailable the limiter allows all
    traffic rather than rejecting it — availability is preferred over

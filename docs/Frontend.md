@@ -512,9 +512,9 @@ feature. Decisions worth knowing when reading the code:
   `ProductMetrics`, `ProductIdentity`, `ProductEditorBreadcrumb`,
   `SupplierSyncStatus` components, `estimateMarginPercent`, `useMounted`.
 
-`docs/ux/ux-l2d-phase-2-status.md` records the frozen branch state, the
-backend dependencies and the CI checks still required before Phase 2 can be
-accepted.
+`docs/ux/ux-l2d-phase-2-status.md` records the integration record (merged
+into `develop` 2026-09-17 via PR #9), the state at implementation freeze and
+the backend dependencies that remain open.
 
 ## Known limitations
 
@@ -529,9 +529,11 @@ accepted.
 
 3. **Reports revenue has no currency.** `GET /analytics/dashboard` sums
    `Order.total_amount` across orders whose `currency` differs, with no FX
-   and no currency field in the payload; `/analytics` still labels it `USD`.
+   and no currency field in the payload; `/analytics` therefore shows the
+   figures as recorded, with no currency symbol, and says why (UX-L2D-07).
    Home shows no monetary figure for that reason. Correcting Reports needs a
-   backend contract (per-currency totals or a converted figure).
+   backend contract (per-currency totals or a converted figure) — BACKEND
+   DEPENDENCY — ANALYTICS CURRENCY.
 
 4. **`/settings` has no editable fields.** The account details it would show are
    already in the user menu; a read-only form that cannot save would look

@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-09-15
+Last updated: 2026-09-17
 
 ## Status
 
@@ -22,9 +22,9 @@ Last updated: 2026-09-15
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
-| Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Independently accepted at `c0092da6`** (Cursor `PASS — PHASE 1 MAY CLOSE`, 2026-09-15; CI run 34846601320 10/10) — PR #7 still draft, **not merged**; Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
+| Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Merged into `develop`** — PR #7 merged 2026-09-16, merge commit `5e21927`. Accepted SHA `c0092da6`: independent review `PASS — PHASE 1 MAY CLOSE` (2026-09-15), CI run 34846601320 10/10; CI on the merge commit run 35164379004 10/10. **Production undeployed** — `main` unchanged. Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
 | UX-L2C (historical) | Live-state clarity and calm completion journey | 🔍 **`origin/feature/ux-l2c-live-state-clarity` (`ece8322`)** — unmerged; reviewed under UX-L2D-GATE-04 (cleared 2026-09-15): selected pieces adapted into UX-L2D-04 (product page, lifecycle subset, external-link allowlist, listings query options, route-isolation spec); the rest deferred to -05/-06 or superseded |
-| UX-L2D | Dashboard design programme (renamed from UX-L2C) | 🧊 **Implementation complete; pending independent review and CI verification.** -01 → -06 accepted, -07 hardening implemented on `feature/ux-l2d-dashboard`, stacked on accepted Phase 1 `c0092da6`; local only, not pushed, not merged, undeployed; no backend/CI files changed; Vitest local only (not a CI gate). Frozen state, backend dependencies and the CI checks still required: `docs/ux/ux-l2d-phase-2-status.md` |
+| UX-L2D | Dashboard design programme (renamed from UX-L2C) | ✅ **Merged into `develop`** — PR #9 merged 2026-09-17, merge commit `b52b223`. Original frozen review SHA `3f1ede8` (tree `0aac7f36`, independent review PASS); final accepted head `41c152c` (tree `489366a9`; two remediation commits, remediation delta review PASS); 27 commits stacked on accepted Phase 1 `c0092da6`. CI on `41c152c` run 35109481727 and on `b52b223` run 35191388324, both 10/10 — Playwright 722 passed / 0 failed / 9 skipped. No backend/CI files changed; Vitest still local only (not a CI gate). **Production undeployed** — `main` unchanged. Integration record and backend dependencies: `docs/ux/ux-l2d-phase-2-status.md` |
 
 ---
 
@@ -273,6 +273,7 @@ synced). Plans:
 | 6–8 | AI Studio, publish polish, E2E | Pending |
 | UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **Integrated into `develop` (`e1dd0f0`); production undeployed** |
 | UX-L2B | Save-before-publish integrity + server publish authority | **Present in `develop` at `a543b029` (R7 tip fast-forwarded); production undeployed.** Historical UX-L2C follows on `feature/ux-l2c-live-state-clarity` (unmerged); the new dashboard programme is UX-L2D |
+| UX-L2D | Dashboard programme: shell, Home, catalogue, editor lifecycle, channels, hardening | **Merged into `develop` at `b52b223` (PR #9, 2026-09-17; accepted head `41c152c`); production undeployed.** Evidence in the Status table above |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.
