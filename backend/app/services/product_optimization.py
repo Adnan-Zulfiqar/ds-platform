@@ -2,7 +2,8 @@
 
     Product → ProductOptimizationService → PromptService.test_render(execute=True)
                                               ├─ product_title_generator
-                                              └─ product_description_generator
+                                              ├─ product_description_generator
+                                              └─ seo_optimizer
                                             → ProductVersion (new, active)
                                             → Product's cached AI fields
 
@@ -31,6 +32,7 @@ from app.services.prompt import PromptService
 
 _TITLE_PROMPT = "product_title_generator"
 _DESCRIPTION_PROMPT = "product_description_generator"
+_SEO_PROMPT = "seo_optimizer"
 
 #: Supplier descriptions are free text of unbounded length and, per
 #: `docs/PHASE_9_PLAN.md`'s risk table, untrusted third-party content. This
@@ -71,16 +73,20 @@ class ProductOptimizationService(BaseService):
         tone: str = "professional",
         requested_by_user_id: uuid.UUID | None,
     ) -> tuple[Product, ProductVersion]:
-        """Generate a new title and description, and activate them.
+        """Generate a new title, description, and SEO proposal, and activate
+        the version that holds them.
 
         Creates the version-1 original snapshot on first call for this
         product — lazily, not at import time, so
         `ProductImportService.import_product` needed no change at all. Every
         subsequent call adds one new `AI_GENERATED` version and activates it.
 
-        Raises `app.ai.exceptions.AIError` if generation fails, after
-        recording `Product.ai_status = FAILED` — every other AI field is left
-        untouched, so a failed *attempt* never erases the last *good* result.
+        Three generations, one outcome: if any of them fails, no version is
+        written at all. Raises `app.ai.exceptions.AIError` after recording
+        `Product.ai_status = FAILED` — every other AI field is left
+        untouched, so a failed *attempt* never erases the last *good* result,
+        and a half-generated result (title and description succeeded, SEO
+        did not) is never persisted as if it were whole.
         """
         product = await self.products.get_by_id_or_raise(product_id)
         await self._ensure_original_snapshot(product)
@@ -99,8 +105,14 @@ class ProductOptimizationService(BaseService):
             execute=True,
             executed_by_user_id=requested_by_user_id,
         )
+        _, _, seo_execution = await self.prompts.test_render(
+            name=_SEO_PROMPT,
+            variables=variables,
+            execute=True,
+            executed_by_user_id=requested_by_user_id,
+        )
 
-        failed = _first_failure(title_execution, description_execution)
+        failed = _first_failure(title_execution, description_execution, seo_execution)
         if failed is not None:
             product.ai_status = ProductAIStatus.FAILED
             await self.flush()
@@ -111,12 +123,20 @@ class ProductOptimizationService(BaseService):
             )
             raise AIError(failed.error_message or "Product optimisation failed.")
 
-        # `_first_failure` returning `None` means neither execution was
-        # `None` and neither failed — `execute=True` was passed to both
+        # `_first_failure` returning `None` means no execution was `None`
+        # and none failed — `execute=True` was passed to all three
         # `test_render` calls, so this is the only path left.
-        if title_execution is None or description_execution is None:
+        if title_execution is None or description_execution is None or seo_execution is None:
             raise AIError("Product optimisation did not produce a result to record.")
 
+        # The SEO keys hold the `seo_optimizer` completion verbatim. The
+        # seeded template asks for a title, a meta description, and keywords
+        # in one response, and no provider yet returns anything parseable —
+        # `StubProvider` returns one opaque synthetic string. Splitting that
+        # into three "fields" would be fabricated model output. The stage
+        # that ships a real provider defines the parse contract; until then
+        # all three values are the same raw text, and say so by being
+        # `[STUB-AI]`-prefixed. See docs/PHASE_9_STAGE_4_PLAN.md §3.
         next_number = await self.versions.next_version_number(product.id)
         version = await self.versions.create(
             product_id=product.id,
@@ -125,6 +145,9 @@ class ProductOptimizationService(BaseService):
             content={
                 "title": title_execution.response_text,
                 "description": description_execution.response_text,
+                "seoTitle": seo_execution.response_text,
+                "seoDescription": seo_execution.response_text,
+                "keywords": seo_execution.response_text,
             },
             active=False,
             ai_provider=title_execution.provider,
@@ -180,7 +203,15 @@ class ProductOptimizationService(BaseService):
         here or by anything else, which is the actual guarantee behind "AI
         content cannot overwrite supplier source", not just a description of
         intent.
+
+        Deliberately reads only `title` and `description` out of `content`.
+        The SEO keys Stage 4 added (`seoTitle`, `seoDescription`,
+        `keywords`) stay in the version row: `Product.seo_title`,
+        `seo_description`, `meta_keywords`, and `tags` are the merchant's,
+        and activating a version — or rolling one back — must not overwrite
+        them with a proposal the merchant never accepted.
         """
+
         product.ai_version = version.version_number
 
         if version.source is ProductVersionSource.ORIGINAL:
