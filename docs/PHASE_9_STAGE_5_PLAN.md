@@ -85,7 +85,11 @@ ProductOptimizationService.optimize_product
 ```
 
 The scorer sits between generation and persistence and never touches the
-provider boundary.
+provider boundary. **Nor does it touch the prompt inputs:** Stage 4's
+`_build_variables` and `_keywords_for_prompt` are not modified, refactored,
+or shared (§5.2), so the rendered `seo_optimizer` prompt — and therefore
+the stub digest in every Stage 4 response — is byte-identical before and
+after Stage 5.
 
 ---
 
@@ -120,16 +124,28 @@ actually used, its source, and whether it was truncated are written into
 the breakdown (§9) so the score can be recomputed from the row alone later
 without consulting the product.
 
-**Effect on Stage 4, stated rather than slipped in.** Stage 4's
-`_keywords_for_prompt` today passes `meta_keywords` through unsplit. If the
-implementation shares one term-extraction helper between the two stages
-(§18, commit 2), Stage 4's `{{keywords}}` variable becomes
-`", ".join(terms)`; the only observable change is that `meta_keywords`
-spacing is normalised (`"a,b"` → `"a, b"`) and exact duplicates collapse.
-The Stage 4 unit tests keep passing as written; one new test pins the
-normalisation. If reviewers prefer zero change to Stage 4, the helper is
-duplicated for Stage 5 instead — both are acceptable, the choice must be
-recorded in the completion report.
+**Stage 5 uses its own private term-parsing helper. Stage 4 is not
+touched.** (Independent plan review, MEDIUM finding 1 — resolved by
+mandate, not by choice.)
+
+- The parsing above lives in the Stage 5 scoring module as a private
+  function (e.g. `_merchant_terms(product) -> MerchantTerms`). It is not
+  exported, not imported by `product_optimization.py`'s Stage 4 code, and
+  not placed in a shared module.
+- Stage 4's `_keywords_for_prompt` **remains exactly as merged in
+  `c3814e8b`**: same source order, `", ".join` of the raw list entries
+  (no de-duplication), `meta_keywords` passed through **unsplit and
+  un-normalised** — `meta_keywords="a,b"` renders `{{keywords}}` as `a,b`
+  today and must still render `a,b` after Stage 5. `_build_variables` is
+  likewise unchanged.
+- No refactor, extraction, or "tidy-up" that alters Stage 4 prompt
+  rendering is acceptable as part of Stage 5, because the rendered
+  `seo_optimizer` prompt is hashed into every `StubProvider` response:
+  any change to the variable text changes the digest of an already
+  accepted, merged, CI-green behaviour.
+- Stage 5 splits, strips, de-duplicates, and caps **for scoring only**;
+  none of that flows back into any prompt variable.
+- Regression tests in §16.1 pin the Stage 4 behaviour literally.
 
 Nothing else on `Product` is read. In particular `Product.seo_title`,
 `seo_description`, `seo_planning`, `slug`, images, and shipping fields —
@@ -237,7 +253,7 @@ exact; a token occurring exactly twice, or exactly 25 %, passes.
 
 | Purpose | Input | Rule |
 |---|---|---|
-| The listing text mentions the keywords the merchant said matter | merchant keyword list `K` (§5.2); haystack `H = plain(title).lower() + " " + plain(description).lower()` | if `K` is empty: **not applicable** (§7.2). Otherwise `matched = count of k in K where k is a substring of H`; points `= (50 × matched + len(K)) ÷ (2 × len(K))` in integer arithmetic — exactly round-half-up of `25 × matched / len(K)` (verified exhaustively for every `matched ≤ len(K) ≤ 50` against `Decimal.quantize(ROUND_HALF_UP)`) |
+| The listing text mentions the keywords the merchant said matter | merchant keyword list `K` (§5.2); haystack `H = plain(title).lower() + " " + plain(description).lower()` | if `K` is empty: **not applicable** — persisted exactly as the §9.2 N/A object, contributing 0 earned and 0 available points (§7.2). Otherwise `matched = count of k in K where k is a substring of H`; points `= (50 × matched + len(K)) ÷ (2 × len(K))` in integer arithmetic — exactly round-half-up of `25 × matched / len(K)` (verified exhaustively for every `matched ≤ len(K) ≤ 50` against `Decimal.quantize(ROUND_HALF_UP)`) |
 
 Edge cases: substring match, not word match — `"case"` matches `"cases"`
 (deliberately lenient; the alternative needs stemming, which is a quality
@@ -276,6 +292,24 @@ breakdown records `applicableMax` so a reader can see which scale applied.
 Because the original and every AI version of the same product are scored
 against the same keyword list at the same moment (§8), D4 is applicable to
 all of them or none, and the delta is always between like scales.
+
+**Exact N/A contract** (independent plan review, MEDIUM finding 2):
+
+- When not applicable, D4 contributes **zero earned points and zero
+  available points**: `earned` excludes it and `applicableMax` is `75`,
+  i.e. the total is rescaled over the remaining three dimensions.
+- The persisted object still says `"max": 25`. That is the dimension's
+  **nominal** maximum, kept constant so readers and tooling can rely on
+  the key; it is **not** part of the active denominator. `applicableMax`
+  is the only denominator.
+- **No synthetic keyword is created** to make the dimension applicable —
+  not from the title, category, brand, or anything else.
+- **The Stage 4 generated `keywords` content key is never a keyword
+  source.** Merchant terms come only from `search_topics` / `tags` /
+  `meta_keywords` (§5.2); provider output cannot make itself "covered".
+- **No merchant field is modified** in either branch of applicability.
+- The exact JSON for both branches is pinned in §9.2, so the implementation
+  never has to invent a field.
 
 ### 7.3 Sub-scores
 
@@ -344,6 +378,16 @@ scored at snapshot time) and `qualityBaseline` / `qualityDelta` are absent
 The delta is a property of the version, fixed at creation. Activating,
 rolling back, or generating later versions never changes it.
 
+**The baseline score can differ between optimisations of the same
+product.** If the merchant edits `search_topics` / `tags` / `meta_keywords`
+between two optimisations, the original's content is unchanged but the
+keyword list used to score it is not, so version 2 and version 3 may record
+different `qualityBaseline.score` values. That is correct: each delta is
+like-for-like *within* its own generated version — both sides scored with
+the same keyword list at the same moment — and the list is recorded in the
+breakdown. Deltas of different versions are not directly comparable to one
+another unless their recorded keyword lists match.
+
 ---
 
 ## 9. Persistence
@@ -382,6 +426,72 @@ would duplicate all of that for five keys.
   "qualityDelta": 15                                        // AI versions only: 56 − 41
 }
 ```
+
+### 9.1 `qualityBreakdown` — pinned key set and types
+
+Every key below is always present with exactly this type. There are no
+optional keys inside the breakdown; absence is expressed by `null` or by
+an empty list, never by omission.
+
+| Path | Type | Notes |
+|---|---|---|
+| `earned` | `int` | sum of the applicable dimensions' `points` |
+| `applicableMax` | `int` | `100` or `75` — the only denominator |
+| `dimensions.title.points` / `.max` / `.applicable` / `.length` | `int` / `int` (`25`) / `bool` (`true`) / `int` | `length` is `len(plain(title))` |
+| `dimensions.description.points` / `.max` / `.applicable` / `.length` | `int` / `int` (`25`) / `bool` (`true`) / `int` | `length` is `len(plain(description))` |
+| `dimensions.repetition.points` / `.max` / `.applicable` | `int` / `int` (`25`) / `bool` (`true`) | |
+| `dimensions.repetition.checks.titleNotStuffed` / `.descriptionNotPhraseStuffed` / `.descriptionNotDominated` / `.descriptionDistinctFromTitle` | `bool` ×4 | D3a–D3d; `true` means the points were awarded |
+| `dimensions.keywordCoverage` | object | one of the two exact shapes in §9.2 |
+| `seoFormat` | object or `null` | the three booleans of §7.4, or `null` when no SEO key is present |
+
+`title`, `description`, and `repetition` are always `applicable: true`
+(their inputs exist on every version, even when blank).
+
+### 9.2 `dimensions.keywordCoverage` — the two exact shapes
+
+**Applicable** (`K` non-empty):
+
+```json
+{
+  "applicable": true,
+  "points": 13,
+  "max": 25,
+  "matched": 1,
+  "total": 2,
+  "source": "search_topics",
+  "keywords": ["Canvas Case", "camera protection"],
+  "truncated": false
+}
+```
+
+- `points`: `int` 0–25 per the D4 formula.
+- `matched`: `int`, `0 ≤ matched ≤ total`.
+- `total`: `int` = `len(K)`, `1 ≤ total ≤ 50`.
+- `source`: exactly one of the strings `"search_topics"`, `"tags"`,
+  `"meta_keywords"` — the source that won under §5.2's priority.
+- `keywords`: the list `K` in order, original case preserved, at most 50.
+- `truncated`: `true` only if the winning source held more than 50 usable
+  terms.
+
+**Not applicable** (`K` empty — the merchant provided no keywords):
+
+```json
+{
+  "applicable": false,
+  "points": 0,
+  "max": 25,
+  "matched": 0,
+  "total": 0,
+  "source": null,
+  "keywords": [],
+  "truncated": false
+}
+```
+
+Exactly these eight keys, exactly these values. `max` stays `25` (nominal,
+§7.2); `applicableMax` on the breakdown is `75`. The implementation
+persists this object literally — no key is dropped, renamed, or set to a
+different placeholder.
 
 **Immutability.** Written once, inside the same `versions.create(...)` call
 that writes the Stage 3/4 keys — a version row is never updated afterwards,
@@ -524,6 +634,13 @@ correctness — the same reasoning Stage 4 recorded. `frontend/types/api.ts`
 is therefore left as-is, and the drift (now three Stage 4 fields plus the
 Stage 5 fields) is recorded once more as M4 for Stage 10 to close.
 
+**For whichever stage first displays a score:** the UI must label the two
+numbers distinctly — *"optimization quality (version)"* for Stage 5's
+`qualityScore`, which describes an immutable version snapshot, and
+*"listing SEO (product)"* for `seo_score.py`'s advisory score, which
+describes the merchant's current product. They measure different things
+on different scales and must never be shown as one number or one trend.
+
 ---
 
 ## 16. Testing contract
@@ -559,12 +676,71 @@ strings built to land on a boundary.
 **Total**
 - Rounding: earned 62 / 75 → 83; earned 1 / 75 → 1 (`(100+37)÷75=1`); earned 74 / 75 → 99 (`(7400+37)÷75=99`).
 - Determinism: scoring the same inputs twice yields equal results, and `qualityScoreVersion == 1`.
+
+**Delta contract** (independent plan review, MEDIUM finding 3). Four
+fixtures constructed from the rules above — not from model output, and
+making no claim about `StubProvider` quality. Each test asserts the
+baseline score, the candidate score, and the subtraction as three separate
+exact integers, then scores everything a second time and asserts equality.
+
+| Fixture | `title` | `description` | D1 | D2 | D3 (a,b,c,d) |
+|---|---|---|---|---|---|
+| **original** | `"Phone Case"` | `"<p>Phone Case</p>"` | 12 (len 10) | 6 (plain len 10) | 8, 8, 5, 0 → 21 (description equals title) |
+| **identical** | `"Phone Case"` | `"<p>Phone Case</p>"` | 12 | 6 | 21 |
+| **better** | `"Durable Canvas Phone Case with Camera Protection"` | `"A durable canvas phone case with raised edges for camera protection, a soft microfibre lining, and precise cut-outs for every port and button. Slim enough for a pocket and grippy enough for daily use."` | 25 (len 48) | 25 (plain len 200) | 8, 8, 5, 4 → 25 (35 tokens; no token ≥3× in title, no bigram ≥3×, no token > 25 %, differs from title) |
+| **worse** | `"Case Case Case"` | `"Case Case Case"` | 12 (len 14) | 6 (len 14) | 0, 8, 5, 0 → 13 (`case` ×3 in title fails D3a; the bigram `case case` occurs only twice so D3b passes; description equals title fails D3d) |
+
+Expected results — **without merchant keywords** (`applicableMax = 75`):
+
+| Case | earned | score | `qualityDelta` |
+|---|---|---|---|
+| original (baseline) | 39 | **52** (`(3900+37)÷75`) | — |
+| identical | 39 | **52** | **0** |
+| better | 75 | **100** | **+48** |
+| worse | 31 | **41** (`(3100+37)÷75`) | **−11** |
+
+Expected results — **with merchant keywords** `K = ["camera protection"]`
+(`applicableMax = 100`; only the *better* fixture contains the term):
+
+| Case | D4 | earned | score | `qualityDelta` |
+|---|---|---|---|---|
+| original (baseline) | 0 | 39 | **39** | — |
+| identical | 0 | 39 | **39** | **0** |
+| better | 25 | 100 | **100** | **+61** |
+| worse | 0 | 31 | **31** | **−8** |
+
+Required assertions, per keyword variant:
+
+1. `score(original) == 52` (resp. `39`) — exact baseline.
+2. `score(identical) == 52` (resp. `39`) and `delta == 0`.
+3. `score(better) == 100` and `delta == 100 − 52 == 48` (resp. `61`).
+4. `score(worse) == 41` (resp. `31`) and `delta == 41 − 52 == −11` (resp. `−8`).
+5. Each delta is computed by the same code path the service uses
+   (`candidate.score − baseline.score`), and asserted equal to the literal.
+6. Repeating every computation yields identical `QualityResult` values.
+
+These four fixtures are the canonical "did it improve" evidence for the
+rubric itself. The `StubProvider` fixture in §7.5 is separate: it pins
+what the stub happens to score, and is not evidence of anything about AI.
 - Totality: `score(content={})`, `score(content={"title": 5, "description": ["x"]})` return a result without raising.
 - **Canonical stub fixture**: content `{"title": "[STUB-AI] synthetic completion (prompt 00000000).", "description": "[STUB-AI] synthetic completion (prompt 11111111)."}` → 75 without keywords, 56 with `K=["anything"]`; `seoFormat` all `true` when the SEO keys hold the same string.
 - `seoFormat` is `null` when no SEO key is present; `seoTitleWithinRequestedBound` is `False` for a 60-character `seoTitle` and `True` for 59.
 
 **Module hygiene**
 - The scoring module's imports contain none of `app.ai`, `app.services.prompt`, `httpx`, `asyncio`, `random`, `datetime`.
+- The scoring module does not import `seo_score` (§4).
+
+**Stage 4 prompt rendering is unchanged** (§5.2) — in
+`tests/unit/test_product_optimization_variables.py`:
+- `_keywords_for_prompt(product with meta_keywords="a,b")` returns exactly
+  `"a,b"` (no split, no re-spacing).
+- `_keywords_for_prompt(product with search_topics=["x", "x"])` returns
+  exactly `"x, x"` (no de-duplication).
+- `_build_variables(...)` for a fixed fixture returns exactly the same
+  six keys with the same values as before Stage 5; the test asserts the
+  whole dict literally.
+- These pass on `c3814e8b` today and must still pass on the Stage 5 branch
+  without edits to the assertions.
 
 ### 16.2 Integration — extend `tests/integration/test_product_optimization.py`
 
@@ -589,6 +765,10 @@ strings built to land on a boundary.
 7. **`quality_scorer` and `image_analyzer` unused**: after optimize, the set
    of `PromptExecution.prompt_name` in the test transaction is exactly
    `{product_title_generator, product_description_generator, seo_optimizer}`.
+   Additionally, the `seo_optimizer` execution's `input_variables["keywords"]`
+   for a product seeded with `metaKeywords: "a,b"` (and no `searchTopics` /
+   `tags`) is exactly `"a,b"` — the Stage 4 variable reached the prompt
+   unchanged.
 8. A legacy row: insert a version through the repository with Stage 3-only
    content, read it through the endpoint → quality fields `null`; then
    optimize → the new AI version has a real `qualityDelta` computed against
@@ -631,12 +811,13 @@ Small commits, none rewritten after review begins:
    `seoFormat`, total, `QualityResult` dataclass, `QUALITY_SCORE_VERSION = 1`.
    Pure module; no session; unit tests for every rule (§16.1).
 2. `feat(ai): score versions at creation and record the delta` —
-   `ProductOptimizationService`: merchant term extraction with Stage 4's
-   source order (one shared helper, with the §5.2 normalisation effect
-   recorded — or a Stage 5-only copy if review prefers Stage 4 untouched),
-   score the original in `_ensure_original_snapshot`, score the AI content
-   and baseline in `optimize_product`, include keys in `create`. Model
-   comment on `content` updated.
+   `ProductOptimizationService`: call the Stage 5 module's **private**
+   term helper (Stage 4's `_keywords_for_prompt` and `_build_variables`
+   are **not** modified — §5.2), score the original in
+   `_ensure_original_snapshot`, score the AI content and baseline in
+   `optimize_product`, include keys in `create`. Model comment on
+   `content` updated. The diff to `product_optimization.py` must show no
+   change inside `_build_variables` or `_keywords_for_prompt`.
 3. `feat(api): expose version quality fields on ProductVersionRead` — typed
    optional fields and nested read models.
 4. `test(ai): integration coverage for scoring, deltas, legacy rows, and
@@ -667,3 +848,31 @@ only if a frontend file changes — which this plan says none will.
 
 Reported as in Stage 4: what ran, the exact numbers, and any environmental
 failure named and explained rather than omitted.
+
+---
+
+## 20. Recorded review notes — LOW findings, documented, not redesigned
+
+The independent plan review accepted the rubric architecture and raised
+these as LOW. Each is a deliberate property of the design, recorded here so
+it is never mistaken for an oversight:
+
+1. **D3 can award non-repetition points on blank text.** A blank title
+   scores D3a = 8; a blank description scores D3b = 8 and D3c = 5. This is
+   intentional: D3 measures repetition, and blank text has none. Blankness
+   is penalised once, by D1 / D2 (0 points each) and by D3d (0 for a blank
+   description). Penalising it again in D3 would double-count.
+2. **A title of 256+ characters scores D1 = 0.** Intentional: Shopify's
+   documented product-title limit is 255 characters (an external platform
+   limit, cited not derived), so such a title cannot be published as-is.
+3. **D4 substring matching is lenient.** `"case"` matches `"cases"` and
+   `"showcase"`. Intentional: the alternative (word-boundary or stemmed
+   matching) is a language-quality judgment the rubric refuses to make.
+4. **The `StubProvider` canonical scores (§7.5) are test fixtures only.**
+   They pin what the stub happens to produce so a test can be exact. They
+   are not evidence of AI quality, and no document may cite them as such.
+5. **A future UI must distinguish "optimization quality (version)" from
+   "listing SEO (product)".** See §15.
+6. **The baseline score can differ across optimisations** when merchant
+   keyword inputs change between them. See §8: comparison is like-for-like
+   within each generated version.
