@@ -105,8 +105,8 @@ export function PublishChecklist({
       ) : null}
 
       <p className="text-sm text-muted-foreground" data-testid="store-status-guidance">
-        {listing
-          ? `Store listing: ${listing.status === "synced" ? "connected" : listing.status}`
+        {listing?.status === "synced"
+          ? `On Shopify${listing.shopDomain ? ` · ${listing.shopDomain}` : ""}`
           : storeGuidance}
       </p>
     </div>

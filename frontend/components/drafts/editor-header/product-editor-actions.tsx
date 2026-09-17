@@ -1,21 +1,16 @@
 import { Eye, Loader2, Save } from "lucide-react";
 
 import { ProductActionsMenu } from "@/components/drafts/editor-header/product-actions-menu";
-import {
-  PublishAction,
-  type PublishActionKind,
-} from "@/components/drafts/editor-header/publish-action";
+import { PublishAction } from "@/components/drafts/editor-header/publish-action";
 import { Button } from "@/components/ui/button";
+import type { NextAction } from "@/lib/editor-lifecycle";
 import { cn } from "@/lib/utils";
 
 interface ProductEditorActionsProps {
+  productId: string;
   saving: boolean;
   saveDisabled: boolean;
-  dirty: boolean;
-  publishKind: PublishActionKind;
-  issueCount: number;
-  disabledPublishReason?: string | null;
-  storefrontUrl?: string | null;
+  action: NextAction;
   adminUrl?: string | null;
   refreshing: boolean;
   optimizing: boolean;
@@ -23,22 +18,19 @@ interface ProductEditorActionsProps {
   onPreview: () => void;
   onSave: () => void;
   onPublish: () => void;
+  onResolveConflict: () => void;
   onRefresh: () => void;
   onOptimize: () => void;
   onOpenAliExpress: () => void;
   onViewHistory: () => void;
-  onGoHistoryTab: () => void;
   className?: string;
 }
 
 export function ProductEditorActions({
+  productId,
   saving,
   saveDisabled,
-  dirty: _dirty,
-  publishKind,
-  issueCount,
-  disabledPublishReason,
-  storefrontUrl,
+  action,
   adminUrl,
   refreshing,
   optimizing,
@@ -46,11 +38,11 @@ export function ProductEditorActions({
   onPreview,
   onSave,
   onPublish,
+  onResolveConflict,
   onRefresh,
   onOptimize,
   onOpenAliExpress,
   onViewHistory,
-  onGoHistoryTab,
   className,
 }: ProductEditorActionsProps) {
   return (
@@ -77,7 +69,7 @@ export function ProductEditorActions({
           data-testid="save-draft"
         >
           {saving ? (
-            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" />
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
           ) : (
             <Save className="mr-1.5 h-4 w-4" aria-hidden="true" />
           )}
@@ -86,14 +78,12 @@ export function ProductEditorActions({
       ) : null}
 
       <PublishAction
-        kind={publishKind}
-        issueCount={issueCount}
-        disabledReason={disabledPublishReason}
-        storefrontUrl={storefrontUrl}
+        action={action}
+        productId={productId}
         adminUrl={adminUrl}
         onPublish={onPublish}
+        onResolveConflict={onResolveConflict}
         size="sm"
-        intent="navigate"
       />
 
       <ProductActionsMenu
@@ -104,7 +94,6 @@ export function ProductEditorActions({
         onOptimize={onOptimize}
         onOpenAliExpress={onOpenAliExpress}
         onViewHistory={onViewHistory}
-        onGoHistoryTab={onGoHistoryTab}
       />
     </div>
   );

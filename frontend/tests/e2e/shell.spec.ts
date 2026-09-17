@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { isApiReachable, registerAndSignIn } from "./helpers/auth";
+import { NAV_SECTIONS, PLANNED_NAV_ITEMS } from "../../lib/navigation";
 
 /**
  * Application shell tests.
@@ -40,26 +41,27 @@ test.describe("Sidebar", () => {
     const nav = page.getByRole("navigation", { name: "Main navigation" });
     await expect(nav).toBeVisible();
 
-    for (const section of [
-      "Main",
-      "Product Management",
-      "Sales",
-      "Stores",
-      "Analytics",
-      "System",
-    ]) {
-      // Matched by role, not text: several section names ("Stores",
-      // "Analytics") are also link labels inside the same landmark, so a text
-      // query would be ambiguous.
-      await expect(nav.getByRole("heading", { name: section })).toBeVisible();
+    // Driven by the manifest rather than a copied list, so a section renamed
+    // in `lib/navigation.ts` cannot leave this test asserting stale labels.
+    // Matched by role, not text: a section name can also be a link label
+    // inside the same landmark, so a text query would be ambiguous.
+    for (const section of NAV_SECTIONS) {
+      if (!section.label) continue;
+      await expect(nav.getByRole("heading", { name: section.label })).toBeVisible();
     }
+    // Settings is pinned in its own landmark so it survives short viewports.
+    await expect(
+      page
+        .getByRole("navigation", { name: "Secondary navigation" })
+        .getByRole("link", { name: "Settings" }),
+    ).toBeVisible();
   });
 
   test("marks the current route as active", async ({ page }) => {
     await signIn(page);
 
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await expect(nav.getByRole("link", { name: "Dashboard" })).toHaveAttribute(
+    await expect(nav.getByRole("link", { name: "Home" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -78,16 +80,18 @@ test.describe("Sidebar", () => {
     );
   });
 
-  test("unbuilt destinations are disabled, not links", async ({ page }) => {
+  test("planned destinations are not offered as navigation", async ({ page }) => {
     /**
-     * The property that keeps navigation from ever reaching a 404: a
-     * `coming-soon` item must not be a link at all.
+     * A placeholder in primary navigation advertises a capability the product
+     * does not have (UX-L2D-02). Planned entries stay in the manifest for their
+     * copy, and never render as a link or as a "coming soon" row; the routes
+     * that do exist keep answering by URL.
      */
     await signIn(page);
-    const nav = page.getByRole("navigation", { name: "Main navigation" });
-
-    await expect(nav.getByRole("link", { name: "Suppliers" })).toHaveCount(0);
-    await expect(nav.getByText("Suppliers")).toBeVisible();
+    for (const planned of PLANNED_NAV_ITEMS) {
+      await expect(page.getByRole("link", { name: planned.label })).toHaveCount(0);
+      await expect(page.getByRole("navigation").getByText(planned.label)).toHaveCount(0);
+    }
   });
 
   test("collapses and expands, persisting across reload", async ({ page }) => {
@@ -108,7 +112,7 @@ test.describe("Sidebar", () => {
     // visible label is gone — a tooltip alone would leave touch users with an
     // unlabelled icon.
     const nav = page.getByRole("navigation", { name: "Main navigation" });
-    await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Home" })).toBeVisible();
   });
 });
 
@@ -265,25 +269,22 @@ test.describe("User menu", () => {
   });
 });
 
-test.describe("Dashboard", () => {
+test.describe("Home", () => {
   test.use({ viewport: VIEWPORTS.desktop });
 
-  test("renders the heading and every live stat card", async ({ page }) => {
+  test("a new workspace is offered the setup steps, not a wall of zeros", async ({ page }) => {
+    // UX-L2D-03: a freshly registered account has no channel and no draft,
+    // so Home shows the three-step setup from real integration status and
+    // workspace counts. No metric cards, no analytics, no currency label.
     await signIn(page);
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-
-    const metrics = page.getByRole("region", { name: "Key metrics" });
-    for (const label of [
-      "Revenue",
-      "Orders",
-      "Products",
-      "Stores",
-      "Inventory units",
-      "Automation runs (7d)",
-    ]) {
-      await expect(metrics.getByText(label, { exact: true })).toBeVisible();
-    }
+    await expect(page.getByRole("heading", { level: 2, name: "Set up your workspace" })).toBeVisible();
+    await expect(page.getByTestId("empty-workspace").getByRole("listitem")).toHaveCount(3);
+    await expect(page.getByRole("region", { name: "Key metrics" })).toHaveCount(0);
+    const main = page.locator("#main-content");
+    await expect(main.getByText(/USD/)).toHaveCount(0);
+    await expect(main.getByText(/Revenue/)).toHaveCount(0);
   });
 
   test("does not present invented sample-data figures", async ({ page }) => {
@@ -292,14 +293,20 @@ test.describe("Dashboard", () => {
     await expect(page.getByText("Sample data")).toHaveCount(0);
   });
 
-  test("renders chart sections for live analytics", async ({ page }) => {
+  test("reporting sections still render on Analytics", async ({ page }) => {
+    // The chart sections moved from Home to Reports in UX-L2D-03; the
+    // coverage moves with them. Each section is a `ChartContainer` whose
+    // title is an h3 inside the page's `main`; scoped there because the
+    // sidebar also has an h2 "Sales" (its navigation group) and "Orders" is
+    // a nav link. Empty tenants show empty states rather than Recharts —
+    // the headings prove the sections mounted. The section is titled
+    // "Sales", not "Sales overview" (that was Home's old heading — the
+    // Phase 2 CI run caught the wrong name here).
     await signIn(page);
-
-    // Matched by role: "Orders" is also a nav link and a stat card label, so a
-    // text query resolves to three elements. Empty tenants show empty states
-    // rather than Recharts — headings prove the sections mounted.
-    for (const title of ["Sales overview", "Orders", "Top products"]) {
-      await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    await page.goto("/analytics");
+    const main = page.getByRole("main");
+    for (const title of ["Sales", "Orders", "Top products"]) {
+      await expect(main.getByRole("heading", { level: 3, name: title, exact: true })).toBeVisible();
     }
   });
 });

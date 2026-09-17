@@ -52,9 +52,11 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("product-editor-header")).toBeVisible();
     await expect(page.getByRole("link", { name: /Back to drafts/i })).toBeVisible();
     await expect(page.getByTestId("product-editor-title")).toBeVisible();
-    await expect(page.getByTestId("product-lifecycle")).toHaveText("Draft");
+    // UX-L2D-05 vocabulary: the badge says where the product is on Shopify,
+    // the save indicator says where the edits are. Neither says "live".
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Not on Shopify");
     await expect(page.getByTestId("draft-save-state")).toContainText(
-      /Draft saved — not live|Unsaved changes/,
+      /Saved in DropPilot|Unsaved changes/,
     );
     await expect(page.getByTestId("product-editor-store")).toContainText(
       /Choose a store in Review & publish/,
@@ -89,7 +91,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       page.getByRole("menuitem", { name: /Refresh supplier information/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: /View recent activity/i }),
+      page.getByRole("menuitem", { name: /Version history/i }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
   });
@@ -224,45 +226,34 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByText(/"code":\s*"validation_error"/)).toHaveCount(0);
   });
 
-  test("More menu History actions have distinct labels and destinations", async ({
+  test("More menu opens Version history, and offers no placeholder sections", async ({
     page,
   }) => {
     await openMockedEditor(page);
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
 
-    // selectTab uses router.replace, so History does not push a stack frame.
-    // Seed a known prior entry; Back must return here — not to a previous tab.
-    await page.evaluate(() => {
-      const here = window.location.href;
-      window.history.replaceState(window.history.state, "", "/drafts?e2e-back-target=1");
-      window.history.pushState(window.history.state, "", here);
-    });
-
     const more = visibleTestId(page, "product-actions-menu");
     await more.focus();
     await page.keyboard.press("Enter");
-    await expect(
-      page.getByRole("menuitem", { name: /^View recent activity$/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("menuitem", { name: /^Open full history$/i }),
-    ).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Version history$/i })).toBeVisible();
+    // UX-L2D-07: the "Open full history" and "AI tools" placeholders that
+    // announced Stage 6 work are gone from merchant-facing navigation.
+    await expect(page.getByRole("menuitem", { name: /Open full history/i })).toHaveCount(0);
     await shot(page, "1440x900-history-menu-labels.png");
 
-    await page.getByRole("menuitem", { name: /^View recent activity$/i }).click();
+    await page.getByRole("menuitem", { name: /^Version history$/i }).click();
     await expect(page.getByRole("dialog", { name: /Version history/i })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: /Version history/i })).toHaveCount(0);
+    await expect(more).toBeFocused();
 
-    await more.click();
-    await page.getByRole("menuitem", { name: /^Open full history$/i }).click();
-    await expect(page).toHaveURL(/[?&]tab=history/);
-    await expect(page.getByRole("heading", { name: /^History$/i })).toBeVisible();
-    await shot(page, "1440x900-full-history-section.png");
-
-    await page.goBack();
-    await expect(page).toHaveURL(/e2e-back-target=1/);
-    await expect(page.getByRole("heading", { name: /^History$/i })).toHaveCount(0);
+    await expect(page.getByTestId("editor-tab-ai-studio")).toHaveCount(0);
+    await expect(page.getByTestId("editor-tab-history")).toHaveCount(0);
+    // A stale deep link to a removed section lands on Product details.
+    await page.goto(`/drafts/${DEMO_PRODUCT_ID}?tab=history`);
+    await expect(page.getByTestId("editor-tab-overview")).toHaveAttribute("aria-selected", "true", {
+      timeout: 30_000,
+    });
   });
 
   test("long title stays two lines and does not hide actions", async ({
@@ -710,7 +701,7 @@ test.describe("UX-L2A editor foundation — save failure", () => {
       timeout: 5_000,
     });
     await expect(page.getByTestId("draft-save-state")).toContainText(
-      "Draft saved — not live",
+      "Saved in DropPilot",
       { timeout: 15_000 },
     );
     await shot(page, "1440x900-saving-inflight.png");
@@ -758,7 +749,7 @@ test.describe("UX-L2A editor foundation — save failure", () => {
     await expect(page.getByTestId("draft-save-retry")).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("draft-save-retry").click();
     await expect(page.getByTestId("draft-save-state")).toContainText(
-      "Draft saved — not live",
+      "Saved in DropPilot",
       { timeout: 15_000 },
     );
   });
@@ -775,10 +766,10 @@ test.describe("UX-L2A editor foundation — save failure", () => {
   });
 });
 
-test.describe("UX-L2A editor foundation — live listing copy", () => {
+test.describe("UX-L2A editor foundation — synced listing copy", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("live store save wording when listing is synced", async ({ page }) => {
+  test("synced listing wording never says live", async ({ page }) => {
     const listing: StoreListing = {
       id: "66666666-6666-4666-8666-666666666666",
       storeId: "77777777-7777-4777-8777-777777777777",
@@ -791,20 +782,24 @@ test.describe("UX-L2A editor foundation — live listing copy", () => {
       adminUrl: "https://demo-shop.myshopify.com/admin/products/1",
       onlineStorePublished: true,
       status: "synced",
-      lastSyncedAt: new Date().toISOString(),
+      // Later than the synthetic product's `updatedAt` (created inside
+      // `openMockedEditor`), so the pair reads as synced rather than as
+      // "changes not sent" by a few milliseconds.
+      lastSyncedAt: new Date(Date.now() + 60_000).toISOString(),
       lastError: null,
       publishedAt: new Date().toISOString(),
       lastFailedSyncAt: null,
     };
     await openMockedEditor(page, { listings: [listing] });
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("product-lifecycle")).toHaveText("Published");
-    await expect(page.getByTestId("draft-save-state")).toContainText(
-      /Changes saved as a draft — your live product has not changed/,
-    );
+    // `onlineStorePublished: true` is the only evidence that earns "visible";
+    // the save indicator stays about DropPilot and never mentions "live".
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Visible on your shop");
+    await expect(page.getByTestId("draft-save-state")).toContainText("Saved in DropPilot");
+    await expect(page.getByTestId("draft-save-state")).not.toContainText(/live/i);
     await expect(page.getByTestId("product-editor-store")).toContainText(
       "demo-shop.myshopify.com",
     );
-    await shot(page, "1440x900-live-draft-wording.png");
+    await shot(page, "1440x900-synced-listing-wording.png");
   });
 });

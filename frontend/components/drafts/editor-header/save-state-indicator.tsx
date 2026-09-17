@@ -1,105 +1,86 @@
+"use client";
+
 import { AlertCircle, Check, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { SaveStateView } from "@/lib/editor-lifecycle";
 import { cn } from "@/lib/utils";
 
+/** The editor's raw save phase; the lifecycle layer turns it into words. */
 export type SaveState = "idle" | "saving" | "saved" | "error" | "conflict";
 
 interface SaveStateIndicatorProps {
-  dirty: boolean;
-  saveState: SaveState;
-  /**
-   * When the product already has a synced store listing, successful saves are
-   * described as draft changes that have not yet updated the live listing.
-   * Only set when the server listing status confirms a live channel record.
-   */
-  isLiveOnStore?: boolean;
+  save: SaveStateView;
   onRetry?: () => void;
   className?: string;
 }
 
-export function SaveStateIndicator({
-  dirty,
-  saveState,
-  isLiveOnStore = false,
-  onRetry,
-  className,
-}: SaveStateIndicatorProps) {
-  let label = isLiveOnStore
-    ? "Changes saved as a draft — your live product has not changed"
-    : "Draft saved — not live";
-  let tone: "muted" | "warn" | "error" | "ok" = "muted";
-  let Icon: typeof Check | null = Check;
-  let showRetry = false;
+/**
+ * Where the merchant's edits are — in the browser, in flight, or in
+ * DropPilot. Never where they are on Shopify: that is the listing badge's
+ * job, and the two sit side by side so neither has to hedge the other.
+ *
+ * The visible text changes with every phase. The announcement does not:
+ * "Saving…" is skipped so an autosave cycle reads as one update ("Saved in
+ * DropPilot") rather than two, and the live region sits outside the test id
+ * so assertions see only what a sighted merchant sees.
+ */
+export function SaveStateIndicator({ save, onRetry, className }: SaveStateIndicatorProps) {
+  const [announced, setAnnounced] = useState(save.label);
+  useEffect(() => {
+    if (save.kind !== "saving") setAnnounced(save.label);
+  }, [save.kind, save.label]);
 
-  // In-flight request wins over dirty — derived from the real save lifecycle.
-  if (saveState === "saving") {
-    label = "Saving…";
-    tone = "muted";
-    Icon = Loader2;
-  } else if (saveState === "error") {
-    label = "Couldn’t save";
-    tone = "error";
-    Icon = AlertCircle;
-    showRetry = Boolean(onRetry);
-  } else if (saveState === "conflict") {
-    label = "Someone else saved this product";
-    tone = "error";
-    Icon = AlertCircle;
-  } else if (dirty) {
-    label = "Unsaved changes";
-    tone = "warn";
-    Icon = null;
-  } else if (saveState === "saved") {
-    label = isLiveOnStore
-      ? "Changes saved as a draft — your live product has not changed"
-      : "Draft saved — not live";
-    tone = "ok";
-    Icon = Check;
-  } else {
-    label = isLiveOnStore
-      ? "Changes saved as a draft — your live product has not changed"
-      : "Draft saved — not live";
-    tone = "muted";
-    Icon = Check;
-  }
+  const Icon =
+    save.kind === "saving"
+      ? Loader2
+      : save.kind === "save-error" || save.kind === "conflict"
+        ? AlertCircle
+        : save.kind === "unsaved"
+          ? null
+          : Check;
 
   return (
-    <span
-      className={cn(
-        "inline-flex max-w-full flex-wrap items-center gap-1.5 text-xs font-medium",
-        tone === "warn" && "text-amber-700 dark:text-amber-400",
-        tone === "error" && "text-destructive",
-        tone === "ok" && "text-emerald-700 dark:text-emerald-400",
-        tone === "muted" && "text-muted-foreground",
-        className,
-      )}
-      data-testid="draft-save-state"
-      aria-live="polite"
-      aria-atomic="true"
-    >
-      {Icon ? (
-        <Icon
-          className={cn(
-            "h-3.5 w-3.5 shrink-0",
-            saveState === "saving" && "animate-spin motion-reduce:animate-none",
-          )}
-          aria-hidden="true"
-        />
-      ) : null}
-      <span className="min-w-0">{label}</span>
-      {showRetry ? (
-        <Button
-          type="button"
-          variant="link"
-          size="sm"
-          className="h-auto px-1 py-0 text-xs"
-          onClick={onRetry}
-          data-testid="draft-save-retry"
-        >
-          Try again
-        </Button>
-      ) : null}
-    </span>
+    <>
+      <span
+        className={cn(
+          "inline-flex max-w-full items-center gap-1.5 text-xs font-medium",
+          save.tone === "warning" && "text-amber-700 dark:text-amber-400",
+          save.tone === "danger" && "text-destructive",
+          save.tone === "success" && "text-emerald-700 dark:text-emerald-400",
+          save.tone === "neutral" && "text-muted-foreground",
+          className,
+        )}
+        data-testid="draft-save-state"
+        data-kind={save.kind}
+      >
+        {Icon ? (
+          <Icon
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              save.kind === "saving" && "animate-spin motion-reduce:animate-none",
+            )}
+            aria-hidden="true"
+          />
+        ) : null}
+        <span className="min-w-0">{save.label}</span>
+        {save.retry && onRetry ? (
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            className="h-auto px-1 py-0 text-xs"
+            onClick={onRetry}
+            data-testid="draft-save-retry"
+          >
+            Try again
+          </Button>
+        ) : null}
+      </span>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announced}
+      </span>
+    </>
   );
 }

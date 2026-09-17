@@ -13,13 +13,13 @@ Statuses: `NOT_STARTED` · `IN_PROGRESS` · `AWAITING_CI` · `BLOCKED` · `SELF_
 | DP-PH1-03 | SELF_VERIFIED | `5bf20d67` → `5bf20d67` | Worker mode recorded; ports 3137/8137 free and used; 3000/8000/8001 observed only; shell env clean of `CI`/`E2E_*`/`NEXT_PUBLIC_*` | Task doc §Phase 1 execution record | — |
 | DP-PH1-04 | SELF_VERIFIED | `5bf20d67` → `5bf20d67` | All five guard checks pass (scanner byte-identical, 4 blank template values, per-run Fernet, exact blank-secret assertion, PG17/Compose probe, 6 `:?` guards) | Task doc §Phase 1 execution record | — |
 | DP-PH1-05 | SELF_VERIFIED | `5bf20d67` → `74c269f` | Fixture + regression + 4 imports; local `provider-isolation` 10/10; affected hermetic specs 252/46/0; negative control detects the unguarded path; Google-auth/CSP stubs untouched | Commit `74c269f`; task doc §F-1 mechanism | API-backed paths → CI |
-| DP-PH1-06 | AWAITING_CI | `74c269f` → (final) | Hermetic flows verified locally; backend-dependent boundary/Google/CSP flows require the final-SHA CI run | Task doc §DP-PH1-06 | Final-SHA CI |
-| DP-PH1-07 | AWAITING_CI | `74c269f` → `f53520d` | Reporter commit `b978694`; `ci.yml` upload hunk isolated in `f53520d` (owner-authorised, pushed with the owner's credentials); `always()`/artifact naming verified only by the final-SHA run | Commits `b978694`, `f53520d` | Final-SHA CI artifact |
+| DP-PH1-06 | INDEPENDENTLY_ACCEPTED | `74c269f` → `c0092da6` | Backend-dependent flows verified by final-SHA CI run 34846601320 (Playwright 517/0/9, 0 flaky) | Owner-held Phase 1 report §E/§G | — |
+| DP-PH1-07 | INDEPENDENTLY_ACCEPTED | `74c269f` → `f53520d` | Reporter + `always()` upload verified: artifact `playwright-report-b1c44f8b…-run34846601320-attempt1` read on a green run | Owner-held Phase 1 report §E/§F | Artifact name uses merge-commit `github.sha` (Low, open) |
 | DP-PH1-08 | SELF_VERIFIED | — | Evidence statement written from pinned versions, run 34762683334 failure text and run 34785118939 job log (RabbitMQ 4.3.5; 5 tasks executed) | Task doc §Celery evidence statement; CHANGELOG runtime note | Multi-worker drill deferred |
 | DP-PH1-09 | SELF_VERIFIED | — | CHANGELOG `[Unreleased]/Fixed` entry; ROADMAP Phase 1 row + Last updated 2026-09-14; ledger | This commit | Freeze after DP-PH1-11 |
-| DP-PH1-10 | AWAITING_CI | (this commit = candidate final SHA) | Push and obtain the `pull_request` run on this exact SHA; totals, skip matrix and artifact read from the run — recorded in the owner-held report, not rewritten here | `DP-Phase-1-Claude-Final-Report.md` §E | CI result |
+| DP-PH1-10 | INDEPENDENTLY_ACCEPTED | `c0092da6` | Run 34846601320 attempt 1, `pull_request`, all 10 jobs success; merge-ref tree = HEAD tree | Owner-held Phase 1 report §E | — |
 | DP-PH1-11 | SELF_VERIFIED | `a543b029`..(this commit) | 20 files in range = 12 adopted + 8 closure paths; `git diff --check` clean; `check_secrets.py` PASS (784 files, 5 rules); no `.env`, build output, `npm-ci.log`, `test-results` or migration committed; build side-effect on `tsconfig.json` reverted | This commit; report §H | Stop `:3137`, remove `.next-r7` after CI |
-| DP-PH1-12 | IN_PROGRESS | — | Final report written after the CI result; Cursor handoff carries the exact final SHA | Owner-held report | — |
+| DP-PH1-12 | INDEPENDENTLY_ACCEPTED | `c0092da6` | Report delivered; Cursor verdict `PASS — PHASE 1 MAY CLOSE`; owner accepted 2026-09-15 | Owner-held `DP-Phase-1-Claude-Final-Report.md`, `DP-Phase-1-Cursor-Review.md` | PR #7 merge is a separate owner decision |
 
 ## Checkpoints
 
@@ -32,3 +32,8 @@ Statuses: `NOT_STARTED` · `IN_PROGRESS` · `AWAITING_CI` · `BLOCKED` · `SELF_
 - Build into `frontend/.next-r7` (git- and eslint-ignored); `next build` rewrote `frontend/tsconfig.json` as a side effect and the change was reverted, not committed.
 - Standalone server on `127.0.0.1:3137` only; no backend, database, Redis or broker created.
 - Two draft defects in the regression spec were found by running it and fixed before commit (nonce precondition; exact sentinel pattern). Recorded in the task document.
+
+### 2026-09-15 — Independent acceptance (recorded from the UX-L2D branch)
+- Cursor independent review of `c0092da6dde6f5dfa586436efd63a33097ed7e7c` (tree `99ed4f48`, base `a543b029`, CI run 34846601320): no Blocker/High findings; one previously disclosed Medium runtime/staging item (Celery exclusive pidbox queues, single-worker verified only); non-blocking Low/Info. Verdict `PASS — PHASE 1 MAY CLOSE`; owner accepted.
+- PR #7 remains a draft and is **not merged**; the accepted SHA is not modified by this note (it is recorded on `feature/ux-l2d-dashboard`, stacked on that SHA).
+- The Celery multi-worker/restart/monitor drill is carried forward as a separate safe-staging validation item, outside UX-L2D.

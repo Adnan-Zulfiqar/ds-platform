@@ -329,7 +329,7 @@ export function DraftShippingPanel({
             Save shipping settings
           </Button>
           {saved ? (
-            <span className="text-xs text-muted-foreground">Draft saved — not live</span>
+            <span className="text-xs text-muted-foreground">Saved in DropPilot</span>
           ) : null}
           {error ? (
             <span className="text-xs text-destructive" role="alert">

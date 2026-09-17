@@ -16,8 +16,8 @@ import {
   CHART_COLOURS,
   GRID_PROPS,
   TOOLTIP_STYLE,
-  formatCurrency,
-  formatCurrencyCompact,
+  formatAmount,
+  formatAmountCompact,
 } from "@/components/dashboard/charts/chart-theme";
 import type { TimeSeriesPoint } from "@/services/dashboard";
 
@@ -32,8 +32,9 @@ interface SalesChartProps {
  * revenue and profit — the margin, which is the number that actually matters to
  * a dropshipping operator — readable at a glance.
  *
- * Axis ticks are abbreviated (`$47.2k`) to keep the axis narrow; the tooltip
- * shows full precision, so nothing is lost.
+ * Axis ticks are abbreviated (`47.2k`) to keep the axis narrow; the tooltip
+ * shows full precision, so nothing is lost. No currency symbol: the API does
+ * not say which currency these are in.
  */
 export function SalesChart({ data }: SalesChartProps) {
   return (
@@ -54,11 +55,11 @@ export function SalesChart({ data }: SalesChartProps) {
 
         <CartesianGrid {...GRID_PROPS} />
         <XAxis dataKey="label" {...AXIS_PROPS} />
-        <YAxis {...AXIS_PROPS} tickFormatter={formatCurrencyCompact} width={56} />
+        <YAxis {...AXIS_PROPS} tickFormatter={formatAmountCompact} width={56} />
 
         <Tooltip
           contentStyle={TOOLTIP_STYLE}
-          formatter={(value: number, name: string) => [formatCurrency(value), name]}
+          formatter={(value: number, name: string) => [formatAmount(value), name]}
           cursor={{ stroke: CHART_COLOURS.grid }}
         />
         <Legend

@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -6,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
+import { toListParams } from "@/services/list-query";
 import type {
   ListQuery,
   Page,
@@ -48,7 +50,7 @@ export const productKeys = {
 
 async function fetchProducts(query: ListQuery): Promise<Page<Product>> {
   const { data } = await apiClient.get<Page<Product>>("/products", {
-    params: query,
+    params: toListParams(query),
   });
   return data;
 }
@@ -59,6 +61,8 @@ export function useProducts(
   return useQuery({
     queryKey: productKeys.list(query),
     queryFn: () => fetchProducts(query),
+    // See `useDrafts`: keep the current page visible while the next loads.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -95,7 +99,7 @@ async function fetchImports(
 ): Promise<Page<ProductImportRecord>> {
   const { data } = await apiClient.get<Page<ProductImportRecord>>(
     "/products/imports",
-    { params: query },
+    { params: toListParams(query) },
   );
   return data;
 }

@@ -33,7 +33,7 @@ test.describe("Draft editor header — desktop", () => {
     await expect(page.getByTestId("product-editor-header")).toBeVisible();
     await expect(page.getByRole("link", { name: /Back to drafts/i })).toBeVisible();
     await expect(page.getByTestId("product-editor-title")).toBeVisible();
-    await expect(page.getByTestId("product-lifecycle")).toHaveText("Draft");
+    await expect(page.getByTestId("product-lifecycle")).toHaveText("Not on Shopify");
     await expect(page.getByTestId("draft-save-state")).toBeVisible();
     await expect(visibleTestId(page, "publish-action")).toHaveCount(1);
 
@@ -49,7 +49,7 @@ test.describe("Draft editor header — desktop", () => {
     await expect(
       page.getByRole("menuitem", { name: /Improve with AI tools/i }),
     ).toBeVisible();
-    await expect(page.getByRole("menuitem", { name: /View recent activity/i })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /Version history/i })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Delete Draft/i })).toHaveCount(0);
 
     await page.screenshot({

@@ -1,7 +1,6 @@
 export { MobileEditorActionBar } from "@/components/drafts/editor-header/mobile-editor-action-bar";
 export { ProductActionsMenu } from "@/components/drafts/editor-header/product-actions-menu";
 export { ProductEditorActions } from "@/components/drafts/editor-header/product-editor-actions";
-export { ProductEditorBreadcrumb } from "@/components/drafts/editor-header/product-editor-breadcrumb";
 export {
   ProductEditorHeader,
   ProductEditorHeaderSkeleton,
@@ -13,15 +12,10 @@ export {
   ProductEditorTabs,
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
-export { ProductIdentity } from "@/components/drafts/editor-header/product-identity";
-export { ProductMetrics } from "@/components/drafts/editor-header/product-metrics";
 export { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
+export { PublishAction } from "@/components/drafts/editor-header/publish-action";
+export { ShopifyStatus } from "@/components/drafts/editor-header/shopify-status";
 export {
-  PublishAction,
-  type PublishActionKind,
-} from "@/components/drafts/editor-header/publish-action";
-export {
-  estimateMarginPercent,
   formatSupplierSyncedAt,
   readinessFor,
   shipToLabel,
@@ -33,6 +27,5 @@ export {
 } from "@/components/drafts/editor-header/save-state-indicator";
 export {
   deriveSupplierSyncKind,
-  SupplierSyncStatus,
   type SupplierSyncKind,
 } from "@/components/drafts/editor-header/supplier-sync-status";

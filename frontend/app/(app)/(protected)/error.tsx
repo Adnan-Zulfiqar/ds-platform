@@ -29,7 +29,7 @@ export default function ProtectedError({
   }, [error]);
 
   return (
-    <div className="p-4 sm:p-6">
+    <div>
       <ErrorState
         title="Something went wrong"
         description="This page could not be displayed. You can try again, and if the problem persists please contact support."

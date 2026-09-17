@@ -38,10 +38,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <TopNav />
 
-          {/* `id` is the skip-link target from the root layout. `min-w-0` stops
-              a wide child — a table, a chart — forcing the whole shell to
-              scroll horizontally instead of scrolling within its own box. */}
-          <main id="main-content" className="min-w-0 flex-1 overflow-y-auto">
+          {/* `id` is the skip-link target from the root layout; `tabIndex={-1}`
+              lets the link actually move focus here in every browser, not only
+              the ones that move the sequential-focus start on a fragment jump.
+              `min-w-0` stops a wide child — a table, a chart — forcing the
+              whole shell to scroll horizontally instead of scrolling within
+              its own box. */}
+          <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto outline-none">
             {children}
           </main>
         </div>

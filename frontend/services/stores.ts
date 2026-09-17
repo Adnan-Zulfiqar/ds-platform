@@ -53,15 +53,6 @@ export interface StoreCurrencyRefreshResult {
   source: string;
 }
 
-export interface StoreCreatePayload {
-  name: string;
-  slug: string;
-  platform?: StorePlatform;
-  storefrontUrl?: string;
-  currency?: string;
-  credentials?: Record<string, string>;
-}
-
 export interface StoreStatistics {
   totalStores: number;
   byStatus: Record<string, number>;
@@ -95,19 +86,6 @@ export function useStoreStatistics(): UseQueryResult<StoreStatistics> {
     queryFn: async () => {
       const { data } = await apiClient.get<StoreStatistics>("/stores/statistics");
       return data;
-    },
-  });
-}
-
-export function useCreateStore() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (payload: StoreCreatePayload) => {
-      const { data } = await apiClient.post<Store>("/stores", payload);
-      return data;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: storeKeys.all });
     },
   });
 }

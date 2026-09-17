@@ -10,6 +10,159 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **UX-L2D-07 — Cross-app hardening (on `feature/ux-l2d-dashboard`, not
+  merged; Phase 2 implementation complete, pending independent review and CI
+  verification).** Journey, accessibility, responsive (1440/1280/1024/768/390,
+  light and dark), vocabulary, dead-UX and performance pass over the accepted
+  UX-L2D-01…06 work. Removed the editor's `AI tools` and `History`
+  placeholder sections (real actions stay in the More menu); neutralised the
+  hard-coded `$`/USD on Analytics (figures shown as recorded — BACKEND
+  DEPENDENCY — ANALYTICS CURRENCY); aligned Home's channel words with the
+  Integrations vocabulary; reworded the last ambiguous "live" copy;
+  catalogue cards from `lg`; named section-strip chevrons; focusable
+  skip-link target; non-animating status badges; Home shares the bell's
+  notifications request; the editor no longer polls the store list every
+  15 s; deleted unreferenced L2A-era header components and helpers. Two
+  timing-sensitive assertions made deterministic. New
+  `ux-l2d-hardening.spec.ts` (semantics, keyboard reachability, the
+  visual matrix, cross-app journeys). Vitest 74/74 locally, not a CI gate.
+
+- **UX-L2D-06 — Channels / Integrations (on `feature/ux-l2d-dashboard`,
+  not merged).** `/settings/integrations` is the canonical connect, repair
+  and disconnect surface; `/stores` becomes a supporting record view
+  (`MAKE INTEGRATIONS CANONICAL; KEEP STORES AS SUPPORTING ROUTE`). One
+  connection-state vocabulary (`lib/channel-state.ts`, 28 Vitest scenarios)
+  maps the real status payloads — Shopify `configured`/`status`/
+  `webhookHealth`, AliExpress computed `connected`/`isTokenExpired`, eBay
+  `configured`/`connected`/`needsReconnect`/`reconnectReason`, `Store.status`
+  — to Checking · Status unavailable · Setup unavailable · Not connected ·
+  Awaiting authorization · Connected · Needs attention · Reconnect required.
+  Shared `ChannelCard`/`ChannelStatusBadge`/`DisconnectDialog`; a channel
+  overview strip; disconnect confirmations that state the backend's actual
+  consequences; role-aware cards (viewers see state, not buttons that 403);
+  Shopify's raw `lastError` no longer rendered; AliExpress "not configured"
+  422 becomes an operator-facing state instead of env-var names. The manual
+  "Add store" dialog is removed from the merchant UI (it created unauthorised
+  `pending` rows that surfaced in the editor's store list); `/stores` keeps
+  its route, drops the unexplained health number, and links every row to
+  Integrations. Backend-less `channels.spec.ts` (25 × 2 projects) covers
+  every state; `integrations.spec.ts` gets the historical main-scoped
+  selector and the confirm step. Backend dependency recorded: AliExpress
+  status has no `configured` flag.
+
+- **UX-L2D-05 — Product editor lifecycle clarity (on
+  `feature/ux-l2d-dashboard`, not merged).** One pure derivation
+  (`lib/editor-lifecycle.ts`, composing the UX-L2D-04 listing authority) now
+  drives the header badge, save indicator, primary action, mobile bar,
+  post-publish panel and Review & publish. Vocabulary: Not on Shopify /
+  Added to Shopify / Visible on your shop (only on
+  `onlineStorePublished === true`) / Changes not sent to Shopify (only when
+  the saved draft is provably newer than `lastSyncedAt`) / Sending to
+  Shopify… / Publish failed / Shopify status unavailable; save state reads
+  Unsaved changes / Saving… / Saved in DropPilot / Couldn't save / Saving
+  paused. "Draft — not live" and "your live product has not changed" are
+  gone (UX-L2D-01 F-4). Header controls navigate (Review & publish, Update
+  Shopify, View product, Resolve conflict); only the panel publishes, and
+  it separates "Validation passed" from "Published to Shopify". The
+  section strip gains edge fades, chevrons and scroll-to-selected (F-9);
+  the header's inline actions move to `xl` so 1024 keeps a readable title;
+  the mobile bar gives the primary action the width. Conflict UX is
+  presentation-only: banner focus on the `none → detected` transition,
+  dialogs return focus on close, manual Save withdrawn and publishing
+  disabled with the reason while a conflict is open — `expectedUpdatedAt`,
+  409 handling, the phases and the autosave gate are unchanged. Vitest is
+  added for the pure lifecycle modules (`npm run test:unit`, 46 tests, not
+  run by CI); Playwright `editor-lifecycle.spec.ts` (30 × 2 projects,
+  backend-less) covers the rendered states; `editor-fixture.ts` gains
+  listings/publish responders only.
+
+- **UX-L2D-04 — Catalogue, Drafts and the product page (on
+  `feature/ux-l2d-dashboard`, not merged).** Closes the UX-L2D-01 Critical:
+  `/products/[productId]` exists, adapted from the reviewed historical UX-L2C
+  page (UX-L2D-GATE-04) — reads `GET /products/{id}` and
+  `GET /drafts/{id}/listings`, sends a product with no synced listing to the
+  draft editor instead of showing it as published, answers a non-UUID path
+  as "Product not found" without calling the API, renders missing and
+  foreign ids identically, strips description HTML to text and links out
+  only to HTTPS `*.myshopify.com` URLs the server supplied. Products rows
+  navigate and say "Published" (the list endpoint's own predicate), not a
+  hard-coded Shopify lifecycle. Drafts and Products gain server-side search
+  (`q`), sort (`sort_by`/`sort_dir` — the wire names the API reads), paging
+  from the server's `meta`, URL-synchronised state (refresh, Back/Forward,
+  shareable links, safe fallbacks for bad values), distinct empty /
+  no-results / out-of-range / error states, one labelled primary action per
+  row with icon-only secondary actions, and a card list below `md`.
+  `lib/listing-lifecycle.ts` and `lib/external-link.ts` are the listing
+  authority and link allowlist; `useDraftListings` takes the reviewed
+  `retry: false` / `refetchOnMount: "always"`. No lifecycle/AI/readiness
+  filter (no API parameter) and no thumbnails (no list-row image field) —
+  both recorded as backend dependencies. Vitest deferred; coverage is
+  Playwright (`catalogue.spec.ts`, backend-less) plus the adapted
+  backend-gated `product-route-isolation.spec.ts`.
+
+- **UX-L2D-03 — Home (on `feature/ux-l2d-dashboard`, not merged).** The
+  analytics wall (fourteen metric cards, three charts, revenue hard-coded to
+  `USD`) is replaced by an operations page built only from endpoints that
+  exist: a needs-attention list (expired or degraded channels, failed imports,
+  failed AI optimisation on recent drafts, order-sync failures, unread failure
+  notifications), a single rule-based next step, three catalogue tiles from
+  `workspace-counts` and `orders/statistics`, the five most recently edited
+  drafts (`GET /drafts?sort_by=updated_at`), channel status as word plus
+  sentence, and recent notifications. A workspace with nothing connected and
+  nothing imported gets a three-step setup instead of zeros. Home shows no
+  monetary figure: the analytics revenue sums mixed-currency orders with no
+  currency in the payload, so no label is true (that caveat now sits on
+  Reports as a known limitation). No "ready to publish" count is shown — a
+  per-draft server check with no aggregate remains a backend dependency.
+  `services/list-query.ts` translates `sortBy`/`sortDir` to the `sort_by`/
+  `sort_dir` names the API reads (drafts, products, imports previously sent
+  camelCase and were silently unsorted). `openMockedEditor` answers the
+  shell's three requests so the editor suites run without a backend. Charts,
+  stat cards and order-sync cards remain on `/analytics` and `/orders`. The
+  `/products/[productId]` Critical stays open for UX-L2D-GATE-04.
+
+- **UX-L2D-02 — application shell (on `feature/ux-l2d-dashboard`, not
+  merged).** `PageContainer` applied once in `(protected)/layout.tsx` gives
+  every page the same gutter and a centred `2xl` maximum width; Drafts,
+  Products, Import history and the editor no longer render flush against the
+  sidebar (UX-L2D-01 F-5). Navigation is re-grouped by merchant job — Home ·
+  Catalogue · Sales · Channels · Automation · Reports — with Settings pinned
+  beneath a scrolling list that fades the edge hiding items, so nothing falls
+  below the fold at laptop heights (F-7); planned destinations leave the
+  sidebar; the top bar drops its two permanently disabled placeholder controls
+  and shows a section › page breadcrumb. Backend-less regression
+  `ux-l2d-shell.spec.ts` (gutters at 1440/1024/390, manifest completeness,
+  every href resolves, breadcrumb, sidebar at 900 and 640 px, drawer, dark
+  mode). No backend, auth, concurrency, integrations or historical UX-L2C code
+  changed; the `/products/[productId]` Critical stays open for
+  UX-L2D-GATE-04.
+
+- **UX-L2D-01 — Phase 2 baseline and UX audit (on `feature/ux-l2d-dashboard`,
+  stacked on the accepted Phase 1 SHA `c0092da6`; not merged).** Documentation
+  only: `docs/ux/ux-l2d-01-baseline.md` records the repository baseline, the
+  frontend architecture, a screen inventory, 15 findings (one Critical: every
+  link on `/products` 404s because the accepted tree has no
+  `/products/[productId]` route), the proposed job-based information
+  architecture, design-system direction, Home/Drafts/editor proposals and the
+  UX-L2D-02…07 backlog. The programme was renamed from UX-L2C to **UX-L2D**
+  because `feature/ux-l2c-live-state-clarity` already carries unmerged
+  historical UX-L2C work; that branch is subject to **UX-L2D-GATE-04**, a
+  mandatory behaviourally verified review before UX-L2D-04, and the Critical
+  finding stays open until the gate resolves ownership. No application code
+  changed.
+
+### Changed
+
+- **Documentation state corrections.** UX-L2B is present in `develop`
+  (`a543b029` is the tip of `feature/ux-l2b-publish-integrity`); earlier
+  entries below describing it as "not merged" predate that fast-forward.
+  Phase 1 (`c0092da6`) was independently accepted by Cursor on 2026-09-15
+  (`PASS — PHASE 1 MAY CLOSE`); PR #7 remains a draft and is **not** merged.
+  Historical UX-L2C (`feature/ux-l2c-live-state-clarity`, `ece8322`) exists
+  remotely, unmerged and not independently accepted.
+
 ### Fixed
 
 - **Phase 1 — Git/CI baseline and PR #7 closure (on
@@ -37,8 +190,9 @@ production release.
   RabbitMQ 4.3.5, which denies the deprecated `transient_nonexcl_queues`
   declaration and is what exposed the failure; the Lightsail pin
   `rabbitmq:4.0-alpine` and the local `rabbitmq:4-management-alpine` tag have
-  not been exercised against the new settings outside CI. Not independently
-  accepted; not merged; not deployed; UX-L2C not started.
+  not been exercised against the new settings outside CI. Independently
+  accepted by Cursor on 2026-09-15 (`PASS — PHASE 1 MAY CLOSE`) at
+  `c0092da6`; PR #7 still draft, not merged; not deployed.
 
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
   `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run

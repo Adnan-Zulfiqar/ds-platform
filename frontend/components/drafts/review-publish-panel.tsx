@@ -7,11 +7,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { EditorTab } from "@/components/drafts/editor-header";
+import type { ShopifyState } from "@/lib/editor-lifecycle";
+import { editorTabForSection, sellerSectionLabel } from "@/lib/editor-section-labels";
 import type {
   ShopifyPublishCheckItem,
   ShopifyPublishReadiness,
   ShopifyPublishResult,
-  StoreListing,
 } from "@/types/api";
 import { DraftPostPublishPanel } from "@/components/drafts/draft-post-publish-panel";
 
@@ -47,26 +48,14 @@ type ReviewPublishPanelProps = {
   publishOk: string | null;
   publishPending: boolean;
   publishResult: ShopifyPublishResult | null;
-  syncedListing: StoreListing | null | undefined;
+  /** The editor's lifecycle view of Shopify — see `lib/editor-lifecycle.ts`. */
+  shopify: ShopifyState;
+  /** A conflict is unresolved; saving (and therefore publishing) is paused. */
+  hasEditingConflict: boolean;
   onPublish: () => void;
   onOpenSection: (tab: EditorTab) => void;
   onContinueEditing: () => void;
 };
-
-function isEditorSection(value: string | null): value is EditorTab {
-  if (!value) return false;
-  return (
-    value === "overview" ||
-    value === "description" ||
-    value === "media" ||
-    value === "variants" ||
-    value === "pricing" ||
-    value === "seo" ||
-    value === "publishing" ||
-    value === "shipping" ||
-    value === "inventory"
-  );
-}
 
 function CheckItemList({
   items,
@@ -79,7 +68,12 @@ function CheckItemList({
 }) {
   return (
     <ul className="space-y-3" data-testid={`publish-${tone}-list`}>
-      {items.map((item) => (
+      {items.map((item) => {
+        // The API's section keys are its own vocabulary; the merchant sees
+        // the editor section's name, and an unknown key shows nothing.
+        const sectionLabel = sellerSectionLabel(item.section);
+        const sectionTab = editorTabForSection(item.section);
+        return (
         <li
           key={`${item.code}-${item.field ?? ""}-${item.message}`}
           className="rounded-md border border-border/80 bg-background p-3"
@@ -87,17 +81,17 @@ function CheckItemList({
           data-code={item.code}
         >
           <p className="text-sm font-medium text-foreground">{item.message}</p>
-          {item.section ? (
+          {sectionLabel ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              Section: {item.section}
+              In {sectionLabel}
             </p>
           ) : null}
-          {item.action && isEditorSection(item.section) ? (
+          {item.action && sectionTab ? (
             <Button
               type="button"
               variant="link"
               className="mt-1 h-11 min-h-11 px-0 text-sm"
-              onClick={() => onOpenSection(item.section as EditorTab)}
+              onClick={() => onOpenSection(sectionTab)}
             >
               {item.action}
             </Button>
@@ -112,12 +106,14 @@ function CheckItemList({
             </Button>
           ) : null}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
 
 export function ReviewPublishPanel({
+  productId,
   stores,
   storeId,
   onStoreChange,
@@ -132,7 +128,8 @@ export function ReviewPublishPanel({
   publishOk,
   publishPending,
   publishResult,
-  syncedListing,
+  shopify,
+  hasEditingConflict,
   onPublish,
   onOpenSection,
   onContinueEditing,
@@ -148,20 +145,35 @@ export function ReviewPublishPanel({
     (readinessStatus === "pending" ||
       (readinessFetching && readinessStatus !== "error"));
   const checkUnavailable = hasStore && !dirty && readinessStatus === "error";
+  // Presentation only: the editor's `handleSave` already refuses to save
+  // over an unresolved conflict, so a click here could never publish.
+  // Disabling the button says so before the click instead of after it.
   const canPublish =
     hasStore &&
+    !hasEditingConflict &&
     !checking &&
     !checkUnavailable &&
     !saveFailureReason &&
     (dirty || (Boolean(readiness?.canPublish) && blockers.length === 0));
+  const onShopify = shopify.hasSyncedListing && shopify.kind !== "publish-failed";
+  const selectedStoreName = stores.find((store) => store.id === storeId)?.name ?? null;
 
   useEffect(() => {
+    // The conflict banner takes focus on its own transition; moving focus
+    // here as well would pull it away from the banner's actions.
+    if (hasEditingConflict) return;
     if (!saveFailureReason && blockers.length === 0 && !publishError) return;
     summaryRef.current?.focus();
-  }, [saveFailureReason, blockers.length, publishError]);
+  }, [saveFailureReason, blockers.length, publishError, hasEditingConflict]);
 
+  // "Validation passed" and "published" are different facts: the first is
+  // the server's readiness check on the saved draft, the second is a
+  // listing on Shopify. The summary only ever states the first; the
+  // post-publish panel above states the second.
   let statusMessage = "Choose a store";
-  if (saveFailureReason) {
+  if (hasEditingConflict) {
+    statusMessage = "Resolve the editing conflict above first.";
+  } else if (saveFailureReason) {
     statusMessage = "Your changes were not saved, so publishing was stopped.";
   } else if (!hasStore) {
     statusMessage = "Choose a store";
@@ -176,8 +188,12 @@ export function ReviewPublishPanel({
   } else if (dirty) {
     statusMessage =
       "We’ll save your latest changes, then check again when you publish.";
+  } else if (shopify.kind === "changes-not-sent") {
+    statusMessage = "Validation passed — your latest changes are ready to send to Shopify.";
+  } else if (onShopify) {
+    statusMessage = "Validation passed — publishing again sends the current DropPilot version.";
   } else {
-    statusMessage = "No blocking issues found";
+    statusMessage = "Validation passed — no blocking issues.";
   }
 
   return (
@@ -188,13 +204,15 @@ export function ReviewPublishPanel({
         supplier is separate from publishing to your shop.
       </p>
 
-      {(publishResult || syncedListing) && (
+      {onShopify ? (
         <DraftPostPublishPanel
-          listing={syncedListing}
+          productId={productId}
+          shopify={shopify}
           publishResult={publishResult}
+          storeName={selectedStoreName}
           onContinueEditing={onContinueEditing}
         />
-      )}
+      ) : null}
 
       <div className="space-y-2">
         <Label htmlFor="publish-store">Shopify store</Label>
@@ -250,7 +268,8 @@ export function ReviewPublishPanel({
             </Button>
           </div>
         ) : null}
-        {!checking &&
+        {!hasEditingConflict &&
+        !checking &&
         !checkUnavailable &&
         hasStore &&
         !saveFailureReason &&
@@ -260,7 +279,12 @@ export function ReviewPublishPanel({
             We’ll check again when you publish.
           </p>
         ) : null}
-        {dirty && hasStore && !saveFailureReason ? (
+        {hasEditingConflict ? (
+          <p className="mt-1 text-sm text-muted-foreground" data-testid="publish-conflict-pointer">
+            Saving is paused until you reload the latest version or review your changes, so nothing can be published yet.
+          </p>
+        ) : null}
+        {dirty && hasStore && !saveFailureReason && !hasEditingConflict ? (
           <p className="mt-1 text-sm text-muted-foreground">
             Unsaved edits are saved first. Publishing stops if that save fails.
           </p>
@@ -345,7 +369,7 @@ export function ReviewPublishPanel({
           ) : (
             <Store className="mr-1.5 h-4 w-4" aria-hidden />
           )}
-          {publishPending ? "Publishing…" : "Publish to Store"}
+          {publishPending ? "Publishing…" : onShopify ? "Update Shopify" : "Publish to Store"}
         </Button>
         {!canPublish ? (
           <p
@@ -353,7 +377,9 @@ export function ReviewPublishPanel({
             className="text-sm text-muted-foreground"
             data-testid="publish-disabled-reason"
           >
-            {saveFailureReason
+            {hasEditingConflict
+              ? "Resolve the editing conflict above first."
+              : saveFailureReason
               ? "Save your changes successfully before publishing."
               : !hasStore
                 ? "Choose a store to continue."

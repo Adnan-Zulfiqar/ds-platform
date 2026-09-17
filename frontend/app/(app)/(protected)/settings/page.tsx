@@ -69,7 +69,7 @@ const SECTIONS: readonly SettingsSection[] = [
 
 export default function SettingsPage() {
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Settings"
         description="Workspace, team, and integration configuration."

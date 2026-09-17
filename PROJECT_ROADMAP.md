@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
 
 ## Status
 
@@ -21,8 +21,10 @@ Last updated: 2026-09-14
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
 | 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
-| UX-L2B | Server-authoritative publish integrity | 🚧 **R4 clean live-API Chromium on `feature/ux-l2b-publish-integrity`** — not merged; not independently accepted; production undeployed; UX-L2C not started |
-| Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | 🚧 **On `fix/ci-baseline-security-pytest`** — owner-adopted 12-file repair + F-1 Google test isolation + F-2 CI skip evidence; awaiting final-SHA CI and Cursor independent review; not merged; Celery multi-worker/restart drill deferred to safe-staging |
+| UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
+| Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Independently accepted at `c0092da6`** (Cursor `PASS — PHASE 1 MAY CLOSE`, 2026-09-15; CI run 34846601320 10/10) — PR #7 still draft, **not merged**; Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
+| UX-L2C (historical) | Live-state clarity and calm completion journey | 🔍 **`origin/feature/ux-l2c-live-state-clarity` (`ece8322`)** — unmerged; reviewed under UX-L2D-GATE-04 (cleared 2026-09-15): selected pieces adapted into UX-L2D-04 (product page, lifecycle subset, external-link allowlist, listings query options, route-isolation spec); the rest deferred to -05/-06 or superseded |
+| UX-L2D | Dashboard design programme (renamed from UX-L2C) | 🧊 **Implementation complete; pending independent review and CI verification.** -01 → -06 accepted, -07 hardening implemented on `feature/ux-l2d-dashboard`, stacked on accepted Phase 1 `c0092da6`; local only, not pushed, not merged, undeployed; no backend/CI files changed; Vitest local only (not a CI gate). Frozen state, backend dependencies and the CI checks still required: `docs/ux/ux-l2d-phase-2-status.md` |
 
 ---
 
@@ -270,7 +272,7 @@ synced). Plans:
 | 5 | Pricing / inventory / shipping | **Done (MVP) on `cursor/draft-product-editor`** |
 | 6–8 | AI Studio, publish polish, E2E | Pending |
 | UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **Integrated into `develop` (`e1dd0f0`); production undeployed** |
-| UX-L2B | Save-before-publish integrity + server publish authority | **On `feature/ux-l2b-publish-integrity` (R4: clean full Chromium 482/9/0/0; store guidance aligned; R2/R3 lock evidence carried forward) — not merged; not independently accepted; production undeployed; UX-L2C not started** |
+| UX-L2B | Save-before-publish integrity + server publish authority | **Present in `develop` at `a543b029` (R7 tip fast-forwarded); production undeployed.** Historical UX-L2C follows on `feature/ux-l2c-live-state-clarity` (unmerged); the new dashboard programme is UX-L2D |
 
 Product Editor Stages 1–2b (description sanitize, PATCH product, sync identity)
 already shipped on develop and are not recreated here.

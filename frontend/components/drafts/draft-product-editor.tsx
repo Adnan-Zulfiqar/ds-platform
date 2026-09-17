@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Loader2 } from "lucide-react";
 
 import { DraftInventoryPanel } from "@/components/drafts/draft-inventory-panel";
@@ -20,12 +20,12 @@ import {
   ProductEditorHeaderSkeleton,
 } from "@/components/drafts/editor-header/product-editor-header";
 import {
-  EDITOR_TAB_LABEL,
   isEditorTab,
   type EditorTab,
 } from "@/components/drafts/editor-header/product-editor-tabs";
 import { PublishChecklist } from "@/components/drafts/editor-header/publish-checklist";
 import { formatSupplierSyncedAt, readinessFor } from "@/components/drafts/editor-header/readiness";
+import { deriveEditorLifecycle } from "@/lib/editor-lifecycle";
 import {
   DESCRIPTION_MAX_LENGTH,
   RichTextDescriptionEditor,
@@ -139,16 +139,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const updateDraft = useUpdateDraft(productId);
   const refreshDraft = useRefreshDraft(productId);
   const optimizeProduct = useOptimizeProduct(productId);
+  // Store guidance copy and the Review & publish store list. Read once per
+  // mount (React Query's staleTime), not polled: UX-L2D-07 removed a 15 s
+  // interval that re-requested the list for every open editor to catch a
+  // connect/disconnect made in another tab — a rare event a reload handles,
+  // at the cost of four requests a minute per tab. Publication authority was
+  // never here; the server's readiness check is what gates publishing.
   const storesQuery = useStores({ size: 50 });
-  const refetchStores = storesQuery.refetch;
-  // Refresh store list so connect/disconnect in another tab updates chrome copy.
-  // Does not affect publication authority (server readiness does).
-  useEffect(() => {
-    const handle = window.setInterval(() => {
-      void refetchStores();
-    }, 15_000);
-    return () => window.clearInterval(handle);
-  }, [refetchStores]);
 
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
@@ -187,6 +184,11 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishOk, setPublishOk] = useState<string | null>(null);
   const [publishResult, setPublishResult] =
     useState<ShopifyPublishResult | null>(null);
+  // When `publishResult` arrived. The lifecycle layer lets the response
+  // stand in for the listings cache only while the cache is older than
+  // this, so the header says "Added to Shopify" the instant the publish
+  // returns and hands over to the server row as soon as it is refetched.
+  const [publishResultAt, setPublishResultAt] = useState<number | null>(null);
   const [publishSaveFailure, setPublishSaveFailure] =
     useState<PublishSaveFailureReason | null>(null);
   const publishInFlightRef = useRef(false);
@@ -225,6 +227,40 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
+  // Focus target for the moment a conflict is detected (UX-L2D-05,
+  // adapted from the reviewed historical branch). Only the `none ->
+  // detected` transition moves focus: returning from the review dialog or
+  // the reload confirmation also lands on "detected", and Radix already
+  // restores focus to the control that opened them -- fighting that would
+  // be focus theft on every phase change.
+  const conflictBannerRef = useRef<HTMLDivElement | null>(null);
+  const conflictReloadButtonRef = useRef<HTMLButtonElement | null>(null);
+  const conflictReviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousConflictPhaseRef = useRef(conflictPhase);
+  // Both conflict dialogs are controlled and have no `DialogTrigger`, so
+  // Radix's default close behaviour (focus the trigger) had nowhere to go
+  // and focus fell to `<body>`. Return it to the banner button that opened
+  // the dialog while the conflict is still open; once it is resolved the
+  // banner is gone, so land on the field the merchant was editing or, on
+  // another tab, on that tab.
+  const returnFocusAfterConflictDialog = (
+    event: Event,
+    opener: RefObject<HTMLButtonElement | null>,
+  ) => {
+    event.preventDefault();
+    const target =
+      opener.current ??
+      document.querySelector<HTMLElement>('[data-testid="draft-title-input"]') ??
+      document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    target?.focus();
+  };
+  useEffect(() => {
+    const previous = previousConflictPhaseRef.current;
+    previousConflictPhaseRef.current = conflictPhase;
+    if (previous === "none" && conflictPhase === "detected") {
+      conflictBannerRef.current?.focus();
+    }
+  }, [conflictPhase]);
   // The server's latest version as of the moment the conflict was detected.
   // Captured separately from `data` so it can be shown next to the
   // merchant's still-untouched local fields without overwriting either.
@@ -790,6 +826,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         },
       );
       setPublishResult(result);
+      setPublishResultAt(Date.now());
       setPublishOk(result.message || "Publish completed.");
       void refetch();
       void queryClient.invalidateQueries({
@@ -865,6 +902,34 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
     null;
+  // One derivation for every surface that talks about state -- header,
+  // save indicator, primary action, mobile bar, post-publish panel, Review
+  // & publish. `savedUpdatedAt` is the version the server last confirmed,
+  // which is the only "saved draft" timestamp that can be compared with a
+  // listing's `lastSyncedAt`.
+  const lifecycle = deriveEditorLifecycle({
+    productStatus: data.status,
+    dirty,
+    saveState,
+    conflict: isConflicted,
+    publishPending,
+    publishFailed: Boolean(publishError),
+    publishResult,
+    publishResultAt,
+    listings: {
+      data: listingsQuery.data,
+      isPending: listingsQuery.isPending,
+      isFetching: listingsQuery.isFetching,
+      isError: listingsQuery.isError,
+      dataUpdatedAt: listingsQuery.dataUpdatedAt,
+    },
+    draftUpdatedAt: savedUpdatedAt,
+    issueCount: readiness.items.length,
+  });
+  const focusConflictBanner = () => {
+    conflictBannerRef.current?.scrollIntoView({ block: "center" });
+    conflictBannerRef.current?.focus();
+  };
 
   // Every editable field where the merchant's rejected value differs from
   // the server's latest. Both sides come from the snapshots frozen when the
@@ -930,20 +995,18 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   return (
     <div className="space-y-4 pb-28 md:pb-6" data-testid="draft-editor">
       <ProductEditorHeader
+        productId={productId}
         product={{ ...data, title: title || data.title }}
         activeTab={tab}
         onTabChange={selectTab}
+        lifecycle={lifecycle}
         dirty={dirty}
-        saveState={saveState}
         saving={updateDraft.isPending || saveState === "saving"}
-        publishPending={publishPending}
-        publishFailed={Boolean(publishError)}
-        listing={syncedListing}
+        listingsRetrying={listingsQuery.isFetching && listingsQuery.data === undefined}
         shopifyStores={shopifyStores}
         storesPending={storesQuery.isPending}
         storesError={storesQuery.isError}
         seoScore={seoScoreQuery.data}
-        readiness={readiness}
         refreshing={refreshDraft.isPending}
         optimizing={optimizeProduct.isPending}
         inspectorOpen={inspectorOpen}
@@ -951,6 +1014,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         onPreview={() => setPreviewOpen(true)}
         onSave={() => void handleSave()}
         onPublish={() => selectTab("publishing")}
+        onResolveConflict={focusConflictBanner}
+        onRetryListings={() => void listingsQuery.refetch()}
         onRefresh={() => void refreshDraft.mutateAsync()}
         onOptimize={() => optimizeProduct.mutate({})}
         onViewHistory={() => setHistoryOpen(true)}
@@ -988,6 +1053,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <Alert
           variant="destructive"
           role="alert"
+          ref={conflictBannerRef}
+          tabIndex={-1}
+          className="scroll-mt-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-testid="draft-conflict-banner"
         >
           <AlertDescription className="space-y-3">
@@ -1001,6 +1069,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
+                ref={conflictReloadButtonRef}
                 onClick={handleRequestReload}
                 data-testid="conflict-reload-latest"
               >
@@ -1010,6 +1080,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="min-h-11"
+                ref={conflictReviewButtonRef}
                 onClick={() => void handleOpenReview()}
                 data-testid="conflict-review-mine"
               >
@@ -1031,7 +1103,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           if (!open) handleCancelReloadConfirm();
         }}
       >
-        <DialogContent data-testid="conflict-reload-confirm-dialog">
+        <DialogContent
+          data-testid="conflict-reload-confirm-dialog"
+          onCloseAutoFocus={(event) =>
+            returnFocusAfterConflictDialog(event, conflictReloadButtonRef)
+          }
+        >
           <DialogHeader>
             <DialogTitle>Discard your changes and reload?</DialogTitle>
             <DialogDescription>
@@ -1070,6 +1147,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <DialogContent
           className="max-w-2xl"
           data-testid="conflict-review-dialog"
+          onCloseAutoFocus={(event) =>
+            returnFocusAfterConflictDialog(event, conflictReviewButtonRef)
+          }
         >
           <DialogHeader>
             <DialogTitle>Review the conflicting changes</DialogTitle>
@@ -1464,7 +1544,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               publishOk={publishOk}
               publishPending={publishPending}
               publishResult={publishResult}
-              syncedListing={syncedListing}
+              shopify={lifecycle.shopify}
+              hasEditingConflict={isConflicted}
               onPublish={() => void handlePublish()}
               onOpenSection={(next) => selectTab(next)}
               onContinueEditing={() => selectTab("overview")}
@@ -1491,25 +1572,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
             <DraftShippingPanel productId={productId} product={data} />
           ) : null}
 
-          {tab !== "overview" &&
-          tab !== "description" &&
-          tab !== "seo" &&
-          tab !== "publishing" &&
-          tab !== "media" &&
-          tab !== "variants" &&
-          tab !== "pricing" &&
-          tab !== "inventory" &&
-          tab !== "shipping" ? (
-            <section className="rounded-lg border border-dashed p-8 text-center">
-              <h2 className="text-lg font-semibold">{EDITOR_TAB_LABEL[tab]}</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {tab === "ai-studio" &&
-                  "Use Improve with AI tools from More actions for now. Side-by-side proposal studio is Stage 6."}
-                {tab === "history" &&
-                  "Use View recent activity in More actions for AI version restore. Full edit timeline is Stage 6."}
-              </p>
-            </section>
-          ) : null}
         </div>
 
         <PublishChecklist

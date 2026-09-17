@@ -2,7 +2,7 @@
 
 import {
   Bot,
-  DollarSign,
+  Coins,
   Package,
   ShoppingCart,
   Store,
@@ -17,7 +17,7 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { PageHeader } from "@/components/ui/page-header";
-import { formatMoney } from "@/lib/utils";
+import { formatAmount } from "@/components/dashboard/charts/chart-theme";
 import {
   toProductPerformance,
   toSalesSeries,
@@ -42,10 +42,10 @@ export default function AnalyticsPage() {
   const { data, isLoading, isError, refetch } = useDashboard(period);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <PageHeader
         title="Analytics"
-        description="Revenue, orders, inventory, sync activity, and automation health."
+        description="Orders, inventory, sync activity and automation health. Revenue figures are shown as recorded, without a currency: the server reports totals across all stores and does not say which currency they are in."
         actions={
           <select
             aria-label="Period"
@@ -71,9 +71,9 @@ export default function AnalyticsPage() {
         <>
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <StatCard
-              label="Revenue"
-              value={formatMoney(data?.revenue, "USD")}
-              icon={DollarSign}
+              label="Revenue (as recorded)"
+              value={data?.revenue ? formatAmount(Number(data.revenue)) : "—"}
+              icon={Coins}
               loading={isLoading}
             />
             <StatCard

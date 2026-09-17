@@ -67,9 +67,11 @@ test.describe("Integrations page", () => {
     await registerAndSignIn(page);
     await page.goto("/settings");
 
-    await page.getByRole("link", { name: /Integrations/ }).click();
+    // The sidebar carries its own Integrations link (UX-L2D-02); the settings
+    // index's link is the one under test.
+    await page.getByRole("main").getByRole("link", { name: /^Integrations/i }).click();
 
-    await expect(page).toHaveURL(/\/settings\/integrations$/);
+    await expect(page).toHaveURL(/\/settings\/integrations$/, { timeout: 15_000 });
     await expect(
       page.getByRole("heading", { name: "Integrations", level: 1 }),
     ).toBeVisible();
@@ -111,6 +113,8 @@ test.describe("Integrations page", () => {
     ).toBeVisible();
     await expect(channels.getByText("Coming soon").first()).toBeVisible();
     await expect(channels.getByText("WooCommerce")).toBeVisible();
+    // Named, never offered: nothing in the planned row can be clicked.
+    await expect(page.getByTestId("planned-channels").getByRole("button")).toHaveCount(0);
   });
 
   test("starting connect moves the connection to pending", async ({ page }) => {
@@ -133,6 +137,8 @@ test.describe("Integrations page", () => {
 
     const suppliers = page.getByRole("region", { name: "Suppliers" });
     await suppliers.getByRole("button", { name: "Disconnect" }).click();
+    // Disconnecting deletes the stored authorization, so it asks first.
+    await page.getByTestId("disconnect-confirm-aliexpress").click();
 
     await expect(suppliers.getByText("Not connected")).toBeVisible();
   });

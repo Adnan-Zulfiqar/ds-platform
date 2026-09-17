@@ -183,10 +183,10 @@ export function ImpactRow({
             >
               {item.published ? (
                 <p>
-                  This product has a live channel listing. Published products
-                  are never repriced by this workflow — changing a live price
-                  needs a separate publish step, which is not part of this
-                  release.
+                  This product is already on Shopify. Published products are
+                  never repriced by this workflow — changing the price Shopify
+                  shows needs a separate publish step, which is not part of
+                  this release.
                 </p>
               ) : (
                 <ul className="list-disc space-y-1 pl-4">

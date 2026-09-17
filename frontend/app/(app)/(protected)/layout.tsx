@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { AuthGuard } from "@/components/auth-guard";
+import { PageContainer } from "@/components/ui/page-container";
 import { AppShell } from "@/layouts/app-shell";
 
 /**
@@ -17,11 +18,18 @@ import { AppShell } from "@/layouts/app-shell";
  *
  * Phase 2 moved the chrome into `AppShell`, leaving this file to compose the
  * two concerns. The authentication behaviour is unchanged.
+ *
+ * `PageContainer` sits here rather than in each page (UX-L2D-02): the gutter
+ * is a property of the shell, and applying it once means a page cannot forget
+ * it — which is exactly how Drafts, Products and the editor ended up flush
+ * against the sidebar while their neighbours had padding.
  */
 export default function ProtectedLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
-      <AppShell>{children}</AppShell>
+      <AppShell>
+        <PageContainer>{children}</PageContainer>
+      </AppShell>
     </AuthGuard>
   );
 }

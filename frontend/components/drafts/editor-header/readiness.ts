@@ -125,17 +125,6 @@ export function readinessFor(product: ProductDetail): ReadinessSummary {
   };
 }
 
-export function estimateMarginPercent(
-  sellPrice: string | null | undefined,
-  costPrice: string | null | undefined,
-): number | null {
-  if (!sellPrice || !costPrice) return null;
-  const sell = Number(sellPrice);
-  const cost = Number(costPrice);
-  if (!Number.isFinite(sell) || !Number.isFinite(cost) || sell <= 0) return null;
-  return Math.round(((sell - cost) / sell) * 100);
-}
-
 const SHIP_TO_LABELS: Record<string, string> = {
   GB: "United Kingdom",
   UK: "United Kingdom",
