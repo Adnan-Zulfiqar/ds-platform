@@ -170,14 +170,14 @@ production release.
   review SHA was `3f1ede8` (tree `0aac7f36`); two remediation commits
   (`2351bcc`, `41c152c`) followed and were reviewed as a delta, so the
   final accepted head is `41c152c` (tree `489366a9`, 27 commits on
-  `c0092da6`). Evidence, in order: independent review PASS on the frozen
-  SHA and on the remediation delta (verdicts recorded in the PR #9 body and
-  the merge commit message; no formal GitHub review submission exists on
-  either PR); CI on `41c152c` (run 35109481727) and on `b52b223` (run
-  35191388324), both 10/10 — ruff, ruff format, mypy, pytest 2984 passed;
-  typecheck, lint, build; Playwright 722 passed / 0 failed / 9 skipped;
-  then the owner's merge. **Merged into `develop` only:** `main` and
-  production are unchanged. The Phase 1 and UX-L2D-01…07 entries had
+  `c0092da6`). Evidence, in order: independent frozen-SHA review PASS
+  (recorded in the PR #9 body) and remediation delta review PASS (recorded
+  in the merge commit message of `b52b223`); no formal GitHub review
+  submission exists on either PR; CI on `41c152c` (run 35109481727) and on
+  `b52b223` (run 35191388324), both 10/10 — ruff, ruff format, mypy, pytest
+  2984 passed; typecheck, lint, build; Playwright 722 passed / 0 failed /
+  9 skipped; then the owner's merge. **Merged into `develop` only:** `main`
+  and production are unchanged. The Phase 1 and UX-L2D-01…07 entries had
   their status wording amended to match; their bodies are unchanged.
   Still open after the merge: the Celery exclusive-pidbox
   multi-worker/restart drill (safe staging), whether Vitest becomes a CI

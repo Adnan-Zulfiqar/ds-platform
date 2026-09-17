@@ -529,9 +529,11 @@ the backend dependencies that remain open.
 
 3. **Reports revenue has no currency.** `GET /analytics/dashboard` sums
    `Order.total_amount` across orders whose `currency` differs, with no FX
-   and no currency field in the payload; `/analytics` still labels it `USD`.
+   and no currency field in the payload; `/analytics` therefore shows the
+   figures as recorded, with no currency symbol, and says why (UX-L2D-07).
    Home shows no monetary figure for that reason. Correcting Reports needs a
-   backend contract (per-currency totals or a converted figure).
+   backend contract (per-currency totals or a converted figure) — BACKEND
+   DEPENDENCY — ANALYTICS CURRENCY.
 
 4. **`/settings` has no editable fields.** The account details it would show are
    already in the user menu; a read-only form that cannot save would look
