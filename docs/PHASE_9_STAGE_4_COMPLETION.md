@@ -12,7 +12,7 @@ something has never been executed, that is stated rather than implied.
 | Branch | `feat/phase-9-stage-4-generation-services` |
 | Base | `develop` @ `109f43f50b1022bc7f6e3a84e13dd24e836e531f` (post-merge CI run 35246290568, 10/10) |
 | Last code commit | `4acc8ebd566b268dc3c0ee8c7d9413ad929298d7` (`4acc8eb`) — every gate below ran against this code |
-| Branch HEAD | the documentation commit that adds this report, directly on top; it changes no code |
+| Branch HEAD | documentation-only commits on top of `4acc8eb` (this report, the `PHASE_9_PLAN.md` entry, whitespace fixes). `git diff --stat 4acc8eb..HEAD` touches only `docs/` |
 | Migration | **None.** `ProductVersion.content` is JSONB; three keys were added to the shape |
 | AI generation | **`StubProvider` only** — no real provider key; no live model call was made or is claimed |
 | Plan | [PHASE_9_STAGE_4_PLAN.md](PHASE_9_STAGE_4_PLAN.md) |
@@ -105,7 +105,8 @@ at which the three values can legitimately differ. A test pins this
 | `9f416e4` | feat(api): expose the SEO proposal on ProductVersionRead |
 | `a0a2ac9` | test(ai): prove the SEO generation, its failure path, and what it must not touch |
 | `4acc8eb` | style(models): keep the prompt_execution_id attribute comment attached to its column |
-| HEAD (this commit) | docs(ai): record Phase 9 Stage 4 completion — this report and the `PHASE_9_PLAN.md` progress entry only |
+| `d4eb5ef` | docs(ai): record Phase 9 Stage 4 completion — this report and the `PHASE_9_PLAN.md` progress entry |
+| `4acc8eb..HEAD` | any further commits are documentation-only (whitespace and wording); no code after `4acc8eb` |
 
 ---
 
