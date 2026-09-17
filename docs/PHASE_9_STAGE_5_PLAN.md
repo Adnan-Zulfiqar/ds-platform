@@ -128,10 +128,35 @@ without consulting the product.
 touched.** (Independent plan review, MEDIUM finding 1 — resolved by
 mandate, not by choice.)
 
-- The parsing above lives in the Stage 5 scoring module as a private
+- The parsing above lives in the Stage 5 scoring module as a **private**
   function (e.g. `_merchant_terms(product) -> MerchantTerms`). It is not
-  exported, not imported by `product_optimization.py`'s Stage 4 code, and
-  not placed in a shared module.
+  exported, not listed in `__all__`, not placed in a shared module, and
+  **not imported by `product_optimization.py` at all** — neither by its
+  Stage 4 code nor by the Stage 5 additions to it.
+- `ProductOptimizationService` calls only the Stage 5 module's **public**
+  scoring API (e.g. `score_version(content, product) -> QualityResult`).
+  That public function derives the merchant terms internally by calling
+  `_merchant_terms`; the caller never sees or handles the term list except
+  as the `keywordCoverage.keywords` field of the returned breakdown.
+
+  ```
+  ProductOptimizationService
+      → score_version(content, product)        public, Stage 5 module
+          → _merchant_terms(product)           private, same module
+          → rubric D1–D4, total, seoFormat     private, same module
+  ```
+
+  not:
+
+  ```
+  ProductOptimizationService → _merchant_terms   (forbidden)
+  ```
+
+  The service passes the `Product` it already holds; it does not extract,
+  pre-process, or forward keywords itself. Scoring the original and the AI
+  candidate for the same product therefore always uses the same terms,
+  because both calls derive them from the same `Product` through the same
+  private path.
 - Stage 4's `_keywords_for_prompt` **remains exactly as merged in
   `c3814e8b`**: same source order, `", ".join` of the raw list entries
   (no de-duplication), `meta_keywords` passed through **unsplit and
@@ -811,13 +836,18 @@ Small commits, none rewritten after review begins:
    `seoFormat`, total, `QualityResult` dataclass, `QUALITY_SCORE_VERSION = 1`.
    Pure module; no session; unit tests for every rule (§16.1).
 2. `feat(ai): score versions at creation and record the delta` —
-   `ProductOptimizationService`: call the Stage 5 module's **private**
-   term helper (Stage 4's `_keywords_for_prompt` and `_build_variables`
-   are **not** modified — §5.2), score the original in
-   `_ensure_original_snapshot`, score the AI content and baseline in
-   `optimize_product`, include keys in `create`. Model comment on
-   `content` updated. The diff to `product_optimization.py` must show no
-   change inside `_build_variables` or `_keywords_for_prompt`.
+   `ProductOptimizationService`: call the Stage 5 module's **public**
+   scoring API (`score_version(content, product)`), which internally uses
+   its own private `_merchant_terms` (§5.2) — the service never imports
+   or calls the private helper. Score the original in
+   `_ensure_original_snapshot`, score the AI content and re-score the
+   original's content for the baseline in `optimize_product`, include the
+   keys in `create`. Stage 4's `_keywords_for_prompt` and
+   `_build_variables` are **not** modified. Model comment on `content`
+   updated. The diff to `product_optimization.py` must show no change
+   inside `_build_variables` or `_keywords_for_prompt`, and its only new
+   import from the Stage 5 module must be the public scoring API.
+
 3. `feat(api): expose version quality fields on ProductVersionRead` — typed
    optional fields and nested read models.
 4. `test(ai): integration coverage for scoring, deltas, legacy rows, and
