@@ -361,4 +361,3 @@ optional fields (M4). Branch not pushed; CI not run. No real AI provider call
 
 **Stage 5 — Quality scoring — is next in sequence (§3), model-free by design.
 Not started.** Stage 4 first needs independent review and CI on a pull request.
-
