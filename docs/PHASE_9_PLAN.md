@@ -322,7 +322,7 @@ Plan: [PHASE_9_STAGE_3_PLAN.md](PHASE_9_STAGE_3_PLAN.md).
 Playwright optimisation foundation **3 passed / 1 skipped** (live AliExpress seed).
 No real AI provider call — every execution uses `StubProvider`.
 
-### Stage 4 — Generation services: implemented, awaiting independent review
+### Stage 4 — Generation services: done
 
 | Delivered | Where |
 |---|---|
@@ -356,8 +356,39 @@ provider defines the parse contract.
 `check_secrets.py`, Stage 4 targeted **68 passed**, full pytest
 **3000 passed / 1 skipped / 1 failed of 3002** (the failure is a local-checkout `.env`-exists assertion, environmental — see the report), `git diff --check` clean. No frontend file changed, so
 no frontend gate ran; `frontend/types/api.ts` deliberately lags by three
-optional fields (M4). Branch not pushed; CI not run. No real AI provider call
-— every execution uses `StubProvider`.
+optional fields (M4). No real AI provider call — every execution uses
+`StubProvider`.
 
-**Stage 5 — Quality scoring — is next in sequence (§3), model-free by design.
-Not started.** Stage 4 first needs independent review and CI on a pull request.
+**Integrated.** Cursor independent review PASS (no blocker/high/medium; two
+low findings recorded in the report). PR #11 CI run 35268480281 10/10
+(pytest 3002 passed in CI — the local `.env`-exists failure did not
+reproduce there). Merged into `develop` as `c3814e8b` (parents `109f43f5`,
+`da090438`); post-merge CI run 35272545887 10/10. `PROJECT_ROADMAP.md`'s
+Phase 9 row and `CHANGELOG.md` were not updated by Stage 4 and are owed
+(CLAUDE.md §9); Stage 5's closing commit carries them.
+
+### Stage 5 — Optimization-quality scoring: planning, awaiting independent plan re-review
+
+Cursor's readiness review found no authoritative Stage 5 contract — the
+repository said only "deterministic, model-free" — and returned NOT READY
+for implementation. The contract now exists:
+[PHASE_9_STAGE_5_PLAN.md](PHASE_9_STAGE_5_PLAN.md) defines the scoring
+input (an immutable `ProductVersion.content` snapshot, compared to the
+original), a four-dimension rubric with exact integer rules, the 0–100
+total and its rounding, the delta semantics, persistence in the existing
+JSONB (no migration), no new endpoint, failure and tenancy semantics, and
+the exact test list. It also fixes what Stage 5 is **not**: not the seeded
+`quality_scorer` prompt (stays unwired), not `seo_score.py` (the merchant
+SEO advisory score, a separate concept left untouched), not
+`image_analyzer` (Stage 6).
+
+The first independent plan review returned FAIL — architecture accepted,
+three MEDIUM gaps: the keyword helper could have been shared with Stage 4
+(now mandated Stage 5-private, Stage 4 untouched, §5.2); the D4
+not-applicable breakdown shape was unpinned (now exact JSON, §9.2); and no
+identical / better / worse delta fixtures existed (now four constructed
+fixtures with exact scores and deltas, §16.1). Six LOW notes are recorded
+in §20. The corrected plan awaits re-review.
+
+**Not implemented.** No Stage 5 code exists on any branch. Implementation
+starts only after the plan passes independent re-review.
