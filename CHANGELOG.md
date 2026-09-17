@@ -12,9 +12,9 @@ production release.
 
 ### Added
 
-- **UX-L2D-07 — Cross-app hardening (on `feature/ux-l2d-dashboard`, not
-  merged; Phase 2 implementation complete, pending independent review and CI
-  verification).** Journey, accessibility, responsive (1440/1280/1024/768/390,
+- **UX-L2D-07 — Cross-app hardening (on `feature/ux-l2d-dashboard`; merged
+  into `develop` 2026-09-17 via PR #9 — see "Phase 1 and Phase 2 integrated"
+  under Changed).** Journey, accessibility, responsive (1440/1280/1024/768/390,
   light and dark), vocabulary, dead-UX and performance pass over the accepted
   UX-L2D-01…06 work. Removed the editor's `AI tools` and `History`
   placeholder sections (real actions stay in the More menu); neutralised the
@@ -29,8 +29,9 @@ production release.
   `ux-l2d-hardening.spec.ts` (semantics, keyboard reachability, the
   visual matrix, cross-app journeys). Vitest 74/74 locally, not a CI gate.
 
-- **UX-L2D-06 — Channels / Integrations (on `feature/ux-l2d-dashboard`,
-  not merged).** `/settings/integrations` is the canonical connect, repair
+- **UX-L2D-06 — Channels / Integrations (on `feature/ux-l2d-dashboard`;
+  merged into `develop` 2026-09-17 via PR #9).**
+  `/settings/integrations` is the canonical connect, repair
   and disconnect surface; `/stores` becomes a supporting record view
   (`MAKE INTEGRATIONS CANONICAL; KEEP STORES AS SUPPORTING ROUTE`). One
   connection-state vocabulary (`lib/channel-state.ts`, 28 Vitest scenarios)
@@ -53,7 +54,8 @@ production release.
   status has no `configured` flag.
 
 - **UX-L2D-05 — Product editor lifecycle clarity (on
-  `feature/ux-l2d-dashboard`, not merged).** One pure derivation
+  `feature/ux-l2d-dashboard`; merged into `develop` 2026-09-17 via PR #9).**
+  One pure derivation
   (`lib/editor-lifecycle.ts`, composing the UX-L2D-04 listing authority) now
   drives the header badge, save indicator, primary action, mobile bar,
   post-publish panel and Review & publish. Vocabulary: Not on Shopify /
@@ -79,7 +81,8 @@ production release.
   listings/publish responders only.
 
 - **UX-L2D-04 — Catalogue, Drafts and the product page (on
-  `feature/ux-l2d-dashboard`, not merged).** Closes the UX-L2D-01 Critical:
+  `feature/ux-l2d-dashboard`; merged into `develop` 2026-09-17 via PR #9).**
+  Closes the UX-L2D-01 Critical:
   `/products/[productId]` exists, adapted from the reviewed historical UX-L2C
   page (UX-L2D-GATE-04) — reads `GET /products/{id}` and
   `GET /drafts/{id}/listings`, sends a product with no synced listing to the
@@ -102,7 +105,8 @@ production release.
   Playwright (`catalogue.spec.ts`, backend-less) plus the adapted
   backend-gated `product-route-isolation.spec.ts`.
 
-- **UX-L2D-03 — Home (on `feature/ux-l2d-dashboard`, not merged).** The
+- **UX-L2D-03 — Home (on `feature/ux-l2d-dashboard`; merged into `develop`
+  2026-09-17 via PR #9).** The
   analytics wall (fourteen metric cards, three charts, revenue hard-coded to
   `USD`) is replaced by an operations page built only from endpoints that
   exist: a needs-attention list (expired or degraded channels, failed imports,
@@ -123,8 +127,9 @@ production release.
   stat cards and order-sync cards remain on `/analytics` and `/orders`. The
   `/products/[productId]` Critical stays open for UX-L2D-GATE-04.
 
-- **UX-L2D-02 — application shell (on `feature/ux-l2d-dashboard`, not
-  merged).** `PageContainer` applied once in `(protected)/layout.tsx` gives
+- **UX-L2D-02 — application shell (on `feature/ux-l2d-dashboard`; merged
+  into `develop` 2026-09-17 via PR #9).**
+  `PageContainer` applied once in `(protected)/layout.tsx` gives
   every page the same gutter and a centred `2xl` maximum width; Drafts,
   Products, Import history and the editor no longer render flush against the
   sidebar (UX-L2D-01 F-5). Navigation is re-grouped by merchant job — Home ·
@@ -140,7 +145,8 @@ production release.
   UX-L2D-GATE-04.
 
 - **UX-L2D-01 — Phase 2 baseline and UX audit (on `feature/ux-l2d-dashboard`,
-  stacked on the accepted Phase 1 SHA `c0092da6`; not merged).** Documentation
+  stacked on the accepted Phase 1 SHA `c0092da6`; merged into `develop`
+  2026-09-17 via PR #9).** Documentation
   only: `docs/ux/ux-l2d-01-baseline.md` records the repository baseline, the
   frontend architecture, a screen inventory, 15 findings (one Critical: every
   link on `/products` 404s because the accepted tree has no
@@ -155,18 +161,43 @@ production release.
 
 ### Changed
 
+- **Phase 1 and Phase 2 integrated into `develop` (2026-09-16/17).** Phase 1
+  (Git/CI baseline, `fix/ci-baseline-security-pytest`, accepted SHA
+  `c0092da6`) was merged through PR #7 on 2026-09-16, merge commit
+  `5e21927`; CI on that merge commit: run 35164379004, 10/10 jobs. Phase 2
+  (UX-L2D dashboard programme, `feature/ux-l2d-dashboard`) was merged
+  through PR #9 on 2026-09-17, merge commit `b52b223`. The original frozen
+  review SHA was `3f1ede8` (tree `0aac7f36`); two remediation commits
+  (`2351bcc`, `41c152c`) followed and were reviewed as a delta, so the
+  final accepted head is `41c152c` (tree `489366a9`, 27 commits on
+  `c0092da6`). Evidence, in order: independent review PASS on the frozen
+  SHA and on the remediation delta (verdicts recorded in the PR #9 body and
+  the merge commit message; no formal GitHub review submission exists on
+  either PR); CI on `41c152c` (run 35109481727) and on `b52b223` (run
+  35191388324), both 10/10 — ruff, ruff format, mypy, pytest 2984 passed;
+  typecheck, lint, build; Playwright 722 passed / 0 failed / 9 skipped;
+  then the owner's merge. **Merged into `develop` only:** `main` and
+  production are unchanged. The Phase 1 and UX-L2D-01…07 entries had
+  their status wording amended to match; their bodies are unchanged.
+  Still open after the merge: the Celery exclusive-pidbox
+  multi-worker/restart drill (safe staging), whether Vitest becomes a CI
+  gate, and the backend dependencies recorded in
+  `docs/ux/ux-l2d-phase-2-status.md`.
+
 - **Documentation state corrections.** UX-L2B is present in `develop`
   (`a543b029` is the tip of `feature/ux-l2b-publish-integrity`); earlier
   entries below describing it as "not merged" predate that fast-forward.
   Phase 1 (`c0092da6`) was independently accepted by Cursor on 2026-09-15
-  (`PASS — PHASE 1 MAY CLOSE`); PR #7 remains a draft and is **not** merged.
+  (`PASS — PHASE 1 MAY CLOSE`); PR #7 was still a draft at that date
+  (merged 2026-09-16 — see the entry above).
   Historical UX-L2C (`feature/ux-l2c-live-state-clarity`, `ece8322`) exists
   remotely, unmerged and not independently accepted.
 
 ### Fixed
 
 - **Phase 1 — Git/CI baseline and PR #7 closure (on
-  `fix/ci-baseline-security-pytest`, not merged).** Owner-adopted the bounded
+  `fix/ci-baseline-security-pytest`; merged into `develop` 2026-09-16 via
+  PR #7).** Owner-adopted the bounded
   12-file baseline repair (scanner-required blank template secrets, per-run R7
   Fernet key, `tests/__init__.py`, exact blank-secret assertion, PostgreSQL 17
   client parity, deterministic Compose password probe, Celery
@@ -192,7 +223,8 @@ production release.
   `rabbitmq:4.0-alpine` and the local `rabbitmq:4-management-alpine` tag have
   not been exercised against the new settings outside CI. Independently
   accepted by Cursor on 2026-09-15 (`PASS — PHASE 1 MAY CLOSE`) at
-  `c0092da6`; PR #7 still draft, not merged; not deployed.
+  `c0092da6`; PR #7 merged into `develop` 2026-09-16 (`5e21927`); not
+  deployed.
 
 - **UX-L2B-R4 — stabilise isolated live-API Chromium + store guidance (on
   `feature/ux-l2b-publish-integrity`, not merged).** Closes the six R3 full-run

@@ -512,9 +512,9 @@ feature. Decisions worth knowing when reading the code:
   `ProductMetrics`, `ProductIdentity`, `ProductEditorBreadcrumb`,
   `SupplierSyncStatus` components, `estimateMarginPercent`, `useMounted`.
 
-`docs/ux/ux-l2d-phase-2-status.md` records the frozen branch state, the
-backend dependencies and the CI checks still required before Phase 2 can be
-accepted.
+`docs/ux/ux-l2d-phase-2-status.md` records the integration record (merged
+into `develop` 2026-09-17 via PR #9), the state at implementation freeze and
+the backend dependencies that remain open.
 
 ## Known limitations
 

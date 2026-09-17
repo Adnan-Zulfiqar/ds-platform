@@ -19,7 +19,7 @@ Statuses: `NOT_STARTED` · `IN_PROGRESS` · `AWAITING_CI` · `BLOCKED` · `SELF_
 | DP-PH1-09 | SELF_VERIFIED | — | CHANGELOG `[Unreleased]/Fixed` entry; ROADMAP Phase 1 row + Last updated 2026-09-14; ledger | This commit | Freeze after DP-PH1-11 |
 | DP-PH1-10 | INDEPENDENTLY_ACCEPTED | `c0092da6` | Run 34846601320 attempt 1, `pull_request`, all 10 jobs success; merge-ref tree = HEAD tree | Owner-held Phase 1 report §E | — |
 | DP-PH1-11 | SELF_VERIFIED | `a543b029`..(this commit) | 20 files in range = 12 adopted + 8 closure paths; `git diff --check` clean; `check_secrets.py` PASS (784 files, 5 rules); no `.env`, build output, `npm-ci.log`, `test-results` or migration committed; build side-effect on `tsconfig.json` reverted | This commit; report §H | Stop `:3137`, remove `.next-r7` after CI |
-| DP-PH1-12 | INDEPENDENTLY_ACCEPTED | `c0092da6` | Report delivered; Cursor verdict `PASS — PHASE 1 MAY CLOSE`; owner accepted 2026-09-15 | Owner-held `DP-Phase-1-Claude-Final-Report.md`, `DP-Phase-1-Cursor-Review.md` | PR #7 merge is a separate owner decision |
+| DP-PH1-12 | INDEPENDENTLY_ACCEPTED | `c0092da6` | Report delivered; Cursor verdict `PASS — PHASE 1 MAY CLOSE`; owner accepted 2026-09-15 | Owner-held `DP-Phase-1-Claude-Final-Report.md`, `DP-Phase-1-Cursor-Review.md` | PR #7 merged 2026-09-16 (`5e21927`) — see the 2026-09-17 checkpoint |
 
 ## Checkpoints
 
@@ -35,5 +35,13 @@ Statuses: `NOT_STARTED` · `IN_PROGRESS` · `AWAITING_CI` · `BLOCKED` · `SELF_
 
 ### 2026-09-15 — Independent acceptance (recorded from the UX-L2D branch)
 - Cursor independent review of `c0092da6dde6f5dfa586436efd63a33097ed7e7c` (tree `99ed4f48`, base `a543b029`, CI run 34846601320): no Blocker/High findings; one previously disclosed Medium runtime/staging item (Celery exclusive pidbox queues, single-worker verified only); non-blocking Low/Info. Verdict `PASS — PHASE 1 MAY CLOSE`; owner accepted.
-- PR #7 remains a draft and is **not merged**; the accepted SHA is not modified by this note (it is recorded on `feature/ux-l2d-dashboard`, stacked on that SHA).
+- PR #7 remains a draft and is **not merged** (as of this checkpoint; superseded below); the accepted SHA is not modified by this note (it is recorded on `feature/ux-l2d-dashboard`, stacked on that SHA).
 - The Celery multi-worker/restart/monitor drill is carried forward as a separate safe-staging validation item, outside UX-L2D.
+
+### 2026-09-17 — PR #7 merged into `develop` (recorded post-merge)
+- PR #7 (`fix/ci-baseline-security-pytest`, head `c0092da6dde6f5dfa586436efd63a33097ed7e7c`) was merged by the owner on 2026-09-16 23:55 UTC with merge commit `5e219273c804c26658088b2af43d7640e8e95eaa` (parents `a543b029`, `c0092da6`). The accepted SHA was not modified.
+- CI on the merge commit: run 35164379004 (`push` to `develop`), 10/10 jobs; pytest 2984 passed; Playwright 513 passed / 9 skipped / 4 flaky (passed on retry).
+- No formal GitHub review submission exists on PR #7; the acceptance evidence remains the owner-held reports named above.
+- Phase 2 (`feature/ux-l2d-dashboard`, accepted head `41c152c`) was merged on top through PR #9 (`b52b223`, 2026-09-17).
+- Production is unchanged: `main` (`3ce66d4`) does not contain `c0092da6`. The Celery exclusive-pidbox multi-worker/restart drill remains open as a safe-staging item.
+- Task statuses above are left as recorded; `INTEGRATED_VERIFIED` is not applied because its definition lives in the owner-held roadmap and has not been checked against this merge.
