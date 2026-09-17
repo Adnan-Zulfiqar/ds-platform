@@ -322,4 +322,42 @@ Plan: [PHASE_9_STAGE_3_PLAN.md](PHASE_9_STAGE_3_PLAN.md).
 Playwright optimisation foundation **3 passed / 1 skipped** (live AliExpress seed).
 No real AI provider call — every execution uses `StubProvider`.
 
-**Stage 4 — Generation services — begins next.**
+### Stage 4 — Generation services: implemented, awaiting independent review
+
+| Delivered | Where |
+|---|---|
+| Third generation call — the seeded `seo_optimizer` prompt — through the unchanged Stage 1–3 boundary (`PromptService.test_render` → `get_ai_provider`) | `app/services/product_optimization.py` |
+| `keywords` prompt variable from merchant data: `search_topics` → `tags` → `meta_keywords` → `""`; never invented | same module, `_keywords_for_prompt` |
+| `seoTitle` / `seoDescription` / `keywords` in AI-generated `ProductVersion.content` — **no migration** | same module; `app/models/product.py` comments |
+| Optional `seoTitle` / `seoDescription` / `keywords` on `ProductVersionRead`; no endpoint or status change | `app/schemas/product.py` |
+| All-or-nothing: `_first_failure` over three executions; an SEO failure writes no version and preserves the last good cache | same service |
+| Tests (6 unit + 12 integration new; supplier-field assertion extended) | `tests/unit/test_product_optimization_variables.py`, `tests/integration/test_product_optimization.py` |
+
+Plan: [PHASE_9_STAGE_4_PLAN.md](PHASE_9_STAGE_4_PLAN.md). Report:
+[PHASE_9_STAGE_4_COMPLETION.md](PHASE_9_STAGE_4_COMPLETION.md).
+
+**Two decisions worth recording.**
+
+*Generated SEO is a proposal on the version, not a write to the product.*
+`Product.seo_title`, `seo_description`, `meta_keywords`, `tags`, `title`,
+`description`, and the supplier copies are never assigned by this stage —
+`_apply_active_version` still syncs only the optimised title/description
+cache, so neither optimise nor activate nor rollback can promote the
+proposal. Promoting it is a merchant decision for a later stage; a stub
+must not be able to rewrite a merchant's SEO by side effect.
+
+*The three SEO values are the raw completion, and with the stub they are
+identical.* The template asks for title, description, and keywords in one
+response; `StubProvider` returns one opaque string. Parsing it into three
+"fields" would be fabricated model output. The stage that ships a real
+provider defines the parse contract.
+
+**Verified locally:** ruff, ruff format, mypy strict (224 files),
+`check_secrets.py`, Stage 4 targeted **68 passed**, full pytest
+**3000 passed / 1 skipped / 1 failed of 3002** (the failure is a local-checkout `.env`-exists assertion, environmental — see the report), `git diff --check` clean. No frontend file changed, so
+no frontend gate ran; `frontend/types/api.ts` deliberately lags by three
+optional fields (M4). Branch not pushed; CI not run. No real AI provider call
+— every execution uses `StubProvider`.
+
+**Stage 5 — Quality scoring — is next in sequence (§3), model-free by design.
+Not started.** Stage 4 first needs independent review and CI on a pull request.

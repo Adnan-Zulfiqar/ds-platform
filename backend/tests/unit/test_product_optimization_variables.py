@@ -61,3 +61,60 @@ class TestBuildVariables:
         assert variables["category"] == "Phone Cases"
         assert variables["brand"] == "Acme"
         assert variables["tone"] == "playful"
+
+
+class TestKeywordsVariable:
+    """Phase 9 stage 4: the `{{keywords}}` input to `seo_optimizer`.
+
+    Every case proves the value comes from something the merchant already
+    recorded on the product — the builder never invents a keyword.
+    """
+
+    def test_keywords_is_always_present(self) -> None:
+        """A product with nothing recorded still supplies the variable, so
+        `seo_optimizer` renders rather than raising
+        `MissingPromptVariablesError` — that error is reserved for a
+        template variable the caller genuinely forgot."""
+        product = _product(search_topics=None, tags=None, meta_keywords=None)
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert "keywords" in variables
+        assert isinstance(variables["keywords"], str)
+
+    def test_search_topics_win_over_every_other_source(self) -> None:
+        product = _product(
+            search_topics=["canvas case", "camera protection"],
+            tags=["realme", "case"],
+            meta_keywords="legacy, keywords",
+        )
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert variables["keywords"] == "canvas case, camera protection"
+
+    def test_tags_are_used_when_search_topics_are_empty(self) -> None:
+        product = _product(search_topics=[], tags=["realme", "case"], meta_keywords="legacy")
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert variables["keywords"] == "realme, case"
+
+    def test_meta_keywords_are_used_when_both_lists_are_empty(self) -> None:
+        product = _product(search_topics=[], tags=[], meta_keywords="  legacy, keywords  ")
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert variables["keywords"] == "legacy, keywords"
+
+    def test_falls_back_to_an_empty_string_not_a_fabricated_keyword(self) -> None:
+        """No source, no keyword. Filling the gap from the title or category
+        would be the builder inventing input the merchant never gave."""
+        product = _product(search_topics=[], tags=[], meta_keywords="   ")
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert variables["keywords"] == ""
+
+    def test_blank_list_entries_do_not_count_as_a_source(self) -> None:
+        """A list holding only whitespace is treated as empty and falls
+        through, rather than producing a keywords value of `", "`."""
+        product = _product(search_topics=["", "  "], tags=["  realme  "], meta_keywords=None)
+        variables = ProductOptimizationService._build_variables(product, tone="professional")
+
+        assert variables["keywords"] == "realme"

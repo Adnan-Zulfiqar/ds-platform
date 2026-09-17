@@ -645,10 +645,13 @@ class ProductVersion(TenantScopedBase):
         nullable=False,
     )
 
-    #: `{"title": ..., "description": ...}` today. JSONB rather than discrete
-    #: columns so a later stage can add `seoTitle`/`seoDescription`/`tags`
-    #: to the shape without a migration — the same reasoning
-    #: `AutomationRule.config` already established in this codebase.
+    #: `{"title": ..., "description": ...}` for every version; AI-generated
+    #: versions from Phase 9 stage 4 onward also carry `seoTitle`,
+    #: `seoDescription`, and `keywords`. JSONB rather than discrete columns
+    #: so exactly that kind of addition needs no migration — the same
+    #: reasoning `AutomationRule.config` already established in this
+    #: codebase. Readers use `.get()`: an `original` snapshot, or a stage 3
+    #: row, legitimately lacks the SEO keys.
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -659,9 +662,11 @@ class ProductVersion(TenantScopedBase):
 
     #: Links to the `PromptExecution` that produced this version, so the
     #: full record (prompt, rendered text, provider, tokens, status) is
-    #: reachable without duplicating any of those columns here. Two
-    #: executions (title, description) currently produce one version; this
-    #: points at one of them as the representative link.
+    #: reachable without duplicating any of those columns here. Three
+    #: executions (title, description, SEO) produce one version; this
+    #: points at the description execution as the representative link, as
+    #: it did when there were two — the others remain queryable by
+    #: `prompt_name` within the same request window.
     prompt_execution_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("prompt_executions.id", ondelete="SET NULL"),

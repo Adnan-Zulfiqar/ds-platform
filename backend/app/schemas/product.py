@@ -426,6 +426,15 @@ class ProductVersionRead(CamelCaseModel):
     ``title``/``description`` are read out of the stored ``content`` JSONB
     rather than exposed as a raw dict, keeping the wire contract typed even
     though storage stays flexible for fields a later stage may add.
+
+    The three SEO fields are that later addition (Phase 9 stage 4). All
+    optional: an ``original`` snapshot never has them, a stage 3-era row
+    predates them, and their value is the ``seo_optimizer`` completion as
+    the provider returned it — with ``StubProvider`` that is one synthetic
+    string, so the three are identical. They are a *proposal* carried by
+    the version; the merchant's own ``seoTitle`` / ``seoDescription`` /
+    ``tags`` on ``ProductRead`` are a different thing and are not written
+    from here.
     """
 
     id: uuid.UUID
@@ -433,6 +442,9 @@ class ProductVersionRead(CamelCaseModel):
     source: ProductVersionSource
     title: str | None = None
     description: str | None = None
+    seo_title: str | None = None
+    seo_description: str | None = None
+    keywords: str | None = None
     active: bool
     ai_provider: str | None = None
     prompt_execution_id: uuid.UUID | None = None
@@ -455,6 +467,9 @@ class ProductVersionRead(CamelCaseModel):
             source=version.source,
             title=content.get("title"),
             description=content.get("description"),
+            seo_title=content.get("seoTitle"),
+            seo_description=content.get("seoDescription"),
+            keywords=content.get("keywords"),
             active=version.active,
             ai_provider=version.ai_provider,
             prompt_execution_id=version.prompt_execution_id,
