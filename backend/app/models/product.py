@@ -667,7 +667,6 @@ class ProductVersion(TenantScopedBase):
     #: points at the description execution as the representative link, as
     #: it did when there were two — the others remain queryable by
     #: `prompt_name` within the same request window.
-
     prompt_execution_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("prompt_executions.id", ondelete="SET NULL"),
