@@ -367,7 +367,7 @@ reproduce there). Merged into `develop` as `c3814e8b` (parents `109f43f5`,
 Phase 9 row and `CHANGELOG.md` were not updated by Stage 4 and are owed
 (CLAUDE.md §9); Stage 5's closing commit carries them.
 
-### Stage 5 — Optimization-quality scoring: implemented on `feat/phase-9-stage-5-quality-scoring`, awaiting independent review
+### Stage 5 — Optimization-quality scoring: implemented on `feat/phase-9-stage-5-quality-scoring`, locally validated, awaiting remote CI / review
 
 Cursor's readiness review found no authoritative Stage 5 contract — the
 repository said only "deterministic, model-free" — and returned NOT READY
@@ -400,7 +400,7 @@ was merged into `develop` as `38ba9aa7` (PR #12; post-merge CI run
 | Public `score_version(content, product)`; private `_merchant_terms` (not exported, not imported by the service) | same module |
 | Original scored at snapshot; AI version scored and baselined to the original at creation; keys written in the one `create` | `ProductOptimizationService` |
 | Five optional wire fields on `ProductVersionRead`, typed nested read models | `app/schemas/product.py` |
-| Tests: 86 unit (every tier, boundary, rule, the delta contract, module hygiene), 3 Stage 4 pins, 9 integration | `tests/unit/test_optimization_quality.py`, `tests/unit/test_product_optimization_variables.py`, `tests/integration/test_product_optimization.py` |
+| Tests: 88 unit (every tier, boundary, rule, the delta contract, module hygiene, raw-length `seoFormat`), 3 Stage 4 pins, 9 Stage 5 integration plus Stage 3/4 regressions in the same file | `tests/unit/test_optimization_quality.py`, `tests/unit/test_product_optimization_variables.py`, `tests/integration/test_product_optimization.py` |
 
 Report: [PHASE_9_STAGE_5_COMPLETION.md](PHASE_9_STAGE_5_COMPLETION.md).
 
@@ -412,14 +412,16 @@ delta today describes the supplier's original, not an AI improvement; the
 rubric is verified, that claim is not made.
 
 **Verified locally:** ruff, ruff format, mypy strict (225 files),
-`check_secrets.py`, Cursor takeover re-run of Stage 5 unit + Stage 4 pins
-+ scoping **127 passed**. Full pytest and the Stage 5 integration class
-**not completed locally** — Docker Desktop was down and the Windows
-`droppilot` role cannot create `droppilot_test` (see the report §3.1).
-Must be re-run before this stage is proposed for merge. `git diff --check`
-clean. No frontend file changed; `frontend/types/api.ts` lags by eight
-optional fields (M4, for Stage 10). Branch not pushed; CI not run. Stage
-4's `_build_variables` and `_keywords_for_prompt` are byte-identical to
-`develop`. No real AI provider call anywhere.
+`check_secrets.py`, Stage 5 unit **88 passed**, Stage 4 pins **13**,
+scoping **28**, combined targeted **129 passed**. Integration
+`test_product_optimization.py` **39 passed** (21.25 s) on isolated
+Postgres 17 `droppilot_test` at `127.0.0.1:5499`. Full pytest **3100
+passed / 1 skipped / 1 failed** — the failure is the local-environment
+`.env`-exists assertion in `test_ebay_c0_security.py`; the files are
+gitignored and untracked and were not deleted. `git diff --check` clean.
+No frontend file changed; `frontend/types/api.ts` lags by eight optional
+fields (M4, for Stage 10). Branch not pushed; CI not run. Stage 4's
+`_build_variables` and `_keywords_for_prompt` are byte-identical to
+`develop`. No real AI provider call anywhere. Not merged, not deployed.
 
 **Stage 6 — Image analysis — is next in sequence (§3). Not started.**

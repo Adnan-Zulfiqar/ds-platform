@@ -13,7 +13,7 @@ production release.
 ### Added
 
 - **Phase 9 Stage 5 — Optimization-quality scoring (on
-  `feat/phase-9-stage-5-quality-scoring`; not merged).** A deterministic,
+  `feat/phase-9-stage-5-quality-scoring`; locally validated, not merged).** A deterministic,
   model-free rubric written on every `ProductVersion` at creation: title
   length, plain-text description length, repetition/distinctness, and
   coverage of the merchant's own keywords (rescaled out when none exist),

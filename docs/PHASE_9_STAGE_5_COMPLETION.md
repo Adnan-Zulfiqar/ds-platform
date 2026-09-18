@@ -11,7 +11,7 @@ never been executed, that is stated rather than implied.
 | Date | 2026-09-18 |
 | Branch | `feat/phase-9-stage-5-quality-scoring` |
 | Base | `develop` @ `38ba9aa7fd31fa0c1fee1ac92f53c3892f468f3e` (post-merge CI run 35285058531, 10/10) |
-| Last code commit | Claude's last application commit `2e4e236`; Cursor takeover added `c3d707c` (the plan's `metaKeywords: "a,b"` integration pin). Gates in §3 / §3.1 name what actually ran |
+| Last code commit | `06894f5` — `seoFormat` raw-length contract fix plus ruff hyphen; docs after this commit record the gates below |
 | Contract | [PHASE_9_STAGE_5_PLAN.md](PHASE_9_STAGE_5_PLAN.md) — the source of truth; this report records that it was implemented as written |
 | Migration | **None.** Five keys added to the existing `ProductVersion.content` JSONB |
 | Rubric version | `QUALITY_SCORE_VERSION = 1` |
@@ -28,7 +28,7 @@ never been executed, that is stated rather than implied.
 | Original snapshot scored at creation; AI version scored and baselined at creation | `ProductOptimizationService._ensure_original_snapshot`, `optimize_product` (`app/services/product_optimization.py`) |
 | Five optional wire fields on `ProductVersionRead`, typed nested read models for baseline and breakdown | `app/schemas/product.py` |
 | Model comment listing the new `content` keys | `app/models/product.py` (comment-only diff) |
-| Unit tests (86) | `tests/unit/test_optimization_quality.py` (new) |
+| Unit tests (88) | `tests/unit/test_optimization_quality.py` (new) |
 | Stage 4 regression pins (3) | `tests/unit/test_product_optimization_variables.py` |
 | Integration tests (9) | `tests/integration/test_product_optimization.py::TestQualityScoring` |
 | This report, plan progress entry, roadmap row, changelog | `docs/`, `PROJECT_ROADMAP.md`, `CHANGELOG.md` |
@@ -89,65 +89,61 @@ about the supplier's original listing, not evidence that AI improved it**
 | `2e4e236` | test(ai): prove Stage 5 integration and protected behavior |
 | `0732482` | docs(ai): record Stage 5 implementation evidence (Claude) |
 | `c3d707c` | test(ai): pin seo_optimizer keywords remain a,b (Cursor takeover) |
-| this commit | docs(ai): record Cursor Stage 5 takeover evidence |
+| `330e28b` | docs(ai): record Cursor Stage 5 takeover evidence (integration then unverified) |
+| `ce1de3e` | fix(ai): align Stage 5 seo format evidence with contract |
+| `06894f5` | style(ai): replace en-dash in seoFormat docstring |
+| this commit | docs(ai): finalize Stage 5 validation evidence |
 
 ---
 
 ## 3. Gates executed
 
-Claude's targeted runs below were against an isolated `postgres:17-alpine`
-container (`droppilot-stage5-testpg`, `droppilot_test`, port 5499) and
-rebuilt the schema from `alembic downgrade base` → `upgrade head` (head
-`0032`). Cursor could not repeat that environment; see §3.1.
+Authoritative local run: Cursor, 2026-09-18, isolated `postgres:17-alpine`
+container `droppilot-stage5-testpg` (`POSTGRES_DB=droppilot_test`,
+`127.0.0.1:5499` → container 5432). Identity checked before the suite:
+`current_database = droppilot_test`, `current_user = droppilot`, image
+`postgres:17.11`. The development Compose database on `:5432`
+(`droppilot-postgres-1`) was not used. Alembic rebuilt the test schema
+`downgrade base` → `upgrade head` (`0032`) at session start.
 
 | Gate | Result |
 |---|---|
 | `ruff check .` | Pass |
 | `ruff format --check .` | Pass (420 files) |
 | `mypy app` (strict) | Pass (225 source files) |
-| `scripts/check_secrets.py` | Pass |
-| Stage 5 unit — `test_optimization_quality.py` | **86 passed** (1.0 s, no database) |
-| Stage 4 pins — `test_product_optimization_variables.py` | **13 passed** (10 existing + 3 new) |
-| Stage 3/4/5 integration — `test_product_optimization.py` | **39 passed** (30 existing + 9 new; the 9 new ran as a class in 4 min 50 s, the 30 existing re-ran green with scoring wired: 135-test batch with the unit files and version scoping) |
-| Repository scoping — `test_product_version_repository_scoping.py` + `test_product_repository_scoping.py` | **6 + 22 = 28 passed** (re-run 2026-09-18 takeover; product-repository file is the Stage 3 file the plan's §16.3 also requires) |
-| **Full `pytest`** | **NOT COMPLETED LOCALLY — gate not satisfied.** See §3.1. |
+| `scripts/check_secrets.py` | Pass (831 tracked files) |
+| Stage 5 unit — `test_optimization_quality.py` | **88 passed** (includes two raw-length `seoFormat` tests) |
+| Stage 4 pins — `test_product_optimization_variables.py` | **13 passed** |
+| Scoping — `test_product_version_repository_scoping.py` + `test_product_repository_scoping.py` | **6 + 22 passed** |
+| Combined targeted unit/scoping | **129 passed** (1.33 s, no database) |
+| Stage 3/4/5 integration — `test_product_optimization.py` | **39 passed**, 0 failed, 0 skipped, 0 errors, 21.25 s |
+| **Full `pytest`** | **3100 passed**, **1 skipped**, **1 failed**, 272 warnings, 393.39 s |
 | `git diff --check origin/develop...HEAD` | Clean |
+| Frontend lint / typecheck / build / Playwright | **Not applicable — no frontend file changed.** CI remains the authority |
+| CI | **Not run** — branch not pushed, by instruction |
 
-### 3.1 Cursor takeover re-verification (2026-09-18)
+The skip is `tests/unit/core/test_log_retention.py` (Windows symlink
+privilege). The single failure is **local-environment only**:
+`tests/integration/test_ebay_c0_security.py::TestNoGeneratedOrSecretFiles::test_no_env_file_was_added_to_the_repository`
+asserts that `.env` must not exist on disk. Root `.env` and
+`backend/.env` are present, **gitignored** (`.gitignore:35`), and
+**untracked** (`git ls-files` empty; `git status --ignored` shows `!!`).
+They were not deleted and their contents were not read. This is the same
+checkout-local failure Stage 4 recorded; it is not a Stage 5 regression
+and was not hidden by changing application code.
 
-Claude reached its monthly usage limit after drafting the report above.
-Cursor took over on `feat/phase-9-stage-5-quality-scoring` at
-`0732482` (clean tree, five commits on `develop` `38ba9aa7`). Nothing
-was recovered from a live pytest process — the terminals folder was
-empty and Docker Desktop was not running.
+Integration test 8
+(`TestQualityScoring::test_scoring_adds_no_prompt_execution`) passed on
+this run: `PromptExecution.prompt_name` is exactly
+`{product_title_generator, product_description_generator, seo_optimizer}`
+(count 3); `quality_scorer` and `image_analyzer` are absent;
+`seo_optimizer` `input_variables["keywords"]` is exactly `"a,b"` when that
+is the only merchant source.
 
-| Gate | Cursor result | Against |
-|---|---|---|
-| `ruff check .` | Pass | current tree |
-| `ruff format --check .` | Pass (420 files) | current tree |
-| `mypy app` (strict) | Pass (225 source files) | current tree |
-| `scripts/check_secrets.py` | Pass (831 tracked files) | current tree |
-| Stage 5 unit — `test_optimization_quality.py` | **86 passed** (3.59 s batch with the three files below) | current tree |
-| Stage 4 pins — `test_product_optimization_variables.py` | **13 passed** | current tree |
-| Scoping — version + product repositories | **6 + 22 passed** | current tree |
-| Combined targeted unit/scoping | **127 passed** | current tree |
-| Stage 3/4/5 integration — `test_product_optimization.py` | **Not re-run.** Collection reached the module (not skipped), then every test errored at `db_session` setup: `database "droppilot_test" does not exist`. Local Windows PostgreSQL accepts `droppilot`/`droppilot` on `:5432` and holds `droppilot` at Alembic `0032` (39 public tables, **not migrated by this takeover**). Role `droppilot` has `CREATEDB=false`. Docker Desktop's engine was down (`dockerDesktopLinuxEngine` pipe missing); starting it was blocked as a host-runtime change, so the isolated `postgres:17-alpine` path Claude used could not be repeated. | n/a |
-| **Full `pytest`** | **Not re-run** — same database blocker. Claude's earlier full-suite attempt remains **not completed** (killed ~15 % in by a reboot). One local environmental failure is still expected if `.env` / `backend/.env` exist: `test_ebay_c0_security.py::test_no_env_file_was_added_to_the_repository`. Those files are gitignored and untracked; they were not deleted. | n/a |
-
-Claude's reported integration **39 passed** and the 9 Stage 5 integration
-cases are **not independently confirmed** in this takeover. They stay in
-the table above as Claude's claimed runs against `2e4e236`, not as
-Cursor-verified results.
-
-The plan's §16.2 item 7 additionally required the `seo_optimizer`
-`input_variables["keywords"] == "a,b"` pin on the unused-prompt
-integration test. That assertion was missing; it is added in the takeover
-code commit (`c3d707c`). It has **not** been executed (same database blocker).
-
-Frontend lint / typecheck / build / Playwright: **not applicable — no
-frontend file changed.** CI: **not run** — branch not pushed, by
-instruction. CI is the authority for the full suite regardless of the
-local re-run.
+An earlier Cursor takeover pass (commit `330e28b`) could not reach this
+database because Docker Desktop was down. Those unverified rows are
+superseded by this section. Claude's interrupted full-suite attempt is
+discarded; it is not evidence.
 
 ### Plan → test coverage
 
@@ -163,7 +159,7 @@ Highlights, with the plan's own expected values:
 | Source priority, comma split, strip, case-insensitive dedupe, non-`str` skip, 50-cap + `truncated`, substring + case-insensitive match, generated `keywords` never a source | `TestKeywordCoverage::*` | per plan |
 | Round-half-up: 62/75→83, 1/75→1, 74/75→99, 56/75→75, 56/100→56 | `TestTotal::test_round_half_up_integer_formula` | exact |
 | Totality over `{}`, non-`str`, nested, `None` | `TestTotal::test_is_total_over_malformed_content` | no raise |
-| Stub fixture 75 / 56; `seoFormat` all true; 60-char bound | `TestStubFixture`, `TestSeoFormat` | exact |
+| Stub fixture 75 / 56; `seoFormat` all true; 60-char bound; markup-wrapped 59-char title is out of bound (raw `len(seoTitle)`) | `TestStubFixture`, `TestSeoFormat` | exact |
 | **Delta contract**: 52 → 52 / 100 / 41, Δ 0 / +48 / −11; with `["camera protection"]` 39 → 39 / 100 / 31, Δ 0 / +61 / −8 | `TestDeltaContract::test_scores_and_deltas` | baseline, candidate, subtraction, repeated-run equality — each separately |
 | Module hygiene: no `app.ai`, `app.services.prompt`, `app.services.seo_score`, `httpx`, `asyncio`, `random`, `datetime`; private helper not exported; scoring succeeds with the provider factory patched to raise | `TestModuleHygiene::*` | AST-verified |
 | Stage 4 pins: `"a,b"` → `"a,b"`; `["x","x"]` → `"x, x"`; exact six-key `_build_variables` | `TestStage4PromptRenderingIsPinned::*` | literal |
@@ -205,9 +201,10 @@ Highlights, with the plan's own expected values:
    from Stage 4, five from this stage) — recorded under M4.
 3. **Frontend gates not run** (consequence of 2 — no frontend file
    changed).
-4. **CI has not run on this branch** — unpushed by instruction. The local
-   full suite is **not** evidence yet (never completed; see §3.1). CI on
-   the eventual PR is the authority.
+4. **CI has not run on this branch** — unpushed by instruction. Local
+   full pytest is recorded in §3 (3100 passed / 1 skipped / 1
+   environment-only `.env` failure). CI on the eventual PR is the
+   authority for a clean checkout without developer env files.
 5. **The baseline can differ between optimisations** of the same product
    if the merchant edits their keywords in between (plan §8). Each delta
    is like-for-like within its own version; deltas across versions are
@@ -224,8 +221,8 @@ Highlights, with the plan's own expected values:
 
 Real providers; any call to `quality_scorer` (still seeded, still
 unwired — the scorer's import hygiene is unit-tested; integration test 8
-asserts the optimize execution log, but that class was not re-run in the
-Cursor takeover); model-assisted explanations;
+passed on the isolated database and asserts the optimize execution log
+holds exactly the three Stage 4 prompts); model-assisted explanations;
 `image_analyzer` / Stage 6; Stage 7 pipeline; Stage 9 Celery; Stage 10 AI
 Studio and any frontend; changes to `seo_score.py`, its endpoint, or the
 editor SEO panel; a migration or product column; back-filling legacy
@@ -238,7 +235,8 @@ publish-integrity code; CI workflows; `main`; deployment.
 
 - `app/services/optimization_quality.py` — each rule against the plan's
   §6 tables; `_round_half_up`; `_merchant_terms` is private and
-  `__all__` excludes it.
+  `__all__` excludes it; `_seo_format` uses raw `len(seoTitle)` / 
+  `len(seoDescription)` per §7.4, not `_plain()`.
 - `app/services/product_optimization.py` — the import line (only
   `score_version`), the two `score_version` calls, that `_build_variables`
   and `_keywords_for_prompt` have no changed line, and that
