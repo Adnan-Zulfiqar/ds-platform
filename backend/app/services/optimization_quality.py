@@ -351,7 +351,7 @@ def _stored_text(value: object) -> str:
     """The stored Stage 4 field as the template asked to produce it.
 
     ``seoFormat`` is a format check on the raw completion (§7.4:
-    ``len(seoTitle) < 60``), not a D1–D4 measurement. Stripping tags or
+    ``len(seoTitle) < 60``), not a D1-D4 measurement. Stripping tags or
     collapsing whitespace here would report the stub's markup-wrapped
     59-character title as in-bound when the stored string is not.
     """
