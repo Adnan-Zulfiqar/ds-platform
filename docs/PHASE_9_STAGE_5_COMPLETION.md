@@ -235,7 +235,7 @@ publish-integrity code; CI workflows; `main`; deployment.
 
 - `app/services/optimization_quality.py` — each rule against the plan's
   §6 tables; `_round_half_up`; `_merchant_terms` is private and
-  `__all__` excludes it; `_seo_format` uses raw `len(seoTitle)` / 
+  `__all__` excludes it; `_seo_format` uses raw `len(seoTitle)` and
   `len(seoDescription)` per §7.4, not `_plain()`.
 - `app/services/product_optimization.py` — the import line (only
   `score_version`), the two `score_version` calls, that `_build_variables`
