@@ -8,7 +8,9 @@ access the way the Playwright suite does.
 
 Stage 4 added the `seo_optimizer` generation; its coverage lives in
 `TestSeoGeneration` and `TestSeoFailure` below, extending this file rather
-than duplicating its fixtures elsewhere.
+than duplicating its fixtures elsewhere. Stage 5 added the deterministic
+quality score written on every version; `TestQualityScoring` covers it the
+same way.
 """
 
 from __future__ import annotations
@@ -26,9 +28,12 @@ from app.ai.exceptions import AIError
 from app.ai.provider import CompletionRequest, CompletionResult
 from app.ai.stub_provider import StubProvider
 from app.core.config import AIProviderName, settings
+from app.core.context import clear_context, set_tenant_id
 from app.core.tokens import create_access_token
 from app.integrations.aliexpress import service as service_module
 from app.models.ai_prompt import PromptExecution
+from app.models.product import Product, ProductVersionSource
+from app.repositories.product import ProductVersionRepository
 from tests.integration.test_products import (
     REAL_PRODUCT_ID,
     auth_header,
@@ -537,6 +542,284 @@ class TestSeoFailure:
         assert detail.json()["seoTitle"] == "Merchant SEO title"
         assert detail.json()["seoDescription"] == "Merchant SEO description"
         assert detail.json()["title"] == product["title"]
+
+
+#: What the stub's 49-character title and description score under the
+#: stage 5 rubric (docs/PHASE_9_STAGE_5_PLAN.md §7.5): 75 when the merchant
+#: provided no keywords (applicableMax 75), 56 when they did (the stub text
+#: never contains a merchant keyword, so D4 scores 0 of 25).
+_STUB_SCORE_WITHOUT_KEYWORDS = 75
+_STUB_SCORE_WITH_KEYWORDS = 56
+_STAGE_4_PROMPTS = {
+    "product_description_generator",
+    "product_title_generator",
+    "seo_optimizer",
+}
+
+
+async def _versions_by_number(
+    client: AsyncClient, product_id: str, headers: dict[str, str]
+) -> dict[int, dict[str, Any]]:
+    history = await client.get(f"/api/v1/products/{product_id}/versions", headers=headers)
+    assert history.status_code == 200, history.text
+    return {v["versionNumber"]: v for v in history.json()["items"]}
+
+
+class TestQualityScoring:
+    """Phase 9 stage 5: the score is written with the version, compared to
+    the original, and never touched again."""
+
+    async def test_optimize_scores_the_ai_version_against_the_original(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The imported fixture product carries no merchant keywords (import
+        populates none of `search_topics` / `tags` / `meta_keywords`), so the
+        stub candidate lands on the plan's 75."""
+        headers, product = await import_a_product(client, monkeypatch)
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert response.status_code == 201, response.text
+        version = response.json()["version"]
+
+        assert version["qualityScoreVersion"] == 1
+        assert version["qualityScore"] == _STUB_SCORE_WITHOUT_KEYWORDS
+        assert version["qualityBaseline"]["versionNumber"] == 1
+        assert (
+            version["qualityDelta"] == version["qualityScore"] - version["qualityBaseline"]["score"]
+        )
+        breakdown = version["qualityBreakdown"]
+        assert breakdown["applicableMax"] == 75
+        assert breakdown["dimensions"]["keywordCoverage"] == {
+            "applicable": False,
+            "points": 0,
+            "max": 25,
+            "matched": 0,
+            "total": 0,
+            "source": None,
+            "keywords": [],
+            "truncated": False,
+        }
+        assert breakdown["seoFormat"] == {
+            "seoTitleWithinRequestedBound": True,
+            "seoDescriptionWithinRequestedBound": True,
+            "keywordsPresent": True,
+        }
+
+    async def test_merchant_keywords_make_coverage_applicable(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        seeded = await client.patch(
+            f"/api/v1/products/{product['id']}",
+            json={"searchTopics": ["merchant topic"]},
+            headers=headers,
+        )
+        assert seeded.status_code == 200, seeded.text
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        version = response.json()["version"]
+
+        assert version["qualityScore"] == _STUB_SCORE_WITH_KEYWORDS
+        coverage = version["qualityBreakdown"]["dimensions"]["keywordCoverage"]
+        assert coverage["applicable"] is True
+        assert coverage["source"] == "search_topics"
+        assert coverage["keywords"] == ["merchant topic"]
+        assert coverage["matched"] == 0
+        assert version["qualityBreakdown"]["applicableMax"] == 100
+
+    async def test_the_original_snapshot_is_scored_and_is_the_baseline(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+
+        versions = await _versions_by_number(client, product["id"], headers)
+        original, generated = versions[1], versions[2]
+
+        assert original["qualityScoreVersion"] == 1
+        assert isinstance(original["qualityScore"], int)
+        assert original["qualityDelta"] is None
+        assert original["qualityBaseline"] is None
+        assert original["qualityBreakdown"]["seoFormat"] is None
+        # The AI version's baseline is the original's own score.
+        assert generated["qualityBaseline"] == {
+            "versionNumber": 1,
+            "score": original["qualityScore"],
+        }
+
+    async def test_second_optimize_keeps_version_numbering_and_the_same_baseline(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+        second = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert second.json()["version"]["versionNumber"] == 3
+
+        versions = await _versions_by_number(client, product["id"], headers)
+        assert versions[3]["qualityBaseline"] == versions[2]["qualityBaseline"]
+        assert versions[3]["qualityScore"] == _STUB_SCORE_WITHOUT_KEYWORDS
+
+    async def test_rollback_does_not_recompute_or_rewrite_quality_fields(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Change the merchant's keywords *after* version 2 was scored, then
+        roll back to it: its stored breakdown must still show the keywords
+        it was scored with, not the new ones — and the product detail
+        carries no quality fields at all."""
+        headers, product = await import_a_product(client, monkeypatch)
+        first = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+        before = await _versions_by_number(client, product["id"], headers)
+
+        await client.patch(
+            f"/api/v1/products/{product['id']}",
+            json={"searchTopics": ["added later"]},
+            headers=headers,
+        )
+        rolled_back = await client.post(
+            f"/api/v1/products/{product['id']}/versions/{first.json()['version']['id']}/activate",
+            headers=headers,
+        )
+        assert rolled_back.status_code == 200, rolled_back.text
+        assert not any(key.startswith("quality") for key in rolled_back.json())
+
+        after = await _versions_by_number(client, product["id"], headers)
+        for number in (1, 2, 3):
+            for key in (
+                "qualityScoreVersion",
+                "qualityScore",
+                "qualityDelta",
+                "qualityBaseline",
+                "qualityBreakdown",
+            ):
+                assert after[number][key] == before[number][key], (number, key)
+        assert after[2]["qualityBreakdown"]["dimensions"]["keywordCoverage"]["keywords"] == []
+
+    async def test_seo_failure_leaves_the_last_good_versions_score_untouched(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+        before = await _versions_by_number(client, product["id"], headers)
+
+        _fail_seo_only(monkeypatch)
+        retry = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert retry.status_code == 503, retry.text
+
+        after = await _versions_by_number(client, product["id"], headers)
+        assert sorted(after) == [1, 2]
+        assert after[2]["qualityScore"] == before[2]["qualityScore"]
+        assert after[2]["qualityDelta"] == before[2]["qualityDelta"]
+        assert after[2]["active"] is True
+
+    async def test_merchant_fields_are_read_for_scoring_but_never_written(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        seeded = {
+            "seoTitle": "Merchant SEO title",
+            "seoDescription": "Merchant SEO description",
+            "metaKeywords": "merchant, keywords",
+            "tags": ["merchant-tag"],
+            "searchTopics": ["merchant topic"],
+        }
+        patched = await client.patch(
+            f"/api/v1/products/{product['id']}", json=seeded, headers=headers
+        )
+        assert patched.status_code == 200, patched.text
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert response.status_code == 201, response.text
+
+        detail = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        for key, value in seeded.items():
+            assert detail[key] == value, key
+        assert detail["title"] == product["title"]
+        assert detail["description"] == product["description"]
+        assert detail["supplierTitle"] == product["supplierTitle"]
+        assert detail["supplierDescription"] == product["supplierDescription"]
+
+        # The keywords the score used appear only inside the version row.
+        coverage = response.json()["version"]["qualityBreakdown"]["dimensions"]["keywordCoverage"]
+        assert coverage["keywords"] == ["merchant topic"]
+
+    async def test_scoring_adds_no_prompt_execution(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`quality_scorer` stays unwired and `image_analyzer` stays stage 6:
+        after an optimize, the execution log holds exactly the three stage 4
+        prompts and nothing else."""
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+
+        names = (await db_session.execute(select(PromptExecution.prompt_name))).scalars().all()
+        assert set(names) == _STAGE_4_PROMPTS
+        assert len(names) == 3
+        assert "quality_scorer" not in names
+        assert "image_analyzer" not in names
+
+    async def test_a_legacy_original_without_quality_keys_still_serves_and_baselines(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A version-1 row written before stage 5 has no quality keys. It
+        reads back as `null`s, is never back-filled, and still serves as
+        the baseline — recomputed from its content — for a new AI version."""
+        headers, product = await import_a_product(client, monkeypatch)
+        product_id = uuid.UUID(product["id"])
+        tenant_id = (
+            await db_session.execute(select(Product.tenant_id).where(Product.id == product_id))
+        ).scalar_one()
+
+        set_tenant_id(tenant_id)
+        try:
+            await ProductVersionRepository(db_session).create(
+                product_id=product_id,
+                version_number=1,
+                source=ProductVersionSource.ORIGINAL,
+                content={"title": product["title"], "description": product["description"]},
+                active=True,
+                ai_provider=None,
+                prompt_execution_id=None,
+                created_by_user_id=None,
+            )
+        finally:
+            clear_context()
+
+        legacy = (await _versions_by_number(client, product["id"], headers))[1]
+        assert legacy["qualityScoreVersion"] is None
+        assert legacy["qualityScore"] is None
+        assert legacy["qualityDelta"] is None
+        assert legacy["qualityBaseline"] is None
+        assert legacy["qualityBreakdown"] is None
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert response.status_code == 201, response.text
+        version = response.json()["version"]
+        assert version["versionNumber"] == 2
+        assert version["qualityScore"] == _STUB_SCORE_WITHOUT_KEYWORDS
+        assert version["qualityBaseline"]["versionNumber"] == 1
+        assert isinstance(version["qualityBaseline"]["score"], int)
+        assert (
+            version["qualityDelta"] == version["qualityScore"] - version["qualityBaseline"]["score"]
+        )
+
+        # The legacy row itself was not back-filled.
+        still_legacy = (await _versions_by_number(client, product["id"], headers))[1]
+        assert still_legacy["qualityScore"] is None
 
 
 class TestActivateVersion:
