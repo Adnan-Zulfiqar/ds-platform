@@ -19,7 +19,7 @@ Last updated: 2026-09-18
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
-| 9 | AI product optimization | 🚧 **In progress** — stages 1–4 merged into `develop` (Stage 4: PR #11, `c3814e8b`); Stage 5 optimization-quality scoring implemented on `feat/phase-9-stage-5-quality-scoring`, locally validated, awaiting remote CI / review, not merged; stages 6–11 not started. `StubProvider` only — no live model call anywhere |
+| 9 | AI product optimization | 🚧 **In progress** — stages 1–5 merged into `develop` (Stage 5: PR #13, `e1558d5c`; post-merge CI 35392825501 10/10); stages 6–11 not started. `StubProvider` only — no live model call anywhere |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
 | Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Merged into `develop`** — PR #7 merged 2026-09-16, merge commit `5e21927`. Accepted SHA `c0092da6`: independent review `PASS — PHASE 1 MAY CLOSE` (2026-09-15), CI run 34846601320 10/10; CI on the merge commit run 35164379004 10/10. **Production undeployed** — `main` unchanged. Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
@@ -289,7 +289,7 @@ in mind. Nothing here is committed to a phase number.
 |---|---|
 | Additional store channels | WooCommerce / Etsy / TikTok. Shopify shipped in Phase 8; **eBay is connected** as of EBAY-C1 but publishes nothing yet — see [docs/ebay/MASTER_EBAY_ROADMAP.md](docs/ebay/MASTER_EBAY_ROADMAP.md) |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
-| AI optimisation (Phase 9) | Stages 1–4 merged; Stage 5 implemented on `feat/phase-9-stage-5-quality-scoring`, locally validated, awaiting remote CI / review, not merged; stages 6–11 not started |
+| AI optimisation (Phase 9) | Stages 1–5 merged (Stage 5: PR #13, `e1558d5c`; post-merge CI 35392825501 10/10); stages 6–11 not started |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
 | Subscription billing | Plan limits attach to `tenants` |
