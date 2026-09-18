@@ -412,13 +412,14 @@ delta today describes the supplier's original, not an AI improvement; the
 rubric is verified, that claim is not made.
 
 **Verified locally:** ruff, ruff format, mypy strict (225 files),
-`check_secrets.py`, Stage 5 targeted **86 + 13 + 39 + 6 passed**, full
-pytest **not completed locally** — the run was killed at ~15 % by a machine
-reboot and must be re-run before this stage is proposed for merge (see the
-report §3), `git diff --check` clean. No frontend file
-changed; `frontend/types/api.ts` lags by eight optional fields (M4, for
-Stage 10). Branch not pushed; CI not run. Stage 4's `_build_variables` and
-`_keywords_for_prompt` are byte-identical to `develop`. No real AI provider
-call anywhere.
+`check_secrets.py`, Cursor takeover re-run of Stage 5 unit + Stage 4 pins
++ scoping **127 passed**. Full pytest and the Stage 5 integration class
+**not completed locally** — Docker Desktop was down and the Windows
+`droppilot` role cannot create `droppilot_test` (see the report §3.1).
+Must be re-run before this stage is proposed for merge. `git diff --check`
+clean. No frontend file changed; `frontend/types/api.ts` lags by eight
+optional fields (M4, for Stage 10). Branch not pushed; CI not run. Stage
+4's `_build_variables` and `_keywords_for_prompt` are byte-identical to
+`develop`. No real AI provider call anywhere.
 
 **Stage 6 — Image analysis — is next in sequence (§3). Not started.**
