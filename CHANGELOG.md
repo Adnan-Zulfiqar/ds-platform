@@ -12,9 +12,10 @@ production release.
 
 ### Added
 
-- **Phase 9 Stage 5 — Optimization-quality scoring (on
-  `feat/phase-9-stage-5-quality-scoring`; locally validated, not merged).** A deterministic,
-  model-free rubric written on every `ProductVersion` at creation: title
+- **Phase 9 Stage 5 — Optimization-quality scoring (merged into `develop`
+  2026-09-18 via PR #13, merge `e1558d5c`; post-merge CI 35392825501
+  10/10).** A deterministic, model-free rubric written on every
+  `ProductVersion` at creation: title
   length, plain-text description length, repetition/distinctness, and
   coverage of the merchant's own keywords (rescaled out when none exist),
   0–100 with integer round-half-up. AI versions record `qualityBaseline`

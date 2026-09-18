@@ -3,15 +3,20 @@
 **Optimization-quality scoring: a deterministic, model-free rubric written on every product version.**
 
 Everything below was verified by running the quality gates locally on
-2026-09-18 against the branch at the SHA in the table. Where something has
-never been executed, that is stated rather than implied.
+2026-09-18 against the reviewed head, then confirmed on GitHub after merge.
+Where something has never been executed, that is stated rather than implied.
 
 | | |
 |---|---|
 | Date | 2026-09-18 |
-| Branch | `feat/phase-9-stage-5-quality-scoring` |
+| Feature branch | `feat/phase-9-stage-5-quality-scoring` |
+| Reviewed / CI-approved head | `8bb3b2d405cd0bba65ab2c1cee2b0a255f296a71` |
 | Base | `develop` @ `38ba9aa7fd31fa0c1fee1ac92f53c3892f468f3e` (post-merge CI run 35285058531, 10/10) |
-| Last code commit | `06894f5` — `seoFormat` raw-length contract fix plus ruff hyphen; docs after this commit record the gates below |
+| Merge | PR #13 into `develop` as `e1558d5c6b92715eac09a69a47d5ce99d09a686e` (2026-09-18T20:41:28Z; parents `38ba9aa7`, `8bb3b2d4`) |
+| Last code commit | `06894f5` — `seoFormat` raw-length contract fix plus ruff hyphen; later docs commits record the gates below |
+| PR CI | run 35388127945, **SUCCESS — 10/10 jobs** on `8bb3b2d` |
+| Post-merge CI | run 35392825501, **SUCCESS — 10/10 jobs** on `e1558d5` |
+| Status | **COMPLETE / MERGED / GREEN.** Not deployed. `main` unchanged. Stage 6 not started |
 | Contract | [PHASE_9_STAGE_5_PLAN.md](PHASE_9_STAGE_5_PLAN.md) — the source of truth; this report records that it was implemented as written |
 | Migration | **None.** Five keys added to the existing `ProductVersion.content` JSONB |
 | Rubric version | `QUALITY_SCORE_VERSION = 1` |
@@ -92,7 +97,9 @@ about the supplier's original listing, not evidence that AI improved it**
 | `330e28b` | docs(ai): record Cursor Stage 5 takeover evidence (integration then unverified) |
 | `ce1de3e` | fix(ai): align Stage 5 seo format evidence with contract |
 | `06894f5` | style(ai): replace en-dash in seoFormat docstring |
-| this commit | docs(ai): finalize Stage 5 validation evidence |
+| `6250188` | docs(ai): finalize Stage 5 validation evidence |
+| `8bb3b2d` | docs(ai): drop trailing whitespace in Stage 5 report (reviewed / CI-approved head) |
+| this commit | docs(ai): close Phase 9 Stage 5 (merge + post-merge CI; docs-only) |
 
 ---
 
@@ -119,8 +126,9 @@ container `droppilot-stage5-testpg` (`POSTGRES_DB=droppilot_test`,
 | Stage 3/4/5 integration — `test_product_optimization.py` | **39 passed**, 0 failed, 0 skipped, 0 errors, 21.25 s |
 | **Full `pytest`** | **3100 passed**, **1 skipped**, **1 failed**, 272 warnings, 393.39 s |
 | `git diff --check origin/develop...HEAD` | Clean |
-| Frontend lint / typecheck / build / Playwright | **Not applicable — no frontend file changed.** CI remains the authority |
-| CI | **Not run** — branch not pushed, by instruction |
+| Frontend lint / typecheck / build / Playwright | **Not applicable locally — no frontend file changed.** Remote CI is the authority and passed |
+| PR CI (run 35388127945, head `8bb3b2d`) | **SUCCESS — 10/10 jobs** (clean checkout; the local `.env`-exists failure did not reproduce) |
+| Post-merge CI (run 35392825501, head `e1558d5`) | **SUCCESS — 10/10 jobs** |
 
 The skip is `tests/unit/core/test_log_retention.py` (Windows symlink
 privilege). The single failure is **local-environment only**:
@@ -201,10 +209,11 @@ Highlights, with the plan's own expected values:
    from Stage 4, five from this stage) — recorded under M4.
 3. **Frontend gates not run** (consequence of 2 — no frontend file
    changed).
-4. **CI has not run on this branch** — unpushed by instruction. Local
-   full pytest is recorded in §3 (3100 passed / 1 skipped / 1
-   environment-only `.env` failure). CI on the eventual PR is the
-   authority for a clean checkout without developer env files.
+4. **Local full pytest recorded a checkout-local `.env`-exists failure**
+   (3100 passed / 1 skipped / 1 failed). Remote clean-environment CI on
+   PR #13 (35388127945) and post-merge `develop` (35392825501) both
+   SUCCESS 10/10; that failure did not reproduce. It is not a Stage 5
+   regression.
 5. **The baseline can differ between optimisations** of the same product
    if the merchant edits their keywords in between (plan §8). Each delta
    is like-for-like within its own version; deltas across versions are
@@ -249,3 +258,33 @@ publish-integrity code; CI workflows; `main`; deployment.
   fixtures are the plan's, and the numbers are literal.
 - `tests/integration/test_product_optimization.py::TestQualityScoring::test_scoring_adds_no_prompt_execution`
   — the proof that `quality_scorer` stays unwired.
+
+---
+
+## 8. Merge closeout
+
+Stage 5 is **COMPLETE / MERGED / GREEN**.
+
+| Fact | Value |
+|---|---|
+| PR | #13, MERGED 2026-09-18T20:41:28Z |
+| Reviewed Stage 5 head | `8bb3b2d405cd0bba65ab2c1cee2b0a255f296a71` |
+| Merge commit | `e1558d5c6b92715eac09a69a47d5ce99d09a686e` |
+| Merge parents | `38ba9aa7` (old `develop`), `8bb3b2d4` (reviewed head) |
+| Post-merge CI | 35392825501, **10/10 SUCCESS** |
+| Deployment | **None.** `main` unchanged |
+| Stage 6 | **Not started** |
+
+Local evidence from the reviewed head is unchanged: targeted **129
+passed**, integration **39 passed**, full pytest **3100 passed / 1
+skipped / 1 local environment-only `.env` failure**. Remote
+clean-environment CI is SUCCESS.
+
+This section is a documentation-only closeout. The “awaiting remote CI /
+review / not merged” wording that shipped on `8bb3b2d` was left in place
+until after merge so the reviewed SHA would not change.
+
+**CLAUDE RETURN REVIEW CHECKPOINT:** All commits from the Stage 5
+takeover onward require a fresh Claude end-to-end review when Claude
+becomes available again. Cursor review and green CI are not a substitute;
+Claude has not reviewed the takeover work.

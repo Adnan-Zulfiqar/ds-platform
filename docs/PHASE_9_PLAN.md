@@ -367,7 +367,7 @@ reproduce there). Merged into `develop` as `c3814e8b` (parents `109f43f5`,
 Phase 9 row and `CHANGELOG.md` were not updated by Stage 4 and are owed
 (CLAUDE.md §9); Stage 5's closing commit carries them.
 
-### Stage 5 — Optimization-quality scoring: implemented on `feat/phase-9-stage-5-quality-scoring`, locally validated, awaiting remote CI / review
+### Stage 5 — Optimization-quality scoring: done
 
 Cursor's readiness review found no authoritative Stage 5 contract — the
 repository said only "deterministic, model-free" — and returned NOT READY
@@ -392,7 +392,7 @@ in §20. The corrected plan passed re-review and one LOW wording fix, and
 was merged into `develop` as `38ba9aa7` (PR #12; post-merge CI run
 35285058531, 10/10).
 
-**Implemented — on the feature branch, not merged.**
+**Implemented and merged.**
 
 | Delivered | Where |
 |---|---|
@@ -420,8 +420,20 @@ passed / 1 skipped / 1 failed** — the failure is the local-environment
 `.env`-exists assertion in `test_ebay_c0_security.py`; the files are
 gitignored and untracked and were not deleted. `git diff --check` clean.
 No frontend file changed; `frontend/types/api.ts` lags by eight optional
-fields (M4, for Stage 10). Branch not pushed; CI not run. Stage 4's
-`_build_variables` and `_keywords_for_prompt` are byte-identical to
-`develop`. No real AI provider call anywhere. Not merged, not deployed.
+fields (M4, for Stage 10). Stage 4's `_build_variables` and
+`_keywords_for_prompt` are byte-identical to pre-Stage-5 `develop`. No
+real AI provider call anywhere. Not deployed.
+
+**Integrated.** Cursor independent review of the reviewed head found no
+blocker/high/medium. PR #13 CI run 35388127945 10/10 (clean checkout;
+the local `.env`-exists failure did not reproduce there). Merged into
+`develop` as `e1558d5c` (parents `38ba9aa7`, `8bb3b2d4`); post-merge CI
+run 35392825501 10/10. Stage 5 is COMPLETE / MERGED / GREEN. Production
+undeployed — `main` unchanged.
+
+**CLAUDE RETURN REVIEW CHECKPOINT:** All commits from the Stage 5
+takeover onward require a fresh Claude end-to-end review when Claude
+becomes available again. Cursor review of the takeover work is not a
+substitute.
 
 **Stage 6 — Image analysis — is next in sequence (§3). Not started.**
