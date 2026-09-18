@@ -760,8 +760,21 @@ class TestQualityScoring:
     ) -> None:
         """`quality_scorer` stays unwired and `image_analyzer` stays stage 6:
         after an optimize, the execution log holds exactly the three stage 4
-        prompts and nothing else."""
+        prompts and nothing else.
+
+        Also the plan's Stage 4 prompt-variable pin: a product whose only
+        keyword source is `metaKeywords: "a,b"` must still render
+        `{{keywords}}` as exactly `a,b` — Stage 5 scoring must not split,
+        re-space, or otherwise rewrite the prompt input.
+        """
         headers, product = await import_a_product(client, monkeypatch)
+        seeded = await client.patch(
+            f"/api/v1/products/{product['id']}",
+            json={"searchTopics": [], "tags": [], "metaKeywords": "a,b"},
+            headers=headers,
+        )
+        assert seeded.status_code == 200, seeded.text
+
         await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
 
         names = (await db_session.execute(select(PromptExecution.prompt_name))).scalars().all()
@@ -769,6 +782,13 @@ class TestQualityScoring:
         assert len(names) == 3
         assert "quality_scorer" not in names
         assert "image_analyzer" not in names
+
+        execution = (
+            await db_session.execute(
+                select(PromptExecution).where(PromptExecution.prompt_name == "seo_optimizer")
+            )
+        ).scalar_one()
+        assert execution.input_variables["keywords"] == "a,b"
 
     async def test_a_legacy_original_without_quality_keys_still_serves_and_baselines(
         self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
