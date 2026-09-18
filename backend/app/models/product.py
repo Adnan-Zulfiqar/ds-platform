@@ -647,11 +647,16 @@ class ProductVersion(TenantScopedBase):
 
     #: `{"title": ..., "description": ...}` for every version; AI-generated
     #: versions from Phase 9 stage 4 onward also carry `seoTitle`,
-    #: `seoDescription`, and `keywords`. JSONB rather than discrete columns
-    #: so exactly that kind of addition needs no migration — the same
-    #: reasoning `AutomationRule.config` already established in this
-    #: codebase. Readers use `.get()`: an `original` snapshot, or a stage 3
-    #: row, legitimately lacks the SEO keys.
+    #: `seoDescription`, and `keywords`; versions written from stage 5
+    #: onward also carry `qualityScoreVersion`, `qualityScore`, and
+    #: `qualityBreakdown` (AI versions add `qualityBaseline` and
+    #: `qualityDelta`). JSONB rather than discrete columns so exactly that
+    #: kind of addition needs no migration — the same reasoning
+    #: `AutomationRule.config` already established in this codebase.
+    #: Readers use `.get()`: an `original` snapshot, or a stage 3 row,
+    #: legitimately lacks the SEO keys, and any pre-stage 5 row lacks the
+    #: quality keys. Immutable once written — a score is never recomputed
+    #: in place.
     content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
