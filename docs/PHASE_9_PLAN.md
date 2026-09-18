@@ -436,4 +436,14 @@ takeover onward require a fresh Claude end-to-end review when Claude
 becomes available again. Cursor review of the takeover work is not a
 substitute.
 
-**Stage 6 — Image analysis — is next in sequence (§3). Not started.**
+### Stage 6 — Image analysis: PLANNING / AWAITING REVIEW
+
+Contract: [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md). **Not
+implemented.** Deterministic blur (variance of Laplacian) and
+byte-identical duplicates first; captions/alt text only through
+`AIProvider.analyse_image`; generic watermark detection explicitly not
+claimed; SSRF-safe HTTPS fetch specified because none exists today;
+`ProductImage.alt_text` is not auto-written. No endpoint, no frontend,
+no Stage 7 pipeline wiring.
+
+**Stage 6 implementation is not started.**
