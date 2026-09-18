@@ -20,7 +20,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal, TypeVar
 
 from pydantic import Field, field_validator
 
@@ -34,6 +34,8 @@ from app.models.product import (
     ProductVersionSource,
 )
 from app.schemas.base import CamelCaseModel
+
+_ModelT = TypeVar("_ModelT", bound=CamelCaseModel)
 
 #: Maximum characters accepted for a merchant-authored product description.
 #:
@@ -420,6 +422,72 @@ class FeedProductRead(CamelCaseModel):
     category_name: str | None = None
 
 
+class ProductVersionQualityBaselineRead(CamelCaseModel):
+    """The original version an AI-generated version was scored against."""
+
+    version_number: int
+    score: int
+
+
+class ProductVersionQualityLengthRead(CamelCaseModel):
+    points: int
+    max: int
+    applicable: bool
+    length: int
+
+
+class ProductVersionQualityRepetitionChecksRead(CamelCaseModel):
+    title_not_stuffed: bool
+    description_not_phrase_stuffed: bool
+    description_not_dominated: bool
+    description_distinct_from_title: bool
+
+
+class ProductVersionQualityRepetitionRead(CamelCaseModel):
+    points: int
+    max: int
+    applicable: bool
+    checks: ProductVersionQualityRepetitionChecksRead
+
+
+class ProductVersionQualityKeywordCoverageRead(CamelCaseModel):
+    """Eight keys, always present; ``applicable=False`` carries zeros, ``None``
+    and ``[]`` rather than omitting anything (Stage 5 plan §9.2)."""
+
+    applicable: bool
+    points: int
+    max: int
+    matched: int
+    total: int
+    source: Literal["search_topics", "tags", "meta_keywords"] | None
+    keywords: list[str]
+    truncated: bool
+
+
+class ProductVersionQualitySeoFormatRead(CamelCaseModel):
+    seo_title_within_requested_bound: bool
+    seo_description_within_requested_bound: bool
+    keywords_present: bool
+
+
+class ProductVersionQualityDimensionsRead(CamelCaseModel):
+    title: ProductVersionQualityLengthRead
+    description: ProductVersionQualityLengthRead
+    repetition: ProductVersionQualityRepetitionRead
+    keyword_coverage: ProductVersionQualityKeywordCoverageRead
+
+
+class ProductVersionQualityBreakdownRead(CamelCaseModel):
+    """Typed mirror of the ``qualityBreakdown`` object the stage 5 scorer
+    persists in ``ProductVersion.content`` — the shape is fixed by
+    docs/PHASE_9_STAGE_5_PLAN.md §9.1, so it is a schema, not a dict."""
+
+    earned: int
+    applicable_max: int
+    dimensions: ProductVersionQualityDimensionsRead
+    seo_format: ProductVersionQualitySeoFormatRead | None
+
+
 class ProductVersionRead(CamelCaseModel):
     """One version of a product's optimisable content — one row of history.
 
@@ -445,6 +513,16 @@ class ProductVersionRead(CamelCaseModel):
     seo_title: str | None = None
     seo_description: str | None = None
     keywords: str | None = None
+    #: Phase 9 stage 5 — the deterministic optimisation-quality score and
+    #: its evidence, read out of ``content`` like everything else here. All
+    #: optional: ``None`` on rows written before stage 5, and ``quality_delta``
+    #: / ``quality_baseline`` are ``None`` on the original snapshot, which is
+    #: the baseline rather than compared to one.
+    quality_score_version: int | None = None
+    quality_score: int | None = None
+    quality_delta: int | None = None
+    quality_baseline: ProductVersionQualityBaselineRead | None = None
+    quality_breakdown: ProductVersionQualityBreakdownRead | None = None
     active: bool
     ai_provider: str | None = None
     prompt_execution_id: uuid.UUID | None = None
@@ -470,12 +548,32 @@ class ProductVersionRead(CamelCaseModel):
             seo_title=content.get("seoTitle"),
             seo_description=content.get("seoDescription"),
             keywords=content.get("keywords"),
+            quality_score_version=content.get("qualityScoreVersion"),
+            quality_score=content.get("qualityScore"),
+            quality_delta=content.get("qualityDelta"),
+            quality_baseline=_optional_model(
+                ProductVersionQualityBaselineRead, content.get("qualityBaseline")
+            ),
+            quality_breakdown=_optional_model(
+                ProductVersionQualityBreakdownRead, content.get("qualityBreakdown")
+            ),
             active=version.active,
             ai_provider=version.ai_provider,
             prompt_execution_id=version.prompt_execution_id,
             created_by_user_id=version.created_by_user_id,
             created_at=version.created_at,
         )
+
+
+def _optional_model(model: type[_ModelT], value: object) -> _ModelT | None:
+    """Validate a nested JSONB object when present; ``None`` when absent.
+
+    Legacy version rows have no stage 5 keys at all, so absence is the
+    normal case, not an error.
+    """
+    if not isinstance(value, dict):
+        return None
+    return model.model_validate(value)
 
 
 class ProductOptimizeRequest(CamelCaseModel):

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.models.product import Product
-from app.services.product_optimization import ProductOptimizationService
+from app.services.product_optimization import ProductOptimizationService, _keywords_for_prompt
 
 pytestmark = pytest.mark.unit
 
@@ -118,3 +118,41 @@ class TestKeywordsVariable:
         variables = ProductOptimizationService._build_variables(product, tone="professional")
 
         assert variables["keywords"] == "realme"
+
+
+class TestStage4PromptRenderingIsPinned:
+    """Phase 9 stage 5 regression pins (docs/PHASE_9_STAGE_5_PLAN.md §5.2).
+
+    Stage 5 parses merchant keyword terms for scoring in its own private
+    helper. Stage 4's `_keywords_for_prompt` must keep producing exactly
+    what it produced when it was accepted, because that string is rendered
+    into the `seo_optimizer` prompt and hashed into every recorded
+    execution. These assertions passed on `develop` before any stage 5
+    code existed; they must pass unchanged afterwards.
+    """
+
+    def test_meta_keywords_are_passed_through_unsplit_and_unnormalised(self) -> None:
+        product = _product(search_topics=None, tags=None, meta_keywords="a,b")
+        assert _keywords_for_prompt(product) == "a,b"
+
+    def test_duplicate_list_entries_are_not_collapsed(self) -> None:
+        product = _product(search_topics=["x", "x"], tags=None, meta_keywords=None)
+        assert _keywords_for_prompt(product) == "x, x"
+
+    def test_build_variables_shape_is_exactly_the_stage_4_dict(self) -> None:
+        product = _product(
+            description="<p>Durable canvas.</p>",
+            category_name="Phone Cases",
+            brand="Acme",
+            search_topics=None,
+            tags=None,
+            meta_keywords="a,b",
+        )
+        assert ProductOptimizationService._build_variables(product, tone="playful") == {
+            "product_title": "Realme GT Neo5 Case",
+            "category": "Phone Cases",
+            "brand": "Acme",
+            "features": "Durable canvas.",
+            "tone": "playful",
+            "keywords": "a,b",
+        }

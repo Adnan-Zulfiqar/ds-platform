@@ -4,6 +4,7 @@
                                               ├─ product_title_generator
                                               ├─ product_description_generator
                                               └─ seo_optimizer
+                                            → score_version (stage 5, pure)
                                             → ProductVersion (new, active)
                                             → Product's cached AI fields
 
@@ -28,6 +29,7 @@ from app.models.ai_prompt import PromptExecution, PromptExecutionStatus
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductRepository, ProductVersionRepository
 from app.services.base import BaseService
+from app.services.optimization_quality import score_version
 from app.services.prompt import PromptService
 
 _TITLE_PROMPT = "product_title_generator"
@@ -89,7 +91,7 @@ class ProductOptimizationService(BaseService):
         did not) is never persisted as if it were whole.
         """
         product = await self.products.get_by_id_or_raise(product_id)
-        await self._ensure_original_snapshot(product)
+        original = await self._ensure_original_snapshot(product)
 
         variables = self._build_variables(product, tone=tone)
 
@@ -137,18 +139,31 @@ class ProductOptimizationService(BaseService):
         # that ships a real provider defines the parse contract; until then
         # all three values are the same raw text, and say so by being
         # `[STUB-AI]`-prefixed. See docs/PHASE_9_STAGE_4_PLAN.md §3.
+        generated = {
+            "title": title_execution.response_text,
+            "description": description_execution.response_text,
+            "seoTitle": seo_execution.response_text,
+            "seoDescription": seo_execution.response_text,
+            "keywords": seo_execution.response_text,
+        }
+
+        # Stage 5: score the candidate and the original with the same
+        # merchant keywords at the same moment, before anything is written.
+        # The baseline is recomputed from the original's immutable content,
+        # never read from a number stored on it — a stored number could
+        # carry an older rubric version, or (legacy rows) not exist at all.
+        # A scorer exception here is a bug, not a generation failure: it
+        # propagates before `create`, so no version is persisted and
+        # `ai_status` is left alone. See docs/PHASE_9_STAGE_5_PLAN.md §11.
+        candidate = score_version(generated, product)
+        baseline = score_version(original.content, product)
+
         next_number = await self.versions.next_version_number(product.id)
         version = await self.versions.create(
             product_id=product.id,
             version_number=next_number,
             source=ProductVersionSource.AI_GENERATED,
-            content={
-                "title": title_execution.response_text,
-                "description": description_execution.response_text,
-                "seoTitle": seo_execution.response_text,
-                "seoDescription": seo_execution.response_text,
-                "keywords": seo_execution.response_text,
-            },
+            content={**generated, **candidate.as_content(baseline=baseline)},
             active=False,
             ai_provider=title_execution.provider,
             prompt_execution_id=description_execution.id,
@@ -177,16 +192,25 @@ class ProductOptimizationService(BaseService):
 
     # -- Internals --------------------------------------------------------------
 
-    async def _ensure_original_snapshot(self, product: Product) -> None:
+    async def _ensure_original_snapshot(self, product: Product) -> ProductVersion:
+        """Return the version-1 original snapshot, creating it on first call.
+
+        Returned rather than discarded because stage 5 scores every AI
+        version against the original's immutable content. `list_for_product`
+        is newest-first, so version 1 is the last element.
+        """
         existing = await self.versions.list_for_product(product.id)
         if existing:
-            return
+            return existing[-1]
 
+        # Stage 5 scores the snapshot at creation. `qualityBaseline` /
+        # `qualityDelta` are not written on the original: it is the baseline.
+        snapshot = {"title": product.title, "description": product.description}
         original = await self.versions.create(
             product_id=product.id,
             version_number=1,
             source=ProductVersionSource.ORIGINAL,
-            content={"title": product.title, "description": product.description},
+            content={**snapshot, **score_version(snapshot, product).as_content()},
             active=True,
             ai_provider=None,
             prompt_execution_id=None,
@@ -194,6 +218,7 @@ class ProductOptimizationService(BaseService):
         )
         self._apply_active_version(product, original)
         await self.flush()
+        return original
 
     def _apply_active_version(self, product: Product, version: ProductVersion) -> None:
         """Sync the product's cached fields to the version just activated.
@@ -209,7 +234,9 @@ class ProductOptimizationService(BaseService):
         `keywords`) stay in the version row: `Product.seo_title`,
         `seo_description`, `meta_keywords`, and `tags` are the merchant's,
         and activating a version — or rolling one back — must not overwrite
-        them with a proposal the merchant never accepted.
+        them with a proposal the merchant never accepted. The stage 5
+        quality keys likewise stay on the version: activation neither
+        recomputes nor copies a score anywhere.
         """
 
         product.ai_version = version.version_number
