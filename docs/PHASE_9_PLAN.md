@@ -367,7 +367,7 @@ reproduce there). Merged into `develop` as `c3814e8b` (parents `109f43f5`,
 Phase 9 row and `CHANGELOG.md` were not updated by Stage 4 and are owed
 (CLAUDE.md §9); Stage 5's closing commit carries them.
 
-### Stage 5 — Optimization-quality scoring: planning, awaiting independent plan re-review
+### Stage 5 — Optimization-quality scoring: implemented on `feat/phase-9-stage-5-quality-scoring`, awaiting independent review
 
 Cursor's readiness review found no authoritative Stage 5 contract — the
 repository said only "deterministic, model-free" — and returned NOT READY
@@ -388,7 +388,37 @@ three MEDIUM gaps: the keyword helper could have been shared with Stage 4
 not-applicable breakdown shape was unpinned (now exact JSON, §9.2); and no
 identical / better / worse delta fixtures existed (now four constructed
 fixtures with exact scores and deltas, §16.1). Six LOW notes are recorded
-in §20. The corrected plan awaits re-review.
+in §20. The corrected plan passed re-review and one LOW wording fix, and
+was merged into `develop` as `38ba9aa7` (PR #12; post-merge CI run
+35285058531, 10/10).
 
-**Not implemented.** No Stage 5 code exists on any branch. Implementation
-starts only after the plan passes independent re-review.
+**Implemented — on the feature branch, not merged.**
+
+| Delivered | Where |
+|---|---|
+| Pure scorer: normalisation, D1–D4, `seoFormat`, integer round-half-up total, frozen `QualityResult`, `as_content()` | `app/services/optimization_quality.py` |
+| Public `score_version(content, product)`; private `_merchant_terms` (not exported, not imported by the service) | same module |
+| Original scored at snapshot; AI version scored and baselined to the original at creation; keys written in the one `create` | `ProductOptimizationService` |
+| Five optional wire fields on `ProductVersionRead`, typed nested read models | `app/schemas/product.py` |
+| Tests: 86 unit (every tier, boundary, rule, the delta contract, module hygiene), 3 Stage 4 pins, 9 integration | `tests/unit/test_optimization_quality.py`, `tests/unit/test_product_optimization_variables.py`, `tests/integration/test_product_optimization.py` |
+
+Report: [PHASE_9_STAGE_5_COMPLETION.md](PHASE_9_STAGE_5_COMPLETION.md).
+
+**Two things worth saying again.** `quality_scorer` stays seeded and
+unwired — an integration test asserts the execution log after an optimize
+holds exactly the three Stage 4 prompts. And with `StubProvider` every AI
+version scores a constant (75 without merchant keywords, 56 with), so a
+delta today describes the supplier's original, not an AI improvement; the
+rubric is verified, that claim is not made.
+
+**Verified locally:** ruff, ruff format, mypy strict (225 files),
+`check_secrets.py`, Stage 5 targeted **86 + 13 + 39 + 6 passed**, full
+pytest **not completed locally** — the run was killed at ~15 % by a machine
+reboot and must be re-run before this stage is proposed for merge (see the
+report §3), `git diff --check` clean. No frontend file
+changed; `frontend/types/api.ts` lags by eight optional fields (M4, for
+Stage 10). Branch not pushed; CI not run. Stage 4's `_build_variables` and
+`_keywords_for_prompt` are byte-identical to `develop`. No real AI provider
+call anywhere.
+
+**Stage 6 — Image analysis — is next in sequence (§3). Not started.**

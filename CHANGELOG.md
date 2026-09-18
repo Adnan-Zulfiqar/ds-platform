@@ -12,6 +12,37 @@ production release.
 
 ### Added
 
+- **Phase 9 Stage 5 — Optimization-quality scoring (on
+  `feat/phase-9-stage-5-quality-scoring`; not merged).** A deterministic,
+  model-free rubric written on every `ProductVersion` at creation: title
+  length, plain-text description length, repetition/distinctness, and
+  coverage of the merchant's own keywords (rescaled out when none exist),
+  0–100 with integer round-half-up. AI versions record `qualityBaseline`
+  (the original's recomputed score) and `qualityDelta`. Five new keys in the
+  existing JSONB `content` — no migration, no back-fill, no endpoint;
+  `ProductVersionRead` exposes them as optional. The scorer imports nothing
+  from `app.ai`; `quality_scorer` stays seeded and unwired; `seo_score.py`
+  (the merchant listing SEO score, a different concept) is untouched. With
+  `StubProvider` every AI version scores a constant, so a delta today
+  describes the supplier's original, not an AI improvement. Plan:
+  [PHASE_9_STAGE_5_PLAN.md](docs/PHASE_9_STAGE_5_PLAN.md); report:
+  [PHASE_9_STAGE_5_COMPLETION.md](docs/PHASE_9_STAGE_5_COMPLETION.md).
+
+- **Phase 9 Stage 4 — Generation services (merged into `develop`
+  2026-09-17 via PR #11, merge `c3814e8b`; post-merge CI 10/10).** The
+  seeded `seo_optimizer` prompt runs as a third generation through the
+  unchanged `PromptService.test_render` → `get_ai_provider` → `StubProvider`
+  path, with a `keywords` variable sourced from merchant data
+  (`search_topics` → `tags` → `meta_keywords`). Its raw completion is stored
+  verbatim under `seoTitle` / `seoDescription` / `keywords` in the
+  AI-generated `ProductVersion.content` (identical under the stub; nothing
+  parsed or fabricated) and exposed as optional fields on
+  `ProductVersionRead`. All-or-nothing with the title and description
+  calls; merchant SEO fields, supplier fields, and the M2A editor
+  concurrency are never written. No migration. Report:
+  [PHASE_9_STAGE_4_COMPLETION.md](docs/PHASE_9_STAGE_4_COMPLETION.md).
+
+
 - **UX-L2D-07 — Cross-app hardening (on `feature/ux-l2d-dashboard`; merged
   into `develop` 2026-09-17 via PR #9 — see "Phase 1 and Phase 2 integrated"
   under Changed).** Journey, accessibility, responsive (1440/1280/1024/768/390,

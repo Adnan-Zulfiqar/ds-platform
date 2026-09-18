@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-09-17
+Last updated: 2026-09-18
 
 ## Status
 
@@ -19,7 +19,7 @@ Last updated: 2026-09-17
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
-| 9 | AI product optimization | 🚧 **In progress** (stages 1–3 done) |
+| 9 | AI product optimization | 🚧 **In progress** — stages 1–4 merged into `develop` (Stage 4: PR #11, `c3814e8b`); Stage 5 optimization-quality scoring implemented on `feat/phase-9-stage-5-quality-scoring`, awaiting independent review, not merged; stages 6–11 not started. `StubProvider` only — no live model call anywhere |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
 | Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Merged into `develop`** — PR #7 merged 2026-09-16, merge commit `5e21927`. Accepted SHA `c0092da6`: independent review `PASS — PHASE 1 MAY CLOSE` (2026-09-15), CI run 34846601320 10/10; CI on the merge commit run 35164379004 10/10. **Production undeployed** — `main` unchanged. Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
