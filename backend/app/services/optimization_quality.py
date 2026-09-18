@@ -347,6 +347,17 @@ def _score_keyword_coverage(
     )
 
 
+def _stored_text(value: object) -> str:
+    """The stored Stage 4 field as the template asked to produce it.
+
+    ``seoFormat`` is a format check on the raw completion (§7.4:
+    ``len(seoTitle) < 60``), not a D1–D4 measurement. Stripping tags or
+    collapsing whitespace here would report the stub's markup-wrapped
+    59-character title as in-bound when the stored string is not.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def _seo_format(content: Mapping[str, Any]) -> SeoFormat | None:
     """Format checks on the stage 4 SEO keys, recorded but never scored.
 
@@ -355,12 +366,14 @@ def _seo_format(content: Mapping[str, Any]) -> SeoFormat | None:
     """
     if not any(key in content for key in ("seoTitle", "seoDescription", "keywords")):
         return None
-    seo_title = _plain(content.get("seoTitle"))
-    seo_description = _plain(content.get("seoDescription"))
-    keywords = _plain(content.get("keywords"))
+    seo_title = _stored_text(content.get("seoTitle"))
+    seo_description = _stored_text(content.get("seoDescription"))
+    keywords = _stored_text(content.get("keywords"))
     return SeoFormat(
-        seo_title_within_requested_bound=0 < len(seo_title) < _SEO_TITLE_BOUND,
-        seo_description_within_requested_bound=0 < len(seo_description) < _SEO_DESCRIPTION_BOUND,
+        seo_title_within_requested_bound=seo_title != "" and len(seo_title) < _SEO_TITLE_BOUND,
+        seo_description_within_requested_bound=(
+            seo_description != "" and len(seo_description) < _SEO_DESCRIPTION_BOUND
+        ),
         keywords_present=keywords != "",
     )
 

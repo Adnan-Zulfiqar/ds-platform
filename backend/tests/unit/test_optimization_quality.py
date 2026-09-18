@@ -447,6 +447,24 @@ class TestSeoFormat:
         assert result.breakdown.seo_format is not None
         assert result.breakdown.seo_format.seo_title_within_requested_bound is True
 
+    def test_seo_title_bound_uses_raw_length_not_plain_text(self) -> None:
+        """§7.4 measures ``len(seoTitle)``, not ``len(plain(seoTitle))``.
+
+        Fifty-nine visible characters wrapped in tags would pass if the
+        scorer stripped markup first; the stored string is 66 characters
+        and is therefore outside the template's requested bound.
+        """
+        wrapped = f"<b>{'x' * 59}</b>"
+        assert len(wrapped) == 66
+        result = _score({"seoTitle": wrapped})
+        assert result.breakdown.seo_format is not None
+        assert result.breakdown.seo_format.seo_title_within_requested_bound is False
+
+    def test_trailing_whitespace_counts_toward_the_seo_title_bound(self) -> None:
+        result = _score({"seoTitle": ("x" * 59) + " "})
+        assert result.breakdown.seo_format is not None
+        assert result.breakdown.seo_format.seo_title_within_requested_bound is False
+
     def test_seo_format_never_enters_earned(self) -> None:
         without = _score({"title": "Phone Case", "description": "A case."})
         with_seo = _score(
