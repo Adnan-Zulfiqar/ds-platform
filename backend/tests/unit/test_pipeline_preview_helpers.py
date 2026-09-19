@@ -13,6 +13,7 @@ from app.services.product_pipeline import (
     PIPELINE_APPROVAL_TITLE_MAX,
     PIPELINE_PUBLISH_TITLE_MAX,
     _quality_baseline,
+    _safe_body_html,
     _title_publish_error,
     _title_storage_error,
 )
@@ -54,3 +55,26 @@ class TestQualityBaseline:
 
     def test_rejects_a_bare_integer(self) -> None:
         assert _quality_baseline(42) is None
+
+
+class TestSafeBodyHtml:
+    def test_strips_script_and_event_handlers(self) -> None:
+        raw = (
+            "<p>Keep</p><script>alert(1)</script>"
+            '<img src="https://cdn.example/a.jpg" onerror="alert(1)">'
+            '<a href="javascript:alert(1)">x</a>'
+            '<a href="data:text/html,hi">y</a>'
+            "<strong>bold</strong>"
+        )
+        cleaned = _safe_body_html(raw)
+        assert "<script>" not in cleaned
+        assert "alert(1)" not in cleaned
+        assert "onerror" not in cleaned
+        assert "javascript:" not in cleaned
+        assert "data:" not in cleaned
+        assert "<p>Keep</p>" in cleaned
+        assert "<strong>bold</strong>" in cleaned
+
+    def test_non_string_description_becomes_empty(self) -> None:
+        assert _safe_body_html(None) == ""
+        assert _safe_body_html(123) == ""

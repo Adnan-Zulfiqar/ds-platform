@@ -1,4 +1,4 @@
-"""Stage 7 product pipeline: preview, approve, then (next commit) publish.
+"""Stage 7 product pipeline: preview, approve, and overlay publish.
 
 Depends on `product_optimization` and the existing Shopify publisher.
 Never imported by `product_optimization` — that direction would cycle.
@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.sanitize import sanitize_html
+from app.integrations.shopify import sync as shopify_sync
+from app.integrations.shopify.sync import ShopifyListingOverlay, ShopifySyncService
 from app.models.product import Product, ProductVersion, ProductVersionSource
 from app.repositories.product import (
     ProductImageRepository,
@@ -96,6 +98,7 @@ class ProductPipelineService(BaseService):
         self.optimization = ProductOptimizationService(session)
         self.analysis = ImageAnalysisService(session)
         self.readiness = PublishReadinessService(session)
+        self.shopify_sync = ShopifySyncService(session)
 
     async def preview(
         self,
@@ -207,6 +210,74 @@ class ProductPipelineService(BaseService):
         self.optimization._apply_active_version(product, activated)
         await self.flush()
         return product
+
+    async def publish(
+        self,
+        product_id: uuid.UUID,
+        *,
+        store_id: uuid.UUID,
+        version_id: uuid.UUID,
+        expected_updated_at: datetime,
+    ) -> dict[str, Any]:
+        """Publish an already-approved pipeline candidate through the overlay.
+
+        Lock the Product first, then re-read the exact version. Never trust a
+        pre-lock `active` flag — a sibling approval can commit in between.
+        """
+        product = await self.products.lock_for_update(
+            product_id,
+            timeout_ms=shopify_sync.PUBLISH_LOCK_TIMEOUT_MS,
+        )
+        if product is None:
+            raise NotFoundError.for_resource("Product", product_id)
+        version = await self.versions.get_by_id_for_product(
+            product_id=product.id,
+            version_id=version_id,
+            populate_existing=True,
+        )
+        if version is None:
+            raise NotFoundError.for_resource("ProductVersion", version_id)
+        if version.source is not ProductVersionSource.AI_GENERATED or version.active is not True:
+            raise ValidationError(
+                "This pipeline candidate has not been approved.",
+                details={"reason": "candidate_not_approved"},
+            )
+        metadata = parse_pipeline_candidate_metadata(version.content)
+        provider = version.ai_provider
+        if not isinstance(provider, str) or provider.strip() == "":
+            raise ValidationError(
+                "AI provider provenance is missing or unverified.",
+                details={"reason": "ai_provenance_unverified"},
+            )
+        if metadata.is_synthetic is True or provider.strip() == "stub":
+            raise ValidationError(
+                "Synthetic AI content cannot be published to a sales channel.",
+                details={"reason": "synthetic_publish_blocked"},
+            )
+        title = version.content.get("title") if isinstance(version.content, dict) else None
+        publish_error = _title_publish_error(title)
+        if publish_error is not None:
+            raise ValidationError(
+                publish_error.message,
+                details={"reason": publish_error.code},
+            )
+        assert type(title) is str
+        raw_description = (
+            version.content.get("description") if isinstance(version.content, dict) else None
+        )
+        safe_body_html = _safe_body_html(raw_description)
+        if len(safe_body_html) > DESCRIPTION_MAX_LENGTH:
+            raise ValidationError(
+                "The sanitized description exceeds the Shopify body length.",
+                details={"reason": "candidate_description_too_long"},
+            )
+        overlay = ShopifyListingOverlay(title=title, body_html=safe_body_html)
+        return await self.shopify_sync.publish_product(
+            store_id=store_id,
+            product_id=product_id,
+            expected_updated_at=expected_updated_at,
+            listing_overlay=overlay,
+        )
 
     async def _compose_preview(
         self,

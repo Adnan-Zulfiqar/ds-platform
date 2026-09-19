@@ -17,10 +17,15 @@ from app.core.context import clear_context, set_tenant_id
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.integrations.aliexpress import service as service_module
 from app.models.ai_prompt import PromptExecution
-from app.models.product import Product, ProductAIStatus, ProductVersionSource
+from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductVersionRepository
+from app.schemas.product import DESCRIPTION_MAX_LENGTH
 from app.services.image_analysis import ImageAnalysisReport, ImageAnalysisService
-from app.services.product_pipeline import PIPELINE_APPROVAL_TITLE_MAX, ProductPipelineService
+from app.services.product_pipeline import (
+    PIPELINE_APPROVAL_TITLE_MAX,
+    PIPELINE_PUBLISH_TITLE_MAX,
+    ProductPipelineService,
+)
 from tests.integration.test_products import (
     REAL_PRODUCT_ID,
     connected_tenant,
@@ -95,6 +100,53 @@ async def _advance_product_updated_at(db_session: AsyncSession, product: Product
     await db_session.flush()
     await db_session.refresh(product)
     return product
+
+
+async def _insert_pipeline_candidate(
+    db_session: AsyncSession,
+    product: Product,
+    *,
+    title: str = "Approved AI title",
+    description: str = "<p>Approved body</p>",
+    is_synthetic: bool = False,
+    ai_provider: str | None = "test",
+    extra_content: dict[str, Any] | None = None,
+) -> ProductVersion:
+    """A strict pipeline row. `ai_provider='test'` is a fixture, not a live model."""
+    content: dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "seoTitle": "AI SEO TITLE MUST NOT PUBLISH",
+        "seoDescription": "AI SEO DESC MUST NOT PUBLISH",
+        "keywords": "ai,must,not,become,tags",
+        "pipelineCandidateVersion": 1,
+        "pipelineSourceUpdatedAt": product.updated_at.isoformat(),
+        "isSynthetic": is_synthetic,
+    }
+    if extra_content:
+        content.update(extra_content)
+    versions = ProductVersionRepository(db_session)
+    return await versions.create(
+        product_id=product.id,
+        version_number=await versions.next_version_number(product.id),
+        source=ProductVersionSource.AI_GENERATED,
+        content=content,
+        active=False,
+        ai_provider=ai_provider,
+        prompt_execution_id=None,
+        created_by_user_id=None,
+    )
+
+
+@pytest.fixture
+def shopify_must_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _blocked(self: object, **_kwargs: object) -> dict[str, Any]:
+        raise AssertionError("Shopify publisher must not be called")
+
+    monkeypatch.setattr(
+        "app.integrations.shopify.sync.ShopifySyncService.publish_product",
+        _blocked,
+    )
 
 
 class TestPreview:
@@ -580,3 +632,279 @@ class TestApprove:
                 )
         finally:
             clear_context()
+
+
+class TestPublish:
+    async def test_inactive_candidate_cannot_publish(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "candidate_not_approved"
+
+    async def test_legacy_optimize_cannot_pipeline_publish(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        headers, product = await _import_product(client, monkeypatch)
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        version_id = uuid.UUID(response.json()["version"]["id"])
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await ProductPipelineService(db_session).publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
+
+    async def test_synthetic_candidate_is_blocked(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session, row, is_synthetic=True, ai_provider="test"
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "synthetic_publish_blocked"
+        assert candidate.active is True
+
+    async def test_stub_provider_is_blocked_even_when_not_synthetic(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session, row, is_synthetic=False, ai_provider="stub"
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "synthetic_publish_blocked"
+
+    async def test_missing_provider_is_unverified(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session, row, is_synthetic=False, ai_provider=None
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "ai_provenance_unverified"
+
+    async def test_empty_provider_is_unverified(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session, row, is_synthetic=False, ai_provider="   "
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "ai_provenance_unverified"
+
+    async def test_title_256_is_not_publishable(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session,
+                row,
+                title="a" * (PIPELINE_PUBLISH_TITLE_MAX + 1),
+                is_synthetic=False,
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "candidate_title_not_publishable"
+
+    async def test_oversized_sanitized_body_is_not_truncated(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        oversized = "a" * (DESCRIPTION_MAX_LENGTH + 1)
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(
+                db_session, row, description=oversized, is_synthetic=False
+            )
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+            reloaded = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=candidate.id
+            )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "candidate_description_too_long"
+        assert reloaded is not None
+        assert reloaded.content["description"] == oversized
+        assert reloaded.active is True
+
+    async def test_malformed_pipeline_metadata_is_rejected(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(db_session, row, is_synthetic=False)
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            content = dict(candidate.content)
+            content["pipelineCandidateVersion"] = True
+            candidate.content = content
+            flag_modified(candidate, "content")
+            await db_session.flush()
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
