@@ -5,7 +5,10 @@ Analyse → Generate → Score → Preview → Approve → Publish.
 Written before implementation and checked against the code as it stood at
 `develop` `0a26a121bf6c03a9e03e1b5ee2b9b69de5c63012` (Stage 6 docs closeout
 merged; post-merge CI run 35458334556, 10/10). Remediated after independent
-plan review of `78674f83df921cbe19e4b239988e175f7a812f3b` (H1, H2, M1–M4).
+plan review of `78674f83df921cbe19e4b239988e175f7a812f3b` (H1, H2, M1–M4)
+and a second independent review of
+`49e5b26a96620fa9be5bab32c6d1ae5b3b67e977` (publish TOCTOU, fingerprint vs
+approved state, fail-open provenance, output bounds, quality-baseline DTO).
 Where this plan narrows what [PHASE_9_PLAN.md](PHASE_9_PLAN.md) §3 originally
 sketched for Stage 7, it says so.
 
@@ -23,7 +26,7 @@ reviewed Stage 7.
 | Stage 6 | COMPLETE / MERGED / GREEN — impl merge `96b890d2`; docs closeout merge `0a26a12`; PR #17 |
 | Latest migration | `0033` (`product_images.analysis`) |
 | Current provider | `StubProvider` via `get_ai_provider(settings)` |
-| Planning status | PLANNING / AWAITING INDEPENDENT REVIEW |
+| Planning status | PLANNING / AWAITING FINAL RE-REVIEW |
 | Pipeline origin marker | `ProductVersion.content["pipelineCandidateVersion"] = 1` |
 
 ---
@@ -215,6 +218,9 @@ Mismatches with the code as it exists:
    let `optimize_product` mint a pipeline-marked row, auto-activate it,
    and let `ProductPipelineService.publish` skip `approve`.** Version
    history `activate_version` would be a second skip of `approve`.
+5. **Checking `version.active` before `lock_for_update` is a TOCTOU:**
+   another transaction can activate B after A was observed active and
+   before Shopify is called.
 
 Stage 7 must introduce preview-before-approve **without** changing the
 existing optimize HTTP contract, must mark pipeline candidates distinctly
@@ -240,7 +246,9 @@ Stage 7 implements a new domain service that composes existing services.
 | Call `ImageAnalysisService.analyse_product_images` from preview | Writing `ProductImage.alt_text` |
 | Compose `PublishReadinessService` without copying its rules | Frontend / AI Studio (Stage 10) |
 | Internal frozen DTOs | `ProductImageRead.analysis`; durable "this version was published" provenance |
-| Tests proving order, marker, bypass refusal, stale reject, sanitizer, synthetic block, overlay, regressions | Migration, new tables, `ProductAIStatus` values |
+| Strict `parse_pipeline_candidate_metadata`; publish locks Product before the active-state decision | Copying `PublishReadinessService` rules |
+| Fail-closed title/body bounds (512 / 255 / 64_000); no truncation | Turning Stage 5 quality score into a publish blocker |
+| Tests proving order, marker, bypass refusal, TOCTOU, stale-vs-approved, sanitizer, fail-closed provenance, overlay, bounds, regressions | Migration, new tables, `ProductAIStatus` values |
 | | Live providers, prompt template edits, `quality_scorer` wiring, structured SEO parse |
 | | Deploy, `main` |
 
@@ -275,8 +283,8 @@ the JSONB marker. No new enum column. No durable "Published" state.
 
 | Name | Meaning in this repository |
 |---|---|
-| No candidate | No row with `content.pipelineCandidateVersion == 1` for this product, or the caller has not selected one |
-| Previewed | An `AI_GENERATED` row exists with `pipelineCandidateVersion == 1`, `active=False`, and `pipelineSourceUpdatedAt` set. `Product.ai_*` still reflects whichever version is currently active (legacy optimize, a previous pipeline approval, or ORIGINAL) |
+| No candidate | No row for which `parse_pipeline_candidate_metadata` succeeds, or the caller has not selected one |
+| Previewed | An `AI_GENERATED` row exists with valid pipeline metadata, `active=False`. `Product.ai_*` still reflects whichever version is currently active (legacy optimize, a previous pipeline approval, or ORIGINAL) |
 | Approved | That exact pipeline row is `active=True`; `_apply_active_version` has synced the AI cache |
 
 **Publish is an operation, not a persisted state.** A successful
@@ -294,18 +302,22 @@ provenance requires a future migration; Stage 7 does not fake it.
 Illegal transitions the implementation must refuse:
 
 - `publish` of a version that is not `AI_GENERATED`.
-- `publish` of a version lacking `pipelineCandidateVersion == 1`
+- `publish` of a version whose pipeline metadata fails the strict parser
   (`not_a_pipeline_candidate`) — includes every legacy `optimize_product`
   row, even if it is active and later non-synthetic.
 - `publish` while the named pipeline `version_id` is not `active`
+  **after** the Product row lock and a fresh version read
   (`candidate_not_approved`).
 - `approve` of `ORIGINAL`.
-- `approve` of a version lacking `pipelineCandidateVersion == 1`.
+- `approve` of a version whose pipeline metadata fails the strict parser.
 - `approve` of a version whose `product_id` does not match.
-- `approve` of an inactive pipeline candidate when
+- `approve` of an **inactive** pipeline candidate when
   `Product.updated_at != expected_updated_at` or
-  `Product.updated_at != content.pipelineSourceUpdatedAt`.
-- `publish` when `content.isSynthetic is True` or `ai_provider == "stub"`.
+  `Product.updated_at != metadata.source_updated_at`.
+- `publish` when metadata `is_synthetic is True` or stripped
+  `ai_provider == "stub"` (`synthetic_publish_blocked`).
+- `publish` when `ai_provider` is missing, empty, or otherwise unverified
+  (`ai_provenance_unverified`).
 - `ProductOptimizationService.activate_version` of a pipeline candidate
   (`pipeline_candidate_requires_approval`).
 
@@ -503,6 +515,12 @@ class PipelineCheckItem:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PipelineQualityBaseline:
+    version_number: int
+    score: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PipelinePreview:
     product_id: uuid.UUID
     candidate_version_id: uuid.UUID
@@ -513,7 +531,7 @@ class PipelinePreview:
     original: PipelineListingView          # current merchant Product fields
     proposal: PipelineListingView          # candidate ProductVersion.content
     quality_score: int | None
-    quality_baseline: int | None
+    quality_baseline: PipelineQualityBaseline | None
     quality_delta: int | None
     quality_score_version: int | None
     quality_breakdown: dict[str, Any] | None
@@ -526,6 +544,10 @@ class PipelinePreview:
     publishable: bool
 ```
 
+`quality_baseline` mirrors Stage 5's persisted object
+`{"versionNumber": 1, "score": ...}` (`ProductVersionRead` already keeps
+both fields). Do not collapse it to a bare integer.
+
 `original` is always the live `Product` merchant state (`title`,
 `description`, `seo_title`, `seo_description`, `meta_keywords` as
 keywords, `tags`). It is not the ORIGINAL snapshot if the merchant has
@@ -536,24 +558,42 @@ since edited.
 does not sanitize into HTML and does not treat the description as a
 storefront document. `proposal.tags` is `()` — generated keywords are
 not merchant tags. AI SEO is review-only; Stage 7 does not publish it.
+An invalid-length proposal is still shown; blockers record why it cannot
+be approved or published.
 
 `candidate_active` is `False` after `preview()`. `get_preview` reports
 the row's real flag.
 
 `approval_expected_updated_at` equals live `Product.updated_at` at DTO
-build time for a fresh preview (and equals `source_updated_at` when the
-candidate is not stale). Stage 8 will send this as `expectedUpdatedAt`
-into `approve` for a first approval.
+build time. Stage 8 sends this as `expectedUpdatedAt` into `approve` for
+a **first** approval of an inactive candidate. After approval, publish
+uses the **post-approve** (or later merchant-edit) token from live
+`Product.updated_at`, not `source_updated_at`.
 
-`publishable` is `True` only when **all** of: candidate has
-`pipelineCandidateVersion == 1`, is active, not stale, not synthetic,
+**Stale vs publishable (inactive vs active):**
+
+- **Inactive** pipeline candidate: `source_updated_at != Product.updated_at`
+  → pipeline blocker `stale_preview`. `publishable` is False because the
+  row is inactive **and** because it is stale.
+- **Active** approved pipeline candidate: do **not** compare
+  `source_updated_at` to `Product.updated_at`. Approval itself bumps
+  `updated_at`, so that comparison would be permanently true and is not
+  a staleness signal. The candidate stays approved until another version
+  is activated. Merchant edits after approval do not auto-revoke
+  approval (no extra persistence). Publish freshness is
+  `expected_updated_at` via existing readiness/publisher M2A.
+
+`publishable` is `True` only when **all** of: strict metadata parse
+succeeds, candidate is **active**, metadata `is_synthetic is False`,
+`ai_provider` is a non-empty non-stub string, title is a non-blank
+string of length ≤ 255, sanitized description length ≤ 64_000,
 `channel_readiness` is present and `can_publish`, and `pipeline_blockers`
 is empty. A fresh `preview()` therefore always has `publishable=False`
 because the candidate is inactive. That is the proof that preview is not
 approval.
 
 `publishable` does **not** mean "this version is the last one synced to
-Shopify". It means this candidate would pass pipeline publish
+Shopify". It means this **active** candidate would pass pipeline publish
 preconditions **right now** if `publish` were called with the current
 M2A token.
 
@@ -592,10 +632,12 @@ async def get_preview(
 if `store_id` is not None). One caller transaction. If generate raises,
 analyse is rolled back with it.
 
-`get_preview` requires `pipelineCandidateVersion == 1`. Otherwise
-`ValidationError` `details.reason = "not_a_pipeline_candidate"`. It reads
-current `ProductImage.analysis` as stored. It does not refetch images.
-It does not read `StoreListing` to claim a published version.
+`get_preview` requires a successful `parse_pipeline_candidate_metadata`
+(§23). Otherwise `ValidationError` `details.reason = "not_a_pipeline_candidate"`.
+It reads current `ProductImage.analysis` as stored. It does not refetch
+images. It does not read `StoreListing` to claim a published version.
+After approval, `get_preview` of the now-active id does **not** emit
+`stale_preview` merely because `Product.updated_at` moved.
 
 ---
 
@@ -608,15 +650,21 @@ valid selector.
 
 Only pipeline rows (`as_pipeline_candidate=True`) write:
 
-- `pipelineCandidateVersion`: `1`
+- `pipelineCandidateVersion`: exact JSON integer `1` (never `true`)
 - `pipelineSourceUpdatedAt`: `Product.updated_at` immediately before
-  `create`, as ISO-8601
-- `isSynthetic`: OR of the three execution flags
+  `create`, as offset-aware ISO-8601
+- `isSynthetic`: exact JSON boolean, OR of the three execution flags
+
+`pipelineSourceUpdatedAt` is an **approval fingerprint for inactive
+candidates only**. After the row is activated, it is historical: it
+records the merchant `updated_at` the copy was generated from. It is
+**not** compared to live `Product.updated_at` to decide whether an
+already-approved candidate is still approved.
 
 Merchant title/description/SEO/slug/tag edits go through
 `ProductService.update_draft` / `update_product` and bump
-`Product.updated_at`. That is sufficient to detect those edits. No extra
-hash column. No migration.
+`Product.updated_at`. For an **inactive** candidate that is sufficient
+to refuse approval. No extra hash column. No migration.
 
 Image/variant routes do not bump `Product.updated_at` (existing M2A).
 Stage 7 does not change that. Approval does not write image alt; publish
@@ -629,30 +677,33 @@ sent, not the preview-time set. Documented residual §29.
 with default `timeout_ms=None`, so it waits for an in-flight publish
 rather than surfacing `ShopifyPublishBusyError`) then:
 
-1. Product exists in tenant (`NotFoundError` otherwise).
-2. `get_by_id_for_product(product_id, version_id)` — foreign or
-   wrong-product version → `NotFoundError` (404, not 403).
+1. Product exists in tenant (`NotFoundError` otherwise). Refresh the
+   locked Product (`populate_existing` is already on `lock_for_update`).
+2. Fresh `get_by_id_for_product(product_id, version_id,
+   populate_existing=True)` — foreign or wrong-product version →
+   `NotFoundError` (404, not 403).
 3. `version.source is AI_GENERATED`. `ORIGINAL` → `ValidationError`
    with `details.reason = "original_not_approvable"`.
-4. `version.content.get("pipelineCandidateVersion") == 1`. Missing or
-   any other value (legacy optimize rows) → `ValidationError` with
+4. `parse_pipeline_candidate_metadata(version.content)` — any missing or
+   malformed field → `ValidationError`
    `details.reason = "not_a_pipeline_candidate"`.
-5. `content.pipelineSourceUpdatedAt` present. Missing on a marked row is
-   a bug → `ValidationError` `details.reason = "not_a_pipeline_candidate"`.
-6. `expected_updated_at` is required. `None` → `ValidationError`
+5. `expected_updated_at` is required. `None` → `ValidationError`
    (same posture as `update_draft`).
-7. **If this exact row is already `active`:** return the current
+6. **If this exact row is already `active`:** return the current
    `Product` immediately. Do not compare `expected_updated_at` to live
    `updated_at`. Do not compare `pipelineSourceUpdatedAt`. Do not call
    `versions.activate`. Do not call `_apply_active_version`. Do not
    create a version. This is the lost-response retry: the client may
    still hold the pre-approval token.
-8. If the version is inactive:
+7. If the version is inactive:
    `expected_updated_at` must equal live `product.updated_at` else
    `ConflictError` `details.reason = "draft_version_stale"`.
-   Live `product.updated_at` must equal parsed `pipelineSourceUpdatedAt`
+   Live `product.updated_at` must equal `metadata.source_updated_at`
    else `ConflictError` `details.reason = "stale_preview"`. Caller must
    `preview()` again.
+8. Approval storage safety (§13.2): title is a `str`, non-blank after
+   strip, length ≤ 512. Else `ValidationError`
+   `details.reason = "candidate_content_invalid"`. Do not truncate.
 9. `versions.activate` then `_apply_active_version` then flush.
 
 ### 12.3 First approval wins for that source token
@@ -662,22 +713,44 @@ Two inactive pipeline candidates A and B generated from the same
 
 - Approving A succeeds, writes `Product.ai_*` / `optimized_*`, flushes,
   and **bumps** `Product.updated_at`.
-- Approving B then fails `stale_preview`: B still carries the old
-  `pipelineSourceUpdatedAt`. B remains historical and inactive.
+- Approving B then fails `stale_preview`: B is still **inactive** and
+  still carries the old `pipelineSourceUpdatedAt`. B remains historical
+  and inactive.
 - The caller must run a new `preview()` to mint a candidate against the
   new product token.
+
+A is **not** stale after that bump. `get_preview(A)` must not emit
+`stale_preview` solely because approval moved `updated_at`.
 
 Do not state that the later activate wins. The later sibling is stale.
 
 Same-candidate concurrent retries: lock serialises. First activates.
-Second sees `active=True` and takes the no-op path in step 7.
+Second sees `active=True` and takes the no-op path in step 6.
 
 `requested_by_user_id` is not persisted on approve (the version already
 has `created_by_user_id` from generate).
 
 After a successful first approve, `Product.updated_at` moves. Pipeline
-`publish` must use the **post-approve** token from the returned
-`Product`, not the preview's `approval_expected_updated_at`.
+`publish` must use the **current** live token (post-approve, or later
+merchant-edit token after the client reloads), not the preview's
+generation `source_updated_at`.
+
+### 12.4 Merchant edit after approval
+
+No extra persistence, so approval is **not** auto-revoked.
+
+1. Candidate A is approved (`active=True`).
+2. `Product.updated_at` moved because of that approval.
+3. Merchant later edits merchant-owned fields; `updated_at` moves again.
+4. Pipeline publish with the old token → existing M2A 409
+   `draft_version_stale` inside `require_publishable`.
+5. If the caller reloads and supplies the **new** `expected_updated_at`,
+   publishing still-active A is allowed.
+6. That publish sends live merchant tags/images/variants/SEO together
+   with A's already-approved AI title and sanitized description overlay.
+
+Stronger "merchant edit revokes AI approval" needs stored approval
+provenance. Stage 7 does not add it and must not imply that guarantee.
 
 ---
 
@@ -698,7 +771,7 @@ Approve means: make this **pipeline** candidate the active
 `_apply_active_version`.
 
 `ProductPipelineService.approve` is the **only** business method allowed
-to activate a row with `pipelineCandidateVersion == 1`. It calls
+to activate a parsed pipeline candidate. It calls
 `ProductVersionRepository.activate` after the §12.2 checks, then
 `ProductOptimizationService._apply_active_version`.
 
@@ -720,28 +793,52 @@ to activate a row with `pipelineCandidateVersion == 1`. It calls
 
 `ProductOptimizationService.activate_version` (HTTP
 `POST /products/{id}/versions/{version_id}/activate`) **refuses** a
-pipeline candidate:
+pipeline candidate. Detection uses the same strict parser as approve
+and publish, not `content.get("pipelineCandidateVersion") == 1`
+(`True == 1` in Python).
+
+If any of `pipelineCandidateVersion`, `pipelineSourceUpdatedAt`, or
+`isSynthetic` is present and the parser fails → `ValidationError`
+`not_a_pipeline_candidate` (do not activate a corrupt row).
+
+If the parser succeeds:
 
 ```python
-if version.content.get("pipelineCandidateVersion") == 1:
-    raise ValidationError(
-        "This version is a pipeline preview and must be approved "
-        "through the product pipeline.",
-        details={"reason": "pipeline_candidate_requires_approval"},
-    )
+raise ValidationError(
+    "This version is a pipeline preview and must be approved "
+    "through the product pipeline.",
+    details={"reason": "pipeline_candidate_requires_approval"},
+)
 ```
 
-Historical `ORIGINAL` and legacy `AI_GENERATED` rows (no marker) keep
-today's activate/rollback behaviour.
+If none of those three keys is present, the row is legacy/ORIGINAL and
+keeps today's activate/rollback behaviour.
 
 `ProductVersionRepository.activate` stays a persistence helper. It is
 not a public business API. Production callers in Stage 7:
 
 - `optimize_product` — unmarked rows only
 - `activate_version` — unmarked rows only, after the refusal above
-- `ProductPipelineService.approve` — marked rows only, after §12.2
+- `ProductPipelineService.approve` — parsed pipeline rows only, after §12.2
 
 Does not publish. Does not call Shopify.
+
+### 13.2 Approval storage bounds
+
+`Product.optimized_title` is `String(512)`, matching
+`ProductUpdateRequest.title` in `app/schemas/product.py`. Before first
+approval, the candidate title must be a `str`, non-blank after strip,
+and `len(title) <= 512`. Otherwise `ValidationError`
+`details.reason = "candidate_content_invalid"`. Do not truncate. Do not
+rely on a database `DataError`.
+
+A 256–512 character title may be approved into the AI cache. It is
+**not** pipeline-publishable (Stage 5 documents Shopify's 255-character
+title limit). Preview records `candidate_title_not_publishable` so
+`publishable` stays False.
+
+Description length is not an approval-storage blocker (`optimized_description`
+is `Text`). Publish still caps sanitized HTML at `DESCRIPTION_MAX_LENGTH`.
 
 ---
 
@@ -784,7 +881,10 @@ overlay; Stage 7 must not pre-empt that.
 
 ### 14.1 Sanitize at overlay build, not in storage
 
-Immediately before constructing `ShopifyListingOverlay`:
+Immediately before constructing `ShopifyListingOverlay`, **after**
+§14.2 has accepted `validated_title`. This is the **same**
+`safe_body_html` already length-checked in §14.2 — not a second
+sanitize pass. Do not coerce a non-string title with `str(...)`.
 
 ```python
 raw_description = version.content.get("description")
@@ -792,7 +892,7 @@ if not isinstance(raw_description, str):
     raw_description = ""
 safe_body_html = sanitize_html(raw_description) or ""
 overlay = ShopifyListingOverlay(
-    title=str(version.content.get("title") or ""),
+    title=validated_title,
     body_html=safe_body_html,
 )
 ```
@@ -808,6 +908,38 @@ Rules:
   `data:` / `vbscript:` URL values do not survive; allowed formatting
   (`p`, `br`, `strong`, `em`, `ul`/`ol`/`li`, `a[href=http(s)]`, …)
   survives.
+
+### 14.2 Channel output bounds
+
+Do not silently truncate model output. Preview may show an oversize
+proposal; first approval and pipeline publish fail closed.
+
+Constants live in `app/services/product_pipeline.py` so Stage 7 does not
+invent a migration or a new schema module:
+
+```python
+from app.schemas.product import DESCRIPTION_MAX_LENGTH  # 64_000
+
+#: Matches Product.optimized_title and ProductUpdateRequest.title.
+PIPELINE_APPROVAL_TITLE_MAX = 512
+#: Shopify product-title limit documented by Stage 5 D1 in
+#: app.services.optimization_quality._score_title.
+PIPELINE_PUBLISH_TITLE_MAX = 255
+```
+
+Before `ShopifySyncService` is called (after lock + fresh read):
+
+- Candidate title is a `str` (do not coerce), non-blank after strip,
+  `len(title) <= PIPELINE_PUBLISH_TITLE_MAX`
+  else `ValidationError` `details.reason = "candidate_title_not_publishable"`
+- `len(safe_body_html) <= DESCRIPTION_MAX_LENGTH` else `ValidationError`
+  `details.reason = "candidate_description_too_long"`
+
+That accepted title is `validated_title` for §14.1. Compute
+`safe_body_html` once, check its length, and pass **that same string**
+to the overlay. Do not sanitize a second time. No Shopify client call
+on validation failure. Stored `ProductVersion.content` is not modified.
+Quality score remains advisory; it is not a length or publish blocker.
 
 ---
 
@@ -847,22 +979,51 @@ async def publish(
 ) -> dict[str, Any]:
 ```
 
-1. Load product + `get_by_id_for_product` (404 if foreign/mismatch).
-2. `source is AI_GENERATED` else `ValidationError`
-   `details.reason = "candidate_not_approved"`.
-3. `content.get("pipelineCandidateVersion") == 1` else `ValidationError`
-   `details.reason = "not_a_pipeline_candidate"` (legacy optimize
-   versions, even if active and later non-synthetic).
-4. `version.active is True` else `ValidationError`
-   `details.reason = "candidate_not_approved"`.
-5. Synthetic guard (§17).
-6. Build overlay with `sanitize_html` (§14.1).
-7. `return await ShopifySyncService(self.session).publish_product(
+Pinned order. A candidate observed active **before** the Product lock
+must never be sent to Shopify.
+
+1. Acquire the tenant-scoped Product lock first:
+   `ProductRepository.lock_for_update(product_id,
+   timeout_ms=PUBLISH_LOCK_TIMEOUT_MS)` from
+   `app.integrations.shopify.sync` (30_000 ms). Timeout raises the
+   existing `ShopifyPublishBusyError`. `None` → `NotFoundError`.
+2. Fresh `ProductVersion` read for the exact `(product_id, version_id)`
+   with `populate_existing=True` (extend
+   `ProductVersionRepository.get_by_id_for_product` with that flag, same
+   pattern as `ProductRepository.lock_for_update`). Do not trust a
+   previously loaded identity-map instance. Missing → `NotFoundError`.
+3. Under that lock validate:
+   - `source is AI_GENERATED` else `candidate_not_approved`
+   - `parse_pipeline_candidate_metadata` else `not_a_pipeline_candidate`
+   - `version.active is True` else `candidate_not_approved`
+   - provenance (§17): missing/empty/non-string `ai_provider` →
+     `ai_provenance_unverified`; then `metadata.is_synthetic is True` or
+     stripped `ai_provider == "stub"` → `synthetic_publish_blocked`
+   - publish bounds (§14.2) before any overlay build
+4. Build the sanitized overlay (§14.1).
+5. `return await ShopifySyncService(self.session).publish_product(
        store_id=store_id,
        product_id=product_id,
        expected_updated_at=expected_updated_at,
        listing_overlay=overlay,
-   )`.
+   )` on the **same** `AsyncSession` / transaction.
+
+`ShopifySyncService.publish_product` may take the Product lock again.
+Re-locking the same row in the same transaction is acceptable and keeps
+the merchant-publish path unchanged. Do not create a second publisher.
+M2A `expected_updated_at` continues to be enforced inside
+`require_publishable`.
+
+Race semantics:
+
+- If B's approval **commits before** pipeline publish acquires the
+  Product lock: the fresh re-read sees A `active=False` →
+  `candidate_not_approved`; Shopify client is not constructed.
+- If pipeline publish **acquires the lock first**: A may publish;
+  competing approval cannot commit its Product update until this
+  transaction releases the lock.
+- Never publish an overlay for a candidate that was active only in a
+  pre-lock identity-map copy.
 
 Do not duplicate REST mapping, handle adopt, or listing upsert.
 
@@ -891,9 +1052,14 @@ Pipeline-specific conditions live in `pipeline_blockers` /
 | Condition | Bucket | Code |
 |---|---|---|
 | No/inactive pipeline candidate (fresh preview) | blocker for **pipeline publish**, not for merchant publish | `candidate_not_approved` |
-| Legacy optimize version used as pipeline id | pipeline blocker | `not_a_pipeline_candidate` |
-| `stale_preview` (source token ≠ live `updated_at`) | pipeline blocker | `stale_preview` |
-| `isSynthetic` | pipeline blocker for publish | `synthetic_publish_blocked` |
+| Legacy/malformed pipeline metadata | pipeline blocker | `not_a_pipeline_candidate` |
+| Inactive candidate whose `source_updated_at !=` live `updated_at` | pipeline blocker | `stale_preview` |
+| Active approved candidate whose `source_updated_at !=` live `updated_at` | **not a blocker** — fingerprint is inactive-only | n/a |
+| `metadata.is_synthetic is True` or stripped `ai_provider == "stub"` | pipeline blocker for publish | `synthetic_publish_blocked` |
+| `ai_provider` missing, empty, or non-string | pipeline blocker for publish | `ai_provenance_unverified` |
+| Title blank or not a str, or length > 512 | pipeline blocker (also refuses first approve) | `candidate_content_invalid` |
+| Title length 256–512 | pipeline blocker for publish; approval still allowed | `candidate_title_not_publishable` |
+| Sanitized body_html length > 64_000 | pipeline blocker for publish | `candidate_description_too_long` |
 | Failed generate | no DTO; `AIError` | n/a |
 | Image `fetchFailed` / `decodeFailed` | pipeline **warning** | `image_analysis_incomplete` |
 | Image `checksOnly` | pipeline **warning** | `image_analysis_checks_only` |
@@ -901,9 +1067,11 @@ Pipeline-specific conditions live in `pipeline_blockers` /
 | `store_id` omitted on preview | `channel_readiness is None`; `publishable=False`; evaluate is not called | n/a |
 | Channel blockers | from `channel_readiness.blockers` | existing codes |
 
-`publishable` on the DTO is the AND of pipeline blockers empty, pipeline
-marker present, candidate active, not synthetic, not stale, and
-`channel_readiness.can_publish`.
+`publishable` on the DTO is the AND of pipeline blockers empty, strict
+metadata parse, candidate **active**, `is_synthetic is False`, verified
+non-stub `ai_provider`, title ≤ 255, sanitized body ≤ 64_000, and
+`channel_readiness.can_publish`. Quality score is advisory only and is
+never a publish blocker.
 
 `ProductPipelineService.publish` still calls the existing
 `require_publishable` **inside** `publish_product`. Do not re-implement
@@ -926,18 +1094,32 @@ Current factory resolves to `StubProvider`. Every `complete` /
 | Approve | Yes — studio can mark a stub pipeline version active in the AI cache |
 | Publish to Shopify (pipeline overlay) | **No** |
 
-Guard in `ProductPipelineService.publish` **before** overlay build and
-**before** `ShopifySyncService.publish_product` (no provider HTTP):
+Guard in `ProductPipelineService.publish` **after** the Product lock and
+fresh version read, **before** overlay build and **before**
+`ShopifySyncService.publish_product` (no provider HTTP).
 
-If `version.content.get("isSynthetic") is True` **or**
-`version.ai_provider == "stub"`:
+Use `parse_pipeline_candidate_metadata` first. Then fail closed. Check
+provider type/emptiness **before** the stub equality so a missing
+provider cannot skip into a channel-publishable state:
 
 ```python
-raise ValidationError(
-    "Synthetic AI content cannot be published to a sales channel.",
-    details={"reason": "synthetic_publish_blocked"},
-)
+provider = version.ai_provider
+if not isinstance(provider, str) or provider.strip() == "":
+    raise ValidationError(
+        "AI provider provenance is missing or unverified.",
+        details={"reason": "ai_provenance_unverified"},
+    )
+if metadata.is_synthetic is True or provider.strip() == "stub":
+    raise ValidationError(
+        "Synthetic AI content cannot be published to a sales channel.",
+        details={"reason": "synthetic_publish_blocked"},
+    )
 ```
+
+Publish is allowed only when `metadata.is_synthetic is` exactly `False`
+**and** `ai_provider` is a non-empty string **and** the stripped
+provider is not `"stub"`. Missing `isSynthetic` never means "real AI";
+the parser already rejected it as `not_a_pipeline_candidate`.
 
 Rationale: Stage 7 overlay is the first code path that would send AI
 copy to Shopify. Stub output is labelled, but a merchant can still press
@@ -946,16 +1128,16 @@ true at the channel boundary. Merchant-only publish of `Product.title`
 is unaffected.
 
 Tests that need a successful overlay publish construct a **pipeline**
-candidate (`pipelineCandidateVersion=1`) with `isSynthetic=False` and
-`ai_provider="test"` (or a fake non-stub provider in unit tests). They
-do not claim a live model. Legacy optimize rows are never used as that
-fixture.
+candidate with strict metadata (`pipelineCandidateVersion` integer `1`,
+offset-aware `pipelineSourceUpdatedAt`, `isSynthetic` boolean `False`)
+and `ai_provider="test"`. They do not claim a live model. Legacy
+optimize rows are never used as that fixture.
 
 When a real provider exists in a later stage, a **pipeline** candidate
-with `isSynthetic=False` and a non-stub `ai_provider` will pass this
-guard without a Stage 7 rewrite. A legacy `optimize_product` row from
-that same provider still cannot pipeline-publish: it lacks
-`pipelineCandidateVersion`.
+with exact `isSynthetic=False` and a non-empty non-stub `ai_provider`
+will pass this guard without a Stage 7 rewrite. A legacy
+`optimize_product` row from that same provider still cannot
+pipeline-publish: it fails the strict parser.
 
 ---
 
@@ -1004,7 +1186,7 @@ approved pipeline candidate.
 |---|---|
 | `preview` | Not idempotent. Each call analyses + creates a **new** inactive pipeline version. Safe to retry; prior inactive candidates remain history |
 | `get_preview` | Read-only. Idempotent |
-| `approve` | Idempotent no-op when the exact pipeline row is already active (§12.2 step 7), even if `expected_updated_at` is the pre-approval token. Inactive siblings from the same old token are stale, not retries |
+| `approve` | Idempotent no-op when the exact pipeline row is already active (§12.2 step 6), even if `expected_updated_at` is the pre-approval token. Inactive siblings from the same old token are stale, not retries |
 | `publish` | Delegates to existing adopt-by-handle + `uq_store_listings_tenant_store_product` + row lock. Retry after Shopify/timeout uses the same overlay and the current `expected_updated_at` |
 
 No duplicate `StoreListing`. No second Shopify product when handle adopt
@@ -1039,10 +1221,11 @@ matching optimize/publish.
 
 | Need | Existing representation |
 |---|---|
-| Inactive pipeline candidate | `ProductVersion.active=False` plus `content.pipelineCandidateVersion == 1` |
-| Active approved pipeline AI | same marker, `active=True`, plus `Product.ai_*` cache |
-| Legacy optimize version | `AI_GENERATED` **without** `pipelineCandidateVersion` |
-| Generation fingerprint | `content.pipelineSourceUpdatedAt` (pipeline rows only) |
+| Inactive pipeline candidate | `ProductVersion.active=False` plus strict `parse_pipeline_candidate_metadata` success |
+| Active approved pipeline AI | same parsed metadata, `active=True`, plus `Product.ai_*` cache |
+| Legacy optimize version | `AI_GENERATED` with **none** of the three pipeline keys |
+| Generation fingerprint | `content.pipelineSourceUpdatedAt` — approval fingerprint for **inactive** rows only |
+| Merchant-edit-after-approve | live `Product.updated_at` via M2A on publish; approval is not revoked |
 | Synthetic flag | `content.isSynthetic` plus existing `ai_provider` (pipeline rows only) |
 | Image evidence | `ProductImage.analysis` |
 | Channel listing synced | `StoreListing.status` — **not** version provenance |
@@ -1057,9 +1240,40 @@ Publish remains an operation.
 ## 23. Internal DTO shapes
 
 Defined in §11 (`PipelinePreview`, `PipelineListingView`,
-`PipelineCheckItem`) and §14 (`ShopifyListingOverlay`).
-`ImageAnalysisReport` / `PublishReadinessResult` are reused, not wrapped
-in public pydantic models.
+`PipelineCheckItem`, `PipelineQualityBaseline`) and §14
+(`ShopifyListingOverlay`). `ImageAnalysisReport` /
+`PublishReadinessResult` are reused, not wrapped in public pydantic
+models.
+
+Shared fail-closed parser used by `get_preview`, `approve`, `publish`,
+and `activate_version` detection:
+
+```python
+@dataclass(frozen=True, slots=True)
+class PipelineCandidateMetadata:
+    source_updated_at: datetime
+    is_synthetic: bool
+
+
+def parse_pipeline_candidate_metadata(
+    content: object,
+) -> PipelineCandidateMetadata:
+    """Raise ValidationError(not_a_pipeline_candidate) unless all three
+    pipeline keys are present with exact types.
+    """
+```
+
+A valid pipeline candidate requires **all three** keys:
+
+| Key | Rule |
+|---|---|
+| `pipelineCandidateVersion` | `type(x) is int` (bool is **not** accepted; `True == 1` in Python) and value exactly `1` |
+| `pipelineSourceUpdatedAt` | `type(x) is str`, parseable offset-aware ISO-8601 datetime. Missing, non-string, malformed, or **naive** datetime → reject |
+| `isSynthetic` | `type(x) is bool`. Missing, `"false"`, `0`, `1` → reject |
+
+Malformed/missing metadata is `not_a_pipeline_candidate` **before**
+approval and **before** channel publication. Do not silently assume
+missing `isSynthetic` means real AI.
 
 Stage 8 maps these to camelCase response schemas. Stage 7 does not.
 Stage 7 does not add `pipelineCandidateVersion` to `ProductVersionRead`
@@ -1073,6 +1287,9 @@ it) so `publish_product` does not import `app.services.product_pipeline`
 The pipeline service **may** import `ShopifySyncService` and
 `ShopifyListingOverlay`, same as `PublishReadinessService` already
 imports `ShopifySyncService`.
+
+`ProductVersionRepository.get_by_id_for_product` gains
+`populate_existing: bool = False`. Publish and approve pass `True`.
 
 ---
 
@@ -1111,8 +1328,9 @@ class ProductOptimizationService:
     ) -> Product:
         """Activate ORIGINAL or legacy AI versions.
 
-        Refuses pipelineCandidateVersion == 1 with
-        details.reason = pipeline_candidate_requires_approval.
+        Uses parse_pipeline_candidate_metadata. Parsed pipeline rows
+        raise pipeline_candidate_requires_approval. Partial/malformed
+        pipeline keys raise not_a_pipeline_candidate.
         """
 
     async def list_versions(self, product_id: uuid.UUID) -> list[ProductVersion]: ...
@@ -1155,6 +1373,22 @@ class ProductPipelineService(BaseService):
         version_id: uuid.UUID,
         expected_updated_at: datetime,
     ) -> dict[str, Any]: ...
+
+
+def parse_pipeline_candidate_metadata(
+    content: object,
+) -> PipelineCandidateMetadata: ...
+
+
+# app/repositories/product_version.py
+class ProductVersionRepository:
+    async def get_by_id_for_product(
+        self,
+        product_id: uuid.UUID,
+        version_id: uuid.UUID,
+        *,
+        populate_existing: bool = False,
+    ) -> ProductVersion | None: ...
 ```
 
 `ProductPipelineService` constructs `ImageAnalysisService`,
@@ -1177,7 +1411,7 @@ each independently testable:
   `_generate_version`, `generate_candidate`; `optimize_product` calls
   the core with `as_pipeline_candidate=False` then activates; FAILED
   handling stays on the optimize path.
-- `activate_version` refuses `pipelineCandidateVersion == 1`.
+- `activate_version` refuses parsed pipeline rows (`pipeline_candidate_requires_approval`) and malformed pipeline keys (`not_a_pipeline_candidate`).
 - Tests: existing `test_product_optimization.py` still green; legacy
   optimize version has no `pipelineCandidateVersion` and is active;
   `generate_candidate` returns `active=False` with marker `1`;
@@ -1195,30 +1429,43 @@ each independently testable:
 
 **Commit 3 — preview composer**
 
-- `backend/app/services/product_pipeline.py` — DTOs, `preview`,
-  `get_preview`.
-- Tests: candidate inactive with `pipelineCandidateVersion=1`; previous
-  active version remains; DTO separates original vs proposal including
-  raw SEO for review; `publishable is False`; merchant fields unchanged;
-  no Shopify call; analysis invoked; `get_preview` of a legacy optimize
-  id is `not_a_pipeline_candidate`.
+- `backend/app/services/product_pipeline.py` — DTOs including
+  `PipelineQualityBaseline`, `parse_pipeline_candidate_metadata`,
+  `preview`, `get_preview`.
+- Tests: candidate inactive with integer marker `1`; previous active
+  version remains; DTO separates original vs proposal including raw SEO
+  and baseline `{version_number, score}`; `publishable is False`;
+  merchant fields unchanged; no Shopify call; analysis invoked;
+  `get_preview` of a legacy optimize id is `not_a_pipeline_candidate`;
+  after approve, `get_preview` is not `stale_preview` solely because
+  `updated_at` moved.
 
 **Commit 4 — exact-candidate approve**
 
-- `approve` with lock + marker + stale / M2A / ORIGINAL guards.
+- `approve` with lock + strict parser + inactive-only fingerprint /
+  M2A / ORIGINAL / title≤512 guards.
 - Tests: exact id; already-active no-op with original token; stale
-  reject after merchant edit; foreign/wrong product 404; sibling B
-  rejected after A approved; HTTP activate still refused.
+  reject after merchant edit of an **inactive** candidate;
+  foreign/wrong product 404; sibling B rejected after A approved; HTTP
+  activate still refused; title >512 → `candidate_content_invalid` with
+  no DataError.
 
 **Commit 5 — pipeline publish**
 
-- `publish` marker + active + synthetic guard + `sanitize_html` overlay.
+- `publish` locks Product first (`PUBLISH_LOCK_TIMEOUT_MS`), fresh
+  version read, strict parser, fail-closed provenance, length bounds,
+  `sanitize_html` overlay, then existing publisher on the same session.
+- `ProductVersionRepository.get_by_id_for_product(...,
+  populate_existing=True)`.
 - Tests: publisher called once; overlay title + sanitized body; merchant
   SEO/tags/images/variants preserved; `<script>` / `onerror` /
   `javascript:` / `data:` cannot reach the Shopify body; stored version
   content unchanged; `Product.description` unchanged; synthetic blocked
-  before client; unapproved rejected; legacy optimize version rejected
-  as `not_a_pipeline_candidate`; Shopify failure leaves approval intact.
+  before client; missing provider → `ai_provenance_unverified`;
+  unapproved rejected; legacy optimize version rejected as
+  `not_a_pipeline_candidate`; Shopify failure leaves approval intact;
+  TOCTOU: B commits before lock → A rejected, client not called;
+  length 256 title blocked at publish; 64_001 sanitized body blocked.
 
 **Commit 6 — integration + protected regressions**
 
@@ -1267,14 +1514,18 @@ No workflow, Docker, dependency, or frontend files.
 
 - New candidate inactive; previously approved or legacy-active version
   remains `active`.
-- DTO contains candidate id, number, score keys, image report,
-  `is_synthetic`, `approval_expected_updated_at`, raw SEO proposal.
+- DTO contains candidate id, number, score keys, `PipelineQualityBaseline`
+  with `version_number` and `score`, image report, `is_synthetic`,
+  `approval_expected_updated_at`, raw SEO proposal.
+- Inactive current candidate is not `stale_preview`.
 - `Product.title` / `description` / SEO / tags / `alt_text` unchanged.
 - No `StoreListing` write; Shopify client not constructed.
 - Analyse ran (images have `analysis` JSON).
 - `get_preview` does not create another version.
 - `get_preview` / `PipelinePreview` do not claim the candidate is the
   listing's published version from `StoreListing`.
+- After approve, `get_preview(active id)` does **not** become
+  `stale_preview` merely because approval changed `updated_at`.
 
 ### C. Approval
 
@@ -1282,7 +1533,8 @@ No workflow, Docker, dependency, or frontend files.
 - Re-approve same id with the **pre-approval** token: success, no extra
   version, cache not rewritten.
 - Re-approve same id with the post-approve token: also success no-op.
-- After merchant `update_draft`, old inactive candidate → `stale_preview`.
+- After merchant `update_draft`, old **inactive** candidate →
+  `stale_preview`.
 - Generate A and B from the same source token; approve A; approve B →
   `stale_preview`; active remains A; no extra version created.
 - Foreign tenant version id → 404.
@@ -1293,6 +1545,8 @@ No workflow, Docker, dependency, or frontend files.
 - `ORIGINAL` → `original_not_approvable`.
 - Legacy optimize version → `not_a_pipeline_candidate` on pipeline
   approve; `activate_version` still works for that unmarked row.
+- Title length > 512 → `candidate_content_invalid`; no DB `DataError`.
+- Blank title → `candidate_content_invalid`.
 
 ### D. Publish
 
@@ -1311,6 +1565,27 @@ No workflow, Docker, dependency, or frontend files.
   sends `Product.title`.
 - Successful pipeline publish is not readable later as "this version id
   is stored on StoreListing."
+- Old post-approval token after a later merchant edit → 409
+  `draft_version_stale`.
+- Reloaded current token → still-active candidate may publish (live
+  merchant tags/images/SEO + approved overlay).
+- Title length 255 → publish eligible (remaining guards passing).
+- Title length 256 → `candidate_title_not_publishable`; no Shopify
+  client.
+- Sanitized body length 64_000 → allowed; 64_001 →
+  `candidate_description_too_long`; stored raw content unchanged.
+
+### D2. Publish vs concurrent activation (TOCTOU)
+
+- Candidate A is active. Between the pipeline-publish call setup and
+  the Shopify client call, candidate B is approved in another
+  transaction.
+- If B commits before A acquires `lock_for_update`: A is rejected
+  `candidate_not_approved`; Shopify client is not constructed.
+- If A owns the lock first: A's publish finishes before B can commit
+  its Product update.
+- Never publish an inactive/stale A overlay after B has committed.
+- Lock timeout still raises `ShopifyPublishBusyError`.
 
 ### E. Sanitizer on overlay
 
@@ -1331,10 +1606,22 @@ No workflow, Docker, dependency, or frontend files.
 - `alt_text` unchanged.
 - `ProductImageRead` schema test from Stage 6 still passes.
 
-### G. Provider
+### G. Provider and provenance
 
 - Stub pipeline preview/approve allowed; pipeline publish raises
   `synthetic_publish_blocked`.
+- Marker `True` (bool) instead of integer `1` →
+  `not_a_pipeline_candidate`.
+- Marker missing → `not_a_pipeline_candidate`.
+- `pipelineSourceUpdatedAt` malformed → `not_a_pipeline_candidate`.
+- `isSynthetic` missing → `not_a_pipeline_candidate`.
+- `isSynthetic` string `"false"` → `not_a_pipeline_candidate`.
+- `ai_provider is None` → `ai_provenance_unverified`; no Shopify client.
+- `ai_provider == ""` → `ai_provenance_unverified`.
+- `ai_provider == "stub"` even with `isSynthetic is False` →
+  `synthetic_publish_blocked`.
+- Non-stub provider + exact `isSynthetic is False` → eligible subject
+  to remaining guards.
 - No test name or docstring claims a live model.
 
 ### H. Regression
@@ -1362,7 +1649,10 @@ No workflow, Docker, dependency, or frontend files.
 | Merchant SEO on channel | Overlay has no SEO fields; publisher keeps `Product.seo_*` |
 | Image alt | analyse/approve/publish never assign it |
 | Unsanitized model HTML | `sanitize_html` at overlay build; content row unchanged |
-| M2A 409 | first approve and publish compare `updated_at`; draft PATCH untouched |
+| Oversized AI copy | fail-closed 512/255/64_000 bounds; no truncate |
+| Fail-open JSONB | strict parser; `True == 1` rejected |
+| Publish TOCTOU | lock Product before active check; fresh version read |
+| M2A 409 | inactive approve and publish compare `updated_at`; draft PATCH untouched |
 | Cross-tenant 404 | repositories + `get_by_id_for_product` |
 | Publish idempotency | unchanged `publish_product` core |
 | Stub not presented as live AI | synthetic publish block + `[STUB-AI]` content |
@@ -1383,24 +1673,30 @@ Stage 7 is done when all of the following are true:
    `pipelineCandidateVersion == 1` and a DTO with `publishable is False`.
 2. `optimize_product` still auto-activates and does **not** write
    `pipelineCandidateVersion`.
-3. `approve` requires exact `version_id`, marker `1`, and (when inactive)
-   matching `expected_updated_at` plus `pipelineSourceUpdatedAt`.
+3. `approve` requires exact `version_id`, strict metadata parse, and
+   (when inactive) matching `expected_updated_at` plus
+   `metadata.source_updated_at`. Active approved rows are not fingerprint-
+   stale.
 4. Already-active exact pipeline id is a no-op (no extra version, no
    cache rewrite).
-5. `activate_version` refuses pipeline candidates.
-6. `publish` without prior pipeline approve of that id fails.
-7. `publish` of a legacy optimize version fails as
+5. `activate_version` refuses parsed pipeline candidates.
+6. `publish` acquires `lock_for_update` **before** the active-state
+   decision and re-reads the version with `populate_existing`.
+7. `publish` without prior pipeline approve of that id fails.
+8. `publish` of a legacy optimize version fails as
    `not_a_pipeline_candidate`.
-8. `publish` of synthetic pipeline content fails before any Shopify
-   client call.
-9. `publish` of a non-synthetic approved **pipeline** candidate
-   delegates overlay of sanitized title+description; merchant
-   title/description/SEO columns unchanged; Shopify SEO still merchant.
-10. No new HTTP route, no frontend change, no migration, no `main`
+9. `publish` of synthetic or unverified-provenance pipeline content
+   fails before any Shopify client call.
+10. `publish` of a non-synthetic approved **pipeline** candidate
+    delegates overlay of sanitized title+description; merchant
+    title/description/SEO columns unchanged; Shopify SEO still merchant.
+11. Title >512 cannot approve; title 256–512 cannot pipeline-publish;
+    sanitized body >64_000 cannot pipeline-publish; no truncation.
+12. No new HTTP route, no frontend change, no migration, no `main`
     change. `StoreListing` is not treated as version provenance.
-11. Quality gates: `ruff check`, `ruff format --check`, `mypy app`,
+13. Quality gates: `ruff check`, `ruff format --check`, `mypy app`,
     `pytest` (implementation PR).
-12. Independent review of the implementation: BLOCKER 0, HIGH 0,
+14. Independent review of the implementation: BLOCKER 0, HIGH 0,
     MEDIUM 0.
 
 This planning document is accepted when an independent review of **the
@@ -1416,8 +1712,9 @@ Plan self-review after remediation: BLOCKER 0, HIGH 0, MEDIUM 0.
 LOW (accepted, not elevated):
 
 1. **Image/variant draft routes do not bump `Product.updated_at`.**
-   Existing M2A. Pipeline stale guard therefore does not see image-only
-   edits. Publish sends live images anyway; alt is never auto-written.
+   Existing M2A. The inactive-candidate approval fingerprint therefore
+   does not see image-only edits. Publish sends live images anyway; alt
+   is never auto-written.
 2. **`ProductVersionRepository.activate` remains a persistence helper**
    that does not itself inspect `pipelineCandidateVersion`. Business
    refusal lives on `activate_version` and `approve`. A new service that
@@ -1448,12 +1745,26 @@ LOW (accepted, not elevated):
     is channel sync, not "this ProductVersion was published." Callers
     must not infer otherwise. A future migration can add it; Stage 7
     does not.
+11. **Merchant edit after approval does not revoke the AI candidate.**
+    Intentional with no extra persistence. Publish of the still-active
+    overlay is allowed with a fresh M2A token; live merchant fields go
+    with it (§12.4).
+12. **Titles of 256–512 characters can be approved into `optimized_title`
+    but cannot pipeline-publish.** Preview surfaces
+    `candidate_title_not_publishable`. Regeneration is required for the
+    channel path. Stage 5's quality score remains advisory.
+13. **Description length is not an approval-storage blocker** because
+    `optimized_description` is `Text`. An oversize body is refused at
+    pipeline publish after sanitization, not at approve.
+14. **Nested Product `FOR UPDATE`** when `ShopifySyncService` re-locks
+    the same row in the same transaction is accepted so the merchant
+    publish path stays unchanged.
 
 LOW #2 from the first plan draft ("version-history activate omits
 fingerprint") is **removed**: `activate_version` now refuses pipeline
 candidates. LOW #5 from the first draft ("Stub SEO opacity, overlay
 will send it later") is **removed as a residual of the overlay plan**:
-Stage 7 does not overlay AI SEO at all (M1).
+Stage 7 does not overlay AI SEO at all.
 
 ---
 
@@ -1504,7 +1815,10 @@ Option B keeps that contract. `generate_candidate` is pipeline-only and
 writes `pipelineCandidateVersion=1`. `optimize_product` calls the same
 private core with `as_pipeline_candidate=False`, then auto-activates an
 unmarked row. Pipeline approve/publish refuse unmarked rows.
-`activate_version` refuses marked rows.
+`activate_version` refuses marked rows. Pipeline `publish` locks the
+Product row before the active-state decision and fail-closes on
+malformed provenance. Overlay HTML is sanitized; AI SEO is not
+published; title/body length is fail-closed.
 
 Internals share prompt execution and `score_version` so generation
 cannot drift. The marker is what prevents Preview → Approve → Publish

@@ -449,7 +449,7 @@ parents `979e7cca`, `ae67907`). PR CI 35447520423 10/10; post-merge develop
 CI 35449956506 10/10. Migration `0033`. Pillow `12.3.0`. Production
 undeployed — `main` unchanged. `StubProvider` only — no live vision-model
 quality claim. Claude has not reviewed Stage 6. Stage 7 implementation has
-not started; the Stage 7 plan is in independent review (below).
+not started; the Stage 7 plan is awaiting final re-review (below).
 
 Deterministic blur (variance of Laplacian) and byte-identical duplicates
 (Phase A then B); captions/alt text only through `analyse_image`;
@@ -460,7 +460,7 @@ allow-list plus connect-to-IP and a streamed 5 MiB cap;
 `0033` pairs with a one-line Playwright Alembic-head expectation
 `0032` → `0033`.
 
-### Stage 7 — Pipeline: PLANNING / AWAITING INDEPENDENT REVIEW
+### Stage 7 — Pipeline: PLANNING / AWAITING FINAL RE-REVIEW
 
 Contract: [PHASE_9_STAGE_7_PLAN.md](PHASE_9_STAGE_7_PLAN.md).
 
@@ -475,12 +475,17 @@ shot and does **not** mint pipeline candidates. Stage 7 adds
 `_generate_version` core. `generate_candidate` writes
 `pipelineCandidateVersion=1` on an inactive row. Legacy
 `POST /products/{id}/optimize` stays auto-activating and unmarked.
-`activate_version` refuses pipeline rows. Approved AI title +
-`sanitize_html` description reach Shopify only through an optional
-two-field overlay on `ShopifySyncService.publish_product`; merchant
-`title` / `description` / SEO are not overwritten and AI SEO is not
-published. Synthetic (`StubProvider`) candidates may be previewed and
-approved; pipeline publish to a sales channel is refused. No Alembic
-migration — marker, fingerprint, and `isSynthetic` live on
-`ProductVersion.content` JSONB. Head remains `0033`. Publish is an
-operation, not a durable StoreListing provenance.
+`activate_version` refuses pipeline rows. Pipeline `publish` takes the
+Product `FOR UPDATE` lock **before** the active-state decision.
+Approved AI title + `sanitize_html` description reach Shopify only
+through an optional two-field overlay on
+`ShopifySyncService.publish_product`; merchant `title` / `description` /
+SEO are not overwritten and AI SEO is not published. Pipeline metadata
+is fail-closed (exact int `1`, offset-aware timestamp, exact bool
+`isSynthetic`). Synthetic or unverified provenance cannot reach a sales
+channel. Title/body length is fail-closed (512 approve / 255 publish /
+64_000 body). No Alembic migration — marker, fingerprint, and
+`isSynthetic` live on `ProductVersion.content` JSONB. Head remains
+`0033`. Publish is an operation, not a durable StoreListing provenance.
+`pipelineSourceUpdatedAt` is an inactive-candidate approval fingerprint
+only.
