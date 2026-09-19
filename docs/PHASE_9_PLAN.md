@@ -436,19 +436,20 @@ takeover onward require a fresh Claude end-to-end review when Claude
 becomes available again. Cursor review of the takeover work is not a
 substitute.
 
-### Stage 6 — Image analysis: PLANNING / AWAITING REVIEW
+### Stage 6 — Image analysis: IMPLEMENTED LOCALLY / AWAITING INDEPENDENT REVIEW AND REMOTE CI
 
-Contract: [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md). **Not
-implemented.** A first independent review of `7ff1ae5` found two HIGH
-and six MEDIUM gaps; a second review of `bcd3530` found two HIGH and
-two MEDIUM gaps. This revision closes them and still awaits re-review.
-Deterministic blur (variance of Laplacian, with a 16px checkerboard /
-box-blur pair) and byte-identical duplicates (Phase A then B) first;
-captions/alt text only through `analyse_image`; generic watermark
-detection not claimed; SSRF fetch is an `is_global` allow-list plus
-connect-to-IP and a streamed 5 MiB cap; `ProductImage.alt_text` is not
-auto-written; no endpoint, no `ProductImageRead` change, no frontend, no
-Stage 7 wiring. Implementation (not this plan) pairs migration `0033`
-with a one-line Playwright Alembic-head expectation `0032` → `0033`.
+Contract: [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md). Report:
+[PHASE_9_STAGE_6_COMPLETION.md](PHASE_9_STAGE_6_COMPLETION.md).
 
-**Stage 6 implementation is not started.**
+Implemented on `feat/phase-9-stage-6-image-analysis` from `develop`
+`979e7cca`. Not pushed, not merged, not deployed. `main` unchanged.
+Claude has not reviewed Stage 6.
+
+Deterministic blur (variance of Laplacian) and byte-identical duplicates
+(Phase A then B); captions/alt text only through `analyse_image`;
+generic watermark detection not claimed; SSRF fetch is an `is_global`
+allow-list plus connect-to-IP and a streamed 5 MiB cap;
+`ProductImage.alt_text` is not auto-written; no endpoint, no
+`ProductImageRead` change, no frontend, no Stage 7 wiring. Migration
+`0033` pairs with a one-line Playwright Alembic-head expectation
+`0032` → `0033`.

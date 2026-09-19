@@ -33,6 +33,11 @@ dependencies = [
     "structlog>=24.4.0",
     "python-json-logger>=2.0.7",
     "httpx>=0.28.0",
+    # Exact pin: CI installs from this file (`pip install -e ".[dev]"`), not a
+    # lockfile. An open range would not reproduce the same decode behaviour
+    # across local, CI, and later rebuilds. Changing the patch later requires
+    # rerunning the Stage 6 deterministic fixture suite.
+    "pillow==12.3.0",
     # Google's own ID-token verification. Used rather than hand-rolling JWT
     # checks: the signature, the key rotation and the `aud`/`exp` handling are
     # exactly the parts that are dangerous to get subtly wrong.

@@ -12,7 +12,7 @@ every commit without needing Postgres, so there is no excuse to skip it.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.dialects import postgresql
@@ -151,6 +151,31 @@ class TestPublishRowLock:
         source = ProductRepository.lock_for_update.__doc__ or ""
         assert "timeout" in source.lower()
         assert "ShopifyPublishBusyError" in source or "busy" in source.lower()
+
+
+class TestImageListForProduct:
+    """Stage 6 reads images only through this tenant-scoped query."""
+
+    async def test_list_for_product_cannot_select_by_product_id_alone(
+        self, tenant_id: uuid.UUID
+    ) -> None:
+        set_tenant_id(tenant_id)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = []
+        session = MagicMock()
+        session.execute = AsyncMock(return_value=result)
+        repository = ProductImageRepository(session)
+        product_id = uuid.uuid4()
+
+        await repository.list_for_product(product_id)
+
+        query = session.execute.await_args.args[0]
+        sql = _compile(query)
+        assert "product_images.tenant_id" in sql
+        assert str(tenant_id) in sql
+        assert "deleted_at IS NULL" in sql
+        assert str(product_id) in sql
+        assert "product_images.product_id" in sql
 
 
 class TestSortAllowlists:

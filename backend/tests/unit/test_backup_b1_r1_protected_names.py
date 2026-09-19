@@ -383,7 +383,7 @@ class FakeCursor:
         elif "to_regclass" in lowered:
             self._row = (True,)
         elif "alembic_version" in lowered:
-            self._row = (self._facts.get("revision", "0032"),)
+            self._row = (self._facts.get("revision", "0033"),)
         elif "information_schema.tables" in lowered:
             self._row = (self._facts.get("tables", 0),)
         else:
@@ -425,7 +425,7 @@ def fake_postgres(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     facts: dict[str, Any] = {
         "database": "droppilot_staging",
         "version": "PostgreSQL 17.10 on x86_64-windows",
-        "revision": "0032",
+        "revision": "0033",
         "tables": 0,
     }
     FakePopen.calls = []
