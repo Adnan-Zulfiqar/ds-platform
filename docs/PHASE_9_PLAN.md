@@ -447,8 +447,9 @@ Reviewed head `ae67907faf1abda197c76e441d62c501ad6bbeae`. Merged into
 `develop` as `96b890d25f43865d41e6ba27896b0923dbb09db2` (2026-09-19T14:50:23Z;
 parents `979e7cca`, `ae67907`). PR CI 35447520423 10/10; post-merge develop
 CI 35449956506 10/10. Migration `0033`. Pillow `12.3.0`. Production
-undeployed — `main` unchanged. Stage 7 not started. `StubProvider` only —
-no live vision-model quality claim. Claude has not reviewed Stage 6.
+undeployed — `main` unchanged. `StubProvider` only — no live vision-model
+quality claim. Claude has not reviewed Stage 6. Stage 7 implementation has
+not started; the Stage 7 plan is in independent review (below).
 
 Deterministic blur (variance of Laplacian) and byte-identical duplicates
 (Phase A then B); captions/alt text only through `analyse_image`;
@@ -458,3 +459,23 @@ allow-list plus connect-to-IP and a streamed 5 MiB cap;
 `ProductImageRead` change, no frontend, no Stage 7 wiring. Migration
 `0033` pairs with a one-line Playwright Alembic-head expectation
 `0032` → `0033`.
+
+### Stage 7 — Pipeline: PLANNING / AWAITING INDEPENDENT REVIEW
+
+Contract: [PHASE_9_STAGE_7_PLAN.md](PHASE_9_STAGE_7_PLAN.md).
+
+Baseline `develop` `0a26a121bf6c03a9e03e1b5ee2b9b69de5c63012` (Stage 6
+docs closeout; post-merge CI 35458334556, 10/10). Implementation has
+**not** started. No new HTTP route, no frontend, no migration, no
+Celery, no deploy. Claude has not reviewed Stage 7.
+
+The current `optimize_product` path still generate→score→activate in one
+shot. Stage 7 adds `ProductPipelineService` (preview / approve / publish)
+and a shared `generate_candidate` that leaves the new version inactive.
+Existing `POST /products/{id}/optimize` stays auto-activating. Approved
+AI copy reaches Shopify only through an optional overlay on
+`ShopifySyncService.publish_product`; merchant `title` / `description`
+are not overwritten. Synthetic (`StubProvider`) candidates may be
+previewed and approved; pipeline publish to a sales channel is refused.
+No Alembic migration — fingerprint and `isSynthetic` live on
+`ProductVersion.content` JSONB. Head remains `0033`.
