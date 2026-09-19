@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Final
@@ -38,6 +39,28 @@ logger = get_logger(__name__)
 #: create to finish under the lock, short enough that a wedged worker surfaces
 #: ``shopify_publish_busy`` instead of hanging HTTP workers forever.
 PUBLISH_LOCK_TIMEOUT_MS: Final = 30_000
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ShopifyListingOverlay:
+    """Optional title/body substitution for an approved pipeline candidate.
+
+    SEO, tags, images, variants, and handle stay on the merchant Product.
+    The pipeline sanitizes `body_html` before constructing this; the
+    publisher must not sanitize again.
+    """
+
+    title: str
+    body_html: str
+
+
+def _apply_listing_overlay(
+    product_body: dict[str, Any], overlay: ShopifyListingOverlay | None
+) -> None:
+    if overlay is None:
+        return
+    product_body["title"] = overlay.title
+    product_body["body_html"] = overlay.body_html
 
 
 def _deterministic_handle(product_id: uuid.UUID) -> str:
@@ -163,6 +186,7 @@ class ShopifySyncService(BaseService):
         store_id: uuid.UUID,
         product_id: uuid.UUID,
         expected_updated_at: datetime | None = None,
+        listing_overlay: ShopifyListingOverlay | None = None,
     ) -> dict[str, Any]:
         """Create or update a Shopify product for a DropPilot catalogue product.
 
@@ -273,6 +297,7 @@ class ShopifySyncService(BaseService):
             product_body["metafields_global_title_tag"] = product.seo_title
         if product.seo_description:
             product_body["metafields_global_description_tag"] = product.seo_description
+        _apply_listing_overlay(product_body, listing_overlay)
         # Weight / shipping flags on the first variant when physical.
         if product.requires_shipping and product.package_weight_kg is not None:
             grams = int((product.package_weight_kg * Decimal("1000")).to_integral_value())

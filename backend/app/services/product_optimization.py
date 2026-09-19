@@ -5,8 +5,9 @@
                                               ├─ product_description_generator
                                               └─ seo_optimizer
                                             → score_version (stage 5, pure)
-                                            → ProductVersion (new, active)
-                                            → Product's cached AI fields
+                                            → ProductVersion (new)
+                                            → Product's cached AI fields (legacy
+                                              optimize / pipeline approve only)
 
 Reuses `PromptService.test_render` from Phase 9 stage 2 rather than
 re-implementing render → call provider → record execution — it already does
@@ -14,16 +15,24 @@ exactly that. **No real AI call happens here.** `test_render` calls
 `get_ai_provider(settings)`, which resolves to `StubProvider` unless a real
 provider has been configured, and none has — every version this stage can
 produce is synthetic, recorded as such on the underlying `PromptExecution`.
+
+Stage 7 splits generation from activation. `_generate_version` is the shared
+core; `optimize_product` still auto-activates an unmarked row; `generate_candidate`
+writes an inactive pipeline-marked row. Pipeline metadata lives here so
+`activate_version` can refuse a preview without importing the pipeline service.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.exceptions import AIError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.sanitize import html_to_plain_text
 from app.models.ai_prompt import PromptExecution, PromptExecutionStatus
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
@@ -43,6 +52,75 @@ _SEO_PROMPT = "seo_optimizer"
 #: plain size bound so one oversized product cannot build an arbitrarily
 #: large prompt.
 _MAX_FEATURES_CHARS = 2000
+
+_PIPELINE_METADATA_KEYS = (
+    "pipelineCandidateVersion",
+    "pipelineSourceUpdatedAt",
+    "isSynthetic",
+)
+_REASON_NOT_A_PIPELINE_CANDIDATE = "not_a_pipeline_candidate"
+_REASON_PIPELINE_REQUIRES_APPROVAL = "pipeline_candidate_requires_approval"
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineCandidateMetadata:
+    source_updated_at: datetime
+    is_synthetic: bool
+
+
+def content_has_any_pipeline_metadata_key(content: object) -> bool:
+    """True when any pipeline key is present, even if the values are garbage.
+
+    `activate_version` uses this to split unmarked legacy/ORIGINAL rows from
+    a corrupt pipeline object. Type checking belongs in
+    `parse_pipeline_candidate_metadata`, not here — a bool `True` marker
+    must still be treated as a pipeline row so it cannot be activated as
+    if it were a legacy optimize version (`True == 1` in Python).
+    """
+    if not isinstance(content, dict):
+        return False
+    return any(key in content for key in _PIPELINE_METADATA_KEYS)
+
+
+def parse_pipeline_candidate_metadata(content: object) -> PipelineCandidateMetadata:
+    """Fail closed on anything that is not an exact Stage 7 pipeline candidate.
+
+    Channel publication and approval both depend on this. A missing flag
+    must not become "real AI", and `True == 1` must not become marker
+    version 1.
+    """
+    if not isinstance(content, dict):
+        raise _not_a_pipeline_candidate()
+
+    marker = content.get("pipelineCandidateVersion")
+    if type(marker) is not int or marker != 1:
+        raise _not_a_pipeline_candidate()
+
+    raw_source = content.get("pipelineSourceUpdatedAt")
+    if type(raw_source) is not str:
+        raise _not_a_pipeline_candidate()
+    try:
+        source_updated_at = datetime.fromisoformat(raw_source)
+    except ValueError as exc:
+        raise _not_a_pipeline_candidate() from exc
+    if source_updated_at.tzinfo is None:
+        raise _not_a_pipeline_candidate()
+
+    is_synthetic = content.get("isSynthetic")
+    if type(is_synthetic) is not bool:
+        raise _not_a_pipeline_candidate()
+
+    return PipelineCandidateMetadata(
+        source_updated_at=source_updated_at,
+        is_synthetic=is_synthetic,
+    )
+
+
+def _not_a_pipeline_candidate() -> ValidationError:
+    return ValidationError(
+        "This version is not a pipeline candidate.",
+        details={"reason": _REASON_NOT_A_PIPELINE_CANDIDATE},
+    )
 
 
 class ProductOptimizationService(BaseService):
@@ -66,7 +144,28 @@ class ProductOptimizationService(BaseService):
         product = await self.products.get_by_id_or_raise(product_id)
         return await self.versions.list_for_product(product.id)
 
-    # -- Optimisation -----------------------------------------------------------
+    # -- Generation ------------------------------------------------------------
+
+    async def generate_candidate(
+        self,
+        product_id: uuid.UUID,
+        *,
+        tone: str = "professional",
+        requested_by_user_id: uuid.UUID | None,
+    ) -> ProductVersion:
+        """Create an inactive pipeline candidate. Does not activate or publish.
+
+        Expected generation failure must not flip `Product.ai_status` to
+        FAILED — that status is the legacy optimize contract, and a preview
+        retry must not look like an optimize failure.
+        """
+        _product, version = await self._generate_version(
+            product_id,
+            tone=tone,
+            requested_by_user_id=requested_by_user_id,
+            as_pipeline_candidate=True,
+        )
+        return version
 
     async def optimize_product(
         self,
@@ -81,7 +180,8 @@ class ProductOptimizationService(BaseService):
         Creates the version-1 original snapshot on first call for this
         product — lazily, not at import time, so
         `ProductImportService.import_product` needed no change at all. Every
-        subsequent call adds one new `AI_GENERATED` version and activates it.
+        subsequent call adds one new unmarked `AI_GENERATED` version and
+        activates it.
 
         Three generations, one outcome: if any of them fails, no version is
         written at all. Raises `app.ai.exceptions.AIError` after recording
@@ -90,9 +190,85 @@ class ProductOptimizationService(BaseService):
         and a half-generated result (title and description succeeded, SEO
         did not) is never persisted as if it were whole.
         """
+        try:
+            product, version = await self._generate_version(
+                product_id,
+                tone=tone,
+                requested_by_user_id=requested_by_user_id,
+                as_pipeline_candidate=False,
+            )
+        except AIError:
+            product = await self.products.get_by_id_or_raise(product_id)
+            product.ai_status = ProductAIStatus.FAILED
+            await self.flush()
+            raise
+        # Generation stays outside FOR UPDATE so the three prompt calls do not
+        # hold the Product row. Activation then follows the same Product →
+        # ProductVersion → cache order as pipeline approve; otherwise a
+        # concurrent approve and this path deadlock on crossed row locks.
+        locked = await self.products.lock_for_update(product.id)
+        if locked is None:
+            raise NotFoundError.for_resource("Product", product.id)
+        activated = await self.versions.activate(product_id=locked.id, version_id=version.id)
+        self._apply_active_version(locked, activated)
+        await self.flush()
+        product = locked
+
+        self.logger.info(
+            "product_optimized",
+            product_id=str(product.id),
+            version_number=activated.version_number,
+            provider=activated.ai_provider,
+        )
+        return product, activated
+
+    async def activate_version(self, product_id: uuid.UUID, version_id: uuid.UUID) -> Product:
+        """Activate ORIGINAL or legacy AI versions.
+
+        Pipeline candidates must go through `ProductPipelineService.approve`.
+        Product `FOR UPDATE` is taken first so this path cannot deadlock
+        with pipeline approve (Product then ProductVersion). Parsing lives
+        in this module so this method never imports the pipeline service.
+        """
+        product = await self.products.lock_for_update(product_id)
+        if product is None:
+            raise NotFoundError.for_resource("Product", product_id)
+        version = await self.versions.get_by_id_for_product(
+            product_id=product.id,
+            version_id=version_id,
+            populate_existing=True,
+        )
+        if version is None:
+            raise NotFoundError.for_resource("ProductVersion", version_id)
+        if content_has_any_pipeline_metadata_key(version.content):
+            parse_pipeline_candidate_metadata(version.content)
+            raise ValidationError(
+                "This version is a pipeline preview and must be approved "
+                "through the product pipeline.",
+                details={"reason": _REASON_PIPELINE_REQUIRES_APPROVAL},
+            )
+        activated = await self.versions.activate(product_id=product.id, version_id=version_id)
+        self._apply_active_version(product, activated)
+        await self.flush()
+        return product
+
+    async def _generate_version(
+        self,
+        product_id: uuid.UUID,
+        *,
+        tone: str,
+        requested_by_user_id: uuid.UUID | None,
+        as_pipeline_candidate: bool,
+    ) -> tuple[Product, ProductVersion]:
+        """Shared prompt/score/write path. Does not activate.
+
+        Pipeline rows are marked here, not by wrapping `optimize_product`.
+        A single public generator would let the legacy HTTP shortcut mint a
+        pipeline candidate and auto-activate it, skipping approve.
+        """
         product = await self.products.get_by_id_or_raise(product_id)
         original = await self._ensure_original_snapshot(product)
-
+        await self.session.refresh(product)
         variables = self._build_variables(product, tone=tone)
 
         _, _, title_execution = await self.prompts.test_render(
@@ -116,12 +292,11 @@ class ProductOptimizationService(BaseService):
 
         failed = _first_failure(title_execution, description_execution, seo_execution)
         if failed is not None:
-            product.ai_status = ProductAIStatus.FAILED
-            await self.flush()
             self.logger.warning(
                 "product_optimization_failed",
                 product_id=str(product.id),
                 error_code=failed.error_code,
+                as_pipeline_candidate=as_pipeline_candidate,
             )
             raise AIError(failed.error_message or "Product optimisation failed.")
 
@@ -155,40 +330,33 @@ class ProductOptimizationService(BaseService):
         # A scorer exception here is a bug, not a generation failure: it
         # propagates before `create`, so no version is persisted and
         # `ai_status` is left alone. See docs/PHASE_9_STAGE_5_PLAN.md §11.
-        candidate = score_version(generated, product)
+        scored = score_version(generated, product)
         baseline = score_version(original.content, product)
+        content: dict[str, Any] = {
+            **generated,
+            **scored.as_content(baseline=baseline),
+        }
+        if as_pipeline_candidate:
+            content["pipelineCandidateVersion"] = 1
+            content["pipelineSourceUpdatedAt"] = product.updated_at.isoformat()
+            content["isSynthetic"] = bool(
+                title_execution.is_synthetic
+                or description_execution.is_synthetic
+                or seo_execution.is_synthetic
+            )
 
         next_number = await self.versions.next_version_number(product.id)
         version = await self.versions.create(
             product_id=product.id,
             version_number=next_number,
             source=ProductVersionSource.AI_GENERATED,
-            content={**generated, **candidate.as_content(baseline=baseline)},
+            content=content,
             active=False,
             ai_provider=title_execution.provider,
             prompt_execution_id=description_execution.id,
             created_by_user_id=requested_by_user_id,
         )
-        activated = await self.versions.activate(product_id=product.id, version_id=version.id)
-        self._apply_active_version(product, activated)
-        await self.flush()
-
-        self.logger.info(
-            "product_optimized",
-            product_id=str(product.id),
-            version_number=activated.version_number,
-            provider=activated.ai_provider,
-        )
-        return product, activated
-
-    async def activate_version(self, product_id: uuid.UUID, version_id: uuid.UUID) -> Product:
-        """Activate an existing version — a newer one, or a rollback to an
-        older one. Same mechanism either way."""
-        product = await self.products.get_by_id_or_raise(product_id)
-        version = await self.versions.activate(product_id=product.id, version_id=version_id)
-        self._apply_active_version(product, version)
-        await self.flush()
-        return product
+        return product, version
 
     # -- Internals --------------------------------------------------------------
 
@@ -300,4 +468,9 @@ def _first_failure(
     return None
 
 
-__all__ = ["ProductOptimizationService"]
+__all__ = [
+    "PipelineCandidateMetadata",
+    "ProductOptimizationService",
+    "content_has_any_pipeline_metadata_key",
+    "parse_pipeline_candidate_metadata",
+]

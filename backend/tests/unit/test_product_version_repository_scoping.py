@@ -8,6 +8,7 @@ SQL, the same technique `test_product_repository_scoping.py` and
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from unittest.mock import MagicMock
 
@@ -67,6 +68,14 @@ def test_the_product_scoped_lookup_carries_the_tenant_filter(tenant_id: uuid.UUI
     assert "product_versions.tenant_id" in sql
     assert str(tenant_id) in sql
     assert str(product_id) in sql
+
+
+def test_product_scoped_lookup_defaults_populate_existing_off() -> None:
+    """Approve/publish opt in to a fresh identity-map read; other callers stay as they were."""
+    parameter = inspect.signature(ProductVersionRepository.get_by_id_for_product).parameters[
+        "populate_existing"
+    ]
+    assert parameter.default is False
 
 
 def test_declares_a_sort_allowlist() -> None:

@@ -513,11 +513,19 @@ class ProductVersionRepository(TenantScopedRepository[ProductVersion]):
         return (await self.session.execute(query)).scalar_one_or_none()
 
     async def get_by_id_for_product(
-        self, *, product_id: uuid.UUID, version_id: uuid.UUID
+        self,
+        *,
+        product_id: uuid.UUID,
+        version_id: uuid.UUID,
+        populate_existing: bool = False,
     ) -> ProductVersion | None:
         query = self._base_query().where(
             ProductVersion.product_id == product_id, ProductVersion.id == version_id
         )
+        if populate_existing:
+            # Pipeline approve/publish must not trust a stale identity-map copy
+            # of `active` after another transaction committed.
+            query = query.execution_options(populate_existing=True)
         return (await self.session.execute(query)).scalar_one_or_none()
 
     async def next_version_number(self, product_id: uuid.UUID) -> int:

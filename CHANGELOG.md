@@ -12,6 +12,16 @@ production release.
 
 ### Added
 
+- **Phase 9 Stage 7 — Pipeline (implemented, not merged).** Preview /
+  exact-candidate approve / overlay publish on
+  `feat/phase-9-stage-7-pipeline` from `develop` `85e11772` (plan PR #18).
+  No HTTP route, no frontend, no migration (Alembic head remains `0033`),
+  no Celery, no deploy. Legacy `POST /products/{id}/optimize` still
+  auto-activates unmarked rows. Pipeline publish fail-closes synthetic /
+  stub provenance and sanitizes description at overlay build. Status:
+  IMPLEMENTED / AWAITING INDEPENDENT REVIEW AND REMOTE CI. Report:
+  [PHASE_9_STAGE_7_COMPLETION.md](docs/PHASE_9_STAGE_7_COMPLETION.md).
+
 - **Phase 9 Stage 6 — Image analysis (merged into `develop` 2026-09-19
   via PR #16).** Product-scoped fetch, decode, deterministic
   blur/duplicate checks, and `analyse_image` caption/alt proposals

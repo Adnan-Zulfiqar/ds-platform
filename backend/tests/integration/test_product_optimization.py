@@ -32,8 +32,9 @@ from app.core.context import clear_context, set_tenant_id
 from app.core.tokens import create_access_token
 from app.integrations.aliexpress import service as service_module
 from app.models.ai_prompt import PromptExecution
-from app.models.product import Product, ProductVersionSource
+from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductVersionRepository
+from app.services.product_optimization import ProductOptimizationService
 from tests.integration.test_products import (
     REAL_PRODUCT_ID,
     auth_header,
@@ -939,3 +940,172 @@ class TestActivateVersion:
             headers=headers,
         )
         assert response.status_code == 404, response.text
+
+
+async def _product_row(db_session: AsyncSession, product_id: str) -> Product:
+    return (
+        await db_session.execute(select(Product).where(Product.id == uuid.UUID(product_id)))
+    ).scalar_one()
+
+
+async def _generate_pipeline_candidate(db_session: AsyncSession, product_id: str) -> ProductVersion:
+    product = await _product_row(db_session, product_id)
+    set_tenant_id(product.tenant_id)
+    try:
+        return await ProductOptimizationService(db_session).generate_candidate(
+            product.id,
+            requested_by_user_id=None,
+        )
+    finally:
+        clear_context()
+
+
+def _error_reason(body: dict[str, Any]) -> str | None:
+    for detail in body.get("details") or []:
+        if detail.get("type") == "reason":
+            message = detail.get("message")
+            return message if isinstance(message, str) else None
+    return None
+
+
+class TestPipelineCandidates:
+    """Stage 7 generate_candidate / activate_version boundary. No HTTP route."""
+
+    async def test_legacy_optimize_produces_an_active_unmarked_row(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["version"]["active"] is True
+        assert body["product"]["aiStatus"] == "optimized"
+
+        row = await _product_row(db_session, product["id"])
+        set_tenant_id(row.tenant_id)
+        try:
+            versions = await ProductVersionRepository(db_session).list_for_product(row.id)
+        finally:
+            clear_context()
+        generated = next(v for v in versions if v.source is ProductVersionSource.AI_GENERATED)
+        assert generated.active is True
+        assert "pipelineCandidateVersion" not in generated.content
+        assert "pipelineSourceUpdatedAt" not in generated.content
+        assert "isSynthetic" not in generated.content
+
+    async def test_generate_candidate_produces_an_inactive_marked_row(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+        before = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+
+        candidate = await _generate_pipeline_candidate(db_session, product["id"])
+        await db_session.flush()
+
+        assert candidate.active is False
+        assert candidate.content["pipelineCandidateVersion"] == 1
+        assert candidate.content["isSynthetic"] is True
+        assert isinstance(candidate.content["pipelineSourceUpdatedAt"], str)
+
+        after = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        assert after["aiVersion"] == before["aiVersion"]
+        assert after["aiStatus"] == before["aiStatus"]
+        assert after["optimizedTitle"] == before["optimizedTitle"]
+
+    async def test_pipeline_generation_failure_does_not_mark_failed(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+        before = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        _fail_seo_only(monkeypatch)
+
+        row = await _product_row(db_session, product["id"])
+        set_tenant_id(row.tenant_id)
+        try:
+            with pytest.raises(AIError):
+                await ProductOptimizationService(db_session).generate_candidate(
+                    row.id,
+                    requested_by_user_id=None,
+                )
+        finally:
+            clear_context()
+
+        after = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        assert after["aiStatus"] == before["aiStatus"]
+        assert after["aiStatus"] != ProductAIStatus.FAILED.value
+        assert after["optimizedTitle"] == before["optimizedTitle"]
+
+    async def test_generate_candidate_executes_the_stage_4_prompt_trio(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await import_a_product(client, monkeypatch)
+        await _generate_pipeline_candidate(db_session, product["id"])
+        await db_session.flush()
+
+        names = (await db_session.execute(select(PromptExecution.prompt_name))).scalars().all()
+        assert sorted(names) == [
+            "product_description_generator",
+            "product_title_generator",
+            "seo_optimizer",
+        ]
+
+    async def test_activate_version_rejects_a_valid_pipeline_candidate(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        candidate = await _generate_pipeline_candidate(db_session, product["id"])
+        await db_session.flush()
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/versions/{candidate.id}/activate",
+            headers=headers,
+        )
+        assert response.status_code == 422, response.text
+        assert _error_reason(response.json()) == "pipeline_candidate_requires_approval"
+
+        row = await _product_row(db_session, product["id"])
+        set_tenant_id(row.tenant_id)
+        try:
+            reloaded = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=candidate.id
+            )
+        finally:
+            clear_context()
+        assert reloaded is not None
+        assert reloaded.active is False
+
+    async def test_activate_version_rejects_corrupt_pipeline_metadata(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await import_a_product(client, monkeypatch)
+        await client.post(f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers)
+
+        row = await _product_row(db_session, product["id"])
+        set_tenant_id(row.tenant_id)
+        try:
+            versions = ProductVersionRepository(db_session)
+            corrupt = await versions.create(
+                product_id=row.id,
+                version_number=await versions.next_version_number(row.id),
+                source=ProductVersionSource.AI_GENERATED,
+                content={"title": "x", "description": "y", "pipelineCandidateVersion": True},
+                active=False,
+                ai_provider="stub",
+                prompt_execution_id=None,
+                created_by_user_id=None,
+            )
+            await db_session.flush()
+        finally:
+            clear_context()
+
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/versions/{corrupt.id}/activate",
+            headers=headers,
+        )
+        assert response.status_code == 422, response.text
+        assert _error_reason(response.json()) == "not_a_pipeline_candidate"
+        assert corrupt.active is False
