@@ -11,7 +11,9 @@ Baseline this plan was written against: `develop`
 implementation merge `e1558d5c`, closeout PR #14 merge `8d47763`;
 post-merge CI 35400737556, 10/10).
 
-**Status: PLANNING / AWAITING REVIEW. Not implemented.**
+A first independent review of `7ff1ae5` returned **0 BLOCKER / 2 HIGH /
+6 MEDIUM**. This revision closes those findings. **It is still PLANNING /
+AWAITING REVIEW** until a further independent review. Not implemented.
 
 ---
 
@@ -25,7 +27,7 @@ Give DropPilot a **product-scoped image-analysis capability** that:
 3. asks the configured `AIProvider.analyse_image` for a **caption and
    alt-text proposal**, behind the existing provider boundary;
 4. persists the evidence on the image row without overwriting merchant
-   data.
+   data and without changing the public API schema.
 
 Stage 6 is a service Stage 7 can call. It is not the pipeline, not an
 endpoint family, and not AI Studio.
@@ -39,6 +41,8 @@ Stage 6 does **not**:
 - implement Stage 7's pipeline (analyse → generate → score → preview →
   approve → publish);
 - add a public HTTP endpoint whose purpose is "run image analysis";
+- add `analysis` (or any new field) to `ProductImageRead` / any response
+  schema — that is Stage 8;
 - add frontend / AI Studio UI (Stage 10);
 - add a Celery task (Stage 9);
 - wire `quality_scorer` or change Stage 4/5 generation and scoring;
@@ -52,6 +56,7 @@ Stage 6 does **not**:
 - claim generic watermark detection;
 - implement a real vision provider (`OpenAIProvider` etc. stay
   unconfigured);
+- change GitHub Actions merely to pin a Python lockfile;
 - modify `main` or deploy.
 
 ---
@@ -74,41 +79,55 @@ Verified against the baseline SHA, not assumed.
 | Captions have no persistence location | No column, no JSONB key, no version field |
 | No deterministic image service | Grep: no blur/watermark/image-hash service in `app/` |
 | No safe image downloader | `_validate_image_url` only checks `http`/`https` + netloc + length 1024. It does **not** fetch, and does **not** block localhost/private IPs. eBay's SSRF guard is UUID-to-path construction for public keys — a different problem, not reusable as an image fetcher |
-| `_is_internal_address` in `config.py` | IP-*literal* only; hostnames that resolve privately are explicitly out of its scope |
+| `_is_internal_address` in `config.py` | IP-*literal* only; hostnames that resolve privately are explicitly out of its scope. **Not reused.** Stage 6 uses `ip_address(...).is_global` after DNS (see §6) |
 | Images are not versioned | `ProductVersion.content` holds title/description/SEO/quality. Images live on `product_images` and refresh independently |
 | Image-processing libraries | `pyproject.toml`: **no Pillow, OpenCV, imagehash, numpy, scikit-image, OCR**. `httpx>=0.28.0` is present. Stdlib cannot decode JPEG/PNG safely |
+| Backend CI install | `.github/workflows/ci.yml` runs `pip install -e ".[dev]"` (and e2e `pip install -e .`). **No Python lockfile is installed in CI.** An open version range is therefore not reproducible |
 | Latest migration | `0032` |
 
 ---
 
 ## 4. Architecture
 
+Three phases. Duplicate grouping cannot run inside the per-image fetch
+loop: an earlier image would not yet know a later sibling's hash.
+
 ```
-ImageAnalysisService.analyse_product_images(product_id)
-  → ProductImageRepository.list_for_product          tenant-scoped
-  → for each live image (independent):
-      ImageFetcher.fetch(url)                        SSRF-safe bytes
-      image_checks.blur(pixels)                      pure + Pillow decode
-      image_checks.duplicates(sha256, siblings)      within this product
-      PromptService.execute_image_analysis(...)      render + analyse_image + PromptExecution
-      ProductImage.analysis = <pinned JSONB>         proposal, not alt_text
+ImageAnalysisService.analyse_product_images(product_id, *, executed_by_user_id=None)
+
+PHASE A — acquisition (per live image, independent expected failures)
+  ImageFetcher.fetch(url)                 SSRF-safe bytes; no second DNS
+  decode_image(bytes)                     JPEG/PNG; pixel cap BEFORE load
+  blur_score(working 256×256 luma)
+  retain interim {image, raw_bytes, sha256, blur, decode meta} OR failure
+
+PHASE B — duplicate grouping (only Phase-A successes, this invocation)
+  group by contentSha256
+  duplicateOfImageIds = other ids in the same group, sorted lexicographically
+
+PHASE C — provider + one persistence flush
+  successes: PromptService.execute_image_analysis(...) then JSONB
+  fetch/decode failures: JSONB failure shape; no provider call
+  assign every ProductImage.analysis in memory
+  one session flush
 ```
 
 Layering:
 
 ```
-api (unchanged in Stage 6)
+api (unchanged in Stage 6 — no schema fields added)
   → services/image_analysis.py     (new; no fastapi)
       → services/prompt.py         (new method only)
       → ai/factory.get_ai_provider
       → ai/image_fetch.py          (new)
+      → ai/image_decode.py         (new; Pillow; pixel cap)
       → ai/image_checks.py         (new; no provider import)
       → repositories/product.ProductImageRepository
 ```
 
 `image_checks` imports nothing from `app.ai.provider` / `app.services.prompt`.
-The fetcher imports nothing from the scorer or the prompt layer.
-`ImageAnalysisService` is the only module that composes the three.
+The fetcher imports nothing from decode/checks/prompt.
+`ImageAnalysisService` is the only module that composes them.
 
 `IMAGE_ANALYSIS_VERSION = 1`.
 
@@ -117,8 +136,6 @@ The fetcher imports nothing from the scorer or the prompt layer.
 ## 5. Service boundaries
 
 ### 5.1 Public Stage 6 API
-
-One public function on `ImageAnalysisService`:
 
 ```python
 async def analyse_product_images(
@@ -130,18 +147,19 @@ async def analyse_product_images(
 ```
 
 - Loads the product via the existing tenant-scoped product repository
-  (`get_by_id_or_raise` → 404 across tenants, same as everywhere else).
-- Analyses every **live** `ProductImage` for that product (`deleted_at IS NULL`
-  via `_base_query()`).
-- Returns a frozen `ImageAnalysisReport` (product_id, list of per-image
-  results in `position` order).
-- Persists `ProductImage.analysis` for every image it attempted.
-- Forwards `executed_by_user_id` into `PromptExecution` (None is allowed;
-  Stage 8 will pass the actor when an endpoint exists).
+  (`get_by_id_or_raise` → missing / cross-tenant `NotFoundError`).
+- Analyses every **live** `ProductImage` (`deleted_at IS NULL` via
+  `_base_query()`), in `position` order for the returned report.
+- Runs Phase A → B → C as in §4.
+- Persists `ProductImage.analysis` for every live image (success or
+  expected failure) in **one flush** at the end of Phase C.
+- Forwards `executed_by_user_id` into `PromptExecution` (None is allowed).
+- Returns a frozen `ImageAnalysisReport`. Callers in-process (tests,
+  later Stage 7) read the report and/or the ORM column. HTTP clients do
+  not see `analysis` in Stage 6.
 
-Stage 7 is expected to call exactly this method. Stage 6 does not call
-`ProductOptimizationService` and does not add an `analyse` step inside
-`optimize_product`.
+Stage 6 does not call `ProductOptimizationService` and does not add an
+`analyse` step inside `optimize_product`.
 
 ### 5.2 PromptService extension
 
@@ -165,24 +183,27 @@ Behaviour:
 4. `result = await provider.analyse_image(ImageAnalysisRequest(image_url=variables["image_url"], instructions=rendered))`.
 5. Write `PromptExecution` as today, except:
    - `response_text` is the exact JSON in §11;
-   - `input_tokens` / `output_tokens` are `None` (`ImageAnalysisResult` has none);
-   - `is_synthetic` / `provider` / `model` copied from the result, never from config.
+   - `input_tokens` / `output_tokens` are `None`;
+   - `is_synthetic` / `provider` / `model` copied from the result.
 
 On `AIError`: write `FAILED` the same way `test_render` does, return
-`(rendered, None, execution)`.
+`(rendered, None, execution)`. That is an **expected** domain failure.
 
-`test_render` remains byte-identical in behaviour for the three Stage 4
-prompts. A regression test calls `test_render("image_analyzer", ...,
-execute=True)` and asserts it still goes through `complete()` — that path
-is **not** Stage 6's path, and Stage 6 must not start using it.
+On anything that is not `AIError` and not a missing-variable render error:
+**propagate**. Do not write a `PromptExecution` for `TypeError`,
+`AssertionError`, `sqlalchemy.exc.SQLAlchemyError`, etc.
+
+`test_render` remains byte-identical for the three Stage 4 prompts. A
+regression test calls `test_render("image_analyzer", ..., execute=True)`
+and asserts it still goes through `complete()`.
 
 ### 5.3 What Stage 6 does not import
 
 - `StubProvider` (factory only).
 - `app.services.seo_score`.
-- `app.services.optimization_quality` (Stage 5 stays unwired from this
-  stage, and this stage stays unwired from scoring).
+- `app.services.optimization_quality`.
 - `fastapi`.
+- `app.schemas.product` (the service does not mutate response models).
 
 ---
 
@@ -191,69 +212,219 @@ is **not** Stage 6's path, and Stage 6 must not start using it.
 There is **no** existing safe downloader to reuse. Stage 6 adds
 `app/ai/image_fetch.py`.
 
-`ProductService._validate_image_url` remains the store-time check. Fetching
-is stricter: a merchant-added `http://127.0.0.1/...` URL that passed
-store-time validation must still be refused at fetch time.
+`ProductService._validate_image_url` remains the store-time check.
+Fetching is stricter.
 
-### 6.1 Policy (every hop, including redirects)
+### 6.1 Closed allow-policy for addresses
+
+Reject-lists of "private / loopback / link-local / reserved / multicast"
+are **not** the contract. Python 3.13 treats CGNAT `100.64.0.0/10` as
+`is_private == False` and `is_global == False`. A private-only reject
+list would allow it.
+
+After parsing an IP literal **or** resolving DNS:
+
+1. Normalise every address with `ipaddress.ip_address(...)`.
+2. Reject IPv6 zone / scoped identifiers (`addr.scope_id` not empty, or
+   `%` in the hostname) → `ImageFetchZoneId`.
+3. If the address is IPv4-mapped IPv6 (`::ffff:x.x.x.x`), replace it
+   with `addr.ipv4_mapped` and judge **that** IPv4 address.
+4. An address is connectable **only** when `address.is_global is True`.
+5. If **any** resolved A/AAAA is not connectable, reject the **host**
+   → `ImageFetchNotGlobalAddress` (DNS rebinding / mixed records).
+6. Only if every resolved address is global: connect to the **first**
+   address in resolver order. No fallback to later records.
+
+Verified on CPython 3.13 (this machine, 2026-09-18):
+
+| Address | `is_global` | Stage 6 |
+|---|---|---|
+| `100.64.0.1` | False (and `is_private` False) | reject |
+| `127.0.0.1` | False | reject |
+| `10.0.0.1` | False | reject |
+| `169.254.169.254` | False | reject |
+| `192.168.1.1` | False | reject |
+| `192.0.2.1` (TEST-NET-1) | False | reject |
+| `::1` | False | reject |
+| `fc00::1` | False | reject |
+| `fe80::1` | False | reject |
+| `::ffff:10.0.0.1` | False (after unwrap: `10.0.0.1`) | reject |
+| `8.8.8.8` | True | allow (policy fixture only; fake transport; no internet) |
+| `::ffff:8.8.8.8` | True (after unwrap) | allow as IPv4 `8.8.8.8` |
+
+### 6.2 Per-hop procedure (logical URL ≠ connection URL)
+
+`httpx` must never be asked to resolve the original hostname.
+
+For each hop, with `logical_url` starting as the stored `https://...`
+URL:
+
+1. Parse `logical_url`. Apply scheme / userinfo / port / hostname
+   blocklist / zone rules in §6.3.
+2. If hostname is an IP literal: skip DNS; wrap it as the sole candidate
+   list. Else resolve **once** through the **injected** resolver
+   (`getaddrinfo`-shaped). Do not call a second resolver. Failure →
+   `ImageFetchDnsFailure`.
+3. Validate **all** candidates with §6.1. Any failure rejects the hop.
+4. `chosen_ip` = first validated address (resolver order).
+5. Connection URL:
+   - IPv4: `https://<chosen_ip><path><?query>`
+   - IPv6: `https://[<chosen_ip>]<path><?query>`
+   - path and query copied from `logical_url`; fragment dropped
+6. Issue **one** GET with a client constructed as:
+
+```python
+client = httpx.AsyncClient(
+    timeout=httpx.Timeout(10.0, connect=3.0),
+    follow_redirects=False,
+    trust_env=False,
+    verify=True,  # never False
+)
+response = await client.request(
+    "GET",
+    connection_url,
+    headers={"Host": logical_hostname},  # original hostname, not the IP
+    extensions={"sni_hostname": logical_hostname},
+)
+```
+
+7. Certificate verification stays enabled. SNI is the logical hostname
+   so the cert still matches the name the merchant stored.
+8. The original hostname is **never** the network-connection target of
+   the httpx request (`request.url.host` in tests is the IP literal).
+
+Connect / read timeout → `ImageFetchTimeout`. No retry on another A
+record.
+
+### 6.3 Other hop rules
 
 | Rule | Pin |
 |---|---|
 | Scheme | `https` only. `http`, `file`, `data`, `gopher`, `ftp`, empty → `ImageFetchDisallowedScheme` |
 | Userinfo | Reject URLs with `user:pass@` |
 | Port | Default 443, or 443 explicitly. Any other port → reject |
-| Hostname | `urlparse(...).hostname`; IDNA-encode. `None` → reject. IP literals skip DNS and are judged as addresses |
+| Hostname | `urlparse(...).hostname`; IDNA-encode. `None` → reject |
 | Hostname blocklist (case-insensitive) | `localhost`, `localhost.`, `metadata.google.internal`, `metadata.internal` |
-| DNS | Resolve with `getaddrinfo`. Failure → `ImageFetchDnsFailure` |
-| Resolved addresses | Reject if **any** A/AAAA is loopback, link-local, private (RFC1918 / ULA), unspecified, multicast, reserved, or IPv4-mapped IPv6 wrapping those. Includes `169.254.0.0/16` (cloud metadata / link-local) |
-| Connect | Connect to a resolved **public** address; TLS SNI and HTTP `Host` are the original hostname. Certificate verification stays **on**; never `verify=False`. Do not ask httpx to resolve the name a second time |
-| Redirects | `follow_redirects=False`. Honour `Location` up to **3** hops. Re-run the full policy on each absolute URL (relative `Location` resolved against the current URL). Redirect-to-http or redirect-to-private is rejected with the matching code |
-| Timeouts | connect 3 s, read 10 s (`httpx.Timeout(10.0, connect=3.0)`). Timeout → `ImageFetchTimeout` |
+| Redirects | `follow_redirects=False`. Honour `Location` up to **3** hops. Resolve a relative `Location` against the **logical** URL, never the IP connection URL. The next hop is a new logical URL that re-runs §6.2 from step 1 (new DNS if the host changed) |
+| Fourth redirect | `ImageFetchTooManyRedirects` |
+| Timeouts | connect 3 s, read 10 s |
 | Size | Stream; abort if more than **5_242_880 bytes** (5 MiB) → `ImageFetchTooLarge` |
-| Content-Type | Required. Media type (before `;`) must be one of `image/jpeg`, `image/jpg`, `image/png` (case-insensitive). GIF/WEBP/BMP/TIFF are **out of Stage 6** — `ImageFetchBadContentType` |
-| Magic bytes | After download, sniff: JPEG `FF D8 FF` or PNG `\x89PNG\r\n\x1a\n`. Mismatch or unknown → `ImageFetchBadMagic` |
-| Decode | Pillow; see §7. `Image.MAX_IMAGE_PIXELS = 16_777_216` (4096×4096). Exceeding → `ImageFetchPixelLimit`. Corrupt → `ImageFetchDecodeFailed` |
+| HTTP status | Only `200` is success. Anything else → `ImageFetchHttpError` |
+| Content-Type | Required. Media type (before `;`) must be `image/jpeg`, `image/jpg`, or `image/png` (case-insensitive). GIF/WEBP/BMP/TIFF → `ImageFetchBadContentType` |
+| Magic bytes | JPEG `FF D8 FF` or PNG `\x89PNG\r\n\x1a\n`. Mismatch → `ImageFetchBadMagic` |
 
-No test hits the public internet. Tests inject a resolver and an httpx
-transport.
+No test hits the public internet. Tests inject the resolver **and** an
+httpx mock transport that records `request.url`, `Host`, `extensions`,
+and the client’s `trust_env` / `follow_redirects`.
 
-### 6.2 Why not `httpx.get(image_url)`
+### 6.4 Why not `httpx.get(image_url)`
 
-httpx will follow DNS to whatever the name resolves to, including
-loopback and RFC1918, and a `Location` header can bounce a public URL
-onto `http://169.254.169.254/`. That is SSRF. Stage 6 will not ship it.
+httpx would resolve the name itself (second DNS, including to loopback /
+CGNAT), honour `trust_env` proxy settings, and follow `Location` onto
+`http://169.254.169.254/`. That is SSRF. Stage 6 will not ship it.
 
 ---
 
-## 7. Blur algorithm
+## 7. Decode and blur
 
-**Metric:** variance of Laplacian on a normalized 256×256 grayscale image.
+### 7.0 Decode (before any Laplacian)
 
-**Why this, and why not OpenCV:** `pyproject.toml` has no OpenCV/numpy.
-Pillow can decode; a 3×3 convolution over 254×254 integers is small enough
-to run in pure Python and be bit-identical across platforms.
+Do **not** use `Image.MAX_IMAGE_PIXELS = 16_777_216` as the sole control.
+Pillow's default cap is larger than 4096×4096, and a warning can pass
+silently.
 
-### 7.1 Preprocess
+```
+import warnings
+from io import BytesIO
+from PIL import Image
 
-1. Decode with Pillow (`Image.open(BytesIO(body)).load()`). Only JPEG and
-   PNG are accepted by §6; any other Pillow format reaching here is
-   `ImageFetchDecodeFailed`.
-2. If mode is not `RGB`, convert to `RGB` (this drops alpha; palette and
-   `L` go through RGB then back to `L` so the path is one path).
-3. Convert to `L` (ITU-R 601 luma, Pillow's default).
-4. Let `w, h = image.size`. If `w == 0` or `h == 0` → decode failed.
-5. Fit to 256×256 **without upscaling** (upscaling a thumbnail invents
-   blur the file did not contain):
-   - if `min(w, h) > 256`, scale **down** with
-     `Image.Resampling.BILINEAR` so `min(w, h) == 256`, then center-crop
-     to 256×256 (`left = (w - 256) // 2`, `top = (h - 256) // 2`; leftover
-     odd pixel comes off the right / bottom);
-   - if `w == 256` and `h == 256`, use as-is;
-   - if `w < 256` or `h < 256`, do **not** scale up: paste onto a 256×256
-     canvas filled with luma `128`, centered (`left = (256 - w) // 2`,
-     `top = (256 - h) // 2`).
-6. Committed fixtures in §18 are **already** 256×256 PNG so the happy-path
-   tests never exercise resample or letterbox.
+def decode_image(body: bytes) -> Image.Image:
+    # Convert DecompressionBombWarning into an error for this call only.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            image = Image.open(BytesIO(body))
+        except Image.DecompressionBombError as exc:
+            raise ImageFetchPixelLimit from exc
+        except Image.DecompressionBombWarning as exc:
+            raise ImageFetchPixelLimit from exc
+    width, height = image.size
+    if width <= 0 or height <= 0 or width * height > 16_777_216:
+        raise ImageFetchPixelLimit
+    try:
+        image.load()
+    except Image.DecompressionBombError as exc:
+        raise ImageFetchPixelLimit from exc
+    except Exception as exc:
+        raise ImageFetchDecodeFailed from exc
+    if image.format not in {"JPEG", "PNG"}:
+        raise ImageFetchDecodeFailed
+    return image
+```
+
+`load()` happens **only after** the `width * height` check. Tests for
+4096×4096 / 4097×4096 / forged huge IHDR **must not allocate** a giant
+decoded buffer: they stub/fake `Image.size` (or feed a PNG IHDR-only
+header that Pillow rejects at open). `4096 * 4096 == 16_777_216` is
+permitted by the **policy**; the test asserts the comparison, not a
+16-million-pixel array.
+
+Pillow format names are `"JPEG"` and `"PNG"`; persisted `decodedFormat`
+is `jpeg` / `png`.
+
+### 7.1 Working-canvas normalisation
+
+Metric input is always a 256×256 luma image. **Never upscale.** Every
+positive `(w, h)` has exactly one path. No behaviour may depend on
+Pillow clipping a paste that does not fit.
+
+Integer scale uses truncating division (Python `//`).
+
+**Step 1 — RGB then L.** Convert to `RGB` then `L` (ITU-R 601 luma,
+Pillow default). `w, h = image.size` after convert (same as source for
+JPEG/PNG).
+
+**Step 2 — downscale to fit inside 256×256 if needed, preserving aspect
+with integer arithmetic:**
+
+```
+if w > 256 or h > 256:
+    scale_den = max(w, h)
+    new_w = max(1, (w * 256) // scale_den)
+    new_h = max(1, (h * 256) // scale_den)
+    image = image.resize((new_w, new_h), Image.Resampling.BILINEAR)
+else:
+    new_w, new_h = w, h
+```
+
+**Step 3 — pad, never upscale, onto a 256×256 canvas of luma 128:**
+
+```
+canvas = Image.new("L", (256, 256), 128)
+left = (256 - new_w) // 2
+top  = (256 - new_h) // 2
+canvas.paste(image, (left, top))
+# leftover odd pixel is on the right / bottom by integer division
+```
+
+If `new_w == 256` and `new_h == 256`, paste at `(0, 0)` — identity.
+
+Pinned geometry (source → after step 2 → paste origin):
+
+| Source `w×h` | After step 2 | `left, top` |
+|---|---|---|
+| 256×256 | 256×256 (skip step 2) | 0, 0 |
+| 512×512 | 256×256 | 0, 0 |
+| 500×200 | 256×102 | 0, 77 |
+| 200×500 | 102×256 | 77, 0 |
+| 128×128 | 128×128 (skip step 2) | 64, 64 |
+| 128×512 | 64×256 | 96, 0 |
+| 512×128 | 256×64 | 0, 96 |
+| 301×500 | 154×256 | 51, 0 |
+| 500×301 | 256×154 | 0, 51 |
+
+Tests in §18.2 assert these exact `(new_w, new_h, left, top)` values and
+that pad pixels are 128. They do not need blur scores.
 
 ### 7.2 Laplacian
 
@@ -271,12 +442,12 @@ Valid region: `x in 1..254`, `y in 1..254` (0-based), `n = 254 * 254 = 64516`.
 L(x, y) = p(x,y-1) + p(x,y+1) + p(x-1,y) + p(x+1,y) - 4 * p(x,y)
 ```
 
-Pixels are 0–255 integers. `L` is an integer.
+Pixels 0–255. `L` is an integer.
 
 ### 7.3 Score
 
-Population variance, then integer round-half-up (same rule as Stage 5,
-never Python `round()`):
+Population variance, integer round-half-up (same rule as Stage 5, never
+Python `round()`):
 
 ```
 sum_l  = Σ L
@@ -288,28 +459,46 @@ blurScore   = (numerator + denominator // 2) // denominator
 
 `isBlurry = blurScore < 100`.
 
-`threshold` is stored as `100` so a later rubric version can change it
-without rewriting history.
+`threshold` is stored as `100`.
 
-### 7.4 Why 100
+### 7.4 Threshold evidence
 
-Uniform 8-bit gray has `blurScore = 0`. A 256×256 1-pixel checkerboard
-(alternating 0/255) has `|L| = 1020` on every interior pixel, `sum_l = 0`,
-`blurScore = 1020² = 1_040_400`. The gap between "no structure" and "any
-hard edge" is three to six orders of magnitude. 100 sits above integer
-noise on a flat field and far below any edged fixture. **It is not a
-marketplace sharpness grade.** Recalibrating against real product photos
-is a new `IMAGE_ANALYSIS_VERSION`, not a silent tweak.
-
-### 7.5 Exact fixture outcomes
+Computed locally with the formulas above (CPython, 2026-09-18), not
+guessed:
 
 | Fixture | Construction | `blurScore` | `isBlurry` |
 |---|---|---|---|
 | `uniform_128.png` | 256×256, every pixel 128 | `0` | `true` |
-| `checkerboard_1px.png` | 256×256, `p(x,y) = 255 if (x+y)%2 else 0` | `1040400` | `false` |
+| `checkerboard_1px.png` | `p(x,y) = 255 if (x+y)%2 else 0` | `1040400` | `false` |
+| `checkerboard_16px.png` | 16×16-cell checkerboard: `255 if ((x//16)+(y//16))%2 else 0` | `17174` | `false` |
+| `checkerboard_16px_box15.png` | the 16px checkerboard, then the box filter in §7.5 | `37` | `true` |
 
-The comparison itself is tested at `blurScore ∈ {0, 99, 100, 1040400}`
-without PNG: `99 → true`, `100 → false`.
+`37 < 100 < 17174`. Threshold 100 **does** separate the paired
+structured fixture from its documented blur. It is still not a
+marketplace grade; it **is** a demonstrated classifier on this pair.
+
+The comparison itself is also tested at `blurScore ∈ {0, 37, 99, 100, 17174, 1040400}` without PNG: `99 → true`, `100 → false`.
+
+### 7.5 Box-filter construction (paired fixture)
+
+Radius `r = 7` → window 15×15, `area = 225`. Replicate (clamp) edges.
+Integer mean:
+
+```
+for y in 0..255:
+  for x in 0..255:
+    s = 0
+    for dy in -7..7:
+      for dx in -7..7:
+        yy = min(max(y+dy, 0), 255)
+        xx = min(max(x+dx, 0), 255)
+        s += src[yy][xx]
+    dst[y][x] = s // 225
+```
+
+Tests may build both arrays in process (no network). If a PNG is
+committed, it must be generated from this loop, not from an unspecified
+Gaussian.
 
 Unsupported/malformed inputs never produce a blur score; they take the
 fetch/decode failure shape in §14.
@@ -322,36 +511,34 @@ Three different facts. Stage 6 names them separately.
 
 | Kind | Who owns it | Stage 6? |
 |---|---|---|
-| **A. Duplicate URL** | `uq_images_product_url` already rejects it | Not re-implemented. Not reported as a "finding" |
-| **B. Byte-identical body, different URLs** | Stage 6 | **Yes.** SHA-256 of the **fetched bytes** (not decoded pixels) |
-| **C. Visually near-identical** | Perceptual hash | **No.** No `imagehash`, no pHash, no Hamming-distance threshold. Deferred until a caller needs it and can pin fixtures |
+| **A. Duplicate URL** | `uq_images_product_url` already rejects it | Not re-implemented |
+| **B. Byte-identical body, different URLs** | Stage 6 | **Yes.** SHA-256 of the **fetched bytes** |
+| **C. Visually near-identical** | Perceptual hash | **No** |
 
 ### 8.1 Scope
 
-**Within one product, one tenant, live images only.**
+**Within one product, one tenant, live images that succeeded Phase A in
+this invocation.** Not tenant-wide, not catalogue-wide, not stale stored
+hashes.
 
-Not tenant-wide, not catalogue-wide. Cross-product matching would need an
-unscoped or extra-scoped query and is a different feature.
+### 8.2 Two-phase contract
 
-### 8.2 Contract
+Phase A stores `contentSha256 = sha256(raw_bytes).hexdigest()` (64
+lowercase hex) on each success.
 
-For each successfully fetched image:
+Phase B, after **all** images have finished Phase A:
 
 ```
-contentSha256 = sha256(raw_bytes).hexdigest()   # 64 lowercase hex
-duplicateOfImageIds = sorted(
-    sibling.id for sibling in live_images
-    if sibling.id != self.id
-    and sibling was also fetched this run
-    and sibling.contentSha256 == self.contentSha256
-)
+groups = {sha: [interim, ...] for successes sharing sha}
+for interim in successes:
+    others = [peer.image.id for peer in groups[interim.contentSha256]
+              if peer.image.id != interim.image.id]
+    interim.duplicateOfImageIds = sorted(str(uuid) for uuid in others)
 ```
 
-IDs as UUID strings, sorted lexicographically for stability.
-
-Two URLs serving the same JPEG bytes → each lists the other.
-Re-encoded same picture (different bytes) → not a duplicate (kind C,
-out of scope).
+Two successes with the same bytes → **symmetric** lists (each lists the
+other). A fetch failure is not in any group. Three identical bodies →
+each lists the other two, sorted.
 
 ---
 
@@ -359,15 +546,8 @@ out of scope).
 
 **Option B — do not claim it.**
 
-`PHASE_9_PLAN.md` §3 listed "watermark detection" as an example of
-deterministic image processing. A general-purpose watermark detector is
-not implementable with the libraries we have, is not definable as an
-exact integer rule over committed fixtures, and must not be faked with a
-model call (that would violate the Stage 6 split) or with a function that
-always returns `false` (a silent false-negative presented as a check).
-
-Stage 6 records an explicit not-applicable block, the same honesty
-pattern as Stage 5 D4 when the merchant gave no keywords:
+`PHASE_9_PLAN.md` §3 listed "watermark detection" as an example. A
+general-purpose detector is not implementable here and must not be faked.
 
 ```json
 "watermark": {
@@ -376,14 +556,14 @@ pattern as Stage 5 D4 when the merchant gave no keywords:
 }
 ```
 
-A later stage that pins a **narrow** heuristic (for example a specific
-marketplace overlay with committed positive/negative PNGs) is a new
-`IMAGE_ANALYSIS_VERSION` and its own plan. Until then, UI copy must not
-say "no watermark found".
+UI copy must not say "no watermark found". A later
+`IMAGE_ANALYSIS_VERSION` may add a narrow heuristic with fixtures.
 
 ---
 
 ## 10. Caption / alt-text provider flow
+
+Phase C, successes only:
 
 ```
 variables = {"image_url": image.url, "product_title": product.title}
@@ -394,16 +574,13 @@ rendered, result, execution = await prompts.execute_image_analysis(
 )
 ```
 
-- `image_url` is the **stored** URL, not the resolved IP URL.
-- `product_title` is `Product.title` (merchant listing title), never
-  `supplier_title`. The seeded template already names it `product_title`.
-- Supplier description is **not** a template variable and must not be
-  added (prompt-injection surface; the seeded template does not ask for it).
-- `StubProvider` ignores `instructions` and hashes the URL. That is
-  existing Stage 1 behaviour; Stage 6 does not change it. Recorded
-  `rendered_prompt` still contains the rendered template so an auditor
-  can see what *would* have been sent to a real provider.
-- `is_synthetic` is copied from the result. Stub output is never labelled
+- `image_url` is the **stored** URL, not the connection IP URL.
+- `product_title` is `Product.title`, never `supplier_title`.
+- Supplier description is **not** a template variable.
+- `StubProvider` ignores `instructions` and hashes the URL (Stage 1).
+  Recorded `rendered_prompt` is still the audit of what a real provider
+  would have been asked.
+- `is_synthetic` copied from the result. Stub output is never labelled
   as real visual understanding.
 
 No live vision-provider verification exists. None is claimed.
@@ -415,23 +592,16 @@ No live vision-provider verification exists. None is claimed.
 `response_text` for a successful image analysis is exactly:
 
 ```json
-{"caption":"<caption>","altText":"<alt_text>"}
+{"altText":"<alt_text>","caption":"<caption>"}
 ```
 
-- UTF-8, `ensure_ascii=False` is **not** used; `json.dumps(...,
-  ensure_ascii=True, separators=(",", ":"), sort_keys=True)` so the byte
-  string is stable (`altText` before `caption` alphabetically).
-- Keys `altText`, `caption` — API camelCase at the JSON boundary, matching
-  Stage 5's persisted keys.
+`json.dumps(..., ensure_ascii=True, separators=(",", ":"), sort_keys=True)`.
 
-`input_variables` stores the dict passed in (`image_url`, `product_title`).
-
-Failed provider call: `status=failed`, `response_text=None`,
-`error_code=type(exc).__name__`, same as `test_render`.
+Failed `AIError`: `status=failed`, `response_text=None`,
+`error_code=type(exc).__name__`.
 
 Stage 6 never writes a `PromptExecution` for `product_title_generator`,
 `product_description_generator`, `seo_optimizer`, or `quality_scorer`.
-Optimize remains three Stage 4 names.
 
 ---
 
@@ -439,14 +609,11 @@ Optimize remains three Stage 4 names.
 
 **Migration required: `0033`.**
 
-`ProductImage` has no JSONB column. `ProductVersion.content` is the wrong
-place: images are not versioned, they refresh, and Stage 5's quality keys
-must not be overloaded. Ephemeral-only results would leave Stage 7 with
-nothing to show and no fingerprint to invalidate.
-
 Add nullable JSONB `analysis` on `product_images`, no back-fill, no
-server default (legacy rows read as `null`). Comment on the model lists
-the keys.
+server default. Comment on the **model** lists the keys.
+
+**Do not** add `analysis` to `ProductImageRead`. Stage 8 owns response
+schema. Stage 6 tests read `ProductImage.analysis` from the ORM.
 
 ### 12.1 Success shape (`status: "succeeded"`)
 
@@ -464,7 +631,7 @@ the keys.
   "checks": {
     "blur": {
       "applicable": true,
-      "blurScore": 1040400,
+      "blurScore": 17174,
       "isBlurry": false,
       "threshold": 100,
       "workingSize": 256
@@ -490,7 +657,7 @@ the keys.
 ```
 
 `decodedWidth` / `decodedHeight` / `decodedFormat` are the **source**
-image before the 256 working crop (`decodedFormat` one of `jpeg`, `png`).
+image before the working canvas.
 
 ### 12.2 Fetch/decode failure shape
 
@@ -504,7 +671,7 @@ image before the 256 working crop (`decodedFormat` one of `jpeg`, `png`).
   "decodedHeight": null,
   "decodedFormat": null,
   "status": "fetchFailed",
-  "errorCode": "ImageFetchPrivateAddress",
+  "errorCode": "ImageFetchNotGlobalAddress",
   "checks": null,
   "captionProposal": null,
   "altTextProposal": null,
@@ -517,9 +684,8 @@ image before the 256 working crop (`decodedFormat` one of `jpeg`, `png`).
 ```
 
 `status` is one of `succeeded`, `fetchFailed`, `decodeFailed`,
-`checksOnly`. `checksOnly` means bytes and checks succeeded but the
-provider call failed; `checks` is populated; proposals are null;
-`errorCode` is the provider error.
+`checksOnly`. `checksOnly`: Phase A succeeded, provider raised `AIError`;
+`checks` populated (including final Phase-B duplicates); proposals null.
 
 ### 12.3 What is never written
 
@@ -527,12 +693,8 @@ provider call failed; `checks` is populated; proposals are null;
 - `ProductImage.url`, `position`, `is_supplier`
 - `Product` merchant/supplier/SEO/AI-cache fields
 - `ProductVersion` rows or `content` keys
-- `Product.updated_at` (do not `touch` the product; M2A stays idle)
-
-Optional wire: `ProductImageRead.analysis` as an optional nested model
-(`null` on pre-Stage-6 rows). This is the Stage 5 pattern (optional fields
-on an existing read schema), **not** a new endpoint. Frontend types are
-not updated (M4, Stage 10).
+- `Product.updated_at`
+- `ProductImageRead` / any API schema
 
 ---
 
@@ -542,62 +704,92 @@ not updated (M4, Stage 10).
 |---|---|
 | Supplier drops a URL | Row deleted by `sync_for_product`; analysis goes with it |
 | Supplier keeps the same URL | Row id stable; `alt_text` / `position` untouched by sync; analysis remains until the next `analyse_product_images` |
-| Same URL, different bytes | Next analysis computes a new `contentSha256`. If it differs from the stored one, the previous evidence is replaced wholesale. Callers must treat `contentSha256` as the validity key, not the URL |
+| Same URL, different bytes | Next analysis replaces JSONB; `contentSha256` is the validity key |
 | Merchant adds an image | Analysed like any other live row; never deleted by sync |
-| Position change | Irrelevant to the fingerprint; checks are about bytes/pixels |
-| Image soft-deleted | Not listed; not re-analysed; stale JSONB sits on the soft-deleted row and is not returned by list |
+| Position change | Irrelevant to the fingerprint |
+| Image soft-deleted | Not listed; not re-analysed |
 
-Stage 6 always recomputes (no "skip if hash matches" optimisation). A skip
-cache would be a second, untested path.
+Always recompute. No skip-if-hash-matches path.
 
-There is no `fetchedAt` in the JSON: application clocks are not an
-authority in this codebase; `ProductImage.updated_at` (existing mixin)
-moves when `analysis` is written.
+No `fetchedAt` in the JSON. `ProductImage.updated_at` moves when
+`analysis` is written.
 
 ---
 
 ## 14. Failure semantics
 
-**Per-image independence.** One image's fetch/decode/provider failure
-does not skip the others. The product-level call fails only when the
-product itself cannot be loaded (missing / cross-tenant → `NotFoundError`).
+### 14.1 Expected vs unexpected
 
-| Condition | `status` | `errorCode` | Provider called? | Checks |
+**Closed expected types** (per-image evidence, siblings continue):
+
+- `ImageFetchDisallowedScheme`
+- `ImageFetchInvalidUrl`
+- `ImageFetchNotGlobalAddress`
+- `ImageFetchHostnameBlocked`
+- `ImageFetchZoneId`
+- `ImageFetchDnsFailure`
+- `ImageFetchTimeout`
+- `ImageFetchHttpError`
+- `ImageFetchTooLarge`
+- `ImageFetchBadContentType`
+- `ImageFetchBadMagic`
+- `ImageFetchTooManyRedirects`
+- `ImageFetchPixelLimit`
+- `ImageFetchDecodeFailed`
+- `AIError` (including `AIProviderNotConfiguredError`)
+
+These are raised by the fetcher/decoder or by `get_ai_provider` /
+`analyse_image`. The service catches **only** these types (or a shared
+`ImageFetchError` base plus `AIError`).
+
+**Unexpected** (`IndexError`, `AssertionError`, `TypeError`,
+`RuntimeError`, `MemoryError`, `sqlalchemy.exc.SQLAlchemyError`,
+anything else): **propagate**. No per-image JSONB for that failure, no
+success report, no fake `decodeFailed`. The current unit of work rolls
+back uncommitted Stage 6 writes (Phase C has not flushed yet, or the
+request session rolls back). No savepoints.
+
+The product-level call therefore fails when:
+
+- the product cannot be loaded (`NotFoundError`), **or**
+- an unexpected exception occurs.
+
+It does **not** fail the whole product merely because one image 404s.
+
+### 14.2 Expected mapping
+
+| Condition | `status` | `errorCode` | Provider? | Checks |
 |---|---|---|---|---|
-| Disallowed scheme / private IP / blocked host / bad port | `fetchFailed` | as §6 | no | null |
+| Disallowed scheme / userinfo / port | `fetchFailed` | matching token | no | null |
+| Hostname blocklist | `fetchFailed` | `ImageFetchHostnameBlocked` | no | null |
+| Zone id | `fetchFailed` | `ImageFetchZoneId` | no | null |
+| Any resolved address not `is_global` (incl. CGNAT, loopback, RFC1918, link-local, TEST-NET, mixed DNS) | `fetchFailed` | `ImageFetchNotGlobalAddress` | no | null |
 | DNS failure | `fetchFailed` | `ImageFetchDnsFailure` | no | null |
-| Connect/read timeout | `fetchFailed` | `ImageFetchTimeout` | no | null |
-| HTTP 404 / 500 / anything not 200 | `fetchFailed` | `ImageFetchHttpError` | no | null |
+| Timeout | `fetchFailed` | `ImageFetchTimeout` | no | null |
+| HTTP not 200 | `fetchFailed` | `ImageFetchHttpError` | no | null |
 | Oversize | `fetchFailed` | `ImageFetchTooLarge` | no | null |
 | Bad Content-Type | `fetchFailed` | `ImageFetchBadContentType` | no | null |
 | Bad magic | `fetchFailed` | `ImageFetchBadMagic` | no | null |
+| Too many redirects | `fetchFailed` | `ImageFetchTooManyRedirects` | no | null |
 | Pixel limit / decompression bomb | `decodeFailed` | `ImageFetchPixelLimit` | no | null |
-| Corrupt / unsupported codec after magic | `decodeFailed` | `ImageFetchDecodeFailed` | no | null |
-| Deterministic checker exception | `decodeFailed` | exception type name | no | null |
-| Checks OK, `AIProviderNotConfiguredError` | `checksOnly` | `AIProviderNotConfiguredError` | attempted | populated |
-| Checks OK, other `AIError` | `checksOnly` | exception type name | attempted | populated |
+| Corrupt JPEG/PNG after size check | `decodeFailed` | `ImageFetchDecodeFailed` | no | null |
+| Phase A OK, `AIError` | `checksOnly` | exception type name | attempted | populated, duplicates final |
 | StubProvider | `succeeded` | null | yes | populated; `isSynthetic=true` |
 
-HTTP statuses are not copied into `errorCode`; they may be included in
-`error_message` (PromptExecution) / omitted from the JSONB to keep the
-shape closed. JSONB `errorCode` is the closed token above only.
+Empty image list: report `images: []`, no provider calls, success, no
+flush of analysis.
 
-Empty image list: report with `images: []`, no provider calls, success.
+JSONB `errorCode` is the closed token list above only.
 
 ---
 
 ## 15. Tenancy / auth
 
 - `ProductImageRepository` stays the only image repository.
-  `TenantScopedRepository` injects `tenant_id`. **No third unscoped
-  repository.**
-- `PromptExecutionRepository` stays tenant-scoped; image-analysis
-  executions are tenant rows like Stage 2/4.
-- Cross-tenant `analyse_product_images` → `NotFoundError` → 404 if a
-  future endpoint wraps it. Stage 6 itself raises `NotFoundError`.
-- No viewer-role change. No new router, so no new dependency. When
-  Stage 8 adds an endpoint it must use `RequireAdmin` to match draft
-  media mutations, unless that stage's plan says otherwise.
+- `PromptExecutionRepository` stays tenant-scoped.
+- Cross-tenant `analyse_product_images` → `NotFoundError`.
+- No new router. Stage 8, if it adds an endpoint, uses `RequireAdmin`
+  unless that stage's plan says otherwise.
 
 ---
 
@@ -605,124 +797,141 @@ Empty image list: report with `images: []`, no provider calls, success.
 
 Stage 6 adds **no** route under `/api/v1/`.
 
-Existing draft image routes keep their current meaning (add / reorder /
-patch alt / delete). They do not trigger analysis.
+Stage 6 adds **no** field to `ProductImageRead`, `ProductDetailRead`, or
+`frontend/types/api.ts`.
 
-`ProductImageRead.analysis` is optional and ignored by today's frontend.
-`frontend/types/api.ts` is not updated (M4).
+Existing draft image routes keep their current meaning and do not
+trigger analysis.
+
+In-process tests and Stage 7 read `ProductImage.analysis` from the ORM.
 
 ---
 
 ## 17. Stage 7 boundary
 
-Stage 7 owns orchestration. The intended call is:
-
 ```
 report = await ImageAnalysisService(session).analyse_product_images(product.id)
 ```
 
-before or beside generation, as that plan decides. Stage 6:
-
-- does not call optimize;
-- does not change `ai_status`;
-- does not create versions;
-- does not publish.
+Stage 6 does not call optimize, does not change `ai_status`, does not
+create versions, and does not publish.
 
 ---
 
 ## 18. Exact test matrix
 
-Fixtures live under `backend/tests/fixtures/images/` and are generated
-by a documented snippet in the test module (Pillow, in-process, no
-network). They are either committed PNGs or built in `setup_module` from
-the pixel rules in §7.5 — both are deterministic. **No live URLs.**
+**No live URLs.** Resolver and httpx transport are fakes.
 
-### 18.1 Image fetch security (unit, fake resolver + httpx mock transport)
+### 18.1 Fetch / SSRF
 
-- `https://example.test/a.png` with public resolved IP → bytes returned
+Policy (no sockets):
+
+- `100.64.0.1` → reject (`ImageFetchNotGlobalAddress`) **named CGNAT test**
+- `127.0.0.1`, `10.0.0.1`, `169.254.169.254`, `192.168.1.1` → reject
+- `192.0.2.1` → reject (not global on 3.13)
+- `::1`, `fc00::1`, `fe80::1` → reject
+- `::ffff:10.0.0.1` → reject (mapped)
+- `8.8.8.8` via fake resolver → policy **allow**
+- mixed `8.8.8.8` + `127.0.0.1` → reject host
+
+Hop mechanics (fake transport records the request):
+
+- `https://example.test/a.png` resolving only to `8.8.8.8` →
+  `request.url.host == "8.8.8.8"`, `Host: example.test`,
+  `extensions["sni_hostname"] == "example.test"`, client
+  `trust_env is False`, `follow_redirects is False`
+- original hostname is never `request.url.host`
+- IPv6 chosen address uses bracketed connection URL
 - `http://example.test/a.png` → `ImageFetchDisallowedScheme`
-- `https://127.0.0.1/a.png` (IP literal) → `ImageFetchPrivateAddress`
-- `https://[::1]/a.png` → `ImageFetchPrivateAddress`
-- URL with userinfo → reject
-- port 8443 → reject
-- resolved `127.0.0.1` → `ImageFetchPrivateAddress`
-- resolved `10.0.0.1` → private
-- resolved `192.168.1.1` → private
-- resolved `169.254.169.254` → private / metadata
-- resolved `::1` → private
-- resolved `fc00::1` → private
-- 302 `Location: https://127.0.0.1/secret` → `ImageFetchPrivateAddress`
-- 200 body 5_242_881 bytes → `ImageFetchTooLarge`
-- `Content-Type: text/html` → `ImageFetchBadContentType`
-- `Content-Type: image/png` but body `GIF89a...` → `ImageFetchBadMagic`
-- truncated PNG → `ImageFetchDecodeFailed`
-- PNG claiming 100000×100000 in IHDR → `ImageFetchPixelLimit`
+- `https://localhost/a.png` → hostname blocked
+- `https://127.0.0.1/a.png` → not global
+- `https://[::1]/a.png` → not global
+- userinfo / port 8443 / `%` zone id → reject
+- 302 `Location: https://127.0.0.1/secret` → not global
+- 302 relative `Location: /b.png` resolved against **logical**
+  `https://example.test/a.png` → next logical
+  `https://example.test/b.png`, then a **new** resolve+validate (assert
+  resolver called again for that hop)
+- 200 body 5_242_881 bytes → too large
+- `Content-Type: text/html` → bad type
+- `Content-Type: image/png` + `GIF89a` body → bad magic
 - mocked timeout → `ImageFetchTimeout`
 - DNS exception → `ImageFetchDnsFailure`
 
-### 18.2 Deterministic checks
+### 18.2 Decode + normalisation + blur
 
+- 4096×4096 size (stubbed, **no 16MP allocation**) → pixel policy allow
+- 4097×4096 stubbed size → `ImageFetchPixelLimit`
+- forged huge IHDR (header only) → `ImageFetchPixelLimit`
+- `DecompressionBombWarning` during open mapped to `ImageFetchPixelLimit`
+- truncated JPEG/PNG → `ImageFetchDecodeFailed`
+- normalisation geometry for every row in the §7.1 table
 - `uniform_128.png` → `blurScore=0`, `isBlurry=true`
-- `checkerboard_1px.png` → `blurScore=1040400`, `isBlurry=false`
+- `checkerboard_1px.png` → `1040400`, `false`
+- `checkerboard_16px.png` → `17174`, `false`
+- `checkerboard_16px_box15.png` → `37`, `true`
 - `isBlurry` at 99 / 100
-- two images, identical PNG bytes, different URLs → each
-  `duplicateOfImageIds` lists the other id
-- two images, different bytes → empty duplicate lists
-- watermark block exactly the N/A JSON
-- malformed input never returns a blur score
 
-### 18.3 Model path
+### 18.3 Duplicates (Phase A then B)
 
-- StubProvider caption/alt equal the Stage 1 formula
-  (`[STUB-AI] synthetic caption (image {sha256(url)[:8]}).`)
+- two images, identical PNG bytes, different URLs, **either order** →
+  each `duplicateOfImageIds` lists the other (symmetric)
+- three identical → each lists the other two, sorted
+- two different bytes → empty lists
+- one success + one fetch failure → success has empty duplicate list
+- watermark N/A JSON exact
+
+### 18.4 Model path
+
+- StubProvider caption/alt = Stage 1 formula
 - `is_synthetic is True`
 - `PromptExecution.prompt_name == "image_analyzer"`
-- `prompt_version` is the active row's version
-- `provider == "stub"`, `model == "stub-1"`
-- `response_text` equals the sort_keys JSON in §11
 - `test_render("image_analyzer", execute=True)` still calls `complete`
-  (monkeypatch: `analyse_image` raises if invoked)
-- `execute_image_analysis` never calls `complete` (monkeypatch the other way)
-- `AI_PROVIDER=openai` → `checksOnly` + `AIProviderNotConfiguredError`;
-  no exception swallow that marks synthetic output as real
+- `execute_image_analysis` never calls `complete`
+- `AI_PROVIDER=openai` → `checksOnly` + `AIProviderNotConfiguredError`
+- fetch failure → provider **not** called for that image
+- programming bug in checks (`monkeypatch` raising `TypeError`) →
+  **propagates**; no `decodeFailed` JSONB; no successful report
 
-### 18.4 Tenancy / data
+### 18.5 Tenancy / data
 
-- analysing another tenant's product id → `NotFoundError`
-- after analysis, `ProductImage.alt_text` is unchanged even when it was
-  `None` and even when it was `"merchant wrote this"`
+- other tenant's product id → `NotFoundError`
+- `ProductImage.alt_text` unchanged (`None` or merchant text)
 - `is_supplier`, `url`, `position` unchanged
-- supplier-only vs merchant-added images both analysed; a subsequent
-  `sync_for_product` still does not delete the merchant URL
+- merchant-added URL survives subsequent `sync_for_product`
 - re-analysis with different bytes replaces `contentSha256`
-- Stage 5 quality keys on versions unchanged
-- `Product.updated_at` unchanged (compare before/after)
-- expectedUpdatedAt / 409 path untouched (no product PATCH)
+- Stage 5 quality keys unchanged
+- `Product.updated_at` unchanged
+- `ProductImageRead` schema unchanged (no `analysis` attribute)
 
-### 18.5 Regression
+### 18.6 Regression
 
-- `test_scoring_adds_no_prompt_execution` still: exactly the three Stage 4
-  names; `image_analyzer` absent; `quality_scorer` absent
-- Stage 4 `_build_variables` / `_keywords_for_prompt` pins (`a,b` / `x, x`)
+- optimize execution log: exactly three Stage 4 names; no
+  `image_analyzer` / `quality_scorer`
+- Stage 4 pins `a,b` / `x, x`
 - Stage 5 unit file still 88 passed
-- no new router module
-- no frontend file in the diff
+- no new router; no frontend file; no schema field on `ProductImageRead`
 
 ---
 
 ## 19. Dependencies
 
+Backend CI installs with `pip install -e ".[dev]"` from
+`backend/pyproject.toml` (`.github/workflows/ci.yml`). There is **no**
+Python lockfile in that path. An open range such as `pillow>=11,<12`
+does **not** pin a patch across local, CI, and future rebuilds, and that
+range is also stale: current Pillow is 12.x.
+
 | Package | Decision |
 |---|---|
-| **Pillow** | **Add** at implementation time, not in this planning commit. Needed to decode JPEG/PNG and convert to `L`. Stdlib cannot do this safely. Version strategy: declare `pillow>=11,<12` (Python 3.13 wheels; regenerate
-   the lock in the same implementation commit). Exact patch is whatever the
-   lock resolves. Set `Image.MAX_IMAGE_PIXELS` at import of the checks
-   module. Security: decompression bombs handled by that limit + 5 MiB
-   fetch cap |
-| OpenCV | **Do not add.** Too heavy for a 3×3 Laplacian |
-| imagehash / numpy | **Do not add.** Kind-C duplicates are out of scope |
-| httpx | Already present; used by the fetcher |
-| requests | Do not use (sync, and already a narrower Google-auth transport) |
+| **Pillow** | **Add at implementation time**, not in this planning commit. Pin **one exact patch** in `pyproject.toml`: `pillow==12.3.0`. Verified 2026-09-18 against PyPI/release notes: Pillow 12.3.0 (2026-07-01) requires Python `>=3.10` and publishes CPython 3.13 wheels (standard, not free-threaded). Changing the pin later requires rerunning the whole Stage 6 deterministic fixture suite. Do **not** change CI workflows for this |
+| OpenCV | **Do not add** |
+| imagehash / numpy | **Do not add** |
+| httpx | Already present |
+| requests | Do not use for this fetch |
+
+Do not set a process-global `Image.MAX_IMAGE_PIXELS` as the only pixel
+cap. Decode follows §7.0.
 
 ---
 
@@ -730,77 +939,54 @@ the pixel rules in §7.5 — both are deterministic. **No live URLs.**
 
 **Yes — `0033`**, one nullable JSONB column `product_images.analysis`.
 
-Why not avoid a migration: there is no existing JSONB on `ProductImage`,
-and stuffing this into `ProductVersion.content` would attach image
-evidence to a snapshot that does not own the images.
-
-Why not a new table: a child history table has no second caller. JSONB on
-the image row is one write, one read, one fingerprint. Version history of
-analyses is a later stage if a caller needs it.
-
+Not on `ProductVersion.content`. Not a new table (no second caller).
 `downgrade()` drops the column. No back-fill.
+
+ORM-only in Stage 6. No response-schema migration.
 
 ---
 
 ## 21. Commit sequence
 
-1. `build(ai): add Pillow for Stage 6 image decode` — dependency + lock
-   only.
-2. `feat(ai): add SSRF-safe product image fetcher` — fetch module + §18.1
-   tests.
-3. `feat(ai): add deterministic blur and byte-duplicate checks` — checks
-   + fixtures + §18.2.
-4. `feat(ai): execute image_analyzer through analyse_image` —
-   `PromptService.execute_image_analysis` + unit tests. `test_render`
-   untouched.
-5. `feat(ai): persist image-analysis evidence on product images` —
-   migration `0033`, service, optional `ProductImageRead.analysis`.
-6. `test(ai): prove Stage 6 integration and protected behavior`.
-7. `docs(ai): record Phase 9 Stage 6 completion`.
-
-Do not combine 4 with `test_render` changes.
+1. `build(ai): pin Pillow 12.3.0 for Stage 6 decode` — `pillow==12.3.0`
+   in `pyproject.toml` only (no workflow change).
+2. `feat(ai): add SSRF-safe product image fetcher` — §6 + §18.1.
+3. `feat(ai): decode JPEG/PNG with an explicit pixel cap` — §7.0.
+4. `feat(ai): add deterministic blur and byte-duplicate checks` — §7–8
+   + fixtures.
+5. `feat(ai): execute image_analyzer through analyse_image` —
+   `PromptService.execute_image_analysis`. `test_render` untouched.
+6. `feat(ai): persist image-analysis evidence on product images` —
+   migration `0033` + `ImageAnalysisService` Phase A/B/C. **No**
+   `ProductImageRead` change.
+7. `test(ai): prove Stage 6 integration and protected behavior`.
+8. `docs(ai): record Phase 9 Stage 6 completion`.
 
 ---
 
 ## 22. Quality gates
 
-Same as Stage 5, plus the new tests:
-
-- `ruff check`, `ruff format --check`, `mypy app`
-- `scripts/check_secrets.py`
-- targeted Stage 6 unit tests
-- Stage 4 pins + Stage 5 scorer + optimization integration (must keep
-  `image_analyzer` off the optimize path)
-- full pytest on isolated `droppilot_test`
-- `git diff --check`
-- no frontend gate (no frontend files)
-- CI on the eventual PR is the clean-checkout authority
+Same as Stage 5, plus the new tests. No frontend gate (no frontend
+files). CI on the eventual implementation PR is the clean-checkout
+authority.
 
 ---
 
 ## 23. Known limitations
 
-1. **No live vision model.** Stub captions are a URL digest with a
-   `[STUB-AI]` marker. They are not image understanding.
-2. **Blur threshold is structural, not photographic.** `isBlurry` means
-   "almost no Laplacian energy after 256×256 normalisation", not "a
-   marketplace would reject this photo".
+1. **No live vision model.** Stub captions are a URL digest with
+   `[STUB-AI]`. They are not image understanding.
+2. **Blur is the Laplacian variance after the §7.1 canvas.** Threshold
+   100 is justified by the 16px-checkerboard pair (`17174` vs `37`). It
+   is not a marketplace sharpness grade.
 3. **No perceptual duplicates.**
-4. **No watermark detector.** The N/A block exists so nobody reports
-   "clean".
-5. **HTTPS and JPEG/PNG only.** `http://` URLs and GIF/WEBP/BMP fail
-   analysis. Store-time validation still allows `http` and whatever URL
-   the merchant saved; Stage 6 will not fetch or decode them.
-6. **Provider may fetch the URL independently** when a real vision API
-   exists. Stage 6's SSRF guard protects *our* bytes path. A future real
-   provider's server-side fetch is that provider's problem and out of
-   Stage 6.
-7. **`StubProvider` ignores prompt instructions.** Recorded
-   `rendered_prompt` is still the audit of what a real provider would
-   have been asked.
-8. **Frontend types lag** (M4).
-9. **Duplicates are this-run only.** A sibling that failed fetch is not
-   compared; we do not read stale stored hashes.
+4. **No watermark detector.**
+5. **HTTPS and JPEG/PNG only.**
+6. **A future real provider may fetch the stored URL itself.** Stage 6
+   SSRF protects *our* bytes path only.
+7. **`StubProvider` ignores prompt instructions.**
+8. **Duplicates are this-invocation Phase-A successes only.**
+9. **`analysis` is ORM-only until Stage 8.**
 10. **Not deployed.**
 
 ---
@@ -809,38 +995,46 @@ Same as Stage 5, plus the new tests:
 
 Stage 6 is done when:
 
-- [ ] Pillow is a declared dependency with a lockfile update.
-- [ ] Fetcher tests in §18.1 all exist and pass without network.
-- [ ] Blur scores match §7.5 exactly.
-- [ ] Byte-duplicate ids match §8.2 exactly.
-- [ ] Watermark JSON is the N/A object; no test asserts "watermark
-      detected" or "watermark absent".
+- [ ] `pyproject.toml` contains `pillow==12.3.0` (not a range).
+- [ ] Fetcher tests in §18.1 pass without network, including CGNAT and
+      connect-to-IP / Host / SNI / `trust_env` assertions.
+- [ ] Pixel cap is enforced **before** `load()`; 4096×4096 allowed by
+      policy; 4097×4096 rejected; tests do not allocate huge images.
+- [ ] Normalisation geometry matches the §7.1 table exactly.
+- [ ] Blur scores match §7.4 exactly, including the 16px pair.
+- [ ] Duplicate lists are computed in Phase B and are symmetric.
+- [ ] Watermark JSON is the N/A object.
 - [ ] `execute_image_analysis` calls `analyse_image`, not `complete`.
-- [ ] `test_render` is unchanged for Stage 4 prompts.
 - [ ] `ProductImage.alt_text` is never assigned by Stage 6.
-- [ ] `analysis` JSON matches §12; migration `0033` upgrades and
-      downgrades.
-- [ ] Cross-tenant analyse raises `NotFoundError`.
-- [ ] Optimize execution log still has exactly three Stage 4 names.
+- [ ] `ProductImageRead` is unchanged.
+- [ ] Expected fetch/decode/`AIError` stay per-image; `TypeError` in
+      checks propagates.
+- [ ] One flush at end of Phase C; unexpected exception rolls back.
+- [ ] Optimize log still has exactly three Stage 4 names.
 - [ ] No new API route, no frontend file, no Stage 7 pipeline wiring.
-- [ ] Full local pytest recorded honestly; CI 10/10 on the PR.
+- [ ] Full local pytest recorded honestly; CI 10/10 on the
+      implementation PR.
 
 ---
 
 ## 25. Independent-review notes
 
-A reviewer should look hardest at:
+Look hardest at:
 
-- `image_fetch.py` — DNS + connect-to-IP + redirect re-validation. If any
-  path uses raw `httpx.get(url)` with default redirects, that is a
-  blocker.
-- Watermark: if implementation adds a detector without this plan being
-  revised, that is a blocker.
-- `product.py` service: grep `alt_text=` on the Stage 6 branch.
-- `prompt.py`: `test_render` diff should be empty or comments-only.
-- Migration: JSONB null, no back-fill, working `downgrade()`.
+- `image_fetch.py` — `is_global` allow-list; CGNAT; mixed DNS; connection
+  URL is the IP; `Host` + `sni_hostname` are the logical name;
+  `trust_env=False`; relative redirects against the logical URL; no
+  second DNS per hop.
+- Decode — size check before `load()`; bomb warning/error mapped;
+  no silent warning.
+- Blur pair — `17174` / `37` / threshold 100.
+- Phase A → B → C ordering and symmetric duplicates.
+- `ProductImageRead` diff empty.
+- `prompt.py`: `test_render` untouched.
+- Unexpected exceptions propagate.
 
 **CLAUDE RETURN REVIEW CHECKPOINT:** All commits from the Stage 5
 takeover onward, including this plan and any Stage 6 implementation,
 require a fresh Claude end-to-end review when Claude becomes available
-again. Cursor review is not a substitute.
+again. Cursor review is not a substitute. Claude has not reviewed
+Stage 6.

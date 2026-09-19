@@ -439,11 +439,13 @@ substitute.
 ### Stage 6 — Image analysis: PLANNING / AWAITING REVIEW
 
 Contract: [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md). **Not
-implemented.** Deterministic blur (variance of Laplacian) and
-byte-identical duplicates first; captions/alt text only through
-`AIProvider.analyse_image`; generic watermark detection explicitly not
-claimed; SSRF-safe HTTPS fetch specified because none exists today;
-`ProductImage.alt_text` is not auto-written. No endpoint, no frontend,
-no Stage 7 pipeline wiring.
+implemented.** A first independent review of `7ff1ae5` found two HIGH
+and six MEDIUM gaps; this revision closes them and still awaits
+re-review. Deterministic blur (variance of Laplacian, with a 16px
+checkerboard / box-blur pair) and byte-identical duplicates (Phase A
+then B) first; captions/alt text only through `analyse_image`; generic
+watermark detection not claimed; SSRF fetch is an `is_global` allow-list
+plus connect-to-IP; `ProductImage.alt_text` is not auto-written; no
+endpoint, no `ProductImageRead` change, no frontend, no Stage 7 wiring.
 
 **Stage 6 implementation is not started.**
