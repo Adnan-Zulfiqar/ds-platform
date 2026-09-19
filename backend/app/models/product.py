@@ -503,6 +503,12 @@ class ProductImage(TenantScopedBase):
     #: Supplier-imported images may be refreshed; merchant-added URLs are not
     #: deleted or reordered by sync.
     is_supplier: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: Stage 6 image-analysis evidence. ORM-only until Stage 8; keys are
+    #: imageAnalysisVersion, sourceUrl, contentSha256, byteLength,
+    #: decodedWidth, decodedHeight, decodedFormat, status, errorCode, checks,
+    #: captionProposal, altTextProposal, isSynthetic, provider, model,
+    #: promptName, promptVersion.
+    analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     product: Mapped[Product] = relationship(back_populates="images")
 
