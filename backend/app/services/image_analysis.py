@@ -101,9 +101,7 @@ class ImageAnalysisService(BaseService):
             acquired.append(await self._phase_a(image))
 
         successes = [row for row in acquired if isinstance(row, _PhaseASuccess)]
-        grouped = duplicate_of_image_ids(
-            tuple((item.image.id, item.digest) for item in successes)
-        )
+        grouped = duplicate_of_image_ids(tuple((item.image.id, item.digest) for item in successes))
         for item in successes:
             item.duplicate_of = grouped[item.image.id]
 
