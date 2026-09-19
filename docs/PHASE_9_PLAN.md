@@ -470,12 +470,17 @@ docs closeout; post-merge CI 35458334556, 10/10). Implementation has
 Celery, no deploy. Claude has not reviewed Stage 7.
 
 The current `optimize_product` path still generate→score→activate in one
-shot. Stage 7 adds `ProductPipelineService` (preview / approve / publish)
-and a shared `generate_candidate` that leaves the new version inactive.
-Existing `POST /products/{id}/optimize` stays auto-activating. Approved
-AI copy reaches Shopify only through an optional overlay on
-`ShopifySyncService.publish_product`; merchant `title` / `description`
-are not overwritten. Synthetic (`StubProvider`) candidates may be
-previewed and approved; pipeline publish to a sales channel is refused.
-No Alembic migration — fingerprint and `isSynthetic` live on
-`ProductVersion.content` JSONB. Head remains `0033`.
+shot and does **not** mint pipeline candidates. Stage 7 adds
+`ProductPipelineService` (preview / approve / publish) and a private
+`_generate_version` core. `generate_candidate` writes
+`pipelineCandidateVersion=1` on an inactive row. Legacy
+`POST /products/{id}/optimize` stays auto-activating and unmarked.
+`activate_version` refuses pipeline rows. Approved AI title +
+`sanitize_html` description reach Shopify only through an optional
+two-field overlay on `ShopifySyncService.publish_product`; merchant
+`title` / `description` / SEO are not overwritten and AI SEO is not
+published. Synthetic (`StubProvider`) candidates may be previewed and
+approved; pipeline publish to a sales channel is refused. No Alembic
+migration — marker, fingerprint, and `isSynthetic` live on
+`ProductVersion.content` JSONB. Head remains `0033`. Publish is an
+operation, not a durable StoreListing provenance.
