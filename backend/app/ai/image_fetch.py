@@ -295,6 +295,8 @@ class ImageFetcher:
             raise
         except httpx.TimeoutException as exc:
             raise ImageFetchTimeout from exc
+        except httpx.RequestError as exc:
+            raise ImageFetchHttpError from exc
 
     async def _stream_hop(
         self,

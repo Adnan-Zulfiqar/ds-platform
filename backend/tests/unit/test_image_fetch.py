@@ -442,6 +442,14 @@ class TestHopMechanics:
         with pytest.raises(ImageFetchTimeout):
             await fetcher.fetch("https://example.test/a.png")
 
+    async def test_connect_error_is_mapped_to_http_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        fetcher = _fetcher(resolved=[PUBLIC_V4], transport=httpx.MockTransport(handler))
+        with pytest.raises(ImageFetchHttpError):
+            await fetcher.fetch("https://example.test/a.png")
+
     async def test_dns_failure_is_mapped(self) -> None:
         def resolver(_hostname: str) -> Sequence[str]:
             raise OSError("name not found")
