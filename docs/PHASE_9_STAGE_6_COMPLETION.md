@@ -3,17 +3,23 @@
 **Image analysis: SSRF-safe fetch, deterministic checks, and synthetic
 caption/alt proposals persisted on `ProductImage.analysis`.**
 
-Status: **IMPLEMENTED LOCALLY / AWAITING INDEPENDENT REVIEW AND REMOTE CI.**
+Status: **COMPLETE / MERGED / GREEN.**
 
-Not merged. Not pushed. Not deployed. `main` unchanged. Stage 7 not started.
-Claude has not reviewed Stage 6. Cursor was temporarily both implementation
-and review agent; this report is not a Claude review.
+Merged into `develop`. Production undeployed — `main` unchanged. Stage 7 not
+started. Claude has not reviewed Stage 6. Cursor was temporarily both
+implementation and review agent; this report is not a Claude review.
 
 | | |
 |---|---|
 | Date | 2026-09-19 |
+| Planning PR | [#15](https://github.com/Adnan-Zulfiqar/ds-platform/pull/15) |
+| Implementation PR | [#16](https://github.com/Adnan-Zulfiqar/ds-platform/pull/16) |
 | Feature branch | `feat/phase-9-stage-6-image-analysis` |
 | Base | `develop` @ `979e7cca1581bef96ebb53568ed72b766f262cc6` (Stage 6 plan PR #15 merged; post-merge CI 35436272869, 10/10) |
+| Reviewed implementation head | `ae67907faf1abda197c76e441d62c501ad6bbeae` |
+| Implementation merge | `96b890d25f43865d41e6ba27896b0923dbb09db2` (2026-09-19T14:50:23Z; parents `979e7cca`, `ae67907`) |
+| PR CI | [35447520423](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35447520423) — 10/10 SUCCESS |
+| Post-merge develop CI | [35449956506](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35449956506) — 10/10 SUCCESS |
 | Contract | [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md) |
 | Migration | `0033` — nullable JSONB `product_images.analysis`; no default; no back-fill |
 | Dependency | `pillow==12.3.0` (exact pin) |
@@ -35,7 +41,7 @@ From `979e7cca`:
 8. `199bf46` `style(ai): apply ruff format to image_analysis service`
 9. `e0de564` `fix(ai): map httpx request errors to ImageFetchHttpError`
 10. `03d0605` `build(ai): lock Pillow 12.3.0 in runtime and dev requirements`
-11. this docs commit
+11. `ae67907` `docs(ai): record Phase 9 Stage 6 completion`
 
 Commits 8–10 are quality-gate / self-review fixes. They do not change the
 approved Stage 6 contract. The lock recompile is required by INFRA-L1-R1
@@ -125,7 +131,7 @@ Generic watermark detection is not implemented. The column never stores
 - `quality_scorer` execution or Stage 4 optimize prompt-count changes
 - M2A optimistic-concurrency changes
 - Overwrite of merchant/supplier/SEO/`ai_status` fields
-- Push, PR, merge, or deploy
+- Deploy (production `main` unchanged)
 
 ---
 
@@ -143,30 +149,65 @@ Isolated Postgres `droppilot-stage6-testpg` on `127.0.0.1:5500` (not
 `upgrade 0033` on that database: column `product_images.analysis` is
 nullable JSONB with no default.
 
-Recorded at quality-gate time (this report is committed with the counts
-from the same session):
+Authoritative local result on reviewed head `ae67907`:
 
 - `ruff check .` PASS
-- `ruff format --check .` PASS (after `199bf46`)
+- `ruff format --check .` PASS
 - `mypy app` PASS (229 source files)
-- `scripts/check_secrets.py` PASS (844 tracked files)
+- `scripts/check_secrets.py` PASS (845 tracked files)
+- `git diff --check` PASS
 - Alembic heads: one head, `0033`
-- Targeted Stage 6 unit + integration tests: green
-- Frontend `typecheck` / `lint` / `build`: green (no frontend source diff)
-- Full backend pytest against isolated Stage 6 Postgres
-  (`127.0.0.1:5500` / `droppilot_stage6`): **3199 passed, 1 skipped,
-  3 failed** on the pre-lock head. Two of those three were
-  INFRA-L1-R1 stale-lock assertions; they pass after the lock recompile
-  (`6 passed`). The remaining failure is
-  `test_no_env_file_was_added_to_the_repository`, which fails because a
-  gitignored local `.env` exists on this workstation. The same class of
-  failure was recorded in Stage 5. The `.env` was not deleted, not
-  opened, and not committed. Product code was not changed to hide it.
+- Targeted Stage 4/5/6: **264 passed**
+- Frontend `typecheck` / `lint` / `build`: PASS (no frontend source diff)
+- Full backend pytest against isolated Stage 6 Postgres: **3202 passed,
+  1 failed, 1 skipped**
+
+The one failure is workstation-environment-only:
+`test_no_env_file_was_added_to_the_repository`, because a gitignored
+local `.env` exists on the workstation. It is not tracked, not in the
+branch diff, was not opened, not deleted, and was not used to weaken the
+test. Product code was not changed to hide it. The skipped test is
+Windows symlink privilege in `tests/unit/core/test_log_retention.py`.
+
+That local suite is **not** rewritten as fully green.
 
 ---
 
-## 8. Claude return checkpoint
+## 8. Remote clean-checkout validation
 
+Authoritative evidence is CI on a clean checkout:
+
+- PR #16 CI [35447520423](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35447520423) on `ae67907` — **10/10 SUCCESS**
+- Post-merge develop CI [35449956506](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35449956506) on `96b890d` — **10/10 SUCCESS**
+
+---
+
+## 9. Independent implementation review
+
+Exact reviewed HEAD: `ae67907faf1abda197c76e441d62c501ad6bbeae`.
+
+**BLOCKER: 0 / HIGH: 0 / MEDIUM: 0 / LOW: 4.**
+
+Accepted LOW notes; none were elevated to implementation blockers:
+
+1. Approved `is_global` policy has a future multicast / NAT64
+   consideration; no current-stack exploitable path identified.
+2. Rollback-test analysis assertion is less direct than the
+   `PromptExecution` persistence assertion; production transaction
+   behaviour remains intact (`autoflush=False` matches the session
+   factory).
+3. Decoded Pillow `Image` is not explicitly `close()`'d; input is
+   `BytesIO` only, bounded Stage 6 resource use.
+4. Migration `0033` lacks a dedicated `information_schema` pytest; the
+   upgrade / downgrade / re-upgrade cycle itself was verified.
+
+---
+
+## 10. Claude return checkpoint
+
+CLAUDE RETURN REVIEW CHECKPOINT:
 All commits from Stage 5 takeover onward require a fresh Claude
-end-to-end review when Claude becomes available again. Cursor review of
-this Stage 6 implementation is not a substitute.
+end-to-end review when Claude becomes available again.
+
+Claude has NOT reviewed Stage 6. Cursor review of this Stage 6
+implementation is not a substitute.

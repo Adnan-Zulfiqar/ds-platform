@@ -436,14 +436,19 @@ takeover onward require a fresh Claude end-to-end review when Claude
 becomes available again. Cursor review of the takeover work is not a
 substitute.
 
-### Stage 6 — Image analysis: IMPLEMENTED LOCALLY / AWAITING INDEPENDENT REVIEW AND REMOTE CI
+### Stage 6 — Image analysis: COMPLETE / MERGED / GREEN
 
 Contract: [PHASE_9_STAGE_6_PLAN.md](PHASE_9_STAGE_6_PLAN.md). Report:
 [PHASE_9_STAGE_6_COMPLETION.md](PHASE_9_STAGE_6_COMPLETION.md).
 
-Implemented on `feat/phase-9-stage-6-image-analysis` from `develop`
-`979e7cca`. Not pushed, not merged, not deployed. `main` unchanged.
-Claude has not reviewed Stage 6.
+Plan PR [#15](https://github.com/Adnan-Zulfiqar/ds-platform/pull/15).
+Implementation PR [#16](https://github.com/Adnan-Zulfiqar/ds-platform/pull/16).
+Reviewed head `ae67907faf1abda197c76e441d62c501ad6bbeae`. Merged into
+`develop` as `96b890d25f43865d41e6ba27896b0923dbb09db2` (2026-09-19T14:50:23Z;
+parents `979e7cca`, `ae67907`). PR CI 35447520423 10/10; post-merge develop
+CI 35449956506 10/10. Migration `0033`. Pillow `12.3.0`. Production
+undeployed — `main` unchanged. Stage 7 not started. `StubProvider` only —
+no live vision-model quality claim. Claude has not reviewed Stage 6.
 
 Deterministic blur (variance of Laplacian) and byte-identical duplicates
 (Phase A then B); captions/alt text only through `analyse_image`;
