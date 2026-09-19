@@ -12,14 +12,15 @@ production release.
 
 ### Added
 
-- **Phase 9 Stage 6 — Image analysis (IMPLEMENTED LOCALLY / AWAITING
-  INDEPENDENT REVIEW AND REMOTE CI).** Product-scoped fetch, decode,
-  deterministic blur/duplicate checks, and `analyse_image` caption/alt
-  proposals persisted as nullable JSONB `product_images.analysis`
-  (migration `0033`). No public endpoint, no `ProductImageRead` field, no
-  frontend, no merchant-field overwrite, no live vision provider. Pillow
-  pinned at `12.3.0`. Branch `feat/phase-9-stage-6-image-analysis` from
-  `develop` `979e7cca`. Not pushed, not merged, not deployed. Report:
+- **Phase 9 Stage 6 — Image analysis (merged into `develop` 2026-09-19
+  via PR #16).** Product-scoped fetch, decode, deterministic
+  blur/duplicate checks, and `analyse_image` caption/alt proposals
+  persisted as nullable JSONB `product_images.analysis` (migration
+  `0033`). No public endpoint, no `ProductImageRead` field, no frontend,
+  no merchant-field overwrite, no live vision provider. Pillow pinned at
+  `12.3.0`. Reviewed head `ae67907faf1abda197c76e441d62c501ad6bbeae`.
+  Merge `96b890d25f43865d41e6ba27896b0923dbb09db2`. PR CI 35447520423
+  10/10; post-merge CI 35449956506 10/10. Report:
   [PHASE_9_STAGE_6_COMPLETION.md](docs/PHASE_9_STAGE_6_COMPLETION.md).
 
 - **Phase 9 Stage 5 — Optimization-quality scoring (merged into `develop`
