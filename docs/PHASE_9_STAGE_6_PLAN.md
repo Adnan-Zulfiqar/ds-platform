@@ -12,8 +12,10 @@ implementation merge `e1558d5c`, closeout PR #14 merge `8d47763`;
 post-merge CI 35400737556, 10/10).
 
 A first independent review of `7ff1ae5` returned **0 BLOCKER / 2 HIGH /
-6 MEDIUM**. This revision closes those findings. **It is still PLANNING /
-AWAITING REVIEW** until a further independent review. Not implemented.
+6 MEDIUM**. A second independent review of `bcd3530` returned **0 BLOCKER
+/ 2 HIGH / 2 MEDIUM**. This revision closes those findings. **It is still
+PLANNING / AWAITING REVIEW** until a further independent review. Not
+implemented.
 
 ---
 
@@ -57,6 +59,9 @@ Stage 6 does **not**:
 - implement a real vision provider (`OpenAIProvider` etc. stay
   unconfigured);
 - change GitHub Actions merely to pin a Python lockfile;
+- redesign CI, make the Playwright Alembic-head check dynamic, or edit
+  any workflow step other than the one-line E2E expected head
+  `0032` → `0033` required by migration `0033` (see §20);
 - modify `main` or deploy.
 
 ---
@@ -105,11 +110,13 @@ PHASE B — duplicate grouping (only Phase-A successes, this invocation)
   group by contentSha256
   duplicateOfImageIds = other ids in the same group, sorted lexicographically
 
-PHASE C — provider + one persistence flush
-  successes: PromptService.execute_image_analysis(...) then JSONB
-  fetch/decode failures: JSONB failure shape; no provider call
+PHASE C — provider + persistence (same transaction; no service commit)
+  successes: PromptService.execute_image_analysis(...) then assign JSONB
+             (PromptExecutionRepository.create may flush, as today)
+  fetch/decode failures: assign JSONB failure shape; no provider call
   assign every ProductImage.analysis in memory
-  one session flush
+  flush ProductImage.analysis assignments after Phase C
+  ImageAnalysisService never commits
 ```
 
 Layering:
@@ -151,8 +158,11 @@ async def analyse_product_images(
 - Analyses every **live** `ProductImage` (`deleted_at IS NULL` via
   `_base_query()`), in `position` order for the returned report.
 - Runs Phase A → B → C as in §4.
-- Persists `ProductImage.analysis` for every live image (success or
-  expected failure) in **one flush** at the end of Phase C.
+- Assigns `ProductImage.analysis` for every live image (success or
+  expected failure). After Phase C, flush those assignments. The
+  service does **not** commit. `PromptExecution` rows may flush earlier
+  through the existing `BaseRepository.create()` path. All of those
+  writes stay in the **same surrounding SQL transaction** (see §12.4).
 - Forwards `executed_by_user_id` into `PromptExecution` (None is allowed).
 - Returns a frozen `ImageAnalysisReport`. Callers in-process (tests,
   later Stage 7) read the report and/or the ORM column. HTTP clients do
@@ -271,30 +281,84 @@ URL:
    - IPv4: `https://<chosen_ip><path><?query>`
    - IPv6: `https://[<chosen_ip>]<path><?query>`
    - path and query copied from `logical_url`; fragment dropped
-6. Issue **one** GET with a client constructed as:
+6. Open a **fresh** `httpx.AsyncClient` for **this hop only** (see §6.4).
+   Issue **one streamed GET**. `httpx` must never see the original
+   hostname as the connection target and must never call
+   `response.read()` / `response.aread()`.
 
 ```python
-client = httpx.AsyncClient(
+MAX_BODY = 5_242_880  # 5 MiB
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+async with httpx.AsyncClient(
     timeout=httpx.Timeout(10.0, connect=3.0),
     follow_redirects=False,
     trust_env=False,
     verify=True,  # never False
-)
-response = await client.request(
-    "GET",
-    connection_url,
-    headers={"Host": logical_hostname},  # original hostname, not the IP
-    extensions={"sni_hostname": logical_hostname},
-)
+) as client:
+    async with client.stream(
+        "GET",
+        connection_url,
+        headers={"Host": logical_hostname},  # original hostname, not the IP
+        extensions={"sni_hostname": logical_hostname},
+    ) as response:
+        if response.status_code in REDIRECT_STATUSES:
+            location = response.headers.get("location")
+            # Do not iterate the redirect body. Do not aread().
+            # Exiting the `async with` closes the response, then the client.
+            ...
+        if response.status_code != 200:
+            raise ImageFetchHttpError
+        # Content-Type BEFORE any body read.
+        media_type = (response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+        if media_type not in {"image/jpeg", "image/jpg", "image/png"}:
+            raise ImageFetchBadContentType
+        content_length = response.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except ValueError:
+                declared = None
+            else:
+                if declared > MAX_BODY:
+                    raise ImageFetchTooLarge  # before aiter_bytes
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in response.aiter_bytes(chunk_size=65_536):
+            received += len(chunk)
+            if received > MAX_BODY:
+                raise ImageFetchTooLarge
+            chunks.append(chunk)
+        body = b"".join(chunks)
 ```
 
 7. Certificate verification stays enabled. SNI is the logical hostname
    so the cert still matches the name the merchant stored.
 8. The original hostname is **never** the network-connection target of
    the httpx request (`request.url.host` in tests is the IP literal).
+9. After a 200 body is assembled (length `<= MAX_BODY`), apply magic-byte
+   checks from §6.3.
+
+Do **not** trust `Content-Length`. A missing or unparsable header is not
+a pass: iteration still enforces the cap. A truthful oversized header
+fails **before** iteration so the body is never pulled.
 
 Connect / read timeout → `ImageFetchTimeout`. No retry on another A
 record.
+
+Redirect hops (status in `REDIRECT_STATUSES`):
+
+- read `Location` only;
+- do **not** consume or buffer the redirect body;
+- leaving the `async with` blocks closes the response and the per-hop
+  client;
+- resolve a relative `Location` against the **logical** URL, never the
+  IP connection URL;
+- the next hop is a new logical URL that re-runs §6.2 from step 1
+  (new DNS if the host changed; new client; new streamed GET).
+
+Fourth redirect → `ImageFetchTooManyRedirects`. Missing `Location` on a
+redirect status → `ImageFetchHttpError`.
 
 ### 6.3 Other hop rules
 
@@ -305,23 +369,44 @@ record.
 | Port | Default 443, or 443 explicitly. Any other port → reject |
 | Hostname | `urlparse(...).hostname`; IDNA-encode. `None` → reject |
 | Hostname blocklist (case-insensitive) | `localhost`, `localhost.`, `metadata.google.internal`, `metadata.internal` |
-| Redirects | `follow_redirects=False`. Honour `Location` up to **3** hops. Resolve a relative `Location` against the **logical** URL, never the IP connection URL. The next hop is a new logical URL that re-runs §6.2 from step 1 (new DNS if the host changed) |
+| Redirects | `follow_redirects=False`. Honour `Location` on 301/302/303/307/308 up to **3** hops. Do not buffer the redirect body. Resolve a relative `Location` against the **logical** URL, never the IP connection URL. The next hop re-runs §6.2 from step 1 with a **new** client |
 | Fourth redirect | `ImageFetchTooManyRedirects` |
 | Timeouts | connect 3 s, read 10 s |
-| Size | Stream; abort if more than **5_242_880 bytes** (5 MiB) → `ImageFetchTooLarge` |
-| HTTP status | Only `200` is success. Anything else → `ImageFetchHttpError` |
-| Content-Type | Required. Media type (before `;`) must be `image/jpeg`, `image/jpg`, or `image/png` (case-insensitive). GIF/WEBP/BMP/TIFF → `ImageFetchBadContentType` |
-| Magic bytes | JPEG `FF D8 FF` or PNG `\x89PNG\r\n\x1a\n`. Mismatch → `ImageFetchBadMagic` |
+| Size | Stream with `aiter_bytes`. Cap **5_242_880** bytes. If `Content-Length` parses as an integer `> 5_242_880`, fail **before** iteration. Iteration still enforces the cap. Never `read()` / `aread()`. `5_242_880` allowed; `5_242_881` → `ImageFetchTooLarge` |
+| HTTP status | Only `200` is a successful body. Redirect statuses follow the redirect rule. Anything else → `ImageFetchHttpError` |
+| Content-Type | Required on the **200** response, checked **before** body iteration. Media type (before `;`) must be `image/jpeg`, `image/jpg`, or `image/png` (case-insensitive). GIF/WEBP/BMP/TIFF → `ImageFetchBadContentType` |
+| Magic bytes | After a capped 200 body: JPEG `FF D8 FF` or PNG `\x89PNG\r\n\x1a\n`. Mismatch → `ImageFetchBadMagic` |
 
 No test hits the public internet. Tests inject the resolver **and** an
 httpx mock transport that records `request.url`, `Host`, `extensions`,
-and the client’s `trust_env` / `follow_redirects`.
+the client’s `trust_env` / `follow_redirects` / `verify`, that the
+method was `stream` not `request`/`get`, and that the client closed.
 
-### 6.4 Why not `httpx.get(image_url)`
+### 6.4 Client lifetime
 
-httpx would resolve the name itself (second DNS, including to loopback /
-CGNAT), honour `trust_env` proxy settings, and follow `Location` onto
-`http://169.254.169.254/`. That is SSRF. Stage 6 will not ship it.
+One `AsyncClient` **per hop**, created with `async with` so it always
+closes (success, expected fetch error, or unexpected exception).
+
+Do not keep a long-lived pool across logical hostnames. A TLS connection
+validated for hop 1's SNI/Host must not be reused as hop 2's connection
+to a different name. A fresh client per hop is the Stage 6 boundary;
+do not depend on httpx pool coalescing.
+
+Exiting the client context closes pooled sockets for that hop. Tests
+assert the client is closed after the fetch returns or raises.
+
+There is still **exactly one** injected DNS resolution per hop. The
+connection URL is the already-validated IP literal, so httpx does not
+resolve the original hostname.
+
+### 6.5 Why not `httpx.get(image_url)` / `client.request(...)`
+
+`httpx.get(image_url)` would resolve the name itself (second DNS,
+including to loopback / CGNAT), honour `trust_env` proxy settings, and
+follow `Location` onto `http://169.254.169.254/`. That is SSRF.
+
+`client.request(...)` without `stream` can buffer the body before Stage 6
+enforces the 5 MiB cap. Stage 6 will not ship either form.
 
 ---
 
@@ -336,26 +421,34 @@ silently.
 ```
 import warnings
 from io import BytesIO
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
+
+# Closed input-failure family for JPEG/PNG identification and payload
+# decode. UnidentifiedImageError subclasses OSError; both are listed so
+# the catch is explicit. Do not add Exception, TypeError, RuntimeError,
+# MemoryError, AssertionError, ValueError, or SyntaxError.
+_DECODE_INPUT_ERRORS = (UnidentifiedImageError, OSError)
 
 def decode_image(body: bytes) -> Image.Image:
     # Convert DecompressionBombWarning into an error for this call only.
+    # Do not mutate process-global Image.MAX_IMAGE_PIXELS.
+    # Leave ImageFile.LOAD_TRUNCATED_IMAGES at Pillow's default (False).
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         try:
             image = Image.open(BytesIO(body))
-        except Image.DecompressionBombError as exc:
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
             raise ImageFetchPixelLimit from exc
-        except Image.DecompressionBombWarning as exc:
-            raise ImageFetchPixelLimit from exc
+        except _DECODE_INPUT_ERRORS as exc:
+            raise ImageFetchDecodeFailed from exc
     width, height = image.size
     if width <= 0 or height <= 0 or width * height > 16_777_216:
         raise ImageFetchPixelLimit
     try:
         image.load()
-    except Image.DecompressionBombError as exc:
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ImageFetchPixelLimit from exc
-    except Exception as exc:
+    except _DECODE_INPUT_ERRORS as exc:
         raise ImageFetchDecodeFailed from exc
     if image.format not in {"JPEG", "PNG"}:
         raise ImageFetchDecodeFailed
@@ -368,6 +461,15 @@ decoded buffer: they stub/fake `Image.size` (or feed a PNG IHDR-only
 header that Pillow rejects at open). `4096 * 4096 == 16_777_216` is
 permitted by the **policy**; the test asserts the comparison, not a
 16-million-pixel array.
+
+If a Stage 6 corrupt JPEG/PNG fixture on Pillow **12.3.0** raises a
+different Pillow-documented **input** exception that is not a
+programming error, add that type to `_DECODE_INPUT_ERRORS` in the same
+change as the fixture. Do **not** widen to `except Exception`.
+
+`MemoryError`, `TypeError`, `RuntimeError`, `AssertionError`, and other
+unexpected exceptions **propagate**. They are not `ImageFetchDecodeFailed`.
+This agrees with §14.
 
 Pillow format names are `"JPEG"` and `"PNG"`; persisted `decodedFormat`
 is `jpeg` / `png`.
@@ -696,6 +798,36 @@ image before the working canvas.
 - `Product.updated_at`
 - `ProductImageRead` / any API schema
 
+### 12.4 Transaction / flush (not "one flush")
+
+`ImageAnalysisService` performs **no commit**. Atomicity is **one
+surrounding SQL transaction owned by the caller** (request, task, or
+test), not one SQLAlchemy flush.
+
+Existing `BaseRepository.create()` flushes. `PromptService.execute_image_analysis`
+writes `PromptExecution` through that path, so a successful image 1 can
+flush a `PromptExecution` **before** image 2 is analysed. That is
+accepted. Do not redesign `BaseRepository` or PromptExecution
+persistence to manufacture a single flush.
+
+Contract:
+
+- all Stage 6 writes (PromptExecution rows and `ProductImage.analysis`
+  assignments) share the caller's transaction;
+- after Phase C, flush the `ProductImage.analysis` assignments so they
+  are in the session before the caller commits;
+- expected per-image failures are data: they are assigned, siblings
+  continue, and the caller may commit the whole unit of work;
+- an unexpected exception **propagates**;
+- `ImageAnalysisService` must not catch it, must not return a success
+  report, and must not commit;
+- the transaction owner rolls back, which drops uncommitted
+  PromptExecution rows **and** analysis assignments from that run;
+- no savepoints.
+
+Empty image list: return `images: []`, no provider calls, no analysis
+writes.
+
 ---
 
 ## 13. Supplier-refresh semantics
@@ -745,9 +877,11 @@ These are raised by the fetcher/decoder or by `get_ai_provider` /
 **Unexpected** (`IndexError`, `AssertionError`, `TypeError`,
 `RuntimeError`, `MemoryError`, `sqlalchemy.exc.SQLAlchemyError`,
 anything else): **propagate**. No per-image JSONB for that failure, no
-success report, no fake `decodeFailed`. The current unit of work rolls
-back uncommitted Stage 6 writes (Phase C has not flushed yet, or the
-request session rolls back). No savepoints.
+success report, no fake `decodeFailed`. Decode must not map these to
+`ImageFetchDecodeFailed` (see §7.0). `ImageAnalysisService` does not
+commit. The transaction owner rolls back the whole unit of work,
+including PromptExecution rows already flushed by `BaseRepository.create`.
+No savepoints.
 
 The product-level call therefore fails when:
 
@@ -772,12 +906,12 @@ It does **not** fail the whole product merely because one image 404s.
 | Bad magic | `fetchFailed` | `ImageFetchBadMagic` | no | null |
 | Too many redirects | `fetchFailed` | `ImageFetchTooManyRedirects` | no | null |
 | Pixel limit / decompression bomb | `decodeFailed` | `ImageFetchPixelLimit` | no | null |
-| Corrupt JPEG/PNG after size check | `decodeFailed` | `ImageFetchDecodeFailed` | no | null |
+| Corrupt / unidentified JPEG or PNG (`UnidentifiedImageError` / `OSError`) | `decodeFailed` | `ImageFetchDecodeFailed` | no | null |
 | Phase A OK, `AIError` | `checksOnly` | exception type name | attempted | populated, duplicates final |
 | StubProvider | `succeeded` | null | yes | populated; `isSynthetic=true` |
 
 Empty image list: report `images: []`, no provider calls, success, no
-flush of analysis.
+analysis writes.
 
 JSONB `errorCode` is the closed token list above only.
 
@@ -839,7 +973,8 @@ Hop mechanics (fake transport records the request):
 - `https://example.test/a.png` resolving only to `8.8.8.8` →
   `request.url.host == "8.8.8.8"`, `Host: example.test`,
   `extensions["sni_hostname"] == "example.test"`, client
-  `trust_env is False`, `follow_redirects is False`
+  `trust_env is False`, `follow_redirects is False`, issued via
+  `client.stream` (not `request` / `get`)
 - original hostname is never `request.url.host`
 - IPv6 chosen address uses bracketed connection URL
 - `http://example.test/a.png` → `ImageFetchDisallowedScheme`
@@ -851,9 +986,20 @@ Hop mechanics (fake transport records the request):
 - 302 relative `Location: /b.png` resolved against **logical**
   `https://example.test/a.png` → next logical
   `https://example.test/b.png`, then a **new** resolve+validate (assert
-  resolver called again for that hop)
-- 200 body 5_242_881 bytes → too large
-- `Content-Type: text/html` → bad type
+  resolver called again for that hop) and a **new** `AsyncClient`
+- 302 with a large body: `Location` is read; body is **not** iterated /
+  `aread()`; next hop proceeds
+- `Content-Length: 5242881` on a 200 → `ImageFetchTooLarge` **before**
+  `aiter_bytes` (transport records zero body chunks consumed)
+- no `Content-Length`, chunks that cross `5_242_880` →
+  `ImageFetchTooLarge` at the first overflowing chunk
+- body of exactly `5_242_880` bytes → allowed (then magic/type still apply)
+- body of `5_242_881` bytes → `ImageFetchTooLarge`
+- transport double yields incremental chunks; the cap aborts without
+  waiting for remaining chunks
+- after success or fetch error, the hop's `AsyncClient` is closed
+- `Content-Type: text/html` → bad type (asserted before body iteration
+  on a 200)
 - `Content-Type: image/png` + `GIF89a` body → bad magic
 - mocked timeout → `ImageFetchTimeout`
 - DNS exception → `ImageFetchDnsFailure`
@@ -864,7 +1010,11 @@ Hop mechanics (fake transport records the request):
 - 4097×4096 stubbed size → `ImageFetchPixelLimit`
 - forged huge IHDR (header only) → `ImageFetchPixelLimit`
 - `DecompressionBombWarning` during open mapped to `ImageFetchPixelLimit`
-- truncated JPEG/PNG → `ImageFetchDecodeFailed`
+- truncated / corrupt JPEG → `ImageFetchDecodeFailed`
+- truncated / corrupt PNG → `ImageFetchDecodeFailed`
+- monkeypatched `load()` raising `MemoryError` → **propagates** (not
+  `ImageFetchDecodeFailed`)
+- monkeypatched `load()` raising `TypeError` → **propagates**
 - normalisation geometry for every row in the §7.1 table
 - `uniform_128.png` → `blurScore=0`, `isBlurry=true`
 - `checkerboard_1px.png` → `1040400`, `false`
@@ -904,7 +1054,14 @@ Hop mechanics (fake transport records the request):
 - `Product.updated_at` unchanged
 - `ProductImageRead` schema unchanged (no `analysis` attribute)
 
-### 18.6 Regression
+### 18.6 Transaction
+
+- image 1 produces a `PromptExecution` successfully; image 2 then raises
+  an unexpected `TypeError`; the caller rolls back the transaction;
+  neither the PromptExecution nor `ProductImage.analysis` remains
+  committed. No savepoints. `ImageAnalysisService` issued no commit.
+
+### 18.7 Regression
 
 - optimize execution log: exactly three Stage 4 names; no
   `image_analyzer` / `quality_scorer`
@@ -924,7 +1081,7 @@ range is also stale: current Pillow is 12.x.
 
 | Package | Decision |
 |---|---|
-| **Pillow** | **Add at implementation time**, not in this planning commit. Pin **one exact patch** in `pyproject.toml`: `pillow==12.3.0`. Verified 2026-09-18 against PyPI/release notes: Pillow 12.3.0 (2026-07-01) requires Python `>=3.10` and publishes CPython 3.13 wheels (standard, not free-threaded). Changing the pin later requires rerunning the whole Stage 6 deterministic fixture suite. Do **not** change CI workflows for this |
+| **Pillow** | **Add at implementation time**, not in this planning commit. Pin **one exact patch** in `pyproject.toml`: `pillow==12.3.0`. Verified 2026-09-18 against PyPI/release notes: Pillow 12.3.0 (2026-07-01) requires Python `>=3.10` and publishes CPython 3.13 wheels (standard, not free-threaded). Changing the pin later requires rerunning the whole Stage 6 deterministic fixture suite. Do **not** change CI workflows **for the Pillow pin**. The only authorized workflow edit is §20 |
 | OpenCV | **Do not add** |
 | imagehash / numpy | **Do not add** |
 | httpx | Already present |
@@ -944,21 +1101,42 @@ Not on `ProductVersion.content`. Not a new table (no second caller).
 
 ORM-only in Stage 6. No response-schema migration.
 
+Playwright job `Frontend — Playwright e2e` currently asserts Alembic
+head `0032` in `.github/workflows/ci.yml` (`Verify e2e database identity
+and Alembic head`). Adding `0033` without updating that string makes
+implementation CI 10/10 unreachable.
+
+**Authorized implementation-time CI change (this comparison only):**
+
+```
+if [ "$current" != "0033" ]; then
+  echo "::error::Expected Alembic head 0033, got ${current:-<none>}"
+```
+
+Do not make the check dynamic. Do not redesign the job. Do not change
+any other workflow step. Pair this line with the `0033` migration
+commit so CI never sees head `0033` while still expecting `0032`.
+
+This planning commit does **not** edit `.github/workflows/ci.yml`.
+
 ---
 
 ## 21. Commit sequence
 
 1. `build(ai): pin Pillow 12.3.0 for Stage 6 decode` — `pillow==12.3.0`
-   in `pyproject.toml` only (no workflow change).
-2. `feat(ai): add SSRF-safe product image fetcher` — §6 + §18.1.
+   in `pyproject.toml` only (no workflow change in this commit).
+2. `feat(ai): add SSRF-safe product image fetcher` — §6 + §18.1
+   (streamed body, 5 MiB cap during iteration).
 3. `feat(ai): decode JPEG/PNG with an explicit pixel cap` — §7.0.
 4. `feat(ai): add deterministic blur and byte-duplicate checks` — §7–8
    + fixtures.
 5. `feat(ai): execute image_analyzer through analyse_image` —
    `PromptService.execute_image_analysis`. `test_render` untouched.
 6. `feat(ai): persist image-analysis evidence on product images` —
-   migration `0033` + `ImageAnalysisService` Phase A/B/C. **No**
-   `ProductImageRead` change.
+   migration `0033` **and** the one-line Playwright Alembic-head
+   expectation `0032` → `0033` in `.github/workflows/ci.yml`. No other
+   workflow edits. No `ProductImageRead` change. `ImageAnalysisService`
+   Phase A/B/C.
 7. `test(ai): prove Stage 6 integration and protected behavior`.
 8. `docs(ai): record Phase 9 Stage 6 completion`.
 
@@ -968,7 +1146,8 @@ ORM-only in Stage 6. No response-schema migration.
 
 Same as Stage 5, plus the new tests. No frontend gate (no frontend
 files). CI on the eventual implementation PR is the clean-checkout
-authority.
+authority and must see Alembic head `0033` in both `alembic upgrade head`
+and the Playwright E2E identity check.
 
 ---
 
@@ -996,10 +1175,13 @@ authority.
 Stage 6 is done when:
 
 - [ ] `pyproject.toml` contains `pillow==12.3.0` (not a range).
-- [ ] Fetcher tests in §18.1 pass without network, including CGNAT and
-      connect-to-IP / Host / SNI / `trust_env` assertions.
+- [ ] Fetcher tests in §18.1 pass without network, including CGNAT,
+      connect-to-IP / Host / SNI / `trust_env`, streamed body, 5 MiB cap
+      during iteration, redirect body not buffered, and client closed.
 - [ ] Pixel cap is enforced **before** `load()`; 4096×4096 allowed by
       policy; 4097×4096 rejected; tests do not allocate huge images.
+- [ ] Corrupt JPEG and corrupt PNG map to `ImageFetchDecodeFailed`;
+      monkeypatched `MemoryError` / `TypeError` from `load()` propagate.
 - [ ] Normalisation geometry matches the §7.1 table exactly.
 - [ ] Blur scores match §7.4 exactly, including the 16px pair.
 - [ ] Duplicate lists are computed in Phase B and are symmetric.
@@ -1007,9 +1189,14 @@ Stage 6 is done when:
 - [ ] `execute_image_analysis` calls `analyse_image`, not `complete`.
 - [ ] `ProductImage.alt_text` is never assigned by Stage 6.
 - [ ] `ProductImageRead` is unchanged.
-- [ ] Expected fetch/decode/`AIError` stay per-image; `TypeError` in
-      checks propagates.
-- [ ] One flush at end of Phase C; unexpected exception rolls back.
+- [ ] Expected fetch/decode/`AIError` stay per-image; unexpected
+      exceptions propagate.
+- [ ] `ImageAnalysisService` never commits; unexpected `TypeError` after
+      a PromptExecution flush rolls back with the caller (no leftover
+      PromptExecution or analysis).
+- [ ] `alembic upgrade head` is `0033`.
+- [ ] Playwright E2E database identity check expects `0033`.
+- [ ] No other GitHub Actions workflow behavior changed.
 - [ ] Optimize log still has exactly three Stage 4 names.
 - [ ] No new API route, no frontend file, no Stage 7 pipeline wiring.
 - [ ] Full local pytest recorded honestly; CI 10/10 on the
@@ -1023,12 +1210,17 @@ Look hardest at:
 
 - `image_fetch.py` — `is_global` allow-list; CGNAT; mixed DNS; connection
   URL is the IP; `Host` + `sni_hostname` are the logical name;
-  `trust_env=False`; relative redirects against the logical URL; no
-  second DNS per hop.
+  `trust_env=False`; `client.stream` + `aiter_bytes` 5 MiB cap; no
+  `read()`/`aread()` before the cap; redirect body not buffered;
+  relative redirects against the logical URL; fresh `AsyncClient` per
+  hop, closed; no second DNS per hop.
 - Decode — size check before `load()`; bomb warning/error mapped;
-  no silent warning.
+  `UnidentifiedImageError`/`OSError` → `ImageFetchDecodeFailed`; no
+  `except Exception`; `MemoryError`/`TypeError` propagate.
 - Blur pair — `17174` / `37` / threshold 100.
 - Phase A → B → C ordering and symmetric duplicates.
+- Persistence — no service commit; same transaction; not "one flush".
+- Migration `0033` paired with Playwright expected head `0033`.
 - `ProductImageRead` diff empty.
 - `prompt.py`: `test_render` untouched.
 - Unexpected exceptions propagate.
