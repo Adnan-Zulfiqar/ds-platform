@@ -9,6 +9,9 @@ plan review of `78674f83df921cbe19e4b239988e175f7a812f3b` (H1, H2, M1–M4)
 and a second independent review of
 `49e5b26a96620fa9be5bab32c6d1ae5b3b67e977` (publish TOCTOU, fingerprint vs
 approved state, fail-open provenance, output bounds, quality-baseline DTO).
+Final contract cleanup after review of
+`5a878aa13f22bd0b3c5dc14edcddbd1412474f39` (parser module location,
+`ProductVersionRepository` path).
 Where this plan narrows what [PHASE_9_PLAN.md](PHASE_9_PLAN.md) §3 originally
 sketched for Stage 7, it says so.
 
@@ -26,7 +29,7 @@ reviewed Stage 7.
 | Stage 6 | COMPLETE / MERGED / GREEN — impl merge `96b890d2`; docs closeout merge `0a26a12`; PR #17 |
 | Latest migration | `0033` (`product_images.analysis`) |
 | Current provider | `StubProvider` via `get_ai_provider(settings)` |
-| Planning status | PLANNING / AWAITING FINAL RE-REVIEW |
+| Planning status | PLANNING / AWAITING ACCEPTANCE REVIEW |
 | Pipeline origin marker | `ProductVersion.content["pipelineCandidateVersion"] = 1` |
 
 ---
@@ -246,7 +249,7 @@ Stage 7 implements a new domain service that composes existing services.
 | Call `ImageAnalysisService.analyse_product_images` from preview | Writing `ProductImage.alt_text` |
 | Compose `PublishReadinessService` without copying its rules | Frontend / AI Studio (Stage 10) |
 | Internal frozen DTOs | `ProductImageRead.analysis`; durable "this version was published" provenance |
-| Strict `parse_pipeline_candidate_metadata`; publish locks Product before the active-state decision | Copying `PublishReadinessService` rules |
+| Strict `parse_pipeline_candidate_metadata` in `product_optimization.py`; publish locks Product before the active-state decision | Copying `PublishReadinessService` rules; `product_optimization` importing `product_pipeline`; a new `product_version.py` repository |
 | Fail-closed title/body bounds (512 / 255 / 64_000); no truncation | Turning Stage 5 quality score into a publish blocker |
 | Tests proving order, marker, bypass refusal, TOCTOU, stale-vs-approved, sanitizer, fail-closed provenance, overlay, bounds, regressions | Migration, new tables, `ProductAIStatus` values |
 | | Live providers, prompt template edits, `quality_scorer` wiring, structured SEO parse |
@@ -273,6 +276,10 @@ Stage 7 implements a new domain service that composes existing services.
 - No StoreListing column or JSON for last-published `ProductVersion` id.
 - No publishing of `seoTitle` / `seoDescription` / `keywords` from version
   content.
+- No `app/repositories/product_version.py`. `ProductVersionRepository`
+  stays in `app/repositories/product.py`.
+- No `product_optimization → product_pipeline` import, including delayed
+  imports.
 
 ---
 
@@ -797,6 +804,16 @@ pipeline candidate. Detection uses the same strict parser as approve
 and publish, not `content.get("pipelineCandidateVersion") == 1`
 (`True == 1` in Python).
 
+That parser, `PipelineCandidateMetadata`, and the key-presence helper
+live in `app/services/product_optimization.py` next to version create /
+activate. `activate_version` calls them **locally**. It does **not**
+import `ProductPipelineService`. Do not duplicate the parser. Do not
+use a delayed/local import to hide a circular service dependency.
+
+If `content_has_any_pipeline_metadata_key` is false (none of the three
+keys present), the row is legacy/ORIGINAL and keeps today's
+activate/rollback behaviour.
+
 If any of `pipelineCandidateVersion`, `pipelineSourceUpdatedAt`, or
 `isSynthetic` is present and the parser fails → `ValidationError`
 `not_a_pipeline_candidate` (do not activate a corrupt row).
@@ -810,9 +827,6 @@ raise ValidationError(
     details={"reason": "pipeline_candidate_requires_approval"},
 )
 ```
-
-If none of those three keys is present, the row is legacy/ORIGINAL and
-keeps today's activate/rollback behaviour.
 
 `ProductVersionRepository.activate` stays a persistence helper. It is
 not a public business API. Production callers in Stage 7:
@@ -989,9 +1003,11 @@ must never be sent to Shopify.
    existing `ShopifyPublishBusyError`. `None` → `NotFoundError`.
 2. Fresh `ProductVersion` read for the exact `(product_id, version_id)`
    with `populate_existing=True` (extend
-   `ProductVersionRepository.get_by_id_for_product` with that flag, same
-   pattern as `ProductRepository.lock_for_update`). Do not trust a
-   previously loaded identity-map instance. Missing → `NotFoundError`.
+   `ProductVersionRepository.get_by_id_for_product` in
+   `app/repositories/product.py` with that flag, same pattern as
+   `ProductRepository.lock_for_update`). Do not create
+   `app/repositories/product_version.py`. Do not trust a previously
+   loaded identity-map instance. Missing → `NotFoundError`.
 3. Under that lock validate:
    - `source is AI_GENERATED` else `candidate_not_approved`
    - `parse_pipeline_candidate_metadata` else `not_a_pipeline_candidate`
@@ -1246,9 +1262,15 @@ Defined in §11 (`PipelinePreview`, `PipelineListingView`,
 models.
 
 Shared fail-closed parser used by `get_preview`, `approve`, `publish`,
-and `activate_version` detection:
+and `activate_version` detection. **Location:
+`app/services/product_optimization.py`.** That is the module that
+creates and activates `ProductVersion` rows. `ProductPipelineService`
+imports these names from there. `product_optimization.py` never imports
+`product_pipeline.py`.
 
 ```python
+# app/services/product_optimization.py
+
 @dataclass(frozen=True, slots=True)
 class PipelineCandidateMetadata:
     source_updated_at: datetime
@@ -1260,6 +1282,16 @@ def parse_pipeline_candidate_metadata(
 ) -> PipelineCandidateMetadata:
     """Raise ValidationError(not_a_pipeline_candidate) unless all three
     pipeline keys are present with exact types.
+    """
+
+
+def content_has_any_pipeline_metadata_key(content: object) -> bool:
+    """True if any of pipelineCandidateVersion / pipelineSourceUpdatedAt /
+    isSynthetic is present.
+
+    Distinguishes unmarked legacy/ORIGINAL rows from a corrupt pipeline
+    JSON object. Does not validate types; `parse_pipeline_candidate_metadata`
+    does that.
     """
 ```
 
@@ -1288,8 +1320,22 @@ The pipeline service **may** import `ShopifySyncService` and
 `ShopifyListingOverlay`, same as `PublishReadinessService` already
 imports `ShopifySyncService`.
 
-`ProductVersionRepository.get_by_id_for_product` gains
-`populate_existing: bool = False`. Publish and approve pass `True`.
+Pinned import direction (no cycles, no delayed imports to hide one):
+
+```
+product_pipeline.py
+  → product_optimization.py
+      → repositories/product.py
+  → integrations/shopify/sync.py
+```
+
+Never `product_optimization → product_pipeline`. Never
+`integrations/shopify/sync.py → product_pipeline`.
+
+`ProductVersionRepository.get_by_id_for_product` in
+`app/repositories/product.py` gains `populate_existing: bool = False`.
+Publish and approve pass `True`. Do not add
+`app/repositories/product_version.py`. Do not move the class.
 
 ---
 
@@ -1297,6 +1343,21 @@ imports `ShopifySyncService`.
 
 ```python
 # app/services/product_optimization.py
+
+@dataclass(frozen=True, slots=True)
+class PipelineCandidateMetadata:
+    source_updated_at: datetime
+    is_synthetic: bool
+
+
+def parse_pipeline_candidate_metadata(
+    content: object,
+) -> PipelineCandidateMetadata: ...
+
+
+def content_has_any_pipeline_metadata_key(content: object) -> bool: ...
+
+
 class ProductOptimizationService:
     async def _generate_version(
         self,
@@ -1375,18 +1436,13 @@ class ProductPipelineService(BaseService):
     ) -> dict[str, Any]: ...
 
 
-def parse_pipeline_candidate_metadata(
-    content: object,
-) -> PipelineCandidateMetadata: ...
-
-
-# app/repositories/product_version.py
+# app/repositories/product.py  — existing file; do not add product_version.py
 class ProductVersionRepository:
     async def get_by_id_for_product(
         self,
+        *,
         product_id: uuid.UUID,
         version_id: uuid.UUID,
-        *,
         populate_existing: bool = False,
     ) -> ProductVersion | None: ...
 ```
@@ -1394,7 +1450,11 @@ class ProductVersionRepository:
 `ProductPipelineService` constructs `ImageAnalysisService`,
 `ProductOptimizationService`, `PublishReadinessService`, and
 `ShopifySyncService` with the same session (same pattern as
-`ShopifySyncService` constructing readiness internally).
+`ShopifySyncService` constructing readiness internally). It imports
+`ProductOptimizationService`, `PipelineCandidateMetadata`,
+`parse_pipeline_candidate_metadata`, and
+`content_has_any_pipeline_metadata_key` from
+`app.services.product_optimization`.
 
 Do not register new FastAPI dependencies in Stage 7.
 
@@ -1408,16 +1468,22 @@ each independently testable:
 **Commit 1 — shared generator, distinct pipeline marker**
 
 - `backend/app/services/product_optimization.py` — add
-  `_generate_version`, `generate_candidate`; `optimize_product` calls
-  the core with `as_pipeline_candidate=False` then activates; FAILED
-  handling stays on the optimize path.
-- `activate_version` refuses parsed pipeline rows (`pipeline_candidate_requires_approval`) and malformed pipeline keys (`not_a_pipeline_candidate`).
-- Tests: existing `test_product_optimization.py` still green; legacy
-  optimize version has no `pipelineCandidateVersion` and is active;
-  `generate_candidate` returns `active=False` with marker `1`;
-  `activate_version` on that row raises
-  `pipeline_candidate_requires_approval`; generate_candidate error does
-  not set `FAILED`.
+  `PipelineCandidateMetadata`, `parse_pipeline_candidate_metadata`,
+  `content_has_any_pipeline_metadata_key`, `_generate_version`,
+  `generate_candidate`; `optimize_product` calls the core with
+  `as_pipeline_candidate=False` then activates; FAILED handling stays
+  on the optimize path.
+- `activate_version` uses those local helpers: parsed pipeline rows
+  raise `pipeline_candidate_requires_approval`; any pipeline key present
+  with a failed parse raises `not_a_pipeline_candidate`. No import of
+  `product_pipeline`.
+- Tests: existing `test_product_optimization.py` still green; parser
+  unit tests (bool `True` marker, missing keys, malformed timestamp,
+  `isSynthetic` string `"false"`); legacy optimize version has no
+  `pipelineCandidateVersion` and is active; `generate_candidate`
+  returns `active=False` with marker `1`; `activate_version` on that
+  row raises `pipeline_candidate_requires_approval`; generate_candidate
+  error does not set `FAILED`.
 
 **Commit 2 — listing overlay (title + sanitized body only)**
 
@@ -1430,8 +1496,9 @@ each independently testable:
 **Commit 3 — preview composer**
 
 - `backend/app/services/product_pipeline.py` — DTOs including
-  `PipelineQualityBaseline`, `parse_pipeline_candidate_metadata`,
-  `preview`, `get_preview`.
+  `PipelineQualityBaseline`, `preview`, `get_preview`. Consumes
+  `parse_pipeline_candidate_metadata` / `PipelineCandidateMetadata`
+  from `product_optimization.py`. Does **not** redefine them.
 - Tests: candidate inactive with integer marker `1`; previous active
   version remains; DTO separates original vs proposal including raw SEO
   and baseline `{version_number, score}`; `publishable is False`;
@@ -1455,8 +1522,9 @@ each independently testable:
 - `publish` locks Product first (`PUBLISH_LOCK_TIMEOUT_MS`), fresh
   version read, strict parser, fail-closed provenance, length bounds,
   `sanitize_html` overlay, then existing publisher on the same session.
-- `ProductVersionRepository.get_by_id_for_product(...,
-  populate_existing=True)`.
+- `backend/app/repositories/product.py` —
+  `ProductVersionRepository.get_by_id_for_product(...,
+  populate_existing=True)`. Do not add `product_version.py`.
 - Tests: publisher called once; overlay title + sanitized body; merchant
   SEO/tags/images/variants preserved; `<script>` / `onerror` /
   `javascript:` / `data:` cannot reach the Shopify body; stored version
@@ -1485,6 +1553,18 @@ Expected new files at implementation:
 - `backend/app/services/product_pipeline.py`
 - `backend/tests/unit/test_product_pipeline.py`
 - `backend/tests/integration/test_product_pipeline.py`
+- `backend/tests/unit/test_pipeline_candidate_metadata.py` (parser
+  only; no DB; imports from `product_optimization`)
+
+Expected **modified** files at implementation (not an exhaustive list
+of every line, the modules that must change):
+
+- `backend/app/services/product_optimization.py`
+- `backend/app/repositories/product.py`
+- `backend/app/integrations/shopify/sync.py`
+
+Do **not** create `backend/app/repositories/product_version.py`.
+Do **not** move `ProductVersionRepository`.
 
 No workflow, Docker, dependency, or frontend files.
 
@@ -1608,6 +1688,8 @@ No workflow, Docker, dependency, or frontend files.
 
 ### G. Provider and provenance
 
+- Parser unit tests import from `app.services.product_optimization`, not
+  from `product_pipeline`.
 - Stub pipeline preview/approve allowed; pipeline publish raises
   `synthetic_publish_blocked`.
 - Marker `True` (bool) instead of integer `1` →
@@ -1636,6 +1718,8 @@ No workflow, Docker, dependency, or frontend files.
 - Shopify: existing publish/readiness/idempotency tests green.
 - API: grep that Stage 7 adds no router include.
 - Frontend: `git diff -- frontend` empty for the implementation PR.
+- Import graph: `product_optimization.py` has no `product_pipeline`
+  import. No `app/repositories/product_version.py`.
 
 ---
 
@@ -1650,7 +1734,9 @@ No workflow, Docker, dependency, or frontend files.
 | Image alt | analyse/approve/publish never assign it |
 | Unsanitized model HTML | `sanitize_html` at overlay build; content row unchanged |
 | Oversized AI copy | fail-closed 512/255/64_000 bounds; no truncate |
-| Fail-open JSONB | strict parser; `True == 1` rejected |
+| Fail-open JSONB | strict parser in `product_optimization.py`; `True == 1` rejected |
+| No service import cycle | pipeline → optimization only; no delayed import |
+| No new repository module | `ProductVersionRepository` stays in `repositories/product.py` |
 | Publish TOCTOU | lock Product before active check; fresh version read |
 | M2A 409 | inactive approve and publish compare `updated_at`; draft PATCH untouched |
 | Cross-tenant 404 | repositories + `get_by_id_for_product` |
@@ -1679,7 +1765,8 @@ Stage 7 is done when all of the following are true:
    stale.
 4. Already-active exact pipeline id is a no-op (no extra version, no
    cache rewrite).
-5. `activate_version` refuses parsed pipeline candidates.
+5. `activate_version` refuses parsed pipeline candidates using helpers
+   in `product_optimization.py` (no import of `product_pipeline`).
 6. `publish` acquires `lock_for_update` **before** the active-state
    decision and re-reads the version with `populate_existing`.
 7. `publish` without prior pipeline approve of that id fails.
@@ -1694,6 +1781,8 @@ Stage 7 is done when all of the following are true:
     sanitized body >64_000 cannot pipeline-publish; no truncation.
 12. No new HTTP route, no frontend change, no migration, no `main`
     change. `StoreListing` is not treated as version provenance.
+    Parser/types live in `product_optimization.py`. No
+    `product_version.py` repository module.
 13. Quality gates: `ruff check`, `ruff format --check`, `mypy app`,
     `pytest` (implementation PR).
 14. Independent review of the implementation: BLOCKER 0, HIGH 0,
@@ -1815,10 +1904,13 @@ Option B keeps that contract. `generate_candidate` is pipeline-only and
 writes `pipelineCandidateVersion=1`. `optimize_product` calls the same
 private core with `as_pipeline_candidate=False`, then auto-activates an
 unmarked row. Pipeline approve/publish refuse unmarked rows.
-`activate_version` refuses marked rows. Pipeline `publish` locks the
-Product row before the active-state decision and fail-closes on
-malformed provenance. Overlay HTML is sanitized; AI SEO is not
-published; title/body length is fail-closed.
+`activate_version` refuses marked rows via helpers in
+`product_optimization.py`. `ProductPipelineService` imports that module;
+the reverse import is forbidden. `ProductVersionRepository` stays in
+`app/repositories/product.py`. Pipeline `publish` locks the Product row
+before the active-state decision and fail-closes on malformed
+provenance. Overlay HTML is sanitized; AI SEO is not published;
+title/body length is fail-closed.
 
 Internals share prompt execution and `score_version` so generation
 cannot drift. The marker is what prevents Preview → Approve → Publish

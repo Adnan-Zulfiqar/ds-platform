@@ -449,7 +449,7 @@ parents `979e7cca`, `ae67907`). PR CI 35447520423 10/10; post-merge develop
 CI 35449956506 10/10. Migration `0033`. Pillow `12.3.0`. Production
 undeployed — `main` unchanged. `StubProvider` only — no live vision-model
 quality claim. Claude has not reviewed Stage 6. Stage 7 implementation has
-not started; the Stage 7 plan is awaiting final re-review (below).
+not started; the Stage 7 plan is awaiting acceptance review (below).
 
 Deterministic blur (variance of Laplacian) and byte-identical duplicates
 (Phase A then B); captions/alt text only through `analyse_image`;
@@ -460,7 +460,7 @@ allow-list plus connect-to-IP and a streamed 5 MiB cap;
 `0033` pairs with a one-line Playwright Alembic-head expectation
 `0032` → `0033`.
 
-### Stage 7 — Pipeline: PLANNING / AWAITING FINAL RE-REVIEW
+### Stage 7 — Pipeline: PLANNING / AWAITING ACCEPTANCE REVIEW
 
 Contract: [PHASE_9_STAGE_7_PLAN.md](PHASE_9_STAGE_7_PLAN.md).
 
@@ -475,7 +475,10 @@ shot and does **not** mint pipeline candidates. Stage 7 adds
 `_generate_version` core. `generate_candidate` writes
 `pipelineCandidateVersion=1` on an inactive row. Legacy
 `POST /products/{id}/optimize` stays auto-activating and unmarked.
-`activate_version` refuses pipeline rows. Pipeline `publish` takes the
+`activate_version` refuses pipeline rows using helpers defined in
+`product_optimization.py` (`ProductPipelineService` imports that module;
+never the reverse). `ProductVersionRepository` stays in
+`app/repositories/product.py`. Pipeline `publish` takes the
 Product `FOR UPDATE` lock **before** the active-state decision.
 Approved AI title + `sanitize_html` description reach Shopify only
 through an optional two-field overlay on
