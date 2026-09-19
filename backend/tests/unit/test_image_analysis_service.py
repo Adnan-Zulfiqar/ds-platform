@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock
@@ -163,3 +164,94 @@ class TestImageAnalysisService:
             await service.analyse_product_images(product.id)
         service.prompts.execute_image_analysis.assert_not_called()
         service.flush.assert_not_called()
+
+    async def test_merchant_fields_and_duplicates_with_a_failed_sibling(self) -> None:
+        service = _service()
+        product = MagicMock(id=uuid.uuid4(), title="Mug")
+        body = _png()
+        live = _image(url="https://cdn.example/a.png", position=0, alt_text="Keep me")
+        live.is_supplier = False
+        failed = _image(url="https://127.0.0.1/x.jpg", position=1)
+        service.products.get_by_id_or_raise.return_value = product
+        service.images.list_for_product.return_value = [live, failed]
+
+        async def _fetch(url: str) -> bytes:
+            if url == live.url:
+                return body
+            raise ImageFetchNotGlobalAddress()
+
+        service.fetcher.fetch = AsyncMock(side_effect=_fetch)
+        execution = MagicMock(
+            prompt_name="image_analyzer",
+            prompt_version=1,
+            status=PromptExecutionStatus.SUCCEEDED,
+            error_code=None,
+        )
+        digest = hashlib.sha256(live.url.encode()).hexdigest()[:8]
+        result = ImageAnalysisResult(
+            caption=f"[STUB-AI] synthetic caption (image {digest}).",
+            alt_text=f"[STUB-AI] synthetic alt text (image {digest}).",
+            provider="stub",
+            model="stub-1",
+            is_synthetic=True,
+        )
+        service.prompts.execute_image_analysis.return_value = ("rendered", result, execution)
+        service.session.commit = AsyncMock()
+
+        report = await service.analyse_product_images(product.id)
+
+        assert report.images[0].status == "succeeded"
+        assert report.images[1].status == "fetchFailed"
+        assert live.analysis["checks"]["duplicates"]["duplicateOfImageIds"] == []
+        assert live.alt_text == "Keep me"
+        assert live.url == "https://cdn.example/a.png"
+        assert live.position == 0
+        assert live.is_supplier is False
+        assert failed.analysis["captionProposal"] is None
+        assert failed.analysis["promptName"] is None
+        service.session.commit.assert_not_called()
+        service.prompts.execute_image_analysis.assert_awaited_once()
+
+    async def test_reanalysis_replaces_content_hash(self) -> None:
+        service = _service()
+        product = MagicMock(id=uuid.uuid4(), title="Mug")
+        image = _image(url="https://cdn.example/a.png")
+        service.products.get_by_id_or_raise.return_value = product
+        service.images.list_for_product.return_value = [image]
+        first = _png((10, 10, 10))
+        second = _png((200, 10, 10))
+        service.fetcher.fetch = AsyncMock(side_effect=[first, second])
+        execution = MagicMock(
+            prompt_name="image_analyzer",
+            prompt_version=1,
+            status=PromptExecutionStatus.SUCCEEDED,
+            error_code=None,
+        )
+        result = ImageAnalysisResult(
+            caption="x",
+            alt_text="y",
+            provider="stub",
+            model="stub-1",
+            is_synthetic=True,
+        )
+        service.prompts.execute_image_analysis.return_value = ("rendered", result, execution)
+
+        await service.analyse_product_images(product.id)
+        first_hash = image.analysis["contentSha256"]
+        await service.analyse_product_images(product.id)
+        assert image.analysis["contentSha256"] != first_hash
+        assert image.analysis["contentSha256"] == hashlib.sha256(second).hexdigest()
+
+    async def test_decode_failure_skips_provider(self) -> None:
+        service = _service()
+        product = MagicMock(id=uuid.uuid4(), title="Mug")
+        image = _image(url="https://cdn.example/a.png")
+        service.products.get_by_id_or_raise.return_value = product
+        service.images.list_for_product.return_value = [image]
+        service.fetcher.fetch = AsyncMock(return_value=b"not-an-image")
+
+        report = await service.analyse_product_images(product.id)
+
+        service.prompts.execute_image_analysis.assert_not_called()
+        assert report.images[0].status == "decodeFailed"
+        assert report.images[0].error_code == "ImageFetchDecodeFailed"

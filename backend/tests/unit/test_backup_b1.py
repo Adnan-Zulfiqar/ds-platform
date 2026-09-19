@@ -182,7 +182,7 @@ class FakeCursor:
         elif "to_regclass" in lowered:
             self._row = (self._facts.get("has_alembic", True),)
         elif "alembic_version" in lowered:
-            self._row = (self._facts.get("revision", "0032"),)
+            self._row = (self._facts.get("revision", "0033"),)
         elif "information_schema.tables" in lowered:
             self._row = (self._facts.get("tables", 0),)
         else:
@@ -268,7 +268,7 @@ def fake_postgres(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     facts: dict[str, Any] = {
         "database": "droppilot_staging",
         "version": "PostgreSQL 17.10 on x86_64-windows",
-        "revision": "0032",
+        "revision": "0033",
         "tables": 0,
     }
     FakePopen.calls = []
@@ -604,7 +604,7 @@ class TestCreatingABackup:
 
         manifest = outcome.manifest
         assert manifest.database == "droppilot_staging"
-        assert manifest.alembic_revision == "0032"
+        assert manifest.alembic_revision == "0033"
         assert manifest.postgres_version.startswith("PostgreSQL 17")
         assert manifest.dump_format == "pg_dump/custom"
         assert manifest.key_id == a_key().key_id
@@ -727,7 +727,7 @@ class TestCreatingABackup:
         self, fake_postgres: dict[str, Any], backup_dir: Path
     ) -> None:
         long_secret = "an-actual-production-password-9f2c"
-        fake_postgres["revision"] = f"0032-{long_secret}-suffix"
+        fake_postgres["revision"] = f"0033-{long_secret}-suffix"
         with pytest.raises(database_backup.EncryptionError, match="embedded"):
             create_backup(
                 target=replace(a_target(), password=long_secret),
@@ -1165,7 +1165,7 @@ def place_backup(directory: Path, key: BackupKey, created: datetime, *, valid: b
         application_sha="0" * 40,
         database="droppilot_staging",
         postgres_version="PostgreSQL 17.10",
-        alembic_revision="0032",
+        alembic_revision="0033",
         dump_format="pg_dump/custom",
         backup_id=backup_id,
         key_id=key.key_id,

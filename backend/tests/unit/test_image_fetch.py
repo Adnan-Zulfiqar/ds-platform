@@ -252,10 +252,19 @@ class TestHopMechanics:
         with pytest.raises(ImageFetchDisallowedScheme):
             await fetcher.fetch("http://example.test/a.png")
 
-    async def test_localhost_name_is_blocked(self) -> None:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://localhost/a.png",
+            "https://localhost./a.png",
+            "https://metadata.google.internal/a.png",
+            "https://metadata.internal/a.png",
+        ],
+    )
+    async def test_blocked_hostnames_are_rejected(self, url: str) -> None:
         fetcher = _fetcher(transport=_transport(respond=httpx.Response(200)))
         with pytest.raises(ImageFetchHostnameBlocked):
-            await fetcher.fetch("https://localhost/a.png")
+            await fetcher.fetch(url)
 
     async def test_loopback_literal_is_not_global(self) -> None:
         fetcher = _fetcher(transport=_transport(respond=httpx.Response(200)))
