@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.integrations.shopify.sync import ShopifySyncService, _deterministic_handle
+from app.integrations.shopify.sync import (
+    ShopifyListingOverlay,
+    ShopifySyncService,
+    _apply_listing_overlay,
+    _deterministic_handle,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -60,3 +65,43 @@ class TestCreateOrAdopt:
         client.post.assert_not_awaited()
         assert result == {"product": existing}
         assert "handle" not in body["product"]
+
+
+def _merchant_body() -> dict[str, Any]:
+    return {
+        "title": "Merchant title",
+        "body_html": "<p>Merchant description</p>",
+        "vendor": "Acme",
+        "product_type": "Gadgets",
+        "tags": "alpha, beta",
+        "status": "draft",
+        "variants": [{"sku": "SKU-1", "price": "9.99"}],
+        "images": [{"src": "https://cdn.example/a.jpg", "alt": "photo"}],
+        "metafields_global_title_tag": "Merchant SEO title",
+        "metafields_global_description_tag": "Merchant SEO description",
+    }
+
+
+class TestListingOverlay:
+    def test_none_leaves_the_merchant_mapping_unchanged(self) -> None:
+        body = _merchant_body()
+        snapshot = dict(body)
+        _apply_listing_overlay(body, None)
+        assert body == snapshot
+
+    def test_overlay_replaces_only_title_and_body_html(self) -> None:
+        body = _merchant_body()
+        _apply_listing_overlay(
+            body,
+            ShopifyListingOverlay(title="Approved AI title", body_html="<p>Sanitized</p>"),
+        )
+        assert body["title"] == "Approved AI title"
+        assert body["body_html"] == "<p>Sanitized</p>"
+        assert body["metafields_global_title_tag"] == "Merchant SEO title"
+        assert body["metafields_global_description_tag"] == "Merchant SEO description"
+        assert body["tags"] == "alpha, beta"
+        assert body["images"] == [{"src": "https://cdn.example/a.jpg", "alt": "photo"}]
+        assert body["variants"] == [{"sku": "SKU-1", "price": "9.99"}]
+        assert body["vendor"] == "Acme"
+        assert body["product_type"] == "Gadgets"
+        assert body["status"] == "draft"
