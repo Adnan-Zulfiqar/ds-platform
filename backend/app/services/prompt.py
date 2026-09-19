@@ -10,6 +10,7 @@ quality; see ``docs/PHASE_9_PLAN.md`` Stage 2 notes.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Sequence
@@ -19,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.exceptions import AIError
 from app.ai.factory import get_ai_provider
 from app.ai.prompt_renderer import PromptRenderer
-from app.ai.provider import CompletionRequest
+from app.ai.provider import CompletionRequest, ImageAnalysisRequest, ImageAnalysisResult
 from app.core.config import settings
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.models.ai_prompt import AIPrompt, PromptExecution, PromptExecutionStatus
@@ -210,6 +211,77 @@ class PromptService(BaseService):
             executed_by_user_id=executed_by_user_id,
         )
         return rendered, required, execution
+
+    async def execute_image_analysis(
+        self,
+        *,
+        name: str,
+        variables: dict[str, str],
+        executed_by_user_id: uuid.UUID | None,
+    ) -> tuple[str, ImageAnalysisResult | None, PromptExecution]:
+        """Render ``name`` and call ``analyse_image``, never ``complete``.
+
+        Stage 6 always passes ``image_analyzer``. A missing template variable
+        still raises before any execution row is written. ``AIError`` is an
+        expected domain failure: a FAILED row is recorded and the result is
+        ``None``. Any other exception propagates without a row.
+        """
+        prompt = await self.get_active(name)
+        rendered = PromptRenderer.render(prompt.template, variables)
+
+        started = time.monotonic()
+        try:
+            provider = get_ai_provider(settings)
+            result = await provider.analyse_image(
+                ImageAnalysisRequest(
+                    image_url=variables["image_url"],
+                    instructions=rendered,
+                )
+            )
+        except AIError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            execution = await self.executions.create(
+                prompt_id=prompt.id,
+                prompt_name=prompt.name,
+                prompt_version=prompt.version,
+                input_variables=dict(variables),
+                rendered_prompt=rendered,
+                provider=settings.ai.provider.value,
+                model=None,
+                response_text=None,
+                is_synthetic=False,
+                status=PromptExecutionStatus.FAILED,
+                error_code=type(exc).__name__,
+                error_message=str(exc)[:2048],
+                duration_ms=duration_ms,
+                executed_by_user_id=executed_by_user_id,
+            )
+            return rendered, None, execution
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        response_text = json.dumps(
+            {"altText": result.alt_text, "caption": result.caption},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        execution = await self.executions.create(
+            prompt_id=prompt.id,
+            prompt_name=prompt.name,
+            prompt_version=prompt.version,
+            input_variables=dict(variables),
+            rendered_prompt=rendered,
+            provider=result.provider,
+            model=result.model,
+            response_text=response_text,
+            is_synthetic=result.is_synthetic,
+            input_tokens=None,
+            output_tokens=None,
+            status=PromptExecutionStatus.SUCCEEDED,
+            duration_ms=duration_ms,
+            executed_by_user_id=executed_by_user_id,
+        )
+        return rendered, result, execution
 
 
 __all__ = ["PromptService"]
