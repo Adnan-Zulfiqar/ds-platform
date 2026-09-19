@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -18,6 +18,7 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.integrations.aliexpress import service as service_module
 from app.models.ai_prompt import PromptExecution
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
+from app.models.shopify import StoreListing
 from app.repositories.product import ProductVersionRepository
 from app.schemas.product import DESCRIPTION_MAX_LENGTH
 from app.services.image_analysis import ImageAnalysisItem, ImageAnalysisReport, ImageAnalysisService
@@ -136,6 +137,35 @@ async def _insert_pipeline_candidate(
         prompt_execution_id=None,
         created_by_user_id=None,
     )
+
+
+async def _insert_legacy_ai_version(
+    db_session: AsyncSession,
+    product: Product,
+    *,
+    title: str = "Legacy AI title",
+    description: str = "Legacy AI body",
+) -> ProductVersion:
+    versions = ProductVersionRepository(db_session)
+    return await versions.create(
+        product_id=product.id,
+        version_number=await versions.next_version_number(product.id),
+        source=ProductVersionSource.AI_GENERATED,
+        content={"title": title, "description": description},
+        active=False,
+        ai_provider="stub",
+        prompt_execution_id=None,
+        created_by_user_id=None,
+    )
+
+
+async def _listing_count(db_session: AsyncSession, product_id: uuid.UUID) -> int:
+    result = await db_session.execute(
+        select(func.count())
+        .select_from(StoreListing)
+        .where(StoreListing.product_id == product_id, StoreListing.deleted_at.is_(None))
+    )
+    return int(result.scalar_one())
 
 
 @pytest.fixture
@@ -658,6 +688,89 @@ class TestPublish:
         finally:
             clear_context()
         assert exc_info.value.details.get("reason") == "candidate_not_approved"
+
+    async def test_inactive_legacy_ai_is_not_a_pipeline_candidate(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            legacy = await _insert_legacy_ai_version(db_session, row)
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await ProductPipelineService(db_session).publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=legacy.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
+
+    async def test_inactive_malformed_pipeline_metadata_is_not_a_pipeline_candidate(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            malformed = await _insert_pipeline_candidate(
+                db_session, row, extra_content={"pipelineCandidateVersion": True}
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await ProductPipelineService(db_session).publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=malformed.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
+
+    async def test_publish_requires_expected_updated_at(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        shopify_must_not_run: None,
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            candidate = await _insert_pipeline_candidate(db_session, row, is_synthetic=False)
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id, version_id=candidate.id, expected_updated_at=row.updated_at
+            )
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.publish(
+                    row.id,
+                    store_id=uuid.uuid4(),
+                    version_id=candidate.id,
+                    expected_updated_at=None,
+                )
+            reloaded = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=candidate.id
+            )
+            listings = await _listing_count(db_session, row.id)
+        finally:
+            clear_context()
+        assert "expectedUpdatedAt" in exc_info.value.message
+        assert reloaded is not None
+        assert reloaded.active is True
+        assert listings == 0
 
     async def test_legacy_optimize_cannot_pipeline_publish(
         self,

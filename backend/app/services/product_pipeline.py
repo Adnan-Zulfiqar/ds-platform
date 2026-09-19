@@ -217,13 +217,18 @@ class ProductPipelineService(BaseService):
         *,
         store_id: uuid.UUID,
         version_id: uuid.UUID,
-        expected_updated_at: datetime,
+        expected_updated_at: datetime | None,
     ) -> dict[str, Any]:
         """Publish an already-approved pipeline candidate through the overlay.
 
-        Lock the Product first, then re-read the exact version. Never trust a
-        pre-lock `active` flag — a sibling approval can commit in between.
+        The M2A token is required here even though merchant/Celery
+        `publish_product` still allows omitting it. Check before the Product
+        lock so a forgotten token cannot wait on, or skip, freshness.
         """
+        if expected_updated_at is None:
+            raise ValidationError(
+                "expectedUpdatedAt is required to publish an approved pipeline candidate."
+            )
         product = await self.products.lock_for_update(
             product_id,
             timeout_ms=shopify_sync.PUBLISH_LOCK_TIMEOUT_MS,
@@ -237,12 +242,17 @@ class ProductPipelineService(BaseService):
         )
         if version is None:
             raise NotFoundError.for_resource("ProductVersion", version_id)
-        if version.source is not ProductVersionSource.AI_GENERATED or version.active is not True:
+        if version.source is not ProductVersionSource.AI_GENERATED:
             raise ValidationError(
                 "This pipeline candidate has not been approved.",
                 details={"reason": "candidate_not_approved"},
             )
         metadata = parse_pipeline_candidate_metadata(version.content)
+        if version.active is not True:
+            raise ValidationError(
+                "This pipeline candidate has not been approved.",
+                details={"reason": "candidate_not_approved"},
+            )
         provider = version.ai_provider
         if not isinstance(provider, str) or provider.strip() == "":
             raise ValidationError(

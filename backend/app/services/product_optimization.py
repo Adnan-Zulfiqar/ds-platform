@@ -202,9 +202,17 @@ class ProductOptimizationService(BaseService):
             product.ai_status = ProductAIStatus.FAILED
             await self.flush()
             raise
-        activated = await self.versions.activate(product_id=product.id, version_id=version.id)
-        self._apply_active_version(product, activated)
+        # Generation stays outside FOR UPDATE so the three prompt calls do not
+        # hold the Product row. Activation then follows the same Product →
+        # ProductVersion → cache order as pipeline approve; otherwise a
+        # concurrent approve and this path deadlock on crossed row locks.
+        locked = await self.products.lock_for_update(product.id)
+        if locked is None:
+            raise NotFoundError.for_resource("Product", product.id)
+        activated = await self.versions.activate(product_id=locked.id, version_id=version.id)
+        self._apply_active_version(locked, activated)
         await self.flush()
+        product = locked
 
         self.logger.info(
             "product_optimized",
@@ -218,12 +226,17 @@ class ProductOptimizationService(BaseService):
         """Activate ORIGINAL or legacy AI versions.
 
         Pipeline candidates must go through `ProductPipelineService.approve`.
-        Parsing lives in this module so this method never imports the
-        pipeline service.
+        Product `FOR UPDATE` is taken first so this path cannot deadlock
+        with pipeline approve (Product then ProductVersion). Parsing lives
+        in this module so this method never imports the pipeline service.
         """
-        product = await self.products.get_by_id_or_raise(product_id)
+        product = await self.products.lock_for_update(product_id)
+        if product is None:
+            raise NotFoundError.for_resource("Product", product_id)
         version = await self.versions.get_by_id_for_product(
-            product_id=product.id, version_id=version_id
+            product_id=product.id,
+            version_id=version_id,
+            populate_existing=True,
         )
         if version is None:
             raise NotFoundError.for_resource("ProductVersion", version_id)
