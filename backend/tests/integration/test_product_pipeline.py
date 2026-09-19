@@ -3,23 +3,30 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.context import clear_context, set_tenant_id
-from app.core.exceptions import ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.integrations.aliexpress import service as service_module
 from app.models.ai_prompt import PromptExecution
-from app.models.product import Product, ProductVersionSource
+from app.models.product import Product, ProductAIStatus, ProductVersionSource
 from app.repositories.product import ProductVersionRepository
 from app.services.image_analysis import ImageAnalysisReport, ImageAnalysisService
-from app.services.product_pipeline import ProductPipelineService
-from tests.integration.test_products import REAL_PRODUCT_ID, connected_tenant
+from app.services.product_pipeline import PIPELINE_APPROVAL_TITLE_MAX, ProductPipelineService
+from tests.integration.test_products import (
+    REAL_PRODUCT_ID,
+    connected_tenant,
+    id_echoing_handler,
+    patch_aliexpress,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -70,6 +77,23 @@ async def _bind_tenant(db_session: AsyncSession, product_id: str) -> Product:
         await db_session.execute(select(Product).where(Product.id == uuid.UUID(product_id)))
     ).scalar_one()
     set_tenant_id(product.tenant_id)
+    return product
+
+
+async def _advance_product_updated_at(db_session: AsyncSession, product: Product) -> Product:
+    """Move `updated_at` the way a later HTTP request would.
+
+    Integration tests share one transaction with the app client, and Postgres
+    `now()` is frozen for that transaction — the same reason M2A concurrency
+    tests write `updated_at` directly instead of expecting a second flush to
+    advance it.
+    """
+    next_token = product.updated_at + timedelta(seconds=1)
+    await db_session.execute(
+        update(Product).where(Product.id == product.id).values(updated_at=next_token)
+    )
+    await db_session.flush()
+    await db_session.refresh(product)
     return product
 
 
@@ -223,3 +247,336 @@ class TestPreview:
         )
         assert response.status_code == 201, response.text
         assert response.json()["version"]["active"] is True
+
+
+class TestApprove:
+    async def test_approve_activates_the_exact_candidate(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await _import_product(client, monkeypatch)
+        merchant_title = product["title"]
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            approved = await pipeline.approve(
+                row.id,
+                version_id=preview.candidate_version_id,
+                expected_updated_at=row.updated_at,
+            )
+            versions = await ProductVersionRepository(db_session).list_for_product(row.id)
+            after_preview = await pipeline.get_preview(
+                row.id, version_id=preview.candidate_version_id
+            )
+        finally:
+            clear_context()
+
+        assert approved.ai_status is ProductAIStatus.OPTIMIZED
+        assert approved.ai_version == preview.candidate_version_number
+        assert approved.optimized_title == preview.proposal.title
+        assert approved.title == merchant_title
+        assert after_preview.candidate_active is True
+        assert all(item.code != "stale_preview" for item in after_preview.pipeline_blockers)
+        active = next(v for v in versions if v.id == preview.candidate_version_id)
+        assert active.active is True
+        after = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        assert after["title"] == merchant_title
+        assert after["seoTitle"] == product.get("seoTitle")
+        assert after["tags"] == product.get("tags")
+
+    async def test_reapprove_same_candidate_is_a_noop(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            pre_token = row.updated_at
+            first = await pipeline.approve(
+                row.id,
+                version_id=preview.candidate_version_id,
+                expected_updated_at=pre_token,
+            )
+            versions_after_first = await ProductVersionRepository(db_session).list_for_product(
+                row.id
+            )
+            retry_old = await pipeline.approve(
+                row.id,
+                version_id=preview.candidate_version_id,
+                expected_updated_at=pre_token,
+            )
+            await db_session.refresh(row)
+            retry_new = await pipeline.approve(
+                row.id,
+                version_id=preview.candidate_version_id,
+                expected_updated_at=row.updated_at,
+            )
+            versions_after_retry = await ProductVersionRepository(db_session).list_for_product(
+                row.id
+            )
+        finally:
+            clear_context()
+
+        assert retry_old.id == first.id
+        assert retry_new.id == first.id
+        assert len(versions_after_retry) == len(versions_after_first)
+        assert retry_old.optimized_title == first.optimized_title
+
+    async def test_first_approval_wins_for_the_same_source_token(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            first = await pipeline.preview(row.id, requested_by_user_id=None)
+            second = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            await pipeline.approve(
+                row.id,
+                version_id=first.candidate_version_id,
+                expected_updated_at=row.updated_at,
+            )
+            # Production approve bumps `updated_at` in its own transaction.
+            # This shared-transaction harness cannot observe that (Postgres
+            # `now()` is frozen), so advance the token the way M2A tests do.
+            await _advance_product_updated_at(db_session, row)
+            with pytest.raises(ConflictError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=second.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+            versions = await ProductVersionRepository(db_session).list_for_product(row.id)
+        finally:
+            clear_context()
+
+        assert exc_info.value.details.get("reason") == "stale_preview"
+        by_id = {v.id: v for v in versions}
+        assert by_id[first.candidate_version_id].active is True
+        assert by_id[second.candidate_version_id].active is False
+
+    async def test_stale_expected_updated_at_on_inactive_candidate(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            with pytest.raises(ConflictError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=datetime(2000, 1, 1, tzinfo=UTC),
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "draft_version_stale"
+
+    async def test_merchant_edit_makes_inactive_candidate_stale(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            await db_session.execute(
+                update(Product)
+                .where(Product.id == row.id)
+                .values(
+                    title="Merchant edited title",
+                    updated_at=row.updated_at + timedelta(seconds=5),
+                )
+            )
+            await db_session.flush()
+            await db_session.refresh(row)
+            with pytest.raises(ConflictError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "stale_preview"
+
+    async def test_missing_expected_updated_at_is_rejected(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            with pytest.raises(ValidationError):
+                await pipeline.approve(
+                    row.id,
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=None,
+                )
+        finally:
+            clear_context()
+
+    async def test_original_snapshot_is_not_approvable(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            await pipeline.preview(row.id, requested_by_user_id=None)
+            versions = await ProductVersionRepository(db_session).list_for_product(row.id)
+            original = next(v for v in versions if v.source is ProductVersionSource.ORIGINAL)
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=original.id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "original_not_approvable"
+
+    async def test_legacy_optimize_version_is_not_a_pipeline_candidate(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await _import_product(client, monkeypatch)
+        response = await client.post(
+            f"/api/v1/products/{product['id']}/optimize", json={}, headers=headers
+        )
+        version_id = uuid.UUID(response.json()["version"]["id"])
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await ProductPipelineService(db_session).approve(
+                    row.id,
+                    version_id=version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
+
+    async def test_oversized_title_is_not_truncated(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            version = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=preview.candidate_version_id
+            )
+            assert version is not None
+            oversized = "a" * (PIPELINE_APPROVAL_TITLE_MAX + 1)
+            content = dict(version.content)
+            content["title"] = oversized
+            version.content = content
+            flag_modified(version, "content")
+            await db_session.flush()
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+            reloaded = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=preview.candidate_version_id
+            )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "candidate_content_invalid"
+        assert reloaded is not None
+        assert reloaded.active is False
+        assert reloaded.content["title"] == oversized
+
+    async def test_blank_title_is_invalid(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            version = await ProductVersionRepository(db_session).get_by_id_for_product(
+                product_id=row.id, version_id=preview.candidate_version_id
+            )
+            assert version is not None
+            content = dict(version.content)
+            content["title"] = "   "
+            version.content = content
+            flag_modified(version, "content")
+            await db_session.flush()
+            await db_session.refresh(row)
+            with pytest.raises(ValidationError) as exc_info:
+                await pipeline.approve(
+                    row.id,
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()
+        assert exc_info.value.details.get("reason") == "candidate_content_invalid"
+
+    async def test_foreign_tenant_is_indistinguishable_from_missing(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            token = row.updated_at
+            version_id = preview.candidate_version_id
+            product_id = row.id
+        finally:
+            clear_context()
+
+        set_tenant_id(uuid.uuid4())
+        try:
+            with pytest.raises(NotFoundError):
+                await ProductPipelineService(db_session).approve(
+                    product_id,
+                    version_id=version_id,
+                    expected_updated_at=token,
+                )
+        finally:
+            clear_context()
+
+    async def test_wrong_product_version_is_not_found(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, first = await _import_product(client, monkeypatch)
+        patch_aliexpress(monkeypatch, id_echoing_handler)
+        second = (
+            await client.post(
+                "/api/v1/products/import",
+                json={"externalId": "3000000000001"},
+                headers=headers,
+            )
+        ).json()
+        assert second["id"] != first["id"]
+        row = await _bind_tenant(db_session, first["id"])
+        try:
+            pipeline = ProductPipelineService(db_session)
+            preview = await pipeline.preview(row.id, requested_by_user_id=None)
+            await db_session.refresh(row)
+            with pytest.raises(NotFoundError):
+                await pipeline.approve(
+                    uuid.UUID(second["id"]),
+                    version_id=preview.candidate_version_id,
+                    expected_updated_at=row.updated_at,
+                )
+        finally:
+            clear_context()

@@ -1,4 +1,4 @@
-"""Stage 7 product pipeline: preview, then (later commits) approve and publish.
+"""Stage 7 product pipeline: preview, approve, then (next commit) publish.
 
 Depends on `product_optimization` and the existing Shopify publisher.
 Never imported by `product_optimization` — that direction would cycle.
@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.sanitize import sanitize_html
 from app.models.product import Product, ProductVersion, ProductVersionSource
 from app.repositories.product import (
@@ -149,6 +149,64 @@ class ProductPipelineService(BaseService):
             image_analysis=await self._stored_image_report(product.id),
             store_id=store_id,
         )
+
+    async def approve(
+        self,
+        product_id: uuid.UUID,
+        *,
+        version_id: uuid.UUID,
+        expected_updated_at: datetime | None,
+    ) -> Product:
+        """Activate an exact pipeline candidate into the AI cache.
+
+        Does not publish. Does not write merchant/supplier/SEO/image fields.
+        `expected_updated_at` is required at runtime — None is a 422, matching
+        the draft-editor posture, so a forgotten token cannot skip M2A.
+        """
+        product = await self.products.lock_for_update(product_id)
+        if product is None:
+            raise NotFoundError.for_resource("Product", product_id)
+        version = await self.versions.get_by_id_for_product(
+            product_id=product.id,
+            version_id=version_id,
+            populate_existing=True,
+        )
+        if version is None:
+            raise NotFoundError.for_resource("ProductVersion", version_id)
+        if version.source is not ProductVersionSource.AI_GENERATED:
+            raise ValidationError(
+                "The original snapshot cannot be approved as a pipeline candidate.",
+                details={"reason": "original_not_approvable"},
+            )
+        metadata = parse_pipeline_candidate_metadata(version.content)
+        if expected_updated_at is None:
+            raise ValidationError(
+                "expectedUpdatedAt is required to approve a pipeline candidate. "
+                "Reload the product to get its current version, then approve again.",
+            )
+        if version.active:
+            return product
+        if expected_updated_at != product.updated_at:
+            raise ConflictError(
+                ("This draft changed somewhere else. Review the latest version before approving."),
+                details={"reason": "draft_version_stale"},
+            )
+        if metadata.source_updated_at != product.updated_at:
+            raise ConflictError(
+                "The product changed after this preview was generated.",
+                details={"reason": "stale_preview"},
+            )
+        title = version.content.get("title") if isinstance(version.content, dict) else None
+        storage = _title_storage_error(title)
+        if storage is not None:
+            raise ValidationError(
+                storage.message,
+                details={"reason": storage.code},
+            )
+        activated = await self.versions.activate(product_id=product.id, version_id=version.id)
+        self.optimization._apply_active_version(product, activated)
+        await self.flush()
+        return product
 
     async def _compose_preview(
         self,

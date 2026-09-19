@@ -1,4 +1,9 @@
-"""Unit coverage for Stage 7 pipeline preview helpers."""
+"""Unit coverage for Stage 7 pipeline preview helpers.
+
+Named distinctly from `tests/integration/test_product_pipeline.py` because
+pytest's default prepend import mode cannot collect two files with the same
+basename.
+"""
 
 from __future__ import annotations
 
