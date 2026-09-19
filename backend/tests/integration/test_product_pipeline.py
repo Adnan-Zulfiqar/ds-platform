@@ -20,7 +20,7 @@ from app.models.ai_prompt import PromptExecution
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductVersionRepository
 from app.schemas.product import DESCRIPTION_MAX_LENGTH
-from app.services.image_analysis import ImageAnalysisReport, ImageAnalysisService
+from app.services.image_analysis import ImageAnalysisItem, ImageAnalysisReport, ImageAnalysisService
 from app.services.product_pipeline import (
     PIPELINE_APPROVAL_TITLE_MAX,
     PIPELINE_PUBLISH_TITLE_MAX,
@@ -908,3 +908,78 @@ class TestPublish:
         finally:
             clear_context()
         assert exc_info.value.details.get("reason") == "not_a_pipeline_candidate"
+
+
+class TestImageAnalysisPolicy:
+    async def test_expected_image_failures_do_not_abort_preview(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        headers, product = await _import_product(client, monkeypatch)
+        before = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        alts = [image.get("altText") for image in before.get("images") or []]
+
+        async def _advisory(
+            self: ImageAnalysisService,
+            product_id: uuid.UUID,
+            *,
+            executed_by_user_id: uuid.UUID | None = None,
+        ) -> ImageAnalysisReport:
+            return ImageAnalysisReport(
+                product_id=product_id,
+                images=(
+                    ImageAnalysisItem(
+                        image_id=uuid.uuid4(),
+                        position=0,
+                        status="fetchFailed",
+                        error_code="fetchFailed",
+                        analysis={},
+                    ),
+                    ImageAnalysisItem(
+                        image_id=uuid.uuid4(),
+                        position=1,
+                        status="checksOnly",
+                        error_code=None,
+                        analysis={"checks": {"blur": {"isBlurry": True}}},
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(ImageAnalysisService, "analyse_product_images", _advisory)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            preview = await ProductPipelineService(db_session).preview(
+                row.id, requested_by_user_id=None
+            )
+        finally:
+            clear_context()
+
+        codes = [item.code for item in preview.pipeline_warnings]
+        assert "image_analysis_incomplete" in codes
+        assert "image_analysis_checks_only" in codes
+        assert "image_blurry" in codes
+        assert preview.publishable is False
+        after = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()
+        assert [image.get("altText") for image in after.get("images") or []] == alts
+
+    async def test_unexpected_image_analysis_error_does_not_generate(
+        self, client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _headers, product = await _import_product(client, monkeypatch)
+
+        async def _boom(
+            self: ImageAnalysisService,
+            product_id: uuid.UUID,
+            *,
+            executed_by_user_id: uuid.UUID | None = None,
+        ) -> ImageAnalysisReport:
+            raise RuntimeError("unexpected image analysis")
+
+        monkeypatch.setattr(ImageAnalysisService, "analyse_product_images", _boom)
+        row = await _bind_tenant(db_session, product["id"])
+        try:
+            with pytest.raises(RuntimeError, match="unexpected image analysis"):
+                await ProductPipelineService(db_session).preview(row.id, requested_by_user_id=None)
+            versions = await ProductVersionRepository(db_session).list_for_product(row.id)
+        finally:
+            clear_context()
+        assert not any(v.source is ProductVersionSource.AI_GENERATED for v in versions)
