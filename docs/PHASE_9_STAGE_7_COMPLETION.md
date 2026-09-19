@@ -35,7 +35,9 @@ From `85e11772`:
 4. `25adbd2` `feat(ai): add exact pipeline approval`
 5. `bcbc12f` `feat(ai): publish approved pipeline candidates`
 6. `9c2ff3e` `test(ai): harden Stage 7 pipeline contract`
-7. this commit `docs(ai): complete Stage 7 implementation report`
+7. `c75cc4d` `docs(ai): complete Stage 7 implementation report`
+8. `776b123` `fix(ai): serialize all Stage 7 activation paths`
+9. this commit `docs(ai): update Stage 7 remediation report`
 
 ---
 
@@ -51,14 +53,15 @@ ProductPipelineService.publish   → Product FOR UPDATE first → overlay
 | Piece | Behaviour |
 |---|---|
 | Shared generator | `_generate_version` in `product_optimization.py`; Stage 4 trio unchanged; Stage 5 scores candidate + original |
-| Legacy `optimize_product` | Still auto-activates an **unmarked** row; `AIError` still sets `ai_status=FAILED` without erasing last good cache |
+| Legacy `optimize_product` | Still auto-activates an **unmarked** row; three prompts run **outside** Product `FOR UPDATE`; then Product lock → version activate → cache. `AIError` still sets `ai_status=FAILED` without erasing last good cache |
 | `generate_candidate` | Inactive pipeline-marked row; does not activate; does not set FAILED |
 | Strict parser | `parse_pipeline_candidate_metadata` — exact int `1` (not bool), offset-aware ISO-8601, exact bool `isSynthetic` |
-| `activate_version` | Refuses parsed or corrupt pipeline rows; unmarked ORIGINAL/legacy activation unchanged |
+| `activate_version` | Product `FOR UPDATE` first; refuses parsed or corrupt pipeline rows; unmarked ORIGINAL/legacy activation unchanged |
 | Overlay | `ShopifyListingOverlay(title, body_html)` only; merchant SEO/tags/images/variants unchanged |
 | Approve | Lock first; `populate_existing` version read; already-active exact row is a no-op; first sibling wins |
-| Publish | Lock first (`PUBLISH_LOCK_TIMEOUT_MS`); fresh version read; provenance fail-closed; sanitize once; delegate to existing publisher |
+| Publish | `expectedUpdatedAt` required **before** the Product lock; then `PUBLISH_LOCK_TIMEOUT_MS`; source → strict metadata → active; provenance fail-closed; sanitize once; delegate to existing publisher |
 | Bounds | Approve title ≤ 512; publish title ≤ 255; sanitized body ≤ 64_000; no truncation |
+| Activation lock order | All business-level activations: Product → ProductVersion → Product cache. Not moved into `ProductVersionRepository.activate` |
 
 Dependency direction: `product_pipeline` → `product_optimization` → repositories. Never the reverse.
 
@@ -83,7 +86,7 @@ Dependency direction: `product_pipeline` → `product_optimization` → reposito
 
 ## 4. Local gates
 
-Run on this workstation after commits 1–6, before this docs commit.
+### After implementation commits 1–6 (before first docs commit)
 
 | Gate | Result |
 |---|---|
@@ -92,6 +95,22 @@ Run on this workstation after commits 1–6, before this docs commit.
 | `mypy app` | Success: no issues found in 230 source files |
 | full `pytest` | **3279 passed**, **1 skipped**, **1 failed**, 263 warnings, 462.05 s |
 | `python scripts/check_secrets.py` | PASS — 852 tracked files |
+| `git diff --check BASE...HEAD` | clean |
+| frontend | no diff; npm not run |
+
+### After independent-review remediation (`776b123`, before this docs commit)
+
+Targeted first: product optimization, Stage 7 pipeline, Stage 7 live publish locks, Shopify publish/idempotency, M2A concurrency — **267 passed**.
+
+Then:
+
+| Gate | Result |
+|---|---|
+| `ruff check .` | pass |
+| `ruff format --check .` | pass (439 files) |
+| `mypy app` | Success: no issues found in 230 source files |
+| full `pytest` | **3285 passed**, **1 skipped**, **1 failed**, 307 warnings, 640.84 s |
+| `python scripts/check_secrets.py` | PASS — 854 tracked files |
 | `git diff --check BASE...HEAD` | clean |
 | frontend | no diff; npm not run |
 
@@ -113,7 +132,7 @@ defect.** CI has no `.env`.
 
 No other pytest failure.
 
-Implementation PR CI and post-merge CI are **not claimed**.
+Implementation PR CI and post-merge CI are **not claimed**. PR is still not open.
 
 ---
 
@@ -146,9 +165,25 @@ unscoped query; accidental API/frontend/Celery/migration/workflow leakage.
    transaction write the token directly — the same pattern as M2A
    concurrency tests. Production HTTP requests are separate transactions;
    `TimestampMixin.onupdate=func.now()` bumps across them.
-3. **`approve(..., expected_updated_at: datetime | None)`.** The plan stub
-   types it as `datetime`. Runtime `None` is still a 422, matching
-   `update_draft`.
+3. **`approve` / `publish(..., expected_updated_at: datetime | None)`.** The
+   plan stubs type the token as `datetime`. Runtime `None` is a 422 on both
+   paths, matching `update_draft`. ShopifySyncService still accepts an
+   optional token for merchant/Celery callers.
+
+---
+
+## 5a. Independent review remediation
+
+Previous reviewed head: `c75cc4d`. Independent review: BLOCKER 0, HIGH 0,
+MEDIUM 2, LOW 1 contract-ordering cleanup. No PR opened.
+
+| Finding | Fix |
+|---|---|
+| M1 — pipeline approve (Product then version) vs legacy activate/optimize (version then Product) can deadlock | `activate_version` and `optimize_product` now take Product `FOR UPDATE` before `versions.activate`. Optimize still generates outside the Product lock. Rule stays in the services, not in `ProductVersionRepository.activate`. Live lock tests with hang guard. |
+| M2 — `publish(..., expected_updated_at=None)` skipped the M2A freshness guard | Pipeline `publish` rejects `None` with `ValidationError` **before** the Product lock. Shopify publisher is not called. `ShopifySyncService.publish_product` optional-token contract unchanged. |
+| LOW — inactive legacy/malformed rows could return `candidate_not_approved` before proving pipeline metadata | Under the Product lock: AI source → strict parse → active → provenance → bounds → overlay. Inactive legacy/malformed → `not_a_pipeline_candidate`. Valid inactive pipeline → `candidate_not_approved`. |
+
+Self-review of `85e11772...HEAD` after remediation: BLOCKER 0, HIGH 0, MEDIUM 0.
 
 ---
 
