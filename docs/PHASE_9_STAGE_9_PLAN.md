@@ -26,7 +26,9 @@ below is assumed from memory where the code could answer.
 | Stage 8 post-merge CI | run `35529859035` — 10/10 SUCCESS |
 | First plan head | `f6baa9a443dd3a3b2d87f54ea61c20f2f10ddc5c` (PR [#23](https://github.com/Adnan-Zulfiqar/ds-platform/pull/23)) |
 | First plan CI | run `35533340688` — 10/10 SUCCESS |
-| Independent review | BLOCKER 0, HIGH 3, MEDIUM 2 — remediations in this document |
+| Independent review | BLOCKER 0, HIGH 3, MEDIUM 2 — first remediations in `5482e4c` |
+| First remediation CI | run `35536090549` — 10/10 SUCCESS |
+| Second independent review | BLOCKER 0, HIGH 1, MEDIUM 3 — remediations in this document |
 | Alembic head | **0033** (`0033_product_image_analysis.py`) |
 | Migration this planning task | **NOT APPLIED** (authorized for implementation; see §10) |
 | Frontend this stage | **NO** |
@@ -94,6 +96,8 @@ Inspected before writing this plan.
 | Stage 7 preview | `ProductPipelineService.preview` | Analyse + `generate_candidate`. **Does not commit.** **Not idempotent.** Does not activate. Does not set `Product.ai_status=FAILED` |
 | Stage 8 HTTP | `POST /products/{id}/pipeline/preview` | `RequireAdmin`, 201, intentionally non-idempotent per successful call |
 | AI errors | `app/ai/exceptions.py` | `AIError.retryable` default `False`; `AIProviderNotConfiguredError.retryable=False`. No timeout/rate-limit subclass exists yet |
+| Provider exceptions in generation | `PromptService.test_render(execute=True)` and `execute_image_analysis` | Catch `AIError`, write FAILED `PromptExecution`, **return**. Subclass identity and `retryable` **do not escape** |
+| Preview-level raise | `ProductOptimizationService._generate_version` | On `_first_failure`, `raise AIError(failed.error_message or "...")` — a **new base** `AIError` (`retryable=False`). `preview` never sees `AIProviderNotConfiguredError` or a future `retryable=True` subclass |
 | Product AI status | `ProductAIStatus` | `not_optimized` / `optimized` / `failed` only. Comment says Stage 9 would need in-flight; see §8 |
 | Alembic | `0033` | Head. Next revision if schema is added: **0034** |
 | Frontend | `frontend/**` | Out of scope |
@@ -242,10 +246,13 @@ Worker:
 3. Claim `pending → running` with a fresh `lease_token` and this
    delivery's task id — or resume if this task id already owns a
    `running` run — or no-op if another owner holds a live lease.
-4. Loop: next `pending` item, one `transaction()` per product,
-   `preview` + item terminal write + counters + heartbeat, commit.
-5. Finalize: `completed` / `partial` / `failed` / honour `cancelled`.
-6. Always `clear_context()`.
+4. Configuration preflight: `get_ai_provider(settings)` only. No
+   `complete()`. On `AIProviderNotConfiguredError`, fail the run
+   (all still-pending items) and stop. See §21.
+5. Loop: next `pending` item — txn A claim-attempt, txn B resolve
+   `submitted_product_id` then `preview` + terminal write.
+6. Finalize: `completed` / `partial` / `failed` / honour `cancelled`.
+7. Always `clear_context()`.
 
 ### Why A, not B (fan-out per product)
 
@@ -395,8 +402,8 @@ its item row.
 | `id` | UUID PK |
 | `tenant_id` | Same tenant as the run (composite FK) |
 | `run_id` | Parent |
-| `product_id` | Nullable. SET NULL only on genuine hard delete (soft-delete leaves the id) |
-| `submitted_product_id` | Always the id the merchant sent, even if `product_id` is later NULL |
+| `product_id` | Nullable. **NULL at create for every item.** Set to the own-tenant product id only in the worker's terminal success/skip txn after scoped resolution. Composite FK `ON DELETE RESTRICT` (not SET NULL — that would also null `tenant_id`) |
+| `submitted_product_id` | Always the UUID the merchant sent. Never rewritten. Audit identity for foreign/missing ids |
 | `state` | Item state machine §12 |
 | `candidate_version_id` | Set iff `succeeded`. Exact preview this run produced |
 | `error_code` | Stable machine code or NULL |
@@ -428,6 +435,18 @@ item still names is refused by PostgreSQL until the item row is gone
 exists. Stage 10 still reads current candidate status via Stage 8 GET
 preview; a soft-deleted version is 404 there without rewriting this
 run.
+
+`product_id` FK: **`ON DELETE RESTRICT`**, same historical posture.
+
+Do **not** use generic composite `ON DELETE SET NULL`. PostgreSQL would
+SET NULL the referencing FK columns, including non-null `tenant_id`.
+Column-specific `ON DELETE SET NULL (product_id)` is not used: the
+repository has no proven Alembic pattern for it, and soft-delete is
+the catalogue contract. Hard delete of a product while an item still
+names it is refused. Soft-delete does not fire the FK; the worker's
+tenant-scoped lookup then treats the product as `missing` if it has
+not yet attached `product_id`, or leaves historical `product_id` on
+already-terminal items.
 
 ---
 
@@ -524,7 +543,7 @@ Indexes (query-backed, not speculative):
 | Tenant FK | (TenantScopedBase) | `tenant_id → tenants.id` `ON DELETE CASCADE` |
 | Unique | `uq_pipeline_bulk_run_items_run_product` | `(run_id, submitted_product_id)` |
 | Composite FK | `fk_pipeline_bulk_run_items_run_tenant` | `(tenant_id, run_id) → pipeline_bulk_runs(tenant_id, id)` `ON DELETE CASCADE` |
-| Composite FK | `fk_pipeline_bulk_run_items_product_tenant` | `(tenant_id, product_id) → products(tenant_id, id)` `ON DELETE SET NULL`, `product_id` nullable |
+| Composite FK | `fk_pipeline_bulk_run_items_product_tenant` | `(tenant_id, product_id) → products(tenant_id, id)` **`ON DELETE RESTRICT`**, `product_id` nullable |
 | Composite FK | `fk_pipeline_bulk_run_items_version_tenant` | `(tenant_id, candidate_version_id) → product_versions(tenant_id, id)` **`ON DELETE RESTRICT`**, `candidate_version_id` nullable |
 | CHECK | `ck_pipeline_bulk_run_items_succeeded_version` | `(state = 'succeeded' AND candidate_version_id IS NOT NULL) OR (state <> 'succeeded' AND candidate_version_id IS NULL)` |
 
@@ -538,12 +557,18 @@ Indexes:
 | `ix_pipeline_bulk_run_items_tenant_run` | `(tenant_id, run_id)` | paginated item GET |
 | `ix_pipeline_bulk_run_items_run_state` | `(run_id, state)` | worker "next pending", finalize counts |
 
-### 10.5 Candidate delete vs CHECK
+### 10.5 Product and candidate delete vs CHECK
 
-Soft-delete of a `ProductVersion` does not touch `candidate_version_id`.
-Hard delete is `RESTRICT`ed while a succeeded item still points at it.
-Never `SET NULL`. Never `CASCADE` the item. The CHECK and the FK then
-coexist.
+Both `product_id` and `candidate_version_id` composite FKs are
+**`ON DELETE RESTRICT`**.
+
+Soft-delete does not fire either FK. Hard delete of a named product or
+version is refused while an item still points at it. Never generic
+composite `SET NULL` (would null `tenant_id`). Never `CASCADE` the item.
+
+`product_id` is NULL at insert, so mixed foreign UUIDs do not touch
+`products` at create time. PostgreSQL MATCH SIMPLE skips the composite
+FK while `product_id` is NULL.
 
 ---
 
@@ -616,12 +641,27 @@ At create:
    the cap. **Never truncate.**
 3. Dedupe preserving first-seen order (`dict.fromkeys`).
 4. Persist `selection.productIds` and one `pending` item per id.
+   **Do not resolve Product ownership at create.**
+   Every item is inserted as:
+   - `submitted_product_id` = the submitted UUID
+   - `product_id` = **NULL**
 5. `total_count =` that length. Frozen.
 
 Unknown / foreign / deleted ids are **kept** in the snapshot. They
-become `missing` at execution. The whole request is not 404'd on a
-mixed list (that would enumerate which UUIDs exist). Foreign and
-deleted look the same: `missing`.
+cannot violate `fk_pipeline_bulk_run_items_product_tenant` at create
+because `product_id` is NULL. They become `missing` at execution after
+a tenant-scoped lookup of `submitted_product_id`. The whole request is
+not 404'd on a mixed list (that would enumerate which UUIDs exist).
+Foreign and deleted look the same: `missing`, `product_id` stays NULL.
+
+Worker later, in txn B:
+
+- if `submitted_product_id` resolves to an own live product: set
+  `product_id = product.id` in the same terminal transaction as the
+  outcome (success or skipped). The composite FK then proves same-tenant
+  linkage.
+- if it does not resolve: `state=missing`, `product_id` remains NULL,
+  `submitted_product_id` remains the audit identity.
 
 Retries of the worker never re-expand the catalogue.
 
@@ -657,18 +697,30 @@ fingerprint always sorts.
 `tone` is schema-validated `min_length=1`, `max_length=64`, matching
 `PipelinePreviewRequest`. Invalid tone is 422 and never inserts a run.
 
-Create flush / `IntegrityError` handling is deterministic and does **not**
-depend on inspecting which PostgreSQL constraint name fired:
+Create flush / `IntegrityError` handling. After a failed flush the
+SQLAlchemy transaction is unusable until recovered. Pin **full
+rollback** (this create txn has no successful product writes):
 
-1. Attempt insert + flush (run + items).
-2. On `IntegrityError`:
-   - **FIRST** re-read by `(tenant_id, idempotency_key)`.
-   - If that key exists:
-     - same fingerprint → return the original run (202)
-     - different fingerprint → 409 `conflict`
-   - If that key does **not** exist:
-     - treat as the active-run unique index → 409
-       `pipeline_bulk_run_active`
+```
+try:
+    add run + items
+    await flush()
+except IntegrityError:
+    await session.rollback()
+    concurrent = re-read by (tenant_id, idempotency_key)
+    if concurrent exists:
+        same fingerprint -> return existing (202)
+        different fingerprint -> 409 conflict
+    else:
+        409 pipeline_bulk_run_active
+```
+
+Do **not** query after `IntegrityError` without `rollback()`. Nested
+SAVEPOINT is not used; RuleApplication already rolls back the request
+session on this path.
+
+Tests must exercise **actual concurrent database constraint failures**
+(two overlapping inserts), not only sequential service calls.
 
 | Case | Result |
 |---|---|
@@ -706,6 +758,26 @@ Worker claim (own transaction):
 - set `claimed_by_task_id`, `started_at` / heartbeat
 - commit
 
+**Provider configuration preflight** (after claim, before any item
+txn A). Call existing `get_ai_provider(settings)` only — composition
+resolution, **no** `complete()` / `analyse_image()`.
+
+If it raises `AIProviderNotConfiguredError` (lease-conditional):
+
+- mark **all still-pending** items `failed` with
+  `errorCode=ai_provider_not_configured`, a safe message, `finishedAt`
+- recompute `processed_count` / `failed_count` from items
+- run `status=failed`, safe `failureReason`
+- **no** BaseTask retry
+- **no** `ProductVersion` generated
+- remaining generation does not start
+
+This is after claim so a misconfigured deployment cannot leave the run
+`pending` for the reconciler to republish 50 times. It is before the
+item loop so the same known-bad configuration is not run through up to
+50 products via `preview` (which would swallow the subclass and raise
+a new base `AIError` per product).
+
 Worker item is **two** transactions. `attempt_count` is not incremented
 inside the generation transaction (that increment would roll back with
 a retryable failure and lie).
@@ -724,17 +796,26 @@ a retryable failure and lie).
 1. Re-validate run lease/fence. Abort if lost or cancelled.
 2. Lock the same item. If already terminal → no-op counters.
 3. Item must still be `pending`.
-4. Call `ProductPipelineService.preview` on **this session**
+4. Tenant-scoped lookup of `submitted_product_id`.
+   - unresolved / foreign / soft-deleted → `state=missing`,
+     `product_id` stays NULL, increment `missing_count` and
+     `processed_count`, heartbeat, commit. **Do not call `preview`.**
+   - own live product → set `product_id = product.id` in this txn
+     (composite FK now binds same-tenant).
+   - archived / `UNAVAILABLE` → `skipped`, `product_id` attached,
+     `error_code=product_not_eligible`. No `preview`.
+5. Call `ProductPipelineService.preview` on **this session**
    (no commit inside the service — verified).
-5. On success: item `succeeded` + `candidate_version_id`; increment
+6. On success: item `succeeded` + `candidate_version_id`; increment
    `succeeded_count` and `processed_count`; heartbeat.
-6. On classified **permanent product** error: item
-   `failed`/`missing`/`skipped` + safe error fields; increment the
-   matching counter and `processed_count`; heartbeat.
-7. On classified **run-level** `store_not_found`: roll back this txn
-   (no candidate); then a separate lease-conditional fail of the run
-   (see Store contract). Do not mark the item `missing`.
-8. Commit.
+7. On classified **permanent product** error: item `failed` + safe
+   error fields; increment `failed_count` and `processed_count`;
+   heartbeat.
+8. On classified **run-level** `store_not_found`: roll back this txn
+   (no candidate; `product_id` attach rolls back too); then a separate
+   lease-conditional fail of the run (see Store contract). Do not mark
+   the item `missing`.
+9. Commit.
 
 If txn B rolls back: no `ProductVersion`, item still `pending`,
 progress counters unchanged. `attempt_count` from txn A **remains**.
@@ -744,9 +825,12 @@ include a claimed attempt that performed **no** provider call. That is
 the defined meaning: **number of durable processing attempts
 entered/claimed**, not a guaranteed provider-call count.
 
-Retryable errors raised from txn B leave the item `pending` and let
-BaseTask retry the run. The next loop/retry runs txn A again
-(increments `attempt_count` again) then txn B.
+Infrastructure errors raised from txn B (database disconnect, unexpected
+bugs, time limits) leave the item `pending` and let BaseTask retry the
+run. The next loop/retry runs txn A again (increments `attempt_count`
+again) then txn B.
+
+`AIError` raised by `preview` is **not** treated as transient. See §21.
 
 Worker finalize (own transaction, lease-conditional):
 
@@ -900,30 +984,89 @@ call `asyncio.run` without disposing the engine.
 
 ## 21. Retry classification
 
-`BaseTask` retries every uncaught `Exception`. Stage 9 must **catch
-permanent item failures inside the item loop** so they never propagate.
+Stage 9 **does not change** `PromptService`, `ProductOptimizationService`,
+or `ProductPipelineService`.
+
+### A. Provider configuration preflight
+
+`get_ai_provider(settings)` is called once after claim, before any
+item generation. That is the composition boundary that today raises
+`AIProviderNotConfiguredError` when `AI_PROVIDER` names an unimplemented
+backend.
+
+This call does **not** complete a prompt. If it raises
+`AIProviderNotConfiguredError`:
+
+- lease-conditionally mark **all still-pending** items `failed`
+  (`errorCode=ai_provider_not_configured`, safe message, `finishedAt`)
+- recompute counters from items
+- run `failed` with a safe `failureReason`
+- **no** BaseTask retry
+- **no** `ProductVersion`
+
+Do not rely on catching `AIProviderNotConfiguredError` from
+`preview(...)`. `PromptService.test_render(execute=True)` catches
+`AIError`, writes a FAILED `PromptExecution`, and **returns**.
+`_generate_version` then `raise AIError(...)` — a **new base** instance.
+The subclass never reaches the bulk worker from that path.
+
+### B. `AIError` from `ProductPipelineService.preview`
+
+The accepted Stage 7 path normalizes provider failures into base
+`AIError(retryable=False)`.
+
+Stage 9 therefore treats every `AIError` that escapes `preview` as a
+**permanent item failure** (`error_code=ai_error`, no Celery retry).
+
+Do **not** claim Stage 9 can currently observe
+`AIProviderNotConfiguredError` or `AIError(retryable=True)` from the
+real preview path.
+
+### C. What BaseTask retries actually cover
+
+There is no live provider and no retryable-exception propagation
+contract from provider → `PromptService` → optimization → pipeline.
+
+Implemented task retries cover:
+
+- database / infrastructure exceptions that actually escape
+- worker / time-limit failures
+- unexpected exceptions
+- recovery after `acks_late` / reclaim
+
+They do **not** claim live provider timeout or rate-limit retry
+semantics.
+
+When a real provider is added, **that provider stage** must define how
+`retryable` survives:
+
+provider → `PromptService` → `ProductOptimizationService` →
+`ProductPipelineService`
+
+before Stage 9 may classify provider transient failures. Until then,
+do not monkeypatch `preview` to raise `AIError(retryable=True)` and
+call that "real provider pipeline verification". A unit test of
+**task retry mechanics** may raise a synthetic `Exception` (or a test
+double that is not `preview`); label it as task retry mechanics only.
 
 | Error | Item / run | Retry the Celery task? |
 |---|---|---|
+| Preflight `AIProviderNotConfiguredError` | run-level fail all remaining pending items; no versions | no |
+| `AIError` from `preview` (always base, `retryable=False` today) | item `failed`, `error_code=ai_error` | no |
 | `NotFoundError` whose resource is **Product** | item `missing` | no |
-| `NotFoundError` whose resource is **Store** | **run-level** `store_not_found`: roll back current preview; stop remaining items; finalize `failed`; prior successes kept. **Not** item `missing` | no |
-| Soft-deleted product | item `missing` | no |
+| `NotFoundError` whose resource is **Store** | **run-level** `store_not_found`; roll back current preview; stop remaining; prior successes kept. **Not** item `missing` | no |
+| Soft-deleted product (scoped lookup) | item `missing`; `product_id` stays NULL | no |
 | Archived / `UNAVAILABLE` | item `skipped`, `error_code=product_not_eligible` | no |
-| `ValidationError` (malformed product / prompt vars / bound failure) | item `failed`, use domain `code` | no |
+| `ValidationError` (malformed product / prompt vars) | item `failed`, use domain `code` | no |
 | `ConflictError` (unexpected on preview) | item `failed` | no |
-| `AIProviderNotConfiguredError` | **run-level**: mark this item `failed` with `ai_provider_not_configured`; remaining `pending` items `failed` with the same code; finalize `failed`. Configuration will not heal mid-run | no |
-| `AIError` with `retryable=False` (current default, including base `AIError`) | item `failed`, `error_code=ai_error` | no |
-| `AIError` with `retryable=True` | none yet in tree; when added: **raise** so BaseTask retries the run; item stays `pending`; `attempt_count` already committed in txn A | yes |
+| `MissingPromptVariablesError` | item `failed` (it is a `ValidationError`) | no |
 | DB / `OperationalError` / disconnect | raise | yes |
 | SoftTimeLimitExceeded / time limit | raise; lease still held until reclaim | yes, then exhaustion / reclaim |
 | Unexpected `Exception` | raise (do **not** record as a quiet item failure) | yes |
 | Missing run row | return no-op | no |
 
-Catch `NotFoundError` by `details["resource"]` (see
-`NotFoundError.for_resource`). Do **not** treat every `NotFoundError`
-as a missing product.
-
-`MissingPromptVariablesError` is a `ValidationError` — terminal item.
+Catch `NotFoundError` by `details["resource"]`. Do **not** treat every
+`NotFoundError` as a missing product.
 
 Do not globally swallow bugs as item failures. Exhaustion path logs
 `task_failed_permanently` via BaseTask and lease-conditional
@@ -1231,7 +1374,7 @@ widen Stage 8's policy by a side door. Stage 10 may revisit.
 |---|---|
 | Foreign `run_id` GET | 404 |
 | Foreign item via own run id | impossible (items scoped by run + tenant) |
-| Foreign `productId` in start list | accepted as snapshot id; executes as `missing`; no candidate |
+| Foreign `productId` in start list | accepted; item created with `product_id` NULL; executes as `missing`; no candidate; no FK violation |
 | Foreign / missing `storeId` on POST | **404**, no run created |
 | Store deleted after run accepted | run `failed` `store_not_found`; prior successes kept; no item `missing` |
 | Mixed own + foreign product ids | run starts; own products generate; foreign `missing`; no 404 that distinguishes them |
@@ -1311,14 +1454,23 @@ Default page size 25, max 100 — existing platform constants.
 - 51 ids 422 naming 50
 - tone `""` or >64 chars 422
 - mixed foreign **product** ids accepted; later `missing`
+- at create, **every** item has `productId=null`; `submittedProductId` set
+- own successful item later has `productId` = own id
+- missing/foreign item `productId` stays null
+- no cross-tenant `(tenant_id, product_id)` can be persisted
+- `ON DELETE RESTRICT` on product FK (hard delete of a referenced
+  product is refused)
 - foreign `storeId` → 404, **no run row**
 - own missing/deleted `storeId` → 404, no run
 - duplicate key + same fingerprint returns original
 - same key different tone/ids/store 409 `conflict`
 - **A.** two simultaneous requests, same idempotency key, same payload
   → exactly one row; both resolve to that run
+  (real overlapping inserts that hit `IntegrityError`, including
+  `session.rollback()` before the re-read — not sequential fakes)
 - **B.** two simultaneous requests, **different** idempotency keys
   → exactly one active run; one 202; one 409 `pipeline_bulk_run_active`
+  (real overlapping inserts against the partial unique index)
 - **C.** after first run terminal, second key may create a new run
 - snapshot frozen (new product matching nothing in the list is not added)
 
@@ -1346,15 +1498,23 @@ Default page size 25, max 100 — existing platform constants.
 
 ### Retries
 
-- `retryable=True` AIError subclass (test double) retries; no extra
-  candidate
-- `attemptCount` increments on txn A even when txn B rolls back a
-  retryable error; next retry increments again
+- Preflight `AIProviderNotConfiguredError` (via `get_ai_provider`,
+  **not** via `preview`) → run `failed`, all pending items failed with
+  `ai_provider_not_configured`, **zero** ProductVersions, no three
+  Celery retries
+- `preview` raising base `AIError` → item `failed`; task does not retry
+- Do **not** monkeypatch `preview` to raise `AIError(retryable=True)`
+  and call that provider-pipeline verification
+- A **task-retry-mechanics** unit test may raise a synthetic
+  `Exception` from the worker loop (infrastructure stand-in); label it
+  as such
+- `attemptCount` increments on txn A even when txn B rolls back an
+  infrastructure error; next retry increments again
 - worker-death after txn A before preview: `attemptCount >= 1`, item
   still `pending`, later success does not duplicate the candidate
 - `ValidationError` → item `failed`, task does not retry three times
-- `AIProviderNotConfiguredError` → run `failed`, no three retries
-- exhaustion → run `failed`, prior successes kept
+- exhaustion of infrastructure retries → run `failed`, prior successes
+  kept
 
 ### Progress
 
@@ -1423,23 +1583,33 @@ The harness must:
 5. Let the **already running** Celery worker consume it.
 6. Poll **PostgreSQL** (run row `status` / counts), **not**
    `AsyncResult`, until the run is terminal, with a bounded timeout.
-7. Assert:
+7. Assert (do **not** assert `COUNT(product_versions) == 1` on a
+   product that had no versions yet — Stage 7 lazy snapshot may also
+   create ORIGINAL version 1):
    - run left `pending`/`running` and became a success terminal
      (`completed` for a one-item success)
    - item `succeeded`
    - `candidateVersionId` stored
-   - exactly one `ProductVersion` is that item's effect
+   - **exactly one pipeline-marked `AI_GENERATED` candidate** exists
+     for that product as this item's effect
+   - that row's `id == item.candidate_version_id`
    - `active=false`
-   - pipeline-marked (`pipelineCandidateVersion=1`)
+   - `pipelineCandidateVersion == 1`
+   - an ORIGINAL snapshot **may** also exist; that is Stage 7, not a
+     harness failure
    - no approval, no `StoreListing`, no Shopify call
    - candidate `tenant_id` equals the durable run `tenant_id`
 8. Deliver a **duplicate** real broker message for the **same** run id.
 9. Assert after the worker handles it:
-   - still exactly one candidate for that item effect
+   - count of **pipeline-marked** candidates for this run item remains
+     exactly 1
+   - `candidateVersionId` unchanged
    - `succeededCount` unchanged
    - `processedCount` unchanged
-   - same `candidateVersionId`
    - task no-ops safely (claim/terminal short-circuit)
+
+Do not alter Stage 7 lazy original-snapshot semantics to make the
+harness simpler.
 
 That is the real at-least-once / duplicate-delivery acceptance.
 
@@ -1505,6 +1675,8 @@ Must **not** modify in Stage 9 implementation unless a STOP review
 says otherwise:
 
 - `product_pipeline.py` behaviour
+- `product_optimization.py` behaviour
+- `prompt.py` (`PromptService.test_render` / `execute_image_analysis`)
 - Stage 8 request/response semantics (tone bounds are copied, not
   changed)
 - `frontend/**`
@@ -1542,6 +1714,9 @@ This planning PR contains **no** migration.
 - `Product` / `ProductVersion` **behaviour** unchanged. 0034 may add
   only `UNIQUE (tenant_id, id)` metadata matching pairs, as in 0024
 - No silent Stage 7 extension. If one is discovered necessary: STOP
+- `PromptService` still swallows `AIError` into FAILED executions;
+  `_generate_version` still raises a new base `AIError`. Stage 9 does
+  not "fix" that to make Celery classification nicer.
 
 ---
 
@@ -1582,7 +1757,7 @@ Remaining LOWs:
 | L4 | Compose worker does not consume `integrations` | Pre-existing. Stage 9 avoids that queue |
 | L5 | Stage 8 single-product preview can race a bulk item on the same product | Preserving Stage 8 non-idempotence is mandatory. Extra candidate is the same as clicking Preview twice |
 | L6 | `enqueued_at` not set on the happy after_commit path | Same as RuleApplication. Age + `pending` is the unpublished signal |
-| L7 | Live provider timeout/rate-limit classes do not exist | Cannot claim real provider retry behaviour. When those subclasses appear with `retryable=True`, classification in §21 already covers them |
+| L7 | Live provider timeout/rate-limit classes do not exist, and `retryable` does not survive `PromptService` → `_generate_version` | Stage 9 does **not** claim provider transient retry. Preflight covers not-configured. Preview `AIError` is a permanent item failure. A future provider stage must restore `retryable` through the stack before Stage 9 classifies it |
 | L8 | POST start always 202, including idempotent replay of a finished run | Matches RuleApplication. Clients read `status` in the body |
 | L9 | Cancelled run leaves remaining items `pending` | Matches RuleApplication. Run `status=cancelled` is the explanation |
 | L10 | No in-flight `ProductAIStatus` | Progress is the run row. Avoids lying on listing chips that mean legacy optimize |
@@ -1590,6 +1765,7 @@ Remaining LOWs:
 | L12 | `UNIQUE (tenant_id, id)` on products/versions is redundant identity | Required as composite-FK targets. Same 0024 pattern. No behaviour change |
 | L13 | `store_id` is not a composite tenant FK | `stores` has no `(tenant_id, id)` unique pair; Stage 9 does not add a third. Create uses scoped `StoreRepository`. Residual: only application code plus `ON DELETE RESTRICT` |
 | L14 | Live worker-kill redelivery is not run in CI | Duplicate real-broker delivery is. Crash/reclaim is fencing-tested |
+| L15 | Product/version `ON DELETE RESTRICT` blocks hard delete while items reference them | Soft-delete is the catalogue contract. GDPR erasure deletes or clears the run first. Matches candidate historical posture |
 
 ---
 
@@ -1598,13 +1774,15 @@ Remaining LOWs:
 1. Migration 0034 (including product/version unique pairs) + models +
    `models/__init__.py` + `product.py` UniqueConstraint-only
 2. Repositories (scoped + lookup) + isolation tests
-3. Service: create / claim / txn A attempt / txn B preview / finalize /
-   fail / cancel / reclaim / fingerprint / store validation
+3. Service: create (rollback-on-IntegrityError) / claim /
+   `get_ai_provider` preflight / txn A attempt / txn B resolve+preview /
+   finalize / fail / cancel / reclaim / fingerprint / store validation
 4. Tasks: `_run`, publish after commit, process, reconcile
 5. `celery_app` imports + beat + `verify_celery_broker.py` names
 6. Schemas + four HTTP routes
-7. Integration tests (API, concurrent A/B/C, queue harness, fencing,
-   recovery, attemptCount, store 404 / store-during-run)
+7. Integration tests (API, concurrent A/B/C real constraint races,
+   mixed foreign `product_id` NULL, queue harness, fencing, recovery,
+   attemptCount, store 404 / store-during-run, preflight not-configured)
 8. `verify_pipeline_bulk_broker.py` + CI celery-broker step: real run
    through RabbitMQ + duplicate delivery
 9. Docs: completion, CHANGELOG, roadmap, PHASE_9_PLAN
@@ -1625,6 +1803,7 @@ Remaining LOWs:
 - No frontend diff
 - `origin/main` unchanged
 - No live-AI quality claims
+- No claim of live provider timeout/rate-limit retry
 - No claim of live worker-crash redelivery
 
 ---
@@ -1671,10 +1850,17 @@ end-to-end review when Claude becomes available again.
 | Real worker never exercises pipeline | HIGH | `verify_pipeline_bulk_broker.py`: real run, real product, real `preview` under worker |
 | Fake "broker verified" from Python `.run()` | HIGH | Harness uses `send_task` + separate worker; unknown-run smoke is extra, not enough |
 | Concurrent different-key active-run race | HIGH | partial unique `uq_pipeline_bulk_runs_tenant_active`; test B |
-| Same-key `IntegrityError` ambiguity | HIGH | Always re-read by key first; fingerprint; else `pipeline_bulk_run_active` |
+| Same-key `IntegrityError` ambiguity | HIGH | `rollback()` then re-read by key; fingerprint; else `pipeline_bulk_run_active` |
+| `IntegrityError` re-query before rollback | HIGH | explicit `await session.rollback()` before any re-read |
 | Impossible PostgreSQL composite FK | HIGH | 0034 adds `UNIQUE (tenant_id, id)` on products and product_versions first |
 | ORM / migration schema drift | HIGH | authorized `product.py` UniqueConstraint-only matching 0034 |
 | Candidate delete / CHECK contradiction | HIGH | `ON DELETE RESTRICT`, never SET NULL |
+| Product composite SET NULL nulling `tenant_id` | HIGH | product FK `ON DELETE RESTRICT`; `product_id` NULL at create |
+| Mixed foreign ids violating FK at creation | HIGH | all items inserted with `product_id=NULL`; worker attaches only after scoped resolve |
+| Provider exception subtype lost by `PromptService` | HIGH | honest: `preview` raises new base `AIError`; preflight uses `get_ai_provider` |
+| False claims of retryable provider handling | HIGH | not claimed; synthetic task-retry tests labelled as mechanics only |
+| Provider-not-configured repeated across 50 items | HIGH | preflight after claim, fail all remaining pending once |
+| Lazy ORIGINAL snapshot false candidate-count | HIGH | harness counts pipeline-marked `AI_GENERATED` only |
 | Foreign/deleted store as product `missing` | HIGH | create-time 404; worker classifies `NotFoundError` by resource; run-level `store_not_found` |
 | `attemptCount` rolls back with preview | HIGH | txn A commits the increment before provider I/O |
 | Permanent 4xx retried three times | HIGH | Catch inside item loop; do not raise |
@@ -1685,7 +1871,7 @@ end-to-end review when Claude becomes available again.
 | Duplicate publication | MEDIUM | claim no-op |
 | Two concurrent starts same key | HIGH | idempotency unique + IntegrityError path; test A |
 | Same key different payload | HIGH | fingerprint 409 |
-| Mixed foreign product ids | MEDIUM | snapshot + `missing`; no existence oracle |
+| Mixed foreign product ids | MEDIUM | snapshot + `product_id` NULL at create + `missing` at execution; no existence oracle |
 | Huge broker payload | HIGH | `run_id` only |
 | Huge status response | HIGH | summary vs paginated items |
 | Auto approve / publish / AI SEO | BLOCKER | preview only; pin §6 |
