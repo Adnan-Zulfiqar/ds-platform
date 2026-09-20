@@ -24,6 +24,9 @@ below is assumed from memory where the code could answer.
 | Stage 8 implementation | PR [#22](https://github.com/Adnan-Zulfiqar/ds-platform/pull/22) head `f88c34c89ad030e1fe11b1ac44aaf0965cd65ae6` |
 | Stage 8 merge | `91a7069e73957822550ac47dc14fab0c30d1608a` |
 | Stage 8 post-merge CI | run `35529859035` — 10/10 SUCCESS |
+| First plan head | `f6baa9a443dd3a3b2d87f54ea61c20f2f10ddc5c` (PR [#23](https://github.com/Adnan-Zulfiqar/ds-platform/pull/23)) |
+| First plan CI | run `35533340688` — 10/10 SUCCESS |
+| Independent review | BLOCKER 0, HIGH 3, MEDIUM 2 — remediations in this document |
 | Alembic head | **0033** (`0033_product_image_analysis.py`) |
 | Migration this planning task | **NOT APPLIED** (authorized for implementation; see §10) |
 | Frontend this stage | **NO** |
@@ -95,6 +98,9 @@ Inspected before writing this plan.
 | Alembic | `0033` | Head. Next revision if schema is added: **0034** |
 | Frontend | `frontend/**` | Out of scope |
 | Live AI | `AISettings.provider` default `stub` | No live provider configured or verified |
+| Composite FK precedent | migration `0024` + `pricing.py` / `shipping.py` | `UNIQUE (tenant_id, id)` exists solely as an FK target. `id` is already globally unique. Stage 9 copies this for `products` and `product_versions` |
+| Product / version PKs | `products.id`, `product_versions.id` | **No** `UNIQUE (tenant_id, id)` today. Composite FKs from bulk items are impossible until 0034 adds those pairs |
+| Stage 8 tone | `PipelinePreviewRequest.tone` | `min_length=1`, `max_length=64`. Bulk start must match |
 
 ---
 
@@ -289,7 +295,7 @@ Conceptual columns:
 | `request_fingerprint` | SHA-256 hex (64 chars) of canonical payload |
 | `status` | See §11 |
 | `tone` | Run-level generation tone |
-| `store_id` | Optional. Advisory readiness only. Tenant-scoped FK |
+| `store_id` | Optional. Advisory readiness only. Nullable FK `stores.id` `ON DELETE RESTRICT`. Ownership is validated at create via tenant-scoped `StoreRepository`; see Store contract below |
 | `requested_by_user_id` | Actor. `ON DELETE SET NULL` |
 | `selection` | JSONB snapshot of submitted product ids (deduped, ordered) |
 | `claimed_by_task_id` | Celery identity of the current attempt. Not the fence |
@@ -316,6 +322,62 @@ pipeline preview must not look like legacy optimize, and
 `generate_candidate` already refuses to write `FAILED`. Progress lives
 on `PipelineBulkRun`. No new `ProductAIStatus` value in 0034.
 
+Run-table uniqueness (database, not SELECT-then-INSERT):
+
+| Constraint | Columns / predicate | Name |
+|---|---|---|
+| Idempotency | `UNIQUE (tenant_id, idempotency_key)` | `uq_pipeline_bulk_runs_tenant_idempotency` |
+| Composite FK target | `UNIQUE (tenant_id, id)` | `uq_pipeline_bulk_runs_tenant_id_id` |
+| **One active run per tenant** | partial unique index on `tenant_id` `WHERE status IN ('pending', 'running')` | `uq_pipeline_bulk_runs_tenant_active` |
+
+The partial unique index is the cost bound. Two concurrent POSTs with
+**different** idempotency keys cannot both insert `pending`. Application
+pre-checks are allowed as a fast path but are **not** the invariant.
+
+### Store contract (run-level)
+
+`storeId` is optional. It does not cause publishing. It is a **run-level
+resource**, not a per-product id.
+
+At HTTP create, if `storeId` is supplied:
+
+1. `StoreRepository.get_by_id_or_raise(store_id)` under the authenticated
+   tenant (existing tenant-scoped repo).
+2. Foreign or missing store → **404** `not_found`. Same envelope as
+   Stage 8 foreign store. Do **not** create a run. Do **not** reveal
+   whether the UUID exists in another tenant.
+3. Persist only that own-tenant id.
+4. Shopify connected / platform / readiness problems remain **advisory**
+   at generation time, matching Stage 7 `preview` readiness. Create does
+   not require a connected store.
+
+Race: store valid at create, then soft-deleted or gone before/during
+worker `preview`.
+
+That is **not** product `missing`.
+
+Pinned worker behaviour:
+
+1. Classify via `NotFoundError.details["resource"]` (or an explicit
+   store re-read before `preview`). `Store` → run-level
+   `store_not_found`. `Product` → item `missing`. Never collapse them.
+2. Roll back the current item's `preview` transaction (no candidate).
+3. Stop remaining generation: the shared readiness destination is
+   invalid.
+4. Finalize the run `failed` with `failure_reason` / code
+   `store_not_found`.
+5. Prior **succeeded** items and their candidates **remain**.
+6. The current item stays `pending` (rolled back) or is left `pending`;
+   remaining pending items stay `pending`. None of them are marked
+   `missing` because a store disappeared.
+
+`store_id` FK: `ON DELETE RESTRICT` so a hard delete of a referenced
+store cannot silently null the run. Soft-delete leaves the row; the
+scoped read fails and takes the path above. No composite store FK:
+`stores` has no `(tenant_id, id)` unique pair today, and Stage 9 does
+not add one. Create-time scoped lookup is the tenant check. Accepted
+LOW.
+
 ---
 
 ## 9. Durable item design
@@ -339,24 +401,37 @@ its item row.
 | `candidate_version_id` | Set iff `succeeded`. Exact preview this run produced |
 | `error_code` | Stable machine code or NULL |
 | `error_message` | Safe short message. Never traceback / secrets |
-| `attempt_count` | How many times this item entered generation in this run |
-| `started_at` / `finished_at` | Optional timestamps |
+| `attempt_count` | Durable processing attempts **entered/claimed**. Integer, default 0. Not a guaranteed provider-call count. See §15 |
+| `started_at` / `finished_at` | `started_at` set on first claim-attempt commit; `finished_at` on terminal item commit |
 
-Unique: `(run_id, submitted_product_id)` — one effect per product per
+Unique: `(run_id, submitted_product_id)` named
+`uq_pipeline_bulk_run_items_run_product` — one effect per product per
 run.
 
 `candidate_version_id` is what Stage 10 opens. Clients must not guess
 from version history.
 
-Succeeded item invariant (DB CHECK or service fail-closed + test):
+Succeeded item invariant (table CHECK `ck_pipeline_bulk_run_items_succeeded_version`):
 
 - `state=succeeded` ⇒ `candidate_version_id IS NOT NULL`
 - `candidate_version_id IS NOT NULL` ⇒ `state=succeeded`
-- failed/missing/skipped ⇒ `candidate_version_id IS NULL`
+- failed/missing/skipped/pending ⇒ `candidate_version_id IS NULL`
+
+`candidate_version_id` FK: **`ON DELETE RESTRICT`**.
+
+`ON DELETE SET NULL` would violate the CHECK. `ON DELETE CASCADE` would
+delete bulk history. Soft-delete of `ProductVersion` does not fire the
+FK (the row stays). A later hard delete of a version that a succeeded
+item still names is refused by PostgreSQL until the item row is gone
+(GDPR erasure of the run, or an explicit admin path that is not Stage
+9). Bulk outcome remains historical for as long as the candidate row
+exists. Stage 10 still reads current candidate status via Stage 8 GET
+preview; a soft-deleted version is 404 there without rewriting this
+run.
 
 ---
 
-## 10. Migration decision
+## 10. Migration decision and schema contract
 
 **MIGRATION REQUIRED: YES**
 
@@ -372,10 +447,103 @@ Proposed revision:
 | Revision | **0034** |
 | File (implementation, not this PR) | `backend/alembic/versions/0034_pipeline_bulk_runs.py` |
 | `down_revision` | `0033` |
-| `upgrade` | enums + two tables + indexes + constraints |
-| `downgrade` | drop tables + enums. Must work |
+| `upgrade` | see exact DDL below |
+| `downgrade` | reverse of upgrade, including dropping the product/version unique pairs this revision adds. Must work |
 
 This planning PR does **not** add 0034.
+
+### 10.1 Target unique pairs (required for composite FKs)
+
+PostgreSQL will not accept
+`(tenant_id, product_id) → products(tenant_id, id)` unless
+`products` has `UNIQUE (tenant_id, id)`. Same for `product_versions`.
+Today both tables have PK `(id)` only.
+
+**Strategy: retain DB-level tenant integrity.** Copy migration 0024.
+
+0034 adds, before creating item FKs:
+
+| Name | Table | Columns |
+|---|---|---|
+| `uq_products_tenant_id_id` | `products` | `(tenant_id, id)` |
+| `uq_product_versions_tenant_id_id` | `product_versions` | `(tenant_id, id)` |
+
+These pairs are redundant as identity (`id` is already globally unique).
+They exist **solely** as referenced keys for composite FKs.
+
+ORM metadata **must** match. Implementation is authorized to add the
+matching `UniqueConstraint` entries in `backend/app/models/product.py`
+(`Product` and `ProductVersion` `__table_args__` only).
+
+Explicitly:
+
+- **NO** column semantics change
+- **NO** Stage 7/8 business behaviour change
+- **NO** version-content change
+- **NO** activation/publish change
+- **NO** new columns on `products` or `product_versions`
+
+Do not leave an impossible FK contract. Do not claim composite FKs
+without these unique pairs.
+
+### 10.2 Enums
+
+Values, not names (`values_callable`). PostgreSQL types:
+
+- `pipeline_bulk_run_status`: `pending`, `running`, `completed`,
+  `partial`, `failed`, `cancelled`
+- `pipeline_bulk_item_state`: `pending`, `succeeded`, `failed`,
+  `skipped`, `missing`
+
+### 10.3 `pipeline_bulk_runs` constraints
+
+| Kind | Name | Definition |
+|---|---|---|
+| PK | (default) | `id` UUID |
+| Tenant FK | (TenantScopedBase) | `tenant_id → tenants.id` `ON DELETE CASCADE` |
+| Unique | `uq_pipeline_bulk_runs_tenant_idempotency` | `(tenant_id, idempotency_key)` |
+| Unique | `uq_pipeline_bulk_runs_tenant_id_id` | `(tenant_id, id)` — item composite FK target |
+| Partial unique index | `uq_pipeline_bulk_runs_tenant_active` | `UNIQUE (tenant_id) WHERE status IN ('pending', 'running')` |
+| Store FK | `fk_pipeline_bulk_runs_store` | `store_id → stores.id` `ON DELETE RESTRICT`, nullable |
+| Actor FK | | `requested_by_user_id → users.id` `ON DELETE SET NULL`, nullable |
+
+Indexes (query-backed, not speculative):
+
+| Name | Columns | Why |
+|---|---|---|
+| `ix_pipeline_bulk_runs_tenant_created` | `(tenant_id, created_at)` | list / poll recency |
+| `ix_pipeline_bulk_runs_tenant_status` | `(tenant_id, status)` | active-run lookup; complements the partial unique |
+| `ix_pipeline_bulk_runs_pending_created` | `(created_at)` `WHERE status = 'pending'` | unpublished-pending sweep |
+| `ix_pipeline_bulk_runs_running_heartbeat` | `(heartbeat_at)` `WHERE status = 'running'` | stale-running sweep |
+
+### 10.4 `pipeline_bulk_run_items` constraints
+
+| Kind | Name | Definition |
+|---|---|---|
+| PK | (default) | `id` UUID |
+| Tenant FK | (TenantScopedBase) | `tenant_id → tenants.id` `ON DELETE CASCADE` |
+| Unique | `uq_pipeline_bulk_run_items_run_product` | `(run_id, submitted_product_id)` |
+| Composite FK | `fk_pipeline_bulk_run_items_run_tenant` | `(tenant_id, run_id) → pipeline_bulk_runs(tenant_id, id)` `ON DELETE CASCADE` |
+| Composite FK | `fk_pipeline_bulk_run_items_product_tenant` | `(tenant_id, product_id) → products(tenant_id, id)` `ON DELETE SET NULL`, `product_id` nullable |
+| Composite FK | `fk_pipeline_bulk_run_items_version_tenant` | `(tenant_id, candidate_version_id) → product_versions(tenant_id, id)` **`ON DELETE RESTRICT`**, `candidate_version_id` nullable |
+| CHECK | `ck_pipeline_bulk_run_items_succeeded_version` | `(state = 'succeeded' AND candidate_version_id IS NOT NULL) OR (state <> 'succeeded' AND candidate_version_id IS NULL)` |
+
+Do **not** add `UNIQUE (tenant_id, id)` on items unless a later FK
+needs it. Stage 9 does not.
+
+Indexes:
+
+| Name | Columns | Why |
+|---|---|---|
+| `ix_pipeline_bulk_run_items_tenant_run` | `(tenant_id, run_id)` | paginated item GET |
+| `ix_pipeline_bulk_run_items_run_state` | `(run_id, state)` | worker "next pending", finalize counts |
+
+### 10.5 Candidate delete vs CHECK
+
+Soft-delete of a `ProductVersion` does not touch `candidate_version_id`.
+Hard delete is `RESTRICT`ed while a succeeded item still points at it.
+Never `SET NULL`. Never `CASCADE` the item. The CHECK and the FK then
+coexist.
 
 ---
 
@@ -425,8 +593,8 @@ terminal) run.
 | `missing` | Id does not resolve in this tenant at execution (never existed, other tenant, or soft-deleted) |
 
 No item-level `running` row that can be abandoned forever. Crash
-mid-`preview` rolls back the product transaction; the item stays
-`pending`. Redelivery retries that item.
+mid-`preview` rolls back **txn B**; the item stays `pending`.
+`attempt_count` from txn A remains. Redelivery retries that item.
 
 No item-level `stale`. Product edits are not an item skip (see §30).
 `stale_preview` remains an **approve-time** Stage 7 error.
@@ -466,28 +634,53 @@ Start request **requires** `idempotencyKey` (string, 1–128, stripped).
 Unique constraint: `(tenant_id, idempotency_key)` named
 `uq_pipeline_bulk_runs_tenant_idempotency`.
 
-Fingerprint: SHA-256 hex of canonical JSON:
+Active-run constraint: partial unique index
+`uq_pipeline_bulk_runs_tenant_active` on `tenant_id`
+`WHERE status IN ('pending', 'running')`.
+
+Fingerprint: SHA-256 hex of canonical JSON built from the **deduped**
+id set (same set persisted in `selection.productIds`), then sorted for
+order-independence:
 
 ```
 {
-  "productIds": [<sorted uuid strings>],
+  "productIds": [<sorted unique uuid strings>],
   "tone": <string>,
   "storeId": <uuid string or null>
 }
 ```
 
-Sorting ids in the fingerprint (not in `selection`) means the same
-set in a different order is the same request.
+Duplicate ids in the request do not change the fingerprint relative to
+the same unique set. Selection storage keeps first-seen order;
+fingerprint always sorts.
+
+`tone` is schema-validated `min_length=1`, `max_length=64`, matching
+`PipelinePreviewRequest`. Invalid tone is 422 and never inserts a run.
+
+Create flush / `IntegrityError` handling is deterministic and does **not**
+depend on inspecting which PostgreSQL constraint name fired:
+
+1. Attempt insert + flush (run + items).
+2. On `IntegrityError`:
+   - **FIRST** re-read by `(tenant_id, idempotency_key)`.
+   - If that key exists:
+     - same fingerprint → return the original run (202)
+     - different fingerprint → 409 `conflict`
+   - If that key does **not** exist:
+     - treat as the active-run unique index → 409
+       `pipeline_bulk_run_active`
 
 | Case | Result |
 |---|---|
-| Same key, same fingerprint | Return original run. 202 if still `pending` (handler may no-op publish if already `running`/`terminal`). Status code: **202** for a still-queued original, **200** if the original is already terminal? Pin: always **202** on this POST, matching RuleApplication, even on idempotent replay of a finished run. The body carries current status |
+| Same key, same fingerprint | Return original run. Always **202**; body carries current status |
 | Same key, different fingerprint | **409** `conflict` |
-| Concurrent identical inserts | `IntegrityError` → re-read by key → return original; if missing, 409 |
+| Concurrent identical inserts (same key, same payload) | Exactly one row. Both callers resolve to it (step 2 above) |
 | Empty key | 422 |
-| Two different keys, same products, one already `pending`/`running` | **409** `pipeline_bulk_run_active` — concurrent-run policy §29 |
+| Two different keys while one run is `pending`/`running` | Exactly one active row. One **202**, one **409** `pipeline_bulk_run_active` |
+| After the first run is terminal | A second key **may** create a new run |
 
-Do not `SELECT` then `INSERT` without the unique constraint.
+Do not `SELECT` then `INSERT` without both uniqueness constraints. Do
+not weaken the one-active-run contract to avoid the partial index.
 
 ---
 
@@ -495,9 +688,11 @@ Do not `SELECT` then `INSERT` without the unique constraint.
 
 HTTP start (API session, committed by `get_db_session`):
 
+- if `storeId` supplied: scoped store lookup; missing/foreign → 404,
+  no insert
 - insert run `pending`
 - insert all item rows `pending`
-- unique-constraint flush
+- unique-constraint flush (idempotency **and** active-run)
 - register `after_commit` publisher
 - return 202
 
@@ -511,23 +706,47 @@ Worker claim (own transaction):
 - set `claimed_by_task_id`, `started_at` / heartbeat
 - commit
 
-Worker item (own transaction, **one product**):
+Worker item is **two** transactions. `attempt_count` is not incremented
+inside the generation transaction (that increment would roll back with
+a retryable failure and lie).
+
+**Txn A — claim attempt (short, no provider I/O):**
 
 1. Lock run; abort if lease lost or cancelled.
-2. Lock item (`FOR UPDATE`).
-3. If already terminal → no-op this item (do not increment counters).
-4. Increment `attempt_count`.
-5. Call `ProductPipelineService.preview` on **this session**
+2. Lock next `pending` item (`FOR UPDATE`).
+3. If already terminal → no-op (do not increment anything).
+4. Increment `attempt_count`. Set `started_at` if null.
+5. Heartbeat the run.
+6. Commit. Item is still `pending`. No `ProductVersion`.
+
+**Txn B — generate + terminal (one product):**
+
+1. Re-validate run lease/fence. Abort if lost or cancelled.
+2. Lock the same item. If already terminal → no-op counters.
+3. Item must still be `pending`.
+4. Call `ProductPipelineService.preview` on **this session**
    (no commit inside the service — verified).
-6. On success: item `succeeded` + `candidate_version_id`; increment
+5. On success: item `succeeded` + `candidate_version_id`; increment
    `succeeded_count` and `processed_count`; heartbeat.
-7. On classified permanent error: item `failed`/`missing`/`skipped` +
-   safe error fields; increment the matching counter and
-   `processed_count`; heartbeat.
+6. On classified **permanent product** error: item
+   `failed`/`missing`/`skipped` + safe error fields; increment the
+   matching counter and `processed_count`; heartbeat.
+7. On classified **run-level** `store_not_found`: roll back this txn
+   (no candidate); then a separate lease-conditional fail of the run
+   (see Store contract). Do not mark the item `missing`.
 8. Commit.
 
-If this transaction rolls back: no `ProductVersion`, item still
-`pending`, counters unchanged.
+If txn B rolls back: no `ProductVersion`, item still `pending`,
+progress counters unchanged. `attempt_count` from txn A **remains**.
+
+If the worker dies after txn A and before txn B: `attemptCount` may
+include a claimed attempt that performed **no** provider call. That is
+the defined meaning: **number of durable processing attempts
+entered/claimed**, not a guaranteed provider-call count.
+
+Retryable errors raised from txn B leave the item `pending` and let
+BaseTask retry the run. The next loop/retry runs txn A again
+(increments `attempt_count` again) then txn B.
 
 Worker finalize (own transaction, lease-conditional):
 
@@ -686,18 +905,23 @@ permanent item failures inside the item loop** so they never propagate.
 
 | Error | Item / run | Retry the Celery task? |
 |---|---|---|
-| `NotFoundError` on product | item `missing` | no |
+| `NotFoundError` whose resource is **Product** | item `missing` | no |
+| `NotFoundError` whose resource is **Store** | **run-level** `store_not_found`: roll back current preview; stop remaining items; finalize `failed`; prior successes kept. **Not** item `missing` | no |
 | Soft-deleted product | item `missing` | no |
 | Archived / `UNAVAILABLE` | item `skipped`, `error_code=product_not_eligible` | no |
 | `ValidationError` (malformed product / prompt vars / bound failure) | item `failed`, use domain `code` | no |
 | `ConflictError` (unexpected on preview) | item `failed` | no |
 | `AIProviderNotConfiguredError` | **run-level**: mark this item `failed` with `ai_provider_not_configured`; remaining `pending` items `failed` with the same code; finalize `failed`. Configuration will not heal mid-run | no |
 | `AIError` with `retryable=False` (current default, including base `AIError`) | item `failed`, `error_code=ai_error` | no |
-| `AIError` with `retryable=True` | none yet in tree; when added: **raise** so BaseTask retries the run; item stays `pending` | yes |
+| `AIError` with `retryable=True` | none yet in tree; when added: **raise** so BaseTask retries the run; item stays `pending`; `attempt_count` already committed in txn A | yes |
 | DB / `OperationalError` / disconnect | raise | yes |
 | SoftTimeLimitExceeded / time limit | raise; lease still held until reclaim | yes, then exhaustion / reclaim |
 | Unexpected `Exception` | raise (do **not** record as a quiet item failure) | yes |
 | Missing run row | return no-op | no |
+
+Catch `NotFoundError` by `details["resource"]` (see
+`NotFoundError.for_resource`). Do **not** treat every `NotFoundError`
+as a missing product.
 
 `MissingPromptVariablesError` is a `ValidationError` — terminal item.
 
@@ -878,8 +1102,10 @@ Two layers:
 1. **Same request** (double click, retry): idempotency key.
 2. **Two different keys while one run is `pending` or `running` for
    the tenant:** refuse with 409 `pipeline_bulk_run_active`. At most
-   **one** active bulk pipeline run per tenant. Bounds cost before
-   token-quota infrastructure exists.
+   **one** active bulk pipeline run per tenant. Enforced by
+   `uq_pipeline_bulk_runs_tenant_active`, not by a raceable
+   SELECT-then-INSERT. Bounds cost before token-quota infrastructure
+   exists.
 
 Once a run is terminal, a new key may target the same products and
 **will generate new independent candidates**. That matches Stage 8
@@ -950,8 +1176,9 @@ so Stage 8 schemas stay untouched. `CamelCaseModel`, `extra=forbid`.
 
 - `productIds: list[UUID]` (required, min 1 after validation)
 - `idempotencyKey: str` (required, 1–128)
-- `tone: str = "professional"`
-- `storeId: UUID | None = None`
+- `tone: str = "professional"` (`min_length=1`, `max_length=64`, same
+  as `PipelinePreviewRequest`)
+- `storeId: UUID | None = None` (if set: own-tenant store or 404; no run)
 
 **GET run** `PipelineBulkRunRead` (summary, **no items array**):
 
@@ -1005,7 +1232,9 @@ widen Stage 8's policy by a side door. Stage 10 may revisit.
 | Foreign `run_id` GET | 404 |
 | Foreign item via own run id | impossible (items scoped by run + tenant) |
 | Foreign `productId` in start list | accepted as snapshot id; executes as `missing`; no candidate |
-| Mixed own + foreign ids | run starts; own products generate; foreign `missing`; no 404 that distinguishes them |
+| Foreign / missing `storeId` on POST | **404**, no run created |
+| Store deleted after run accepted | run `failed` `store_not_found`; prior successes kept; no item `missing` |
+| Mixed own + foreign product ids | run starts; own products generate; foreign `missing`; no 404 that distinguishes them |
 | Forged Celery `tenant_id` in `_context` | ignored; lookup from run row |
 | Broker payload credentials | none |
 | Viewer/Member start | 403 |
@@ -1051,6 +1280,8 @@ Default page size 25, max 100 — existing platform constants.
 | **H.** Lost lease, old worker wakes | new lease on new worker | old task still in process | old writes match 0 rows | none | new owner's progress |
 | **I.** DB down on progress update | uncommitted item txn rolls back | task raises, BaseTask retries | item still pending | residual extra provider call | `running` or retries → `failed` |
 | **J.** Provider not configured | items failed with `ai_provider_not_configured`; run `failed` | ACK after terminal | no 3× retry | none | `failed`, safe code |
+| **K.** Store gone after accept | current preview rolled back; run `failed` `store_not_found`; prior successes kept | ACK after fail | no | none extra | `failed`; succeeded items still have candidates |
+| **L.** Die after txn A (attempt++) before preview | item `pending`; `attempt_count>=1`; run `running` | redeliver / reclaim | txn A may increment again; then txn B | none | `running`; attemptCount may exceed provider calls |
 
 ---
 
@@ -1059,12 +1290,18 @@ Default page size 25, max 100 — existing platform constants.
 ### Model / migration
 
 - 0034 upgrade + downgrade
-- unique `(tenant_id, idempotency_key)`
+- `uq_products_tenant_id_id` and `uq_product_versions_tenant_id_id`
+- `uq_pipeline_bulk_runs_tenant_idempotency`
+- `uq_pipeline_bulk_runs_tenant_id_id`
+- **partial unique** `uq_pipeline_bulk_runs_tenant_active`
 - unique `(run_id, submitted_product_id)`
 - CHECK succeeded ↔ candidate_version_id
-- composite FKs reject cross-tenant product / version pointers
-- indexes used by list-by-status and items-by-run exist
+- composite FKs reject cross-tenant product / version / run pointers
+- `candidate_version_id` `ON DELETE RESTRICT` (hard delete of a named
+  version fails while the item exists)
+- indexes in §10 exist
 - enum `values_callable` (insert uses values not names)
+- ORM `__table_args__` on `Product` / `ProductVersion` match 0034
 
 ### Run creation (HTTP)
 
@@ -1072,11 +1309,17 @@ Default page size 25, max 100 — existing platform constants.
 - Viewer/Member 403, unauth 401
 - empty `productIds` 422
 - 51 ids 422 naming 50
-- mixed foreign ids accepted; later `missing`
+- tone `""` or >64 chars 422
+- mixed foreign **product** ids accepted; later `missing`
+- foreign `storeId` → 404, **no run row**
+- own missing/deleted `storeId` → 404, no run
 - duplicate key + same fingerprint returns original
-- same key different tone/ids/store 409
-- concurrent identical starts one run (unique constraint)
-- second different key while active 409 `pipeline_bulk_run_active`
+- same key different tone/ids/store 409 `conflict`
+- **A.** two simultaneous requests, same idempotency key, same payload
+  → exactly one row; both resolve to that run
+- **B.** two simultaneous requests, **different** idempotency keys
+  → exactly one active run; one 202; one 409 `pipeline_bulk_run_active`
+- **C.** after first run terminal, second key may create a new run
 - snapshot frozen (new product matching nothing in the list is not added)
 
 ### Broker handoff
@@ -1105,6 +1348,10 @@ Default page size 25, max 100 — existing platform constants.
 
 - `retryable=True` AIError subclass (test double) retries; no extra
   candidate
+- `attemptCount` increments on txn A even when txn B rolls back a
+  retryable error; next retry increments again
+- worker-death after txn A before preview: `attemptCount >= 1`, item
+  still `pending`, later success does not duplicate the candidate
 - `ValidationError` → item `failed`, task does not retry three times
 - `AIProviderNotConfiguredError` → run `failed`, no three retries
 - exhaustion → run `failed`, prior successes kept
@@ -1131,7 +1378,9 @@ Default page size 25, max 100 — existing platform constants.
 - deleted after submit → `missing`; `totalCount` unchanged
 - edited while queued → candidate from live state; Stage 7
   `stale_preview` still on approve if edited after generation
-- two keys, one active → 409
+- two keys, one active → 409 (partial unique index)
+- store deleted after accept → run `failed` `store_not_found`; no item
+  marked `missing` solely because the store disappeared
 - Stage 8 single preview still non-idempotent and unlocked
 
 ### Pipeline
@@ -1142,15 +1391,72 @@ Default page size 25, max 100 — existing platform constants.
 - StubProvider `isSynthetic`
 - `Product.ai_status` unchanged by success or expected preview failure
 
-### Real Celery
+### Real Celery (RabbitMQ + worker process)
 
-- tasks in `REQUIRED_TASKS`
-- worker ping + `send_task("ai.reconcile_pipeline_bulk_runs")`
-  returns counts
-- `send_task("ai.process_pipeline_bulk_run", run_id=random)` no-ops
-  without error (unknown run)
-- **not** claimed as broker-verified by calling the Python function
-  directly
+Mock-only task tests and `send_task` of an **unknown** run id are **not**
+sufficient. Stage 9 is the Celery stage.
+
+Registration smoke (keep):
+
+- both task names in `REQUIRED_TASKS`
+- `send_task("ai.reconcile_pipeline_bulk_runs")` returns counts
+- unknown `run_id` process no-ops
+
+**Required durable pipeline harness** — new script
+`backend/scripts/verify_pipeline_bulk_broker.py`, invoked from the
+existing CI `celery-broker` job **after** migrations (including 0034)
+and after the separately started real worker is pingable.
+
+The harness must:
+
+1. Use the job's isolated PostgreSQL (`droppilot_test`). No production
+   DSN. No local `.env`.
+2. Seed a tenant, an admin actor if the service needs `requested_by`,
+   and **one** valid `Product` with the minimum fields StubProvider
+   generation needs (reuse Stage 7/8 fixture shape: title, description).
+3. Create a real `PipelineBulkRun` + pending item through
+   `PipelineBulkRunService.create` (the same service POST will call).
+   Commit.
+4. Publish `ai.process_pipeline_bulk_run` with that real `run_id`
+   through RabbitMQ (`send_task` / `enqueue` after commit — not
+   `Task.run()`, not eager, not a direct Python call of `_apply`).
+5. Let the **already running** Celery worker consume it.
+6. Poll **PostgreSQL** (run row `status` / counts), **not**
+   `AsyncResult`, until the run is terminal, with a bounded timeout.
+7. Assert:
+   - run left `pending`/`running` and became a success terminal
+     (`completed` for a one-item success)
+   - item `succeeded`
+   - `candidateVersionId` stored
+   - exactly one `ProductVersion` is that item's effect
+   - `active=false`
+   - pipeline-marked (`pipelineCandidateVersion=1`)
+   - no approval, no `StoreListing`, no Shopify call
+   - candidate `tenant_id` equals the durable run `tenant_id`
+8. Deliver a **duplicate** real broker message for the **same** run id.
+9. Assert after the worker handles it:
+   - still exactly one candidate for that item effect
+   - `succeededCount` unchanged
+   - `processedCount` unchanged
+   - same `candidateVersionId`
+   - task no-ops safely (claim/terminal short-circuit)
+
+That is the real at-least-once / duplicate-delivery acceptance.
+
+**Worker-kill / `acks_late` redelivery of an in-flight process is not
+executed in CI.** Killing a worker mid-`preview` is flaky on shared
+runners. Honest split:
+
+- Real broker + real worker prove: registration, consumption of
+  `default`, durable run lookup, tenant rebind, worker DB access,
+  StubProvider `preview` under the worker process, candidate + progress
+  commit, `candidate_version_id` linkage, duplicate-delivery
+  exactly-once effect.
+- Lease / reclaim / stale-heartbeat / old-worker-write paths remain
+  **DB/integration fencing tests** (same shape as RuleApplication
+  fencing). Do **not** claim those as live crash-redelivery.
+
+Uses StubProvider only. No live AI quality or live rate-limit claims.
 
 ### Regression
 
@@ -1179,14 +1485,19 @@ Created (implementation stage, not this PR):
 - `backend/tests/integration/test_pipeline_bulk_queue.py`
 - `backend/tests/integration/test_pipeline_bulk_recovery.py`
 - `backend/tests/integration/test_pipeline_bulk_fencing.py`
+- `backend/scripts/verify_pipeline_bulk_broker.py`
 
 Modified:
 
 - `backend/app/models/__init__.py`
+- `backend/app/models/product.py` — **`UniqueConstraint("tenant_id", "id", ...)` only** on `Product` and `ProductVersion`. No other model edits
 - `backend/app/workers/celery_app.py` (`imports` + beat)
 - `backend/app/api/v1/products/router.py` (four thin routes)
 - `backend/app/api/v1/products/__init__.py` if needed
-- `backend/scripts/verify_celery_broker.py`
+- `backend/scripts/verify_celery_broker.py` (`REQUIRED_TASKS`)
+- `.github/workflows/ci.yml` — `celery-broker` job runs
+  `verify_pipeline_bulk_broker.py` after the existing broker smoke,
+  against the same isolated DB and already-started worker
 - `docs/PHASE_9_PLAN.md`, `CHANGELOG.md`, `PROJECT_ROADMAP.md`,
   Stage 9 completion report (implementation closeout, not this PR)
 
@@ -1194,10 +1505,12 @@ Must **not** modify in Stage 9 implementation unless a STOP review
 says otherwise:
 
 - `product_pipeline.py` behaviour
-- Stage 8 schemas/routes semantics
+- Stage 8 request/response semantics (tone bounds are copied, not
+  changed)
 - `frontend/**`
 - `BaseTask` defaults globally
 - RuleApplication tables
+- `Product` / `ProductVersion` columns, defaults, or methods
 
 ---
 
@@ -1207,9 +1520,9 @@ Implementation only:
 
 `backend/alembic/versions/0034_pipeline_bulk_runs.py`
 
-Creates PostgreSQL enums (values, not names), `pipeline_bulk_runs`,
-`pipeline_bulk_run_items`, indexes and constraints listed in §44–45.
-Working `downgrade()`. Never edit 0033.
+Creates the schema in §10 (enums, unique pairs on `products` /
+`product_versions`, both bulk tables, partial unique active-run index,
+composite FKs, CHECK, indexes). Working `downgrade()`. Never edit 0033.
 
 This planning PR contains **no** migration.
 
@@ -1226,6 +1539,8 @@ This planning PR contains **no** migration.
 - StubProvider still non-publishable
 - `optimize_product` still auto-activates unmarked rows
 - Alembic 0033 behaviour unchanged
+- `Product` / `ProductVersion` **behaviour** unchanged. 0034 may add
+  only `UNIQUE (tenant_id, id)` metadata matching pairs, as in 0024
 - No silent Stage 7 extension. If one is discovered necessary: STOP
 
 ---
@@ -1255,13 +1570,14 @@ No Phase 9 tag. No production deploy. `origin/main` stays
 
 ## 44. Risks / accepted LOWs
 
-Self-review (§58) resolved BLOCKER / HIGH / MEDIUM inside this plan.
+Self-review at the end of this document resolved BLOCKER / HIGH /
+MEDIUM inside the plan.
 Remaining LOWs:
 
 | ID | Risk | Why accepted |
 |---|---|---|
 | L1 | Extra provider call after success-then-rollback | Unavoidable with non-atomic HTTP+DB. Exactly-once is on durable state |
-| L2 | No AI token/cost ledger | Infrastructure does not exist. Hard cap 50 + concurrent-run 1 + start limiter are the Stage 9 controls. Full quota is later |
+| L2 | No AI token/cost ledger | Infrastructure does not exist. Hard cap 50 + **partial unique one-active-run** + start limiter are the Stage 9 controls. Full quota is later |
 | L3 | Sequential run can occupy one worker up to ~75 minutes | prefetch=1; scale with replicas; cap 50. Fan-out deferred |
 | L4 | Compose worker does not consume `integrations` | Pre-existing. Stage 9 avoids that queue |
 | L5 | Stage 8 single-product preview can race a bulk item on the same product | Preserving Stage 8 non-idempotence is mandatory. Extra candidate is the same as clicking Preview twice |
@@ -1270,20 +1586,27 @@ Remaining LOWs:
 | L8 | POST start always 202, including idempotent replay of a finished run | Matches RuleApplication. Clients read `status` in the body |
 | L9 | Cancelled run leaves remaining items `pending` | Matches RuleApplication. Run `status=cancelled` is the explanation |
 | L10 | No in-flight `ProductAIStatus` | Progress is the run row. Avoids lying on listing chips that mean legacy optimize |
+| L11 | `attemptCount` can exceed actual provider calls | Honest: it counts claimed attempts. Documented. Better than a counter that rolls back |
+| L12 | `UNIQUE (tenant_id, id)` on products/versions is redundant identity | Required as composite-FK targets. Same 0024 pattern. No behaviour change |
+| L13 | `store_id` is not a composite tenant FK | `stores` has no `(tenant_id, id)` unique pair; Stage 9 does not add a third. Create uses scoped `StoreRepository`. Residual: only application code plus `ON DELETE RESTRICT` |
+| L14 | Live worker-kill redelivery is not run in CI | Duplicate real-broker delivery is. Crash/reclaim is fencing-tested |
 
 ---
 
 ## 45. Implementation sequence
 
-1. Migration 0034 + models + `models/__init__.py`
+1. Migration 0034 (including product/version unique pairs) + models +
+   `models/__init__.py` + `product.py` UniqueConstraint-only
 2. Repositories (scoped + lookup) + isolation tests
-3. Service: create / claim / process_one / finalize / fail / cancel /
-   reclaim / fingerprint
+3. Service: create / claim / txn A attempt / txn B preview / finalize /
+   fail / cancel / reclaim / fingerprint / store validation
 4. Tasks: `_run`, publish after commit, process, reconcile
-5. `celery_app` imports + beat + `verify_celery_broker.py`
+5. `celery_app` imports + beat + `verify_celery_broker.py` names
 6. Schemas + four HTTP routes
-7. Integration tests (API, queue harness, fencing, recovery)
-8. Real-broker assertions in the CI Celery job
+7. Integration tests (API, concurrent A/B/C, queue harness, fencing,
+   recovery, attemptCount, store 404 / store-during-run)
+8. `verify_pipeline_bulk_broker.py` + CI celery-broker step: real run
+   through RabbitMQ + duplicate delivery
 9. Docs: completion, CHANGELOG, roadmap, PHASE_9_PLAN
 10. Quality gate. Stop. Do not open Stage 10
 
@@ -1295,11 +1618,14 @@ Remaining LOWs:
 - 0034 upgrade **and** downgrade
 - Stage 7 + Stage 8 tests still pass
 - RuleApplication tests still pass
-- CI Celery job: new tasks registered; reconcile + unknown-run
-  process execute on the real worker
+- CI Celery job: tasks registered **and**
+  `verify_pipeline_bulk_broker.py` passes (real durable run, real
+  candidate under the worker, duplicate broker delivery, Postgres
+  polling — not AsyncResult)
 - No frontend diff
 - `origin/main` unchanged
 - No live-AI quality claims
+- No claim of live worker-crash redelivery
 
 ---
 
@@ -1307,9 +1633,11 @@ Remaining LOWs:
 
 - HTTP routes can be un-mounted; in-flight workers finish or reclaim
   to `failed` after recovery ceiling
-- `downgrade()` of 0034 drops the two tables and enums. It does
-  **not** delete `ProductVersion` candidates already created — those
-  are catalogue history, not bulk-run rows
+- `downgrade()` of 0034 drops item/run tables and enums first, then
+  drops `uq_products_tenant_id_id` and
+  `uq_product_versions_tenant_id_id`. It does **not** delete
+  `ProductVersion` candidates already created — those are catalogue
+  history, not bulk-run rows
 - Never `DELETE` products or versions as rollback
 - Beat entry removed together with the task module
 
@@ -1330,24 +1658,34 @@ end-to-end review when Claude becomes available again.
 
 | Attack | Severity | Resolution |
 |---|---|---|
-| Duplicate `ProductVersion` after redelivery | BLOCKER | Item lock + unique `(run, submitted_product_id)` + `preview` in the same commit as `succeeded` |
-| Candidate generated, item result missing | BLOCKER | Same transaction; rollback drops both |
-| Item success without candidate | BLOCKER | CHECK / fail-closed invariant |
-| Progress double-count | BLOCKER | Increment only when transitioning `pending → terminal` under row lock |
-| Redis result backend as truth | BLOCKER | Merchant API reads Postgres only |
+| Duplicate `ProductVersion` after redelivery | BLOCKER | Item lock + unique `(run, submitted_product_id)` + `preview` in txn B with `succeeded` |
+| Duplicate `ProductVersion` after duplicate broker delivery | BLOCKER | Same; real-broker harness step 8–9 |
+| Candidate generated, item result missing | BLOCKER | Same transaction B; rollback drops both |
+| Item success without candidate | BLOCKER | CHECK `ck_pipeline_bulk_run_items_succeeded_version` |
+| Progress double-count | BLOCKER | Increment only `pending → terminal` under row lock in txn B |
+| Redis result backend as truth | BLOCKER | Merchant API and broker harness poll Postgres only |
 | Worker trusts forged `tenant_id` | BLOCKER | Payload has no tenant field used; lookup then rebind |
 | Tenant context leak | BLOCKER | `clear_context` before bind and in `finally`; existing postrun kept |
 | Queue not consumed | BLOCKER | `default` queue; Compose/CI already consume it |
 | Task not registered | BLOCKER | `imports` + `REQUIRED_TASKS` + tests |
+| Real worker never exercises pipeline | HIGH | `verify_pipeline_bulk_broker.py`: real run, real product, real `preview` under worker |
+| Fake "broker verified" from Python `.run()` | HIGH | Harness uses `send_task` + separate worker; unknown-run smoke is extra, not enough |
+| Concurrent different-key active-run race | HIGH | partial unique `uq_pipeline_bulk_runs_tenant_active`; test B |
+| Same-key `IntegrityError` ambiguity | HIGH | Always re-read by key first; fingerprint; else `pipeline_bulk_run_active` |
+| Impossible PostgreSQL composite FK | HIGH | 0034 adds `UNIQUE (tenant_id, id)` on products and product_versions first |
+| ORM / migration schema drift | HIGH | authorized `product.py` UniqueConstraint-only matching 0034 |
+| Candidate delete / CHECK contradiction | HIGH | `ON DELETE RESTRICT`, never SET NULL |
+| Foreign/deleted store as product `missing` | HIGH | create-time 404; worker classifies `NotFoundError` by resource; run-level `store_not_found` |
+| `attemptCount` rolls back with preview | HIGH | txn A commits the increment before provider I/O |
 | Permanent 4xx retried three times | HIGH | Catch inside item loop; do not raise |
 | Provider retry duplicates candidates | HIGH | Terminal check before `preview` |
 | Stale worker writes after recovery | HIGH | `lease_token` fence on every write |
 | Infinite recovery | HIGH | `MAX_PIPELINE_BULK_RECOVERIES=3` then `failed` |
 | DB committed, never queued | HIGH | pending reconciler |
 | Duplicate publication | MEDIUM | claim no-op |
-| Two concurrent starts | HIGH | unique idempotency + IntegrityError path; plus active-run 409 |
+| Two concurrent starts same key | HIGH | idempotency unique + IntegrityError path; test A |
 | Same key different payload | HIGH | fingerprint 409 |
-| Mixed foreign ids | MEDIUM | snapshot + `missing`; no existence oracle |
+| Mixed foreign product ids | MEDIUM | snapshot + `missing`; no existence oracle |
 | Huge broker payload | HIGH | `run_id` only |
 | Huge status response | HIGH | summary vs paginated items |
 | Auto approve / publish / AI SEO | BLOCKER | preview only; pin §6 |
@@ -1356,7 +1694,7 @@ end-to-end review when Claude becomes available again.
 | Live AI claims | BLOCKER | StubProvider honesty |
 | `integrations` queue stranding | HIGH | not used |
 | Chord/group result expiry | HIGH | architecture A, no chord |
-| Holding one 50-product DB transaction | HIGH | one product per transaction |
+| Holding one 50-product DB transaction | HIGH | one product per txn B |
 | Silent truncation | HIGH | 422 over cap |
 | `optimize_product` in the worker | BLOCKER | forbidden; would auto-activate |
 | Stage 7 modification for idempotency | HIGH | reuse `preview`; STOP if not possible |
