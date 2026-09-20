@@ -493,3 +493,28 @@ channel. Title/body length is fail-closed (512 approve / 255 publish /
 64_000 body). Publish is an operation, not a durable StoreListing
 provenance. `pipelineSourceUpdatedAt` is an inactive-candidate approval
 fingerprint only.
+
+### Stage 8 — API: COMPLETE / UNMERGED / AWAITING INDEPENDENT REVIEW
+
+Contract: [PHASE_9_STAGE_8_PLAN.md](PHASE_9_STAGE_8_PLAN.md). Report:
+[PHASE_9_STAGE_8_COMPLETION.md](PHASE_9_STAGE_8_COMPLETION.md).
+
+Implementation branch `feat/phase-9-stage-8-api` from plan merge
+`9a7c2900406cd1fbe3a6ca94f6615666deb95cf0` (PR #21; post-merge CI
+35518849907 10/10). Not merged. Stages 9–11 not started. Production
+undeployed — `main` unchanged. Alembic head remains `0033`. No frontend.
+No Celery. Claude has not reviewed Stage 8.
+
+Four `RequireAdmin` routes on `/api/v1/products`: POST
+`/{id}/pipeline/preview` (201), GET
+`/{id}/pipeline/versions/{vid}/preview` (200), POST
+`.../approve` (200), POST `.../publish` (200). Required
+`expectedUpdatedAt` on approve/publish. T0 is
+`approvalExpectedUpdatedAt`; first publish uses T1 after approval.
+Lost-approve retry with T0 is 200 no-op returning current T1. NULL/empty
+`ProductImage.analysis` projects as `analysis: null`. Existing Shopify
+publisher only; AI SEO is not overlaid.
+
+CLAUDE RETURN REVIEW CHECKPOINT:
+All commits from Stage 5 takeover onward require a fresh Claude
+end-to-end review when Claude becomes available again.

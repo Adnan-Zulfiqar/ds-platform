@@ -25,6 +25,7 @@ from typing import Any, Literal, TypeVar
 from pydantic import Field, field_validator
 
 from app.integrations.aliexpress.catalog import normalise_product_id
+from app.integrations.shopify.schemas import ShopifyPublishReadinessResponse
 from app.models.product import (
     ImportStatus,
     ProductAIStatus,
@@ -576,6 +577,132 @@ def _optional_model(model: type[_ModelT], value: object) -> _ModelT | None:
     return model.model_validate(value)
 
 
+class PipelineListingViewRead(CamelCaseModel):
+    """Merchant listing vs pipeline proposal — preview only, not a publish overlay."""
+
+    title: str | None = None
+    description: str | None = None
+    seo_title: str | None = None
+    seo_description: str | None = None
+    keywords: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class PipelineCheckItemRead(CamelCaseModel):
+    """Pipeline-owned blocker/warning. Distinct from Shopify readiness items."""
+
+    code: str
+    message: str
+
+
+class PipelineImageAnalysisBlurRead(CamelCaseModel):
+    applicable: bool
+    blur_score: int
+    is_blurry: bool
+    threshold: int
+    working_size: int
+
+
+class PipelineImageAnalysisDuplicatesRead(CamelCaseModel):
+    applicable: bool
+    content_sha256: str
+    duplicate_of_image_ids: list[str]
+
+
+class PipelineImageAnalysisWatermarkRead(CamelCaseModel):
+    applicable: bool
+    reason: str
+
+
+class PipelineImageAnalysisChecksRead(CamelCaseModel):
+    """Stage 6 persisted ``checks`` block — typed, not a dict."""
+
+    blur: PipelineImageAnalysisBlurRead
+    duplicates: PipelineImageAnalysisDuplicatesRead
+    watermark: PipelineImageAnalysisWatermarkRead
+
+
+class PipelineImageAnalysisEvidenceRead(CamelCaseModel):
+    """Typed Stage 6 ``ProductImage.analysis`` payload, including failure nulls."""
+
+    image_analysis_version: int
+    source_url: str
+    content_sha256: str | None = None
+    byte_length: int | None = None
+    decoded_width: int | None = None
+    decoded_height: int | None = None
+    decoded_format: str | None = None
+    status: str
+    error_code: str | None = None
+    checks: PipelineImageAnalysisChecksRead | None = None
+    caption_proposal: str | None = None
+    alt_text_proposal: str | None = None
+    is_synthetic: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    prompt_name: str | None = None
+    prompt_version: int | None = None
+
+
+class PipelineImageAnalysisItemRead(CamelCaseModel):
+    image_id: uuid.UUID
+    position: int
+    status: str
+    error_code: str | None = None
+    #: ``None`` when Stage 7 reconstructed empty/missing stored analysis.
+    analysis: PipelineImageAnalysisEvidenceRead | None = None
+
+
+class PipelineImageAnalysisReportRead(CamelCaseModel):
+    product_id: uuid.UUID
+    images: list[PipelineImageAnalysisItemRead]
+
+
+class PipelinePreviewRequest(CamelCaseModel):
+    """Generate an inactive pipeline candidate. Does not activate or publish."""
+
+    tone: str = Field(default="professional", min_length=1, max_length=64)
+    store_id: uuid.UUID | None = None
+
+
+class PipelineApproveRequest(CamelCaseModel):
+    """Exact-candidate approval. Token is required — not the optional PATCH shape."""
+
+    expected_updated_at: datetime
+
+
+class PipelinePublishRequest(CamelCaseModel):
+    """Publish an already-approved candidate through the existing Shopify publisher."""
+
+    store_id: uuid.UUID
+    expected_updated_at: datetime
+
+
+class PipelinePreviewResponse(CamelCaseModel):
+    """Wire projection of Stage 7 ``PipelinePreview``. Never a raw dict."""
+
+    product_id: uuid.UUID
+    candidate_version_id: uuid.UUID
+    candidate_version_number: int
+    candidate_active: bool
+    source_updated_at: datetime
+    approval_expected_updated_at: datetime
+    original: PipelineListingViewRead
+    proposal: PipelineListingViewRead
+    quality_score: int | None = None
+    quality_baseline: ProductVersionQualityBaselineRead | None = None
+    quality_delta: int | None = None
+    quality_score_version: int | None = None
+    quality_breakdown: ProductVersionQualityBreakdownRead | None = None
+    image_analysis: PipelineImageAnalysisReportRead
+    is_synthetic: bool
+    provider: str | None = None
+    channel_readiness: ShopifyPublishReadinessResponse | None = None
+    pipeline_blockers: list[PipelineCheckItemRead] = Field(default_factory=list)
+    pipeline_warnings: list[PipelineCheckItemRead] = Field(default_factory=list)
+    publishable: bool
+
+
 class ProductOptimizeRequest(CamelCaseModel):
     """Ask for a new AI-generated title and description.
 
@@ -633,6 +760,19 @@ class ProductDuplicateCheckResponse(CamelCaseModel):
 
 __all__ = [
     "FeedProductRead",
+    "PipelineApproveRequest",
+    "PipelineCheckItemRead",
+    "PipelineImageAnalysisBlurRead",
+    "PipelineImageAnalysisChecksRead",
+    "PipelineImageAnalysisDuplicatesRead",
+    "PipelineImageAnalysisEvidenceRead",
+    "PipelineImageAnalysisItemRead",
+    "PipelineImageAnalysisReportRead",
+    "PipelineImageAnalysisWatermarkRead",
+    "PipelineListingViewRead",
+    "PipelinePreviewRequest",
+    "PipelinePreviewResponse",
+    "PipelinePublishRequest",
     "ProductDetailRead",
     "ProductDuplicateCheckResponse",
     "ProductDuplicateMatch",
