@@ -14,17 +14,31 @@ correct.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
 from app.integrations.aliexpress.catalog import normalise_product_id
+from app.integrations.shopify.schemas import (
+    ShopifyPublishCheckItem,
+    ShopifyPublishReadinessResponse,
+    ShopifyPublishResponse,
+)
 from app.models.product import Product, ProductSource
 from app.repositories.product import ProductImportRepository, ProductRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.product import (
     FeedProductRead,
+    PipelineApproveRequest,
+    PipelineCheckItemRead,
+    PipelineImageAnalysisEvidenceRead,
+    PipelineImageAnalysisItemRead,
+    PipelineImageAnalysisReportRead,
+    PipelineListingViewRead,
+    PipelinePreviewRequest,
+    PipelinePreviewResponse,
+    PipelinePublishRequest,
     ProductDetailRead,
     ProductDuplicateCheckResponse,
     ProductDuplicateMatch,
@@ -36,12 +50,22 @@ from app.schemas.product import (
     ProductRead,
     ProductUpdateRequest,
     ProductVariantRead,
+    ProductVersionQualityBaselineRead,
+    ProductVersionQualityBreakdownRead,
     ProductVersionRead,
     ProductWorkspaceCounts,
 )
+from app.services.image_analysis import ImageAnalysisReport
 from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
+from app.services.product_pipeline import (
+    PipelineCheckItem,
+    PipelineListingView,
+    PipelinePreview,
+    ProductPipelineService,
+)
+from app.services.publish_readiness import PublishReadinessResult
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -73,6 +97,130 @@ def _to_detail(product: Product) -> ProductDetailRead:
 def _to_read(product: Product, variant_count: int) -> ProductRead:
     """List-row projection with the count from the same query, not a guess."""
     return ProductRead.model_validate(product).model_copy(update={"variant_count": variant_count})
+
+
+def _listing_view(view: PipelineListingView) -> PipelineListingViewRead:
+    return PipelineListingViewRead(
+        title=view.title,
+        description=view.description,
+        seo_title=view.seo_title,
+        seo_description=view.seo_description,
+        keywords=view.keywords,
+        tags=list(view.tags),
+    )
+
+
+def _pipeline_checks(items: tuple[PipelineCheckItem, ...]) -> list[PipelineCheckItemRead]:
+    return [PipelineCheckItemRead(code=item.code, message=item.message) for item in items]
+
+
+def _image_analysis_report(report: ImageAnalysisReport) -> PipelineImageAnalysisReportRead:
+    """Project Stage 7 stored analysis. Empty/missing evidence is ``null``, not invented."""
+    images: list[PipelineImageAnalysisItemRead] = []
+    for item in report.images:
+        evidence = item.analysis
+        analysis = (
+            None if not evidence else PipelineImageAnalysisEvidenceRead.model_validate(evidence)
+        )
+        images.append(
+            PipelineImageAnalysisItemRead(
+                image_id=item.image_id,
+                position=item.position,
+                status=item.status,
+                error_code=item.error_code,
+                analysis=analysis,
+            )
+        )
+    return PipelineImageAnalysisReportRead(product_id=report.product_id, images=images)
+
+
+def _channel_readiness(
+    result: PublishReadinessResult | None,
+) -> ShopifyPublishReadinessResponse | None:
+    if result is None:
+        return None
+    return ShopifyPublishReadinessResponse(
+        channel=result.channel,
+        store_id=result.store_id,
+        draft_id=result.draft_id,
+        draft_updated_at=result.draft_updated_at,
+        can_publish=result.can_publish,
+        blockers=[
+            ShopifyPublishCheckItem(
+                code=item.code,
+                message=item.message,
+                field=item.field,
+                section=item.section,
+                action=item.action,
+            )
+            for item in result.blockers
+        ],
+        recommendations=[
+            ShopifyPublishCheckItem(
+                code=item.code,
+                message=item.message,
+                field=item.field,
+                section=item.section,
+                action=item.action,
+            )
+            for item in result.recommendations
+        ],
+        checked_at=result.checked_at,
+    )
+
+
+def _pipeline_preview_to_response(preview: PipelinePreview) -> PipelinePreviewResponse:
+    """DTO → wire. No Stage 7 decisions live here."""
+    quality_baseline = None
+    if preview.quality_baseline is not None:
+        quality_baseline = ProductVersionQualityBaselineRead(
+            version_number=preview.quality_baseline.version_number,
+            score=preview.quality_baseline.score,
+        )
+    quality_breakdown = None
+    if preview.quality_breakdown is not None:
+        quality_breakdown = ProductVersionQualityBreakdownRead.model_validate(
+            preview.quality_breakdown
+        )
+    return PipelinePreviewResponse(
+        product_id=preview.product_id,
+        candidate_version_id=preview.candidate_version_id,
+        candidate_version_number=preview.candidate_version_number,
+        candidate_active=preview.candidate_active,
+        source_updated_at=preview.source_updated_at,
+        approval_expected_updated_at=preview.approval_expected_updated_at,
+        original=_listing_view(preview.original),
+        proposal=_listing_view(preview.proposal),
+        quality_score=preview.quality_score,
+        quality_baseline=quality_baseline,
+        quality_delta=preview.quality_delta,
+        quality_score_version=preview.quality_score_version,
+        quality_breakdown=quality_breakdown,
+        image_analysis=_image_analysis_report(preview.image_analysis),
+        is_synthetic=preview.is_synthetic,
+        provider=preview.provider,
+        channel_readiness=_channel_readiness(preview.channel_readiness),
+        pipeline_blockers=_pipeline_checks(preview.pipeline_blockers),
+        pipeline_warnings=_pipeline_checks(preview.pipeline_warnings),
+        publishable=preview.publishable,
+    )
+
+
+def _shopify_publish_response(result: dict[str, Any]) -> ShopifyPublishResponse:
+    """Same mapping as ``POST /integrations/shopify/publish`` — not a second contract."""
+    external_id = str(result["external_product_id"])
+    return ShopifyPublishResponse(
+        message=f"Published to Shopify product {external_id}.",
+        listing_id=uuid.UUID(str(result["listing_id"])),
+        external_product_id=external_id,
+        external_handle=result.get("external_handle"),
+        external_graphql_id=result.get("external_graphql_id"),
+        shop_domain=result.get("shop_domain"),
+        storefront_url=result.get("storefront_url"),
+        admin_url=result.get("admin_url"),
+        online_store_published=result.get("online_store_published"),
+        updated=bool(result.get("updated", True)),
+    )
 
 
 @router.get(
@@ -465,3 +613,90 @@ async def activate_product_version(
     """
     product = await ProductOptimizationService(session).activate_version(product_id, version_id)
     return _to_detail(product)
+
+
+@router.post(
+    "/{product_id}/pipeline/preview",
+    response_model=PipelinePreviewResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate an inactive pipeline preview candidate",
+)
+async def generate_pipeline_preview(
+    session: DbSession,
+    principal: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: PipelinePreviewRequest | None = None,
+) -> PipelinePreviewResponse:
+    """Analyse and generate one inactive pipeline candidate. Does not activate or publish."""
+    request = payload if payload is not None else PipelinePreviewRequest()
+    preview = await ProductPipelineService(session).preview(
+        product_id,
+        store_id=request.store_id,
+        tone=request.tone,
+        requested_by_user_id=principal.user_id,
+    )
+    return _pipeline_preview_to_response(preview)
+
+
+@router.get(
+    "/{product_id}/pipeline/versions/{version_id}/preview",
+    response_model=PipelinePreviewResponse,
+    summary="Read an existing pipeline candidate preview",
+)
+async def get_pipeline_preview(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    version_id: Annotated[uuid.UUID, Path()],
+    store_id: Annotated[uuid.UUID | None, Query(alias="storeId")] = None,
+) -> PipelinePreviewResponse:
+    """Compose a preview from a stored candidate. Does not analyse or generate."""
+    preview = await ProductPipelineService(session).get_preview(
+        product_id,
+        version_id=version_id,
+        store_id=store_id,
+    )
+    return _pipeline_preview_to_response(preview)
+
+
+@router.post(
+    "/{product_id}/pipeline/versions/{version_id}/approve",
+    response_model=ProductDetailRead,
+    summary="Approve an exact pipeline candidate",
+)
+async def approve_pipeline_candidate(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    version_id: Annotated[uuid.UUID, Path()],
+    payload: PipelineApproveRequest,
+) -> ProductDetailRead:
+    """Activate the exact candidate. Token required. Does not publish."""
+    product = await ProductPipelineService(session).approve(
+        product_id,
+        version_id=version_id,
+        expected_updated_at=payload.expected_updated_at,
+    )
+    return _to_detail(product)
+
+
+@router.post(
+    "/{product_id}/pipeline/versions/{version_id}/publish",
+    response_model=ShopifyPublishResponse,
+    summary="Publish an already-approved pipeline candidate to Shopify",
+)
+async def publish_pipeline_candidate(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    version_id: Annotated[uuid.UUID, Path()],
+    payload: PipelinePublishRequest,
+) -> ShopifyPublishResponse:
+    """Overlay title/body through the existing Shopify publisher. Token required."""
+    result = await ProductPipelineService(session).publish(
+        product_id,
+        store_id=payload.store_id,
+        version_id=version_id,
+        expected_updated_at=payload.expected_updated_at,
+    )
+    return _shopify_publish_response(result)
