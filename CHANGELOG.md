@@ -12,14 +12,16 @@ production release.
 
 ### Added
 
-- **Phase 9 Stage 7 — Pipeline (implemented, not merged).** Preview /
-  exact-candidate approve / overlay publish on
-  `feat/phase-9-stage-7-pipeline` from `develop` `85e11772` (plan PR #18).
-  No HTTP route, no frontend, no migration (Alembic head remains `0033`),
-  no Celery, no deploy. Legacy `POST /products/{id}/optimize` still
-  auto-activates unmarked rows. Pipeline publish fail-closes synthetic /
-  stub provenance and sanitizes description at overlay build. Status:
-  IMPLEMENTED / AWAITING INDEPENDENT REVIEW AND REMOTE CI. Report:
+- **Phase 9 Stage 7 — Pipeline (merged into `develop` 2026-09-19 via
+  PR #19).** Preview / exact-candidate approve / overlay publish.
+  Reviewed head `d42c1a4606d227e79cfb0d1232534606dd39d508`. Merge
+  `ffa0d6e37db218c85a1facdc265087553c694e02`. PR CI 35472626657 10/10;
+  post-merge CI 35474423524 10/10. No HTTP route, no frontend, no
+  migration (Alembic head remains `0033`), no Celery, no deploy. Legacy
+  `POST /products/{id}/optimize` still auto-activates unmarked rows.
+  Pipeline publish fail-closes synthetic / stub provenance and sanitizes
+  description at overlay build. Independent review PASS (BLOCKER 0,
+  HIGH 0, MEDIUM 0). Report:
   [PHASE_9_STAGE_7_COMPLETION.md](docs/PHASE_9_STAGE_7_COMPLETION.md).
 
 - **Phase 9 Stage 6 — Image analysis (merged into `develop` 2026-09-19
