@@ -271,8 +271,10 @@ Wire: `{ "storeId": "<uuid>", "expectedUpdatedAt": "<ISO-8601>" }`.
 Channel is not a client field. Stage 8 is Shopify-only because Stage 7 is
 Shopify-only. Do not accept `channel`.
 
-Clients should send `approvalExpectedUpdatedAt` from the latest preview
-(or `updatedAt` from `GET /products/{id}`) as `expectedUpdatedAt`.
+Token source is **not** “whatever preview last returned.” See §10.1:
+approve uses preview `approvalExpectedUpdatedAt` (**T0**); first publish
+uses the post-approval `updatedAt` (**T1**). Reusing T0 on first publish
+is a stale-token 409 once the candidate is otherwise publishable.
 
 ---
 
@@ -359,25 +361,63 @@ blockers; those exist on Shopify readiness items.
 - `position: int`
 - `status: str`
 - `errorCode: str | null`
-- `analysis: PipelineImageAnalysisEvidenceRead`
+- `analysis: PipelineImageAnalysisEvidenceRead | null`
 
-`PipelineImageAnalysisEvidenceRead` is the **typed** Stage 6 persisted
-JSON (`_evidence` / `_failure_payload`), not `dict[str, Any]`:
+`ProductImage.analysis` is **nullable**. Stage 7
+`ProductPipelineService._stored_image_report()` already maps a missing
+or non-dict value to `analysis={}`, `status="unknown"`, `error_code=None`.
+That is a legitimate runtime state (image never analysed, or GET preview
+of a candidate whose live images have no stored evidence). Stage 8 must
+**not** require a full evidence object in that case and must **not**
+fabricate one.
 
-`imageAnalysisVersion`, `sourceUrl`, `contentSha256`, `byteLength`,
-`decodedWidth`, `decodedHeight`, `decodedFormat`, `status`, `errorCode`,
-`checks`, `captionProposal`, `altTextProposal`, `isSynthetic`, `provider`,
-`model`, `promptName`, `promptVersion`.
+Projection (HTTP adapter only; do not change Stage 7):
 
-`checks` may be `null` on fetch failure. Nested check objects stay typed
-enough to round-trip stored keys (`blur`, `duplicates`, `watermark`)
-without dropping fields. Implementation must `model_validate` the stored
-dict; if a fixture is missing a required key, fail the test rather than
-silently dumping JSON.
+| Stored / DTO `ImageAnalysisItem.analysis` | Wire `analysis` | `status` | `errorCode` |
+|---|---|---|---|
+| missing, non-dict, or **empty** `{}` | `null` | keep DTO (`"unknown"` when Stage 7 found no status string) | `null` |
+| non-empty dict | `PipelineImageAnalysisEvidenceRead` via `model_validate` | from evidence/`status` | from evidence/`errorCode` |
+
+Do not return arbitrary JSON. Do not invent `imageAnalysisVersion`,
+`sourceUrl`, or checks for a never-analysed image.
+
+`PipelineImageAnalysisEvidenceRead` is the typed Stage 6 persisted JSON
+(`_evidence` / `_failure_payload`). Field nullability matches the **actual
+failure payload**, not a success-only shape:
+
+| Field | Type | Notes |
+|---|---|---|
+| `imageAnalysisVersion` | `int` | always present on stored evidence |
+| `sourceUrl` | `str` | always present on stored evidence |
+| `status` | `str` | always present on stored evidence |
+| `errorCode` | `str \| null` | present; `null` on success |
+| `contentSha256` | `str \| null` | `null` on fetch/decode failure |
+| `byteLength` | `int \| null` | `null` on failure |
+| `decodedWidth` | `int \| null` | `null` on failure |
+| `decodedHeight` | `int \| null` | `null` on failure |
+| `decodedFormat` | `str \| null` | `null` on failure |
+| `checks` | typed checks \| `null` | `null` on failure; else `blur` / `duplicates` / `watermark` |
+| `captionProposal` | `str \| null` | |
+| `altTextProposal` | `str \| null` | |
+| `isSynthetic` | `bool \| null` | |
+| `provider` | `str \| null` | |
+| `model` | `str \| null` | |
+| `promptName` | `str \| null` | `null` on failure |
+| `promptVersion` | `int \| null` | `null` on failure |
+
+Nested check objects stay typed enough to round-trip stored keys without
+dropping fields. Caption/alt remain **proposals**; Stage 7 still does not
+write `ProductImage.alt_text`.
+
+**Malformed non-empty evidence** (non-empty dict that fails
+`PipelineImageAnalysisEvidenceRead` validation) is **server-side data
+corruption**, not a client error. Do not coerce, do not dump JSON, do not
+return `{}`. Response-model construction fails into the existing
+`pydantic_error_handler` → **500** `internal_error` with no internals.
+Empty/`NULL` analysis is **not** corruption.
 
 These keys are already tenant-owned `ProductImage.analysis` data. They are
-not a new leak. Caption/alt are **proposals**; Stage 7 still does not write
-`ProductImage.alt_text`.
+not a new leak.
 
 ### 7.2 Approve response — `ProductDetailRead`
 
@@ -386,6 +426,12 @@ Yes. Legacy `POST .../versions/{id}/activate` already returns
 path; reuse the same projection so the client sees `aiStatus`,
 `optimizedTitle` / `optimizedDescription`, and `updatedAt` after the
 cache write.
+
+That `updatedAt` is **T1**, the post-approval concurrency token. First
+successful approve bumps `Product.updated_at` because the AI cache write
+touches the product row. Clients must use T1 (this field, or a later
+fresh GET) for publish — not the pre-approval preview token T0. See
+§10.1.
 
 `ProductDetailRead` includes supplier twins and variant costs. That is
 the existing authenticated product-detail contract for this tenant, not a
@@ -485,18 +531,95 @@ Pipeline approve and publish **require** `expectedUpdatedAt` at the HTTP
 schema **and** at the service. Optional-token merchant PATCH and optional
 token `ShopifyPublishRequest` are **not** the precedent.
 
+### 10.1 Token lifecycle (T0 → T1)
+
+Stage 7 `approve` writes the Product AI cache and therefore bumps
+`Product.updated_at`. Preview’s `approvalExpectedUpdatedAt` is the token
+**before** that write. Publish must not reuse it after a successful first
+approve.
+
+**A. Preview → approve**
+
+Preview returns `approvalExpectedUpdatedAt = T0` (live
+`product.updated_at` at compose time).
+
+Approve **must** send `expectedUpdatedAt = T0`.
+
+**B. First successful approve**
+
+The handler returns `ProductDetailRead` with `updatedAt = T1`.
+`T1 != T0`. T1 is the authoritative **post-approval** token.
+
+**C. Approve → publish**
+
+Publish **must** send `expectedUpdatedAt = T1`.
+
+Allowed sources for T1:
+
+1. `ProductDetailRead.updatedAt` from the successful approve response, or
+2. a later fresh `GET /products/{product_id}` `updatedAt`, or
+3. a `GET .../pipeline/versions/{id}/preview` performed **after**
+   approval, whose `approvalExpectedUpdatedAt` reflects current product
+   state.
+
+**Do not** reuse the pre-approval preview token T0 for first publish.
+After successful approval, T0 is stale relative to `Product.updated_at`.
+
+**D. Lost approve response**
+
+Stage 7 returns early when the exact candidate is already `active`,
+**before** the M2A equality check. Retrying approve with the old T0 is
+therefore a **200 no-op**, not 409:
+
+1. `approve(candidate, T0)` → first success; product now at T1
+2. client loses the response
+3. `approve(same candidate, T0)` → 200 no-op
+4. retry body is current `ProductDetailRead` with `updatedAt = T1`
+5. client publishes with that T1
+
+### 10.2 Case table
+
 | Case | Approve | Publish |
 |---|---|---|
 | Field omitted | 422 `validation_error` (Pydantic) | same |
 | `null` | 422 `validation_error` | same |
 | Malformed timestamp | 422 `validation_error` | same |
 | Extra unknown field | 422 `extra_forbidden` | same |
-| Token ≠ live `Product.updated_at` (inactive candidate) | 409 `conflict`, details reason `draft_version_stale` | 409 from pipeline compare **or** from `publish_product` / readiness `enforce_version` — still 409 `conflict` |
-| Candidate generated against older product (`stale_preview`) | 409 `conflict`, reason `stale_preview` | N/A if still inactive (`candidate_not_approved` 422). If merchant edited **after approval**, M2A token must be the **current** `updatedAt`; stale token 409; approval is **not** revoked |
-| Exact already-active candidate retry | 200 no-op (Stage 7 §12.2) | If still approved + fresh token: existing publisher idempotency |
-| Sibling candidate after another approved | 409 `stale_preview` or activation race as Stage 7 tests | 422 `candidate_not_approved` if not the active row |
-| Publish before approve | — | 422 `candidate_not_approved` |
+| Token ≠ live `Product.updated_at` (inactive candidate) | 409 `conflict`, reason `draft_version_stale` | see §10.3 — **not** always 409 |
+| Pre-approval T0 reused on first publish of an otherwise-valid approved candidate | — | 409 `conflict`, reason `draft_version_stale` (publisher M2A, after pipeline candidate checks) |
+| Candidate generated against older product (`stale_preview`) | 409 `conflict`, reason `stale_preview` | Inactive → 422 `candidate_not_approved` first. Merchant edit **after** approval: approval is **not** revoked; publish uses current T1; stale token 409 only if the candidate still reaches M2A (§10.3) |
+| Exact already-active candidate retry with T0 | 200 no-op; response `updatedAt` is current T1 (§10.1 D) | If still approved + **T1**: existing publisher idempotency |
+| Sibling candidate after another approved | 409 `stale_preview` or activation race as Stage 7 tests | 422 `candidate_not_approved` if not the active row (before M2A) |
+| Publish before approve | — | 422 `candidate_not_approved` (before M2A) |
 | Merchant edit after candidate generation, before approve | 409 `stale_preview` and/or `draft_version_stale` | — |
+
+### 10.3 Publish stale-token precedence
+
+**Do not claim** that any stale publish token always returns 409.
+
+`ProductPipelineService.publish` validates candidate state, provenance,
+and content **before** `ShopifySyncService.publish_product` performs its
+M2A freshness check. A stale `expectedUpdatedAt` therefore yields 409
+**only when** the candidate is otherwise capable of reaching that check:
+
+- valid pipeline candidate (strict parse)
+- already approved / `active=True`
+- non-synthetic (`isSynthetic is not True` and `ai_provider != "stub"`)
+- provider provenance present
+- title/body within publish bounds after sanitise
+- then readiness / M2A inside the existing publisher
+
+Otherwise the **earlier** Stage 7 error wins, even if the token is also
+stale:
+
+| Candidate state (stale token supplied) | HTTP | reason |
+|---|---|---|
+| inactive / not approved | 422 | `candidate_not_approved` |
+| original / unmarked / corrupt marker | 422 | `not_a_pipeline_candidate` |
+| synthetic or `ai_provider=="stub"` | 422 | `synthetic_publish_blocked` |
+| missing / blank provider | 422 | `ai_provenance_unverified` |
+| title/body fail-closed | 422 | Stage 7 storage/publish codes |
+| otherwise valid approved candidate | 409 | `draft_version_stale` |
 
 Envelope for domain errors (existing `app_error_handler`):
 
@@ -518,8 +641,9 @@ promote `reason` to `code` in the router.
 
 Naive timestamps: if Pydantic accepts them, `datetime != timestamptz`
 fails the equality check and becomes 409, not a silent pass. Tests should
-send the ISO-8601 string from `updatedAt` / `approvalExpectedUpdatedAt`
-(offset-aware), matching existing M2A editor tests.
+send the ISO-8601 string from the **correct generation** of the token
+(§10.1): T0 from preview `approvalExpectedUpdatedAt` for approve; T1 from
+approve/GET `updatedAt` for publish. Matching existing M2A editor tests.
 
 ---
 
@@ -537,8 +661,11 @@ already maps every subclass.
 | Non-pipeline version (GET preview / approve / publish parse) | `ValidationError` | 422 | `validation_error` | `not_a_pipeline_candidate` |
 | Original snapshot approve | `ValidationError` | 422 | `validation_error` | `original_not_approvable` |
 | Missing token at service (schema bypass) | `ValidationError` | 422 | `validation_error` | (none today) |
-| Stale M2A token | `ConflictError` | 409 | `conflict` | `draft_version_stale` |
+| Stale M2A token (approve, inactive candidate) | `ConflictError` | 409 | `conflict` | `draft_version_stale` |
+| Stale M2A token (publish) | `ConflictError` from publisher, **if** candidate checks passed | 409 | `conflict` | `draft_version_stale` — **not** if an earlier 422 applies (§10.3) |
 | Stale inactive preview fingerprint | `ConflictError` | 409 | `conflict` | `stale_preview` |
+| Malformed **non-empty** image evidence on preview projection | response `ValidationError` → `pydantic_error_handler` | 500 | `internal_error` | none (corruption; not a client 422) |
+| `NULL` / empty stored image analysis on GET preview | — | **200** | — | `analysis: null`, `status: "unknown"` (§7.1) |
 | Publish while not active/approved | `ValidationError` | 422 | `validation_error` | `candidate_not_approved` |
 | Missing provider | `ValidationError` | 422 | `validation_error` | `ai_provenance_unverified` |
 | Synthetic / stub publish | `ValidationError` | 422 | `validation_error` | `synthetic_publish_blocked` |
@@ -644,8 +771,8 @@ No Stage 8 idempotency table. No `Idempotency-Key` header.
 |---|---|
 | POST preview | **Not idempotent.** Each 201 creates a **new** inactive candidate and re-runs analysis. Prior inactive rows remain history. Safe to retry; do not treat two 201s as one candidate. |
 | GET preview | Pure read. Must **not** insert `PromptExecution`, must **not** fetch images, must **not** call the provider. Repeatable. |
-| POST approve | Exact already-active candidate → 200 no-op. Inactive sibling of an old token is **not** a retry. |
-| POST publish | Relies on existing adopt-by-handle + `uq_store_listings_tenant_store_product` + publish row lock. No second create path. After Shopify timeout, retry with the **current** `expectedUpdatedAt`. Publish failure does **not** deactivate the candidate (Stage 7). |
+| POST approve | Exact already-active candidate, including retry with pre-approval T0 → 200 no-op; response `updatedAt` is current T1. Inactive sibling of an old token is **not** a retry. |
+| POST publish | Relies on existing adopt-by-handle + `uq_store_listings_tenant_store_product` + publish row lock. No second create path. After Shopify timeout, retry with **T1** (current `updatedAt`), never the pre-approval T0. Publish failure does **not** deactivate the candidate (Stage 7). |
 
 GET preview tests must assert PromptExecution count and image
 `analysis` timestamps/bytes do not change.
@@ -741,7 +868,7 @@ suite already has that harness for merchant publish.
 - Omit store → `channelReadiness` null, `publishable` false.
 - Own store → readiness projected; `publishable` false under StubProvider
   (synthetic blocker) unless a non-synthetic fixture is used.
-- Image analysis projected (`imageId`, `status`, evidence keys).
+- Image analysis projected (`imageId`, `status`, evidence or `analysis: null` per §7.1).
 - `isSynthetic` / `provider` projected (`stub` in default tests).
 - Product `optimizedTitle` unchanged; no Shopify call.
 - Prompt executions created for generation (and analysis as Stage 6
@@ -757,28 +884,36 @@ suite already has that harness for merchant publish.
 - Legacy unmarked optimize version → 422 same.
 - Malformed marker → 422 same.
 - Wrong product + own version → 404 (not 422).
+- **Never-analysed live image:** candidate exists; set live
+  `ProductImage.analysis = NULL`; GET exact pipeline preview → **200**;
+  that image `status == "unknown"`, `errorCode == null`, `analysis == null`;
+  no image refetch, no provider call, no `PromptExecution` insert.
 
 ### F. Approve
 
-- Exact candidate → 200; `ProductDetailRead` cache reflects candidate
-  title/description; `candidate` would now be active on a subsequent GET
-  preview.
+- Exact candidate with T0 → 200; `ProductDetailRead` cache reflects
+  candidate title/description; `updatedAt` is T1 (`T1 != T0`); subsequent
+  GET preview shows `candidateActive: true`.
 - `expectedUpdatedAt` required (422).
-- Stale token → 409 `draft_version_stale`.
+- Stale token on an **inactive** candidate → 409 `draft_version_stale`.
 - Stale preview (merchant edit after generate) → 409 `stale_preview`.
-- Exact active retry → 200 no-op; merchant/supplier/SEO/images untouched.
+- Exact active retry with T0 → 200 no-op; returned `updatedAt` equals
+  current T1; merchant/supplier/SEO/images untouched.
 - Sibling race: first sibling wins; second 409 as Stage 7.
 - Calling **legacy activate** on a pipeline candidate still 422 (regression).
 
 ### G. Publish
 
-- Not approved → 422 `candidate_not_approved`.
+- Not approved → 422 `candidate_not_approved` (even if token is stale —
+  §10.3).
 - `expectedUpdatedAt` required → 422.
-- Synthetic candidate → 422 `synthetic_publish_blocked`.
-- Missing provider → 422 `ai_provenance_unverified`.
+- Synthetic candidate → 422 `synthetic_publish_blocked` (even if token
+  is stale).
+- Missing provider → 422 `ai_provenance_unverified` (even if token is
+  stale).
 - `ai_provider=="stub"` → 422 even if `isSynthetic` were false (Stage 7).
 - Non-synthetic fixture reaches **existing** `publish_product` (mock/
-  recorded shop as current Shopify tests do).
+  recorded shop as current Shopify tests do) **only with T1**.
 - Overlay title/body only — assert merchant SEO/tags/images/variants
   unchanged on the product and on the mocked Shopify payload.
 - Duplicate Shopify create prevented by existing publisher tests still
@@ -787,6 +922,32 @@ suite already has that harness for merchant publish.
 - Foreign store 404.
 - Shopify failure does not deactivate the candidate (HTTP-level replay of
   Stage 7 publish test).
+
+### J. Approve → publish token lifecycle (HTTP)
+
+Use an otherwise valid, **non-synthetic**, publishable fixture (same
+pattern as Stage 7 overlay publish tests — not a live-model claim).
+
+Happy path:
+
+1. `POST .../pipeline/preview`
+2. Capture `T0 = approvalExpectedUpdatedAt`
+3. `POST .../approve` with `expectedUpdatedAt = T0`
+4. Assert 200
+5. Capture `T1 = response.updatedAt`
+6. Assert `T1 != T0`
+7. `POST .../publish` with stale `T0`
+8. Assert 409 `conflict`, reason `draft_version_stale`
+9. `POST .../publish` with `T1`
+10. Assert the existing Shopify publisher is reached successfully
+
+Lost-response retry:
+
+1. preview → T0
+2. approve T0 → success (product now T1; client discards body)
+3. approve same candidate again with T0 → 200 no-op
+4. returned `updatedAt` equals current T1
+5. publish using that returned T1 → succeeds / reaches publisher
 
 ### H. Regression (must still pass unchanged)
 
@@ -863,11 +1024,13 @@ were resolved in the plan text before commit. LOW residuals accepted:
 | L5 | Image evidence includes `sourceUrl` / hashes / byteLength | Already stored on `ProductImage.analysis`; admin of that tenant. |
 | L6 | No extra `endpoint_rate_limit` on preview | Optimize has none. Adding one would be new policy, not HTTP-contract. |
 | L7 | Duplicate `ShopifyPublishResponse` mapping until a helper exists | KISS; both mappings must stay field-identical. |
-| L8 | Naive `expectedUpdatedAt` may 409 rather than 422 | Same datetime equality as Stage 7 / M2A. Tests send API `updatedAt`. |
+| L8 | Naive `expectedUpdatedAt` may 409 rather than 422 | Same datetime equality as Stage 7 / M2A. Tests send T0 from preview and T1 from approve/GET (§10.1). |
 | L9 | Shopify credential failures can surface as 401 `ShopifyAuthError` | Existing merchant publish already does. Distinct `code` from missing user JWT. |
 | L10 | Claude has not reviewed Stage 5–8 | Checkpoint below. Not a Stage 8 HTTP defect. |
 | L11 | No `Idempotency-Key` on generate | Stage 7 preview is intentionally not idempotent. |
 | L12 | StubProvider previews are 201 but never Shopify-publishable | Correct fail-closed publish; Studio (Stage 10) will show blockers. |
+| L13 | Malformed **non-empty** `ProductImage.analysis` yields 500 `internal_error` | Honest: it is stored corruption, not a client mistake. Empty/`NULL` is 200 with `analysis: null`, not 500. |
+| L14 | `extra=forbid` on evidence: a future Stage 6 key would 500 until the schema is extended | Fail-closed; do not silently drop unknown keys. |
 
 ### 20.1 Self-review (attack the plan)
 
@@ -881,19 +1044,23 @@ were resolved in the plan text before commit. LOW residuals accepted:
 | Synthetic publish bypass | **Resolved** | Publish still `ProductPipelineService.publish`; no merchant publish overload. |
 | Duplicate Shopify listing | **Resolved** | Existing publisher only; no second create. |
 | Supplier/internal leak on preview | **Resolved** | Listing views omit supplier twins; approve reuses existing detail schema. |
-| Untyped JSON response | **Resolved** | Typed schemas; breakdown + readiness reused; image evidence typed. |
+| Untyped JSON / fabricated image evidence | **Resolved** | Non-empty evidence is typed; empty/`NULL` → `analysis: null`; no invented payload. |
 | Route collision | **Resolved** | Multi-segment paths; declaration after optimize/activate. |
-| Business logic in router | **Resolved** | Four delegates + projection. |
-| Manual error mapping | **Resolved** | None; global handler. |
+| Business logic in router | **Resolved** | Four delegates + projection. Empty-analysis nulling is projection, not a second analyser. |
+| Manual error mapping | **Resolved** | None; global handler. Malformed evidence uses existing 500 handler. |
 | Transaction weakening lock order | **Resolved** | No router locks. |
-| GET preview regenerating AI | **Resolved** | Calls `get_preview` only; tests forbid new executions. |
+| GET preview regenerating AI | **Resolved** | Calls `get_preview` only; tests forbid new executions, including NULL-analysis case. |
 | Preview activating | **Resolved** | Service contract + `candidateActive` assertion. |
-| Publish before approval | **Resolved** | Service 422 `candidate_not_approved`. |
+| Publish before approval | **Resolved** | Service 422 `candidate_not_approved` (before M2A). |
 | AI SEO leaking into Shopify | **Resolved** | Overlay title/body only; tests assert payload. |
+| Reusing T0 on first publish | **Resolved** | §10.1: publish uses T1; §17 J asserts 409 then success. |
+| Lost approve response stuck on T0 | **Resolved** | Active retry with T0 is 200 no-op returning T1. |
+| “Any stale publish token is 409” | **Resolved** | §10.3 precedence: 422 candidate/provenance/content first. |
+| Strict evidence required for never-analysed images | **Resolved** | `analysis: PipelineImageAnalysisEvidenceRead \| null`; GET NULL → 200. |
 | Stage 9 scope | **Resolved** | Single-product HTTP; no bulk/progress. |
 | Frontend scope | **Resolved** | No `frontend/` in expected files. |
 
-Counts for this plan: **BLOCKER 0, HIGH 0, MEDIUM 0, LOW 12** (accepted).
+Counts for this plan: **BLOCKER 0, HIGH 0, MEDIUM 0, LOW 14** (accepted).
 
 ---
 
@@ -903,10 +1070,12 @@ Do not start until this plan is independently reviewed and an
 implementation branch is authorized.
 
 1. Add schemas to `schemas/product.py` (requests + preview responses).
-   Reuse quality + `ShopifyPublishReadinessResponse`.
+   Reuse quality + `ShopifyPublishReadinessResponse`. Image item
+   `analysis` is optional; evidence field nullability matches Stage 6
+   failure payload (§7.1).
 2. Add four routes to `products/router.py` in the order in §12. Thin
    handlers only. `from_dto` / `_to_detail` / Shopify response mapping.
-3. HTTP integration tests §17 A–G.
+3. HTTP integration tests §17 A–G and J (token lifecycle).
 4. Run regression §17 H (existing files, not rewritten).
 5. Quality gate: `cd backend && ruff check . && ruff format --check . && mypy app && pytest`.
 6. Completion docs + CHANGELOG + roadmap in the **same** implementation
@@ -923,15 +1092,19 @@ Stage 8 implementation is not complete until:
 2. Routers contain no SQL, no locks, no `optimize_product` /
    `activate_version` / raw `publish_product` for these four.
 3. `expectedUpdatedAt` required on approve and publish at schema layer.
+   Approve uses T0; first publish uses T1 (§10.1). T0 on an otherwise-valid
+   approved candidate is 409, not a bypass.
 4. Tenant 404 (not 403) for foreign product/version/store.
 5. Viewer/Member 403; Admin/Owner allowed; unauthenticated 401.
 6. Preview does not activate or publish.
-7. GET preview does not generate or analyse.
+7. GET preview does not generate or analyse. `NULL` live image analysis
+   returns 200 with `status: "unknown"`, `errorCode: null`, `analysis: null`.
 8. Legacy optimize + activate HTTP contracts unchanged.
 9. Alembic head still `0033`.
 10. No `frontend/` and no Celery task files in the implementation diff.
 11. Quality gate green. Honesty: StubProvider / fixtures, no live-AI claim.
 12. Claude return-review checkpoint preserved.
+13. §17 J lifecycle test green (T0 approve, T1 publish, lost-response retry).
 
 This **plan** PR is accepted when: docs-only diff, CI 10/10, independent
 review of the contract, **not merged until that review says so**.
