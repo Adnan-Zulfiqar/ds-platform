@@ -459,17 +459,20 @@ allow-list plus connect-to-IP and a streamed 5 MiB cap;
 `0033` pairs with a one-line Playwright Alembic-head expectation
 `0032` → `0033`.
 
-### Stage 7 — Pipeline: IMPLEMENTED / AWAITING INDEPENDENT REVIEW AND REMOTE CI
+### Stage 7 — Pipeline: COMPLETE / MERGED / GREEN
 
 Contract: [PHASE_9_STAGE_7_PLAN.md](PHASE_9_STAGE_7_PLAN.md). Report:
 [PHASE_9_STAGE_7_COMPLETION.md](PHASE_9_STAGE_7_COMPLETION.md).
 
-Implementation branch `feat/phase-9-stage-7-pipeline` from `develop`
-`85e11772aeba49d4f801ac23a4eb6ca114f7620c` (plan PR #18 merge; post-merge
-CI 35465267981, 10/10). **Not merged. PR not opened. Production
-undeployed — `main` unchanged.** No new HTTP route, no frontend, no
-migration, no Celery, no deploy. Alembic head remains `0033`. Claude has
-not reviewed Stage 7.
+Implementation PR [#19](https://github.com/Adnan-Zulfiqar/ds-platform/pull/19).
+Reviewed head `d42c1a4606d227e79cfb0d1232534606dd39d508`. Merged into
+`develop` as `ffa0d6e37db218c85a1facdc265087553c694e02` (2026-09-19T22:49:43Z;
+parents `85e11772`, `d42c1a46`). PR CI 35472626657 10/10; post-merge
+develop CI 35474423524 10/10. Independent implementation review PASS
+(BLOCKER 0, HIGH 0, MEDIUM 0). Production undeployed — `main` unchanged.
+Stages 8–11 not started. No new HTTP route, no frontend, no migration,
+no Celery, no deploy. Alembic head remains `0033`. Claude has not
+reviewed Stage 7.
 
 `ProductPipelineService` (preview / get_preview / approve / publish) and
 a private `_generate_version` core are in place. `generate_candidate`

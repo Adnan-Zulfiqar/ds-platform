@@ -2,10 +2,10 @@
 
 **Pipeline: preview → exact-candidate approve → overlay publish.**
 
-Status: **IMPLEMENTED / AWAITING INDEPENDENT REVIEW AND REMOTE CI.**
+Status: **COMPLETE / MERGED / GREEN.**
 
-Not merged. Not deployed. No implementation PR opened. `main` unchanged.
-Stages 8–10 not started. Claude has not reviewed Stage 7. Cursor is the
+Merged into `develop`. Production undeployed — `main` unchanged.
+Stages 8–11 not started. Claude has not reviewed Stage 7. Cursor is the
 temporary implementation + self-review agent; this report is not a Claude
 review.
 
@@ -17,10 +17,16 @@ review.
 | Plan merge / baseline | `develop` @ `85e11772aeba49d4f801ac23a4eb6ca114f7620c` |
 | Post-merge plan CI | [35465267981](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35465267981) — 10/10 SUCCESS |
 | Implementation branch | `feat/phase-9-stage-7-pipeline` |
-| Implementation PR | **NOT OPENED** |
-| Merge | **NO** |
+| Implementation PR | [#19](https://github.com/Adnan-Zulfiqar/ds-platform/pull/19) |
+| Reviewed implementation head | `d42c1a4606d227e79cfb0d1232534606dd39d508` |
+| Independent implementation review | PASS — BLOCKER 0, HIGH 0, MEDIUM 0 |
+| PR CI | [35472626657](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35472626657) — 10/10 SUCCESS |
+| Implementation merge | `ffa0d6e37db218c85a1facdc265087553c694e02` (2026-09-19T22:49:43Z; parents `85e11772`, `d42c1a46`) |
+| Post-merge develop CI | [35474423524](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35474423524) — 10/10 SUCCESS |
 | Contract | [PHASE_9_STAGE_7_PLAN.md](PHASE_9_STAGE_7_PLAN.md) |
 | Migration | **none** — Alembic head remains `0033` |
+| Deployment | **NO** |
+| Stage 8 / 9 / 10 / 11 | **NOT STARTED** |
 | AI involvement | `StubProvider` generation allowed for preview/approve. Pipeline publish fail-closed on `isSynthetic is True` or `ai_provider == "stub"`. Overlay publish tests use fixture `ai_provider="test"` / `isSynthetic=False` — not a live-model claim |
 
 ---
@@ -37,7 +43,10 @@ From `85e11772`:
 6. `9c2ff3e` `test(ai): harden Stage 7 pipeline contract`
 7. `c75cc4d` `docs(ai): complete Stage 7 implementation report`
 8. `776b123` `fix(ai): serialize all Stage 7 activation paths`
-9. this commit `docs(ai): update Stage 7 remediation report`
+9. `d42c1a4` `docs(ai): update Stage 7 remediation report`
+
+Then merged into `develop` as `ffa0d6e3` (true merge; parents `85e11772`,
+`d42c1a46`).
 
 ---
 
@@ -79,7 +88,7 @@ Dependency direction: `product_pipeline` → `product_optimization` → reposito
 | Workflow / Docker / dependencies | unchanged |
 | `backend/app/repositories/product_version.py` | does not exist |
 | `origin/main` | `3ce66d488e94ad3805fe24903deda99691c234a6` unchanged |
-| Stage 8 / 9 / 10 | not started |
+| Stage 8 / 9 / 10 / 11 | not started |
 | Deploy | no |
 
 ---
@@ -132,7 +141,10 @@ defect.** CI has no `.env`.
 
 No other pytest failure.
 
-Implementation PR CI and post-merge CI are **not claimed**. PR is still not open.
+Implementation PR CI [35472626657](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35472626657)
+on `d42c1a4` — **10/10 SUCCESS**. Post-merge develop CI
+[35474423524](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/35474423524)
+on `ffa0d6e` — **10/10 SUCCESS**.
 
 ---
 
@@ -184,6 +196,9 @@ MEDIUM 2, LOW 1 contract-ordering cleanup. No PR opened.
 | LOW — inactive legacy/malformed rows could return `candidate_not_approved` before proving pipeline metadata | Under the Product lock: AI source → strict parse → active → provenance → bounds → overlay. Inactive legacy/malformed → `not_a_pipeline_candidate`. Valid inactive pipeline → `candidate_not_approved`. |
 
 Self-review of `85e11772...HEAD` after remediation: BLOCKER 0, HIGH 0, MEDIUM 0.
+
+Independent implementation review of `d42c1a4`: **PASS** — BLOCKER 0,
+HIGH 0, MEDIUM 0. Merged as `ffa0d6e3`.
 
 ---
 
