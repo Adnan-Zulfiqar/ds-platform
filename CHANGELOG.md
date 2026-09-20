@@ -12,6 +12,17 @@ production release.
 
 ### Added
 
+- **Phase 9 Stage 8 — Pipeline API (implementation on
+  `feat/phase-9-stage-8-api`; unmerged, awaiting independent review).**
+  Four `RequireAdmin` routes over Stage 7 `ProductPipelineService`:
+  POST preview (201), GET exact preview (200), approve (200), publish
+  (200). Required `expectedUpdatedAt` on approve/publish. T0 approval /
+  T1 publish. Lost-approve retry is 200 no-op returning current T1.
+  NULL/empty image analysis projects as `analysis: null`. Existing
+  Shopify publisher only; AI SEO is not overlaid. No migration (Alembic
+  head remains `0033`), no frontend, no Celery, no deploy. Report:
+  [PHASE_9_STAGE_8_COMPLETION.md](docs/PHASE_9_STAGE_8_COMPLETION.md).
+
 - **Phase 9 Stage 7 — Pipeline (merged into `develop` 2026-09-19 via
   PR #19).** Preview / exact-candidate approve / overlay publish.
   Reviewed head `d42c1a4606d227e79cfb0d1232534606dd39d508`. Merge
