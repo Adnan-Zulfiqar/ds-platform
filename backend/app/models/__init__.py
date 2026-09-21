@@ -55,6 +55,12 @@ from app.models.order import (
     SyncTrigger,
     TrackingEvent,
 )
+from app.models.pipeline_bulk import (
+    PipelineBulkItemState,
+    PipelineBulkRun,
+    PipelineBulkRunItem,
+    PipelineBulkRunStatus,
+)
 from app.models.pricing import (
     PriceChange,
     PricingRule,
@@ -125,6 +131,10 @@ __all__ = [
     "OrderSource",
     "OrderSyncRun",
     "PaymentStatus",
+    "PipelineBulkItemState",
+    "PipelineBulkRun",
+    "PipelineBulkRunItem",
+    "PipelineBulkRunStatus",
     "PriceChange",
     "PricingRule",
     "PricingScope",

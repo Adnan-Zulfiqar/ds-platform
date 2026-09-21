@@ -135,6 +135,10 @@ class Product(TenantScopedBase):
         # constraint, so unoptimised products (no slug yet) never collide —
         # this only starts enforcing once a tenant actually sets one.
         UniqueConstraint("tenant_id", "slug", name="uq_products_tenant_slug"),
+        # Redundant as identity (``id`` is already globally unique). Exists
+        # solely so Stage 9 bulk items can hold a composite FK
+        # ``(tenant_id, product_id) → products(tenant_id, id)``.
+        UniqueConstraint("tenant_id", "id", name="uq_products_tenant_id_id"),
     )
 
     # --- Provenance ---------------------------------------------------------
@@ -618,6 +622,7 @@ class ProductVersion(TenantScopedBase):
 
     __table_args__ = (
         UniqueConstraint("product_id", "version_number", name="uq_product_versions_product_number"),
+        UniqueConstraint("tenant_id", "id", name="uq_product_versions_tenant_id_id"),
         Index("ix_product_versions_tenant_product", "tenant_id", "product_id"),
         # Partial unique index: at most one row per product may have
         # `active = true`, enforced by the database rather than a
