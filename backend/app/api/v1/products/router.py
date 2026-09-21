@@ -17,8 +17,9 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy import event
 
-from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.api.deps import DbSession, RequireAdmin, RequireViewer, endpoint_rate_limit
 from app.integrations.aliexpress.catalog import normalise_product_id
 from app.integrations.shopify.schemas import (
     ShopifyPublishCheckItem,
@@ -28,6 +29,11 @@ from app.integrations.shopify.schemas import (
 from app.models.product import Product, ProductSource
 from app.repositories.product import ProductImportRepository, ProductRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
+from app.schemas.pipeline_bulk import (
+    PipelineBulkRunCreateRequest,
+    PipelineBulkRunItemRead,
+    PipelineBulkRunRead,
+)
 from app.schemas.product import (
     FeedProductRead,
     PipelineApproveRequest,
@@ -56,6 +62,7 @@ from app.schemas.product import (
     ProductWorkspaceCounts,
 )
 from app.services.image_analysis import ImageAnalysisReport
+from app.services.pipeline_bulk import PipelineBulkRunService
 from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
@@ -66,8 +73,26 @@ from app.services.product_pipeline import (
     ProductPipelineService,
 )
 from app.services.publish_readiness import PublishReadinessResult
+from app.tasks.ai import publish_pipeline_bulk_run
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+_pipeline_bulk_start_limit = endpoint_rate_limit("pipeline-bulk-start", limit=10, window_seconds=60)
+
+
+def _publish_pipeline_bulk_after_commit(session: DbSession, run_id: uuid.UUID) -> None:
+    def on_commit(_session: object) -> None:
+        publish_pipeline_bulk_run(run_id)
+
+    event.listen(session.sync_session, "after_commit", on_commit, once=True)
+
+
+def _to_bulk_run(run: object) -> PipelineBulkRunRead:
+    return PipelineBulkRunRead.model_validate(run)
+
+
+def _to_bulk_item(item: object) -> PipelineBulkRunItemRead:
+    return PipelineBulkRunItemRead.model_validate(item)
 
 
 def _to_detail(product: Product) -> ProductDetailRead:
@@ -400,6 +425,82 @@ async def browse_feed(
         currency=currency,
     )
     return [FeedProductRead.model_validate(item) for item in items]
+
+
+@router.post(
+    "/pipeline/runs",
+    response_model=PipelineBulkRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a bulk pipeline preview run",
+)
+async def start_pipeline_bulk_run(
+    session: DbSession,
+    payload: PipelineBulkRunCreateRequest,
+    principal: RequireAdmin,
+    _throttle: None = Depends(_pipeline_bulk_start_limit),
+) -> PipelineBulkRunRead:
+    """Accept work; generate inactive preview candidates on Celery.
+
+    Declared with the other static paths so ``pipeline`` cannot be parsed as a
+    product id. Publish happens on ``after_commit``; progress is PostgreSQL.
+    """
+    run = await PipelineBulkRunService(session).create(
+        product_ids=payload.product_ids,
+        idempotency_key=payload.idempotency_key,
+        tone=payload.tone,
+        store_id=payload.store_id,
+        actor_id=principal.user_id,
+    )
+    _publish_pipeline_bulk_after_commit(session, run.id)
+    return _to_bulk_run(run)
+
+
+@router.get(
+    "/pipeline/runs/{run_id}",
+    response_model=PipelineBulkRunRead,
+    summary="Read a bulk pipeline run",
+)
+async def get_pipeline_bulk_run(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    run_id: Annotated[uuid.UUID, Path()],
+) -> PipelineBulkRunRead:
+    run = await PipelineBulkRunService(session).get(run_id)
+    return _to_bulk_run(run)
+
+
+@router.get(
+    "/pipeline/runs/{run_id}/items",
+    response_model=Page[PipelineBulkRunItemRead],
+    summary="List items of a bulk pipeline run",
+)
+async def list_pipeline_bulk_run_items(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    run_id: Annotated[uuid.UUID, Path()],
+    params: Annotated[ListQueryParams, Depends(list_query_params)],
+) -> Page[PipelineBulkRunItemRead]:
+    rows, total = await PipelineBulkRunService(session).list_items(run_id, params)
+    return Page[PipelineBulkRunItemRead].build(
+        items=[_to_bulk_item(item) for item in rows],
+        page=params.page,
+        size=params.size,
+        total_items=total,
+    )
+
+
+@router.post(
+    "/pipeline/runs/{run_id}/cancel",
+    response_model=PipelineBulkRunRead,
+    summary="Cancel a bulk pipeline run",
+)
+async def cancel_pipeline_bulk_run(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    run_id: Annotated[uuid.UUID, Path()],
+) -> PipelineBulkRunRead:
+    run = await PipelineBulkRunService(session).cancel(run_id)
+    return _to_bulk_run(run)
 
 
 @router.get(

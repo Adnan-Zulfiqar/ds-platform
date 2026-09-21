@@ -201,6 +201,18 @@ class ShopifyPublishBusyError(ConflictError):
     message = "Publishing is already in progress. Please try again in a moment."
 
 
+class PipelineBulkRunActiveError(ConflictError):
+    """This tenant already has a pending or running pipeline bulk run.
+
+    Enforced by the partial unique index on ``pipeline_bulk_runs``, not by a
+    SELECT-then-INSERT. A different idempotency key cannot start a second
+    active run; that is the cost bound until a token ledger exists.
+    """
+
+    code = "pipeline_bulk_run_active"
+    message = "A pipeline bulk run is already pending or running for this tenant."
+
+
 class RateLimitExceededError(AppError):
     """Too many requests within the configured window."""
 

@@ -3,7 +3,7 @@
 Development status for DropPilot AI. Each phase is a defined scope delivered in
 full before the next begins.
 
-Last updated: 2026-09-20
+Last updated: 2026-09-21
 
 ## Status
 
@@ -19,7 +19,7 @@ Last updated: 2026-09-20
 | 7 | Production hardening & operational readiness | ✅ **Complete** |
 | 8 | Shopify sales-channel integration | ✅ **Complete** |
 | 8.1 | Shopify OAuth production quality | ✅ **Complete** (live Partner OAuth still M17) |
-| 9 | AI product optimization | 🚧 **In progress** — stages 1–7 merged into `develop`; Stage 8 implementation on `feat/phase-9-stage-8-api` (unmerged, awaiting independent review). Stages 9–11 not started. `StubProvider` only — no live model call anywhere. Production undeployed |
+| 9 | AI product optimization | 🚧 **In progress** — stages 1–8 merged into `develop`; Stage 9 implementation on `feat/phase-9-stage-9-bulk-ai` (unmerged, awaiting independent review). Stages 10–11 not started. `StubProvider` only — no live model call anywhere. Production undeployed |
 | UX-L2A | Product editor foundation | ✅ **Integrated into `develop` (`e1dd0f0`)** — production undeployed |
 | UX-L2B | Server-authoritative publish integrity | ✅ **Present in `develop` (`a543b029` = tip of `feature/ux-l2b-publish-integrity`, R7)** — production undeployed. Earlier "not merged" wording predates the fast-forward |
 | Phase 1 (Git/CI) | CI baseline repair and PR #7 closure | ✅ **Merged into `develop`** — PR #7 merged 2026-09-16, merge commit `5e21927`. Accepted SHA `c0092da6`: independent review `PASS — PHASE 1 MAY CLOSE` (2026-09-15), CI run 34846601320 10/10; CI on the merge commit run 35164379004 10/10. **Production undeployed** — `main` unchanged. Celery exclusive-pidbox multi-worker/restart drill remains a separate safe-staging validation item |
@@ -289,7 +289,7 @@ in mind. Nothing here is committed to a phase number.
 |---|---|
 | Additional store channels | WooCommerce / Etsy / TikTok. Shopify shipped in Phase 8; **eBay is connected** as of EBAY-C1 but publishes nothing yet — see [docs/ebay/MASTER_EBAY_ROADMAP.md](docs/ebay/MASTER_EBAY_ROADMAP.md) |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
-| AI optimisation (Phase 9) | Stages 1–7 merged (Stage 7: PR #19, merge `ffa0d6e3`; post-merge CI 35474423524 10/10). Stage 8 implementation on `feat/phase-9-stage-8-api` (unmerged). Stages 9–11 not started. `StubProvider` only — no live model-quality verification. Production undeployed |
+| AI optimisation (Phase 9) | Stages 1–8 merged (Stage 8: PR #22, merge `91a7069e`; post-merge CI 35529859035 10/10). Stage 9 implementation on `feat/phase-9-stage-9-bulk-ai` (unmerged). Stages 10–11 not started. `StubProvider` only — no live model-quality verification. Production undeployed |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
 | Subscription billing | Plan limits attach to `tenants` |

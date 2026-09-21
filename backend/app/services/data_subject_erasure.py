@@ -62,6 +62,7 @@ from app.models.integration import AliExpressConnection
 from app.models.inventory import InventorySyncRun
 from app.models.notification import Notification
 from app.models.order import OrderSyncRun
+from app.models.pipeline_bulk import PipelineBulkRun
 from app.models.pricing import GlobalRuleVersion, PriceChange
 from app.models.product import ProductImport, ProductVersion
 from app.models.refresh_token import RefreshToken
@@ -232,6 +233,13 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
         RuleApplication.requested_by_user_id,
         "clear",
         RuleApplication.tenant_id,
+    ),
+    UserReference(
+        "pipeline_bulk_runs",
+        PipelineBulkRun,
+        PipelineBulkRun.requested_by_user_id,
+        "clear",
+        PipelineBulkRun.tenant_id,
     ),
     UserReference("stores", Store, Store.connected_by_user_id, "clear", Store.tenant_id),
     # Marketplace connections belong to the *workspace*, not the person who

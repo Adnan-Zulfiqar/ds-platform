@@ -494,16 +494,17 @@ channel. Title/body length is fail-closed (512 approve / 255 publish /
 provenance. `pipelineSourceUpdatedAt` is an inactive-candidate approval
 fingerprint only.
 
-### Stage 8 — API: COMPLETE / UNMERGED / AWAITING INDEPENDENT REVIEW
+### Stage 8 — API: COMPLETE / MERGED / GREEN
 
 Contract: [PHASE_9_STAGE_8_PLAN.md](PHASE_9_STAGE_8_PLAN.md). Report:
 [PHASE_9_STAGE_8_COMPLETION.md](PHASE_9_STAGE_8_COMPLETION.md).
 
-Implementation branch `feat/phase-9-stage-8-api` from plan merge
-`9a7c2900406cd1fbe3a6ca94f6615666deb95cf0` (PR #21; post-merge CI
-35518849907 10/10). Not merged. Stages 9–11 not started. Production
-undeployed — `main` unchanged. Alembic head remains `0033`. No frontend.
-No Celery. Claude has not reviewed Stage 8.
+Implementation PR [#22](https://github.com/Adnan-Zulfiqar/ds-platform/pull/22).
+Reviewed head `f88c34c89ad030e1fe11b1ac44aaf0965cd65ae6`. Merged into
+`develop` as `91a7069e73957822550ac47dc14fab0c30d1608a`. Post-merge CI
+35529859035 10/10. Production undeployed — `main` unchanged. No migration
+(Alembic head was still `0033` at merge). No frontend. No Celery. Claude
+has not reviewed Stage 8.
 
 Four `RequireAdmin` routes on `/api/v1/products`: POST
 `/{id}/pipeline/preview` (201), GET
@@ -514,6 +515,24 @@ Four `RequireAdmin` routes on `/api/v1/products`: POST
 Lost-approve retry with T0 is 200 no-op returning current T1. NULL/empty
 `ProductImage.analysis` projects as `analysis: null`. Existing Shopify
 publisher only; AI SEO is not overlaid.
+
+### Stage 9 — Celery bulk: COMPLETE / UNMERGED / AWAITING INDEPENDENT REVIEW
+
+Contract: [PHASE_9_STAGE_9_PLAN.md](PHASE_9_STAGE_9_PLAN.md). Report:
+[PHASE_9_STAGE_9_COMPLETION.md](PHASE_9_STAGE_9_COMPLETION.md).
+
+Plan PR [#23](https://github.com/Adnan-Zulfiqar/ds-platform/pull/23), accepted
+head `5e453b7`, merge `e65b2f5`, post-merge CI 35619263921 10/10.
+Implementation on `feat/phase-9-stage-9-bulk-ai` from that merge. Not merged.
+Stages 10–11 not started. Production undeployed — `main` unchanged. Migration
+`0034`. No frontend. No deploy. Claude has not reviewed Stage 9.
+
+One sequential Celery task generates inactive pipeline preview candidates
+only. Durable progress in PostgreSQL. One-active-run is a partial unique
+index. Lease fencing, Txn A attempt claim, success-only Txn B, fresh
+classified failure transaction, ConflictError task retry, retries 0/1/2
+re-raise and ≥3 owner-fail-and-return. Real RabbitMQ harness plus duplicate
+delivery. Provider retryability is not claimed.
 
 CLAUDE RETURN REVIEW CHECKPOINT:
 All commits from Stage 5 takeover onward require a fresh Claude
