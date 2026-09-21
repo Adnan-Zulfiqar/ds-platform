@@ -12,15 +12,30 @@ production release.
 
 ### Added
 
-- **Phase 9 Stage 8 — Pipeline API (implementation on
-  `feat/phase-9-stage-8-api`; unmerged, awaiting independent review).**
-  Four `RequireAdmin` routes over Stage 7 `ProductPipelineService`:
-  POST preview (201), GET exact preview (200), approve (200), publish
-  (200). Required `expectedUpdatedAt` on approve/publish. T0 approval /
-  T1 publish. Lost-approve retry is 200 no-op returning current T1.
-  NULL/empty image analysis projects as `analysis: null`. Existing
-  Shopify publisher only; AI SEO is not overlaid. No migration (Alembic
-  head remains `0033`), no frontend, no Celery, no deploy. Report:
+- **Phase 9 Stage 9 — Celery bulk pipeline preview (implementation on
+  `feat/phase-9-stage-9-bulk-ai`; unmerged, awaiting independent review).**
+  Durable `pipeline_bulk_runs` / `pipeline_bulk_run_items` (migration
+  `0034`). One sequential `ai.process_pipeline_bulk_run` task on the
+  default queue creates inactive Stage 7 preview candidates only — no
+  approve, no publish. PostgreSQL is progress truth. One-active-run is a
+  partial unique index. Idempotency key + fingerprint. Lease fencing,
+  Txn A / success-only Txn B / fresh classified failure. ConflictError
+  is a task retry. Retries 0/1/2 re-raise; ≥3 owner-fail-and-return.
+  Reconciler every 5 minutes. Four `RequireAdmin` routes under
+  `/api/v1/products/pipeline/runs`. Real RabbitMQ harness plus duplicate
+  delivery. No frontend, no Stage 10, no deploy. Report:
+  [PHASE_9_STAGE_9_COMPLETION.md](docs/PHASE_9_STAGE_9_COMPLETION.md).
+
+- **Phase 9 Stage 8 — Pipeline API (merged into `develop` 2026-09-20 via
+  PR #22, merge `91a7069e`).** Four `RequireAdmin` routes over Stage 7
+  `ProductPipelineService`: POST preview (201), GET exact preview (200),
+  approve (200), publish (200). Required `expectedUpdatedAt` on
+  approve/publish. T0 approval / T1 publish. Lost-approve retry is 200
+  no-op returning current T1. NULL/empty image analysis projects as
+  `analysis: null`. Existing Shopify publisher only; AI SEO is not
+  overlaid. No migration at merge (Alembic head was still `0033`), no
+  frontend, no Celery, no deploy. Post-merge CI 35529859035 10/10.
+  Report:
   [PHASE_9_STAGE_8_COMPLETION.md](docs/PHASE_9_STAGE_8_COMPLETION.md).
 
 - **Phase 9 Stage 7 — Pipeline (merged into `develop` 2026-09-19 via
