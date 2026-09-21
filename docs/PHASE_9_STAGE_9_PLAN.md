@@ -30,7 +30,9 @@ below is assumed from memory where the code could answer.
 | First remediation CI | run `35536090549` — 10/10 SUCCESS |
 | Second independent review | BLOCKER 0, HIGH 1, MEDIUM 3 — remediations in `7cbbc81` |
 | Second remediation CI | run `35538970019` attempt 2 — 10/10 SUCCESS |
-| Third independent review | BLOCKER 0, HIGH 2, MEDIUM 1 — remediations in this document |
+| Third independent review | BLOCKER 0, HIGH 2, MEDIUM 1 — remediations in `52d6951` |
+| Third remediation CI | run `35546686239` — 10/10 SUCCESS |
+| Fourth independent review | BLOCKER 0, HIGH 1, MEDIUM 1 — remediations in this document |
 | Alembic head | **0033** (`0033_product_image_analysis.py`) |
 | Migration this planning task | **NOT APPLIED** (authorized for implementation; see §10) |
 | Frontend this stage | **NO** |
@@ -96,6 +98,8 @@ Inspected before writing this plan.
 | Broker smoke | `backend/scripts/verify_celery_broker.py` | Real RabbitMQ; registration + `send_task`; does **not** currently list any AI task |
 | Pricing bulk | `RuleApplication` + `app/tasks/pricing.py` | Mature durable-run pattern. Pricing-domain tables. **Do not reuse** |
 | Stage 7 preview | `ProductPipelineService.preview` | Analyse + `generate_candidate`. **Does not commit.** **Not idempotent.** Does not activate. Does not set `Product.ai_status=FAILED` |
+| Repository create rollback | `BaseRepository.create` / `update` | On `IntegrityError` **and** other `SQLAlchemyError`: `await self.session.rollback()` then raise translated domain error. `ProductVersionRepository` inherits this. That rollback **releases** any `FOR UPDATE` locks held on this session |
+| Version unique race | `uq_product_versions_product_number` `(product_id, version_number)` + `next_version_number` | Stage 8 HTTP preview remains concurrently callable. A Stage 9 `versions.create()` can lose that unique race and surface as `ConflictError` **after** the session has already rolled back |
 | Stage 8 HTTP | `POST /products/{id}/pipeline/preview` | `RequireAdmin`, 201, intentionally non-idempotent per successful call |
 | AI errors | `app/ai/exceptions.py` | `AIError.retryable` default `False`; `AIProviderNotConfiguredError.retryable=False`. No timeout/rate-limit subclass exists yet |
 | Provider exceptions in generation | `PromptService.test_render(execute=True)` and `execute_image_analysis` | Catch `AIError`, write FAILED `PromptExecution`, **return**. Subclass identity and `retryable` **do not escape** |
@@ -251,11 +255,11 @@ Worker:
 4. Configuration preflight: `get_ai_provider(settings)` only. No
    `complete()`. On `AIProviderNotConfiguredError`, fail the run
    (all still-pending items) and stop. See §21.
-5. Loop: next `pending` item — txn A claim-attempt, txn B resolve
-   `submitted_product_id` then `preview` + terminal write. Both txns
-   start with `_lock_owned` (`FOR UPDATE` on the run row, held until
-   commit). Product `NotFoundError` from `preview` → rollback B, then
-   txn C missing-terminalization. See §15.
+5. Loop: next `pending` item — txn A claim-attempt, txn B
+   resolve + **success-only** `preview`. Any `preview` exception
+   rolls B back (fence gone); classify in a **new** `_lock_owned`
+   transaction. `ConflictError` from `preview` is re-raised (task
+   concurrency retry). See §15.
 6. Finalize: `completed` / `partial` / `failed` / honour `cancelled`.
 7. Exhaustion: if Celery retries are spent, owner-conditional
    `_mark_pipeline_bulk_failed` (LeaseHolder + `_lock_owned`). See §20.
@@ -409,7 +413,7 @@ its item row.
 | `id` | UUID PK |
 | `tenant_id` | Same tenant as the run (composite FK) |
 | `run_id` | Parent |
-| `product_id` | Nullable. **NULL at create for every item.** Attached to the own-tenant product id only after scoped resolution in a terminal **success/skip** commit. **Missing/foreign always store NULL**, including late disappearance after an earlier resolve (Txn B rollback + Txn C — §15). Composite FK `ON DELETE RESTRICT` (not SET NULL — that would also null `tenant_id`) |
+| `product_id` | Nullable. **NULL at create for every item.** Attached to the own-tenant product id only after scoped resolution in a terminal **success/skip** commit. **Missing/foreign always store NULL**, including late disappearance after an earlier resolve (Txn B rollback + classified txn — §15). Composite FK `ON DELETE RESTRICT` (not SET NULL — that would also null `tenant_id`) |
 | `submitted_product_id` | Always the UUID the merchant sent. Never rewritten. Audit identity for foreign/missing ids |
 | `state` | Item state machine §12 |
 | `candidate_version_id` | Set iff `succeeded`. Exact preview this run produced |
@@ -791,9 +795,10 @@ item loop so the same known-bad configuration is not run through up to
 50 products via `preview` (which would swallow the subclass and raise
 a new base `AIError` per product).
 
-Worker item is **two** transactions plus a classified-failure follow-up.
-`attempt_count` is not incremented inside the generation transaction
-(that increment would roll back with a retryable failure and lie).
+Worker item is **Txn A + success-only Txn B**, plus a **classified
+outcome transaction** after any `preview` failure. `attempt_count` is
+not incremented inside the generation transaction (that increment
+would roll back with a retryable failure and lie).
 
 The fence is **not** a plain lease read before provider I/O. It is
 copied from RuleApplication `_lock_owned` / `_lock_row`:
@@ -808,7 +813,8 @@ SELECT PipelineBulkRun
 Then verify `status == running` **and** `lease_token == held token`.
 If no row, lease mismatch, or wrong status: return `LOST` /
 `superseded` and perform **zero writes**. Hold that run-row lock for
-the **rest of the transaction** — including provider I/O in Txn B.
+the **rest of the transaction** — including provider I/O in a
+**successful** Txn B.
 
 `lease_token` lives on the **run**, not the item, not
 `ProductVersion`. Do **not** claim item writes themselves have a
@@ -816,14 +822,29 @@ the **rest of the transaction** — including provider I/O in Txn B.
 `FOR UPDATE` + lease validation, held throughout the transaction that
 performs the candidate / item / counter write.
 
-This intentionally holds the run row during a long preview. Acceptable
-because:
+This intentionally holds the run row during a long **successful**
+preview. Acceptable because:
 
 - there is only one active bulk run per tenant
 - cancellation is cooperative at the item boundary (§28)
 - the reconciler must not steal a genuinely in-flight item
 - **Product** rows are **not** locked by this decision
 - only the bulk **run** row is held
+
+**Never assume that fence survived an exception from `preview`.**
+`BaseRepository.create()` (inherited by `ProductVersionRepository`)
+catches `IntegrityError`, executes `await self.session.rollback()`,
+and then raises `ConflictError`. That rollback **releases** the run
+and item `FOR UPDATE` locks. SQLAlchemy may begin a **new**
+transaction on the next write. Catching the domain exception and
+terminalizing the item on that same session would write **unfenced**.
+A reconciler, cancel, or new lease can win in the gap.
+
+Stage 8 HTTP preview failure rolls the request transaction back.
+Stage 9 must not commit partial generation side effects merely because
+the worker caught the domain exception. No changes to
+`product_pipeline.py`, `product_optimization.py`, `prompt.py`,
+`BaseRepository`, or `BaseTask`. The orchestration layer adapts.
 
 **Txn A — claim attempt (short, no provider I/O):**
 
@@ -836,75 +857,113 @@ because:
 5. Heartbeat the run (same locked row).
 6. Commit. Item is still `pending`. No `ProductVersion`.
 
-**Txn B — generate + terminal (one product):**
+**Txn B — success-only generate (one product):**
 
 1. `_lock_owned(run_id, lease)` takes the run row `FOR UPDATE` and
-   holds it until this transaction commits or rolls back.
+   holds it until this transaction **commits or rolls back**.
 2. If no row / lease mismatch / wrong status: return `LOST`.
    **Zero writes. Do not call `preview`.**
 3. Lock the same item `FOR UPDATE`. If already terminal → no-op
    counters.
 4. Item must still be `pending`.
-5. Tenant-scoped lookup of `submitted_product_id`.
+5. Tenant-scoped lookup of `submitted_product_id` (**no** `preview`
+   yet). These pre-preview outcomes may commit in Txn B because they
+   never call `versions.create()`:
    - unresolved / foreign / soft-deleted → `state=missing`,
-     `product_id` stays NULL, `candidate_version_id` NULL, increment
+     `product_id` NULL, `candidate_version_id` NULL, increment
      `missing_count` and `processed_count`, heartbeat, commit.
-     **Do not call `preview`.**
-   - own live product → remember `product.id` for this txn; do **not**
-     treat that attach as durable until commit. Composite FK binds
-     same-tenant only if this txn commits a non-null `product_id`.
    - archived / `UNAVAILABLE` → `skipped`, `product_id` attached,
-     `error_code=product_not_eligible`. No `preview`.
+     `error_code=product_not_eligible`, commit. No `preview`.
+   - own live product → remember `product.id` in memory for this txn;
+     do **not** treat that attach as durable until a **success**
+     commit.
 6. Call `ProductPipelineService.preview` on **this session**
    (no commit inside the service — verified). The run row remains
-   locked for the duration of this call.
-7. On success: attach `product_id`; item `succeeded` +
-   `candidate_version_id`; increment `succeeded_count` and
-   `processed_count`; heartbeat.
-8. On classified **permanent product** error that is **not** Product
-   `NotFoundError`: item `failed` + safe error fields; attach
-   `product_id` if still own-tenant; increment `failed_count` and
-   `processed_count`; heartbeat.
-9. On classified **run-level** `store_not_found`: roll back this txn
-   (no candidate; any `product_id` attach rolls back too); then a
-   separate lease-conditional fail of the run (see Store contract).
-   Do not mark the item `missing`.
-10. On `NotFoundError` whose resource is **Product** after an earlier
-    resolve (late disappearance / later Stage 7 lookup): **roll back
-    this txn** (candidate + `product_id` attach must not survive).
-    Then **Txn C** (below). Do not commit `missing` with a leftover
-    `product_id`.
-11. Commit.
+   locked for the duration of a **successful** call.
+7. **Only on complete success:** attach `product_id`; item
+   `succeeded` + `candidate_version_id`; increment `succeeded_count`
+   and `processed_count`; heartbeat; **commit**.
 
-Because the run row remains `FOR UPDATE` until Txn B commits:
+If `preview(...)` raises **any** exception:
 
-- the reconciler's reclaim `UPDATE` blocks, then sees a moved
-  heartbeat / lease and matches **zero** rows
-- cancellation `_lock_row` waits; it cannot rewrite ownership or
-  status underneath candidate generation
-- a stale L1 worker cannot commit after L2 has been minted — L2
-  cannot be minted while L1's Txn B holds the row
+- do **not** write terminal item state in Txn B
+- let the generation transaction roll back (or observe that the
+  repository already rolled it back)
+- candidate must not survive
+- `product_id` attach must not survive
+- partial image-analysis / `PromptExecution` rows from that failed
+  preview must not become the bulk success record
+- run/item locks are **considered gone**
+- **preserve** the exception object and classify it **only after**
+  rollback
 
-**Txn C — late Product `NotFound` terminalization (own transaction):**
+Do not catch `ConflictError` / `AIError` / `NotFoundError` /
+`ValidationError` and write `item.failed` on the same session that
+just ran `preview`. That session's fence may already be dead.
 
-Preferred implementation (pinned; do not leave implicit):
+Because the run row remains `FOR UPDATE` until a **successful** Txn B
+commits (or until it rolls back):
 
-1. Txn B rolled back. Session is clean. No candidate. `product_id`
-   attach is gone.
-2. Open a **separate** lease-conditional transaction.
-3. `_lock_owned(run_id, lease)` — zero writes if lost.
-4. Lock item `FOR UPDATE`.
-5. If no longer `pending` → no-op (another owner already terminalized).
-6. Write `state=missing`, `product_id=NULL`,
-   `candidate_version_id=NULL`, `error_code=product_not_found`,
-   safe message, `finishedAt`.
-7. Increment `missing_count` and `processed_count` exactly once.
-8. Heartbeat. Commit.
-9. **No** Celery retry.
+- while B is still open and unrolled, the reconciler's reclaim
+  `UPDATE` blocks, then sees a moved heartbeat / lease and matches
+  **zero** rows
+- cancellation `_lock_row` waits on an open successful preview
+- after a `preview` exception + rollback, reclaim/cancel **can**
+  proceed; the classified transaction must re-take `_lock_owned`
 
-Do not catch Product `NotFoundError` and commit `missing` in the same
-session that already attached `product_id` or flushed a candidate.
-Rollback first.
+**Classified-outcome transaction (after Txn B rollback):**
+
+Generic. Replaces the earlier Product-only "Txn C". Used for every
+**permanent** outcome that escaped `preview`. Always a **new**
+transaction:
+
+1. `_lock_owned(run_id, lease)`.
+2. If lease lost / status changed: **zero writes**, return
+   `superseded`.
+3. Lock item `FOR UPDATE`.
+4. If item no longer `pending`: no-op (another owner already
+   terminalized; do not double-count).
+5. Write the exact terminal outcome (below).
+6. Update counters **exactly once**.
+7. Heartbeat.
+8. Commit.
+
+Outcomes:
+
+| Preserved exception | Write | Celery retry? |
+|---|---|---|
+| `AIError` | item `failed`, `error_code=ai_error`, `candidate_version_id=NULL`, `product_id` NULL unless a prior **committed** attach exists (it does not — B rolled back). `processed` + `failed` +1 | no |
+| `ValidationError` / `MissingPromptVariablesError` | item `failed`, stable domain `code`, no candidate, `processed` + `failed` +1 | no |
+| Product `NotFoundError` | item `missing`, `product_id=NULL`, `candidate_version_id=NULL`, `error_code=product_not_found`, `processed` + `missing` +1 | no |
+| Store `NotFoundError` | **run-level** fail (`store_not_found`); do **not** mark the item `missing`; prior committed successes kept | no |
+| `ConflictError` | **not classified here** — see below | yes (task/concurrency) |
+| DB / unexpected / time limit | **not classified here** — re-raise | yes |
+
+**`ConflictError` from `preview` is retryable execution/concurrency
+failure**, not a permanent product validation failure and not a
+provider retry.
+
+Real race: Stage 8 `POST …/pipeline/preview` (accepted residual L5)
+can take the next `(product_id, version_number)` while Stage 9 Txn B
+is in `versions.create()`. `BaseRepository.create` rolls back, then
+raises `ConflictError("Another record with these values already
+exists.")`.
+
+Pinned contract:
+
+- Txn B rolled back
+- item remains `pending`
+- candidate absent
+- `attemptCount` from Txn A remains
+- **re-raise** so BaseTask autoretry resumes the item
+- max retry budget still applies (`retries` 0/1/2 re-raise; `>= 3`
+  owner-conditional run fail)
+- do **not** write item/counters after that rollback
+
+If implementation instead treated `ConflictError` as permanent, that
+terminalization would **still** require this classified `_lock_owned`
+transaction. Preferred: retryable, because a version-number race is
+transient.
 
 If txn B rolls back for infrastructure reasons: no `ProductVersion`,
 item still `pending`, progress counters unchanged. `attempt_count`
@@ -915,12 +974,13 @@ include a claimed attempt that performed **no** provider call. That is
 the defined meaning: **number of durable processing attempts
 entered/claimed**, not a guaranteed provider-call count.
 
-Infrastructure errors raised from txn B (database disconnect, unexpected
-bugs, time limits) leave the item `pending` and let BaseTask retry the
-run. The next loop/retry runs txn A again (increments `attempt_count`
-again) then txn B.
+Infrastructure errors and `ConflictError` raised from txn B leave the
+item `pending` and let BaseTask retry the run. The next loop/retry
+runs txn A again (increments `attempt_count` again) then txn B.
 
-`AIError` raised by `preview` is **not** treated as transient. See §21.
+`AIError` raised by `preview` is **not** treated as transient. It is
+terminalized only in the classified transaction after rollback.
+See §21.
 
 Worker finalize (own transaction, lease-conditional):
 
@@ -1122,12 +1182,23 @@ except Exception as exc:
 ```
 
 Non-final exceptions are **re-raised** so BaseTask autoretry handles
-backoff/jitter. That is retries `0` and `1` when `max_retries=3`
-(Celery compares `request.retries >= max_retries` on the attempt that
-has already used the last retry).
+backoff/jitter. `BaseTask.max_retries` stays **3** (do not change it).
+
+Celery attempt contract with `max_retries=3`:
+
+| `request.retries` | Meaning | Wrapper |
+|---|---|---|
+| 0 | initial attempt | re-raise |
+| 1 | retry #1 | re-raise |
+| 2 | retry #2 | re-raise |
+| 3 | final allowed attempt | if it still fails: owner-conditional mark failed, **return**, do **not** raise |
+| ≥ 4 | **must not happen** | — |
+
+`if self.request.retries >= self.max_retries` is therefore
+`retries >= 3`. That is the fourth execution, not "retries 0 and 1".
 
 Final exhaustion **must not raise again**. Raising would schedule a
-fourth delivery. Return a dict instead.
+fifth delivery / fourth retry. Return a dict instead.
 
 `_mark_pipeline_bulk_failed` must:
 
@@ -1229,14 +1300,14 @@ double that is not `preview`); label it as task retry mechanics only.
 | Error | Item / run | Retry the Celery task? |
 |---|---|---|
 | Preflight `AIProviderNotConfiguredError` | run-level fail all remaining pending items; no versions | no |
-| `AIError` from `preview` (always base, `retryable=False` today) | item `failed`, `error_code=ai_error` | no |
-| `NotFoundError` whose resource is **Product** | item `missing`; `product_id=NULL`; `candidate_version_id=NULL`; `error_code=product_not_found`. If this escaped `preview` after an earlier resolve: rollback Txn B, then Txn C. | no |
-| `NotFoundError` whose resource is **Store** | **run-level** `store_not_found`; roll back current preview; stop remaining; prior successes kept. **Not** item `missing` | no |
+| `AIError` from `preview` (always base, `retryable=False` today) | **after Txn B rollback**, classified txn: item `failed`, `error_code=ai_error` | no |
+| `NotFoundError` whose resource is **Product** | **after rollback**, classified txn: item `missing`; `product_id=NULL`; `candidate_version_id=NULL`; `error_code=product_not_found` | no |
+| `NotFoundError` whose resource is **Store** | **after rollback**, classified **run-level** `store_not_found`; prior successes kept. **Not** item `missing` | no |
 | Soft-deleted product (scoped lookup **or** late disappearance) | item `missing`; `product_id` **NULL** (never retain a stale attach) | no |
-| Archived / `UNAVAILABLE` | item `skipped`, `error_code=product_not_eligible` | no |
-| `ValidationError` (malformed product / prompt vars) | item `failed`, use domain `code` | no |
-| `ConflictError` (unexpected on preview) | item `failed` | no |
-| `MissingPromptVariablesError` | item `failed` (it is a `ValidationError`) | no |
+| Archived / `UNAVAILABLE` | item `skipped`, `error_code=product_not_eligible` (pre-preview, still in Txn B) | no |
+| `ValidationError` (malformed product / prompt vars) | **after rollback**, classified txn: item `failed`, use domain `code` | no |
+| `ConflictError` from `preview` (version-number unique race with Stage 8) | Txn B rolled back; item **stays pending**; **re-raise** | **yes** — task/concurrency retry, **not** provider retry |
+| `MissingPromptVariablesError` | **after rollback**, classified txn: item `failed` (it is a `ValidationError`) | no |
 | DB / `OperationalError` / disconnect | raise | yes |
 | SoftTimeLimitExceeded / time limit | raise; lease still held until reclaim | yes, then exhaustion / reclaim |
 | Unexpected `Exception` | raise (do **not** record as a quiet item failure) | yes |
@@ -1244,6 +1315,8 @@ double that is not `preview`); label it as task retry mechanics only.
 
 Catch `NotFoundError` by `details["resource"]`. Do **not** treat every
 `NotFoundError` as a missing product.
+
+Do **not** terminalize any `preview` exception inside Txn B.
 
 Do not globally swallow bugs as item failures. Exhaustion uses the
 task wrapper in §20, **not** `BaseTask.on_failure`: owner-conditional
@@ -1263,7 +1336,7 @@ not raise again.
 | Infinite retry | forbidden |
 
 After Celery retries are exhausted (`self.request.retries >=
-self.max_retries` in the task wrapper):
+self.max_retries`, i.e. `retries >= 3` with the inherited default):
 
 - **do not raise** (no extra BaseTask retry)
 - if `holder.lease` is None: write nothing, return `superseded`
@@ -1380,7 +1453,8 @@ a fence. After that read returns, heartbeat can go stale, reclaim can
 mint L2, and the old worker can still commit candidate/item/progress
 under L1.
 
-Proven fence, used for **Txn A, Txn B, Txn C, finalize, fail**:
+Proven fence, used for **Txn A, successful Txn B, classified-outcome
+txn, finalize, fail**:
 
 1. Tenant-scoped `SELECT PipelineBulkRun … FOR UPDATE`
    with `populate_existing=True` (identity-map copy is not a guard).
@@ -1661,11 +1735,13 @@ Default page size 25, max 100 — existing platform constants.
 | **H.** Lost lease, old worker wakes | new lease on new worker | old task still in process | old `_lock_owned` returns lost **before** `preview`; zero writes | none | new owner's progress |
 | **I.** DB down on progress update | uncommitted item txn rolls back | task raises, BaseTask retries; exhaustion → `_mark_pipeline_bulk_failed` if still owned | item still pending | residual extra provider call | `running` or retries → `failed` |
 | **J.** Provider not configured | items failed with `ai_provider_not_configured`; run `failed` | ACK after terminal | no 3× retry | none | `failed`, safe code |
-| **K.** Store gone after accept | current preview rolled back; run `failed` `store_not_found`; prior successes kept | ACK after fail | no | none extra | `failed`; succeeded items still have candidates |
+| **K.** Store gone after accept | current preview rolled back; classified run-level `store_not_found`; prior successes kept | ACK after fail | no | none extra | `failed`; succeeded items still have candidates |
 | **L.** Die after txn A (attempt++) before preview | item `pending`; `attempt_count>=1`; run `running` | redeliver / reclaim | txn A may increment again; then txn B | none | `running`; attemptCount may exceed provider calls |
-| **M.** Heartbeat ages during in-flight Txn B | run still `running`, L1 held `FOR UPDATE` | reclaim `UPDATE` waits then matches 0 | no steal mid-preview | none | current item may commit |
-| **N.** Exhaustion after reclaim | new owner holds L2 | old worker `retries >= max_retries` | `_mark_pipeline_bulk_failed` sees stale lease; writes nothing | none | new owner's run unchanged |
-| **O.** Product disappears after resolve, before/during later preview lookup | Txn B rolled back (no candidate); Txn C `missing`, `product_id` NULL | ACK after Txn C | no Celery retry | none | item `missing`; `productId` null |
+| **M.** Heartbeat ages during in-flight **successful** Txn B | run still `running`, L1 held `FOR UPDATE` | reclaim `UPDATE` waits then matches 0 | no steal mid-preview | none | current item may commit |
+| **N.** Exhaustion after reclaim | new owner holds L2 | old worker `retries >= 3` | `_mark_pipeline_bulk_failed` sees stale lease; writes nothing | none | new owner's run unchanged |
+| **O.** Product disappears after resolve, during later preview lookup | Txn B rolled back (no candidate); classified txn `missing`, `product_id` NULL | ACK after classified txn | no Celery retry | none | item `missing`; `productId` null |
+| **P.** Stage 8 wins `uq_product_versions_product_number` | `BaseRepository.create` rolls back; `ConflictError` | item still `pending`; BaseTask retries | extra attempt; then exactly one Stage 9 pipeline candidate | **no durable duplicate** | `running` then success |
+| **Q.** Catching preview `ConflictError`/`AIError` in Txn B | **forbidden** — fence may already be gone | classified txn or re-raise only | unfenced write would be a bug | none if contract held | n/a |
 
 ---
 
@@ -1743,27 +1819,34 @@ Default page size 25, max 100 — existing platform constants.
   **not** via `preview`) → run `failed`, all pending items failed with
   `ai_provider_not_configured`, **zero** ProductVersions, no three
   Celery retries
-- `preview` raising base `AIError` → item `failed`; task does not retry
+- `preview` raising base `AIError` → Txn B rolled back; classified
+  txn item `failed`; task does not retry
 - Do **not** monkeypatch `preview` to raise `AIError(retryable=True)`
   and call that provider-pipeline verification
 - A **task-retry-mechanics** unit test may raise a synthetic
   `Exception` from the worker loop (infrastructure stand-in); label it
   as such
-- retry 0: exception re-raised (autoretry path); run not marked failed
-- retry 1 (and 2 if `max_retries=3` and `retries` still `<`): still
-  not terminal
-- `request.retries == max_retries` with owned lease: run `failed`
-  **once**; prior succeeded items remain; counters recomputed;
-  **no additional Celery retry** (wrapper returns, does not raise)
-- same exhaustion after lease reclaimed: old worker cannot fail the
-  new owner's run (`superseded`, zero writes)
+- `retries=0` → re-raise; run not marked failed
+- `retries=1` → re-raise
+- `retries=2` → re-raise
+- `retries=3` with owned lease → run `failed` **once**; prior
+  succeeded items remain; counters recomputed; wrapper **returns**
+- `retries=3` after lease reclaimed → `superseded`, zero writes
+- **no** `retries=4` / fourth retry
+- Stage 8/synthetic concurrent version insert wins
+  `uq_product_versions_product_number` → `ConflictError` after
+  repository rollback → item still `pending` → no unfenced
+  item/counter write → task retry generates **exactly one** Stage 9
+  pipeline-marked candidate → `candidateVersionId` stored once →
+  counts increment once
 - `attemptCount` increments on txn A even when txn B rolls back an
-  infrastructure error; next retry increments again
+  infrastructure error or `ConflictError`; next retry increments again
 - worker-death after txn A before preview: `attemptCount >= 1`, item
   still `pending`, later success does not duplicate the candidate
-- `ValidationError` → item `failed`, task does not retry three times
-- exhaustion of infrastructure retries → run `failed`, prior successes
-  kept, pending item stays pending, no fourth retry
+- `ValidationError` → Txn B rolled back; classified txn item `failed`;
+  task does not retry three times
+- exhaustion of infrastructure retries (`retries=3`) → run `failed`,
+  prior successes kept, pending item stays pending, no fourth retry
 - `BaseTask` itself is unmodified; domain fail is in `tasks/ai.py`
 
 ### Progress
@@ -1794,7 +1877,7 @@ Default page size 25, max 100 — existing platform constants.
 - deleted after submit → `missing`; `totalCount` unchanged;
   `productId` null
 - resolved then disappears before later `preview` lookup → Txn B
-  rolled back; Txn C `missing`; `productId` null;
+  rolled back; classified txn `missing`; `productId` null;
   `candidateVersionId` null; `missingCount` +1 once; no retry
 - edited while queued → candidate from live state; Stage 7
   `stale_preview` still on approve if edited after generation
@@ -1942,6 +2025,7 @@ says otherwise:
   changed)
 - `frontend/**`
 - `BaseTask` defaults globally
+- `BaseRepository.create` / `update` rollback-on-IntegrityError
 - RuleApplication tables
 - `Product` / `ProductVersion` columns, defaults, or methods
 
@@ -1978,6 +2062,9 @@ This planning PR contains **no** migration.
 - `PromptService` still swallows `AIError` into FAILED executions;
   `_generate_version` still raises a new base `AIError`. Stage 9 does
   not "fix" that to make Celery classification nicer.
+- Stage 8 HTTP preview failure still rolls the request transaction
+  back. Stage 9 mirrors that: Txn B is success-only; failed `preview`
+  side effects are not committed.
 
 ---
 
@@ -2016,7 +2103,7 @@ Remaining LOWs:
 | L2 | No AI token/cost ledger | Infrastructure does not exist. Hard cap 50 + **partial unique one-active-run** + start limiter are the Stage 9 controls. Full quota is later |
 | L3 | Sequential run can occupy one worker up to ~75 minutes | prefetch=1; scale with replicas; cap 50. Fan-out deferred |
 | L4 | Compose worker does not consume `integrations` | Pre-existing. Stage 9 avoids that queue |
-| L5 | Stage 8 single-product preview can race a bulk item on the same product | Preserving Stage 8 non-idempotence is mandatory. Extra candidate is the same as clicking Preview twice |
+| L5 | Stage 8 single-product preview can race a bulk item on the same product | Preserving Stage 8 non-idempotence is mandatory. Extra HTTP candidate is the same as clicking Preview twice. Stage 9 `ConflictError` on `uq_product_versions_product_number` is retried as task/concurrency, not provider retry |
 | L6 | `enqueued_at` not set on the happy after_commit path | Same as RuleApplication. Age + `pending` is the unpublished signal |
 | L7 | Live provider timeout/rate-limit classes do not exist, and `retryable` does not survive `PromptService` → `_generate_version` | Stage 9 does **not** claim provider transient retry. Preflight covers not-configured. Preview `AIError` is a permanent item failure. A future provider stage must restore `retryable` through the stack before Stage 9 classifies it |
 | L8 | POST start always 202, including idempotent replay of a finished run | Matches RuleApplication. Clients read `status` in the body |
@@ -2027,8 +2114,10 @@ Remaining LOWs:
 | L13 | `store_id` is not a composite tenant FK | `stores` has no `(tenant_id, id)` unique pair; Stage 9 does not add a third. Create uses scoped `StoreRepository`. Residual: only application code plus `ON DELETE RESTRICT` |
 | L14 | Live worker-kill redelivery is not run in CI | Duplicate real-broker delivery is. Crash/reclaim is fencing-tested |
 | L15 | Product/version `ON DELETE RESTRICT` blocks hard delete while items reference them | Soft-delete is the catalogue contract. GDPR erasure deletes or clears the run first. Matches candidate historical posture |
-| L16 | Long `preview` holds the bulk **run** row `FOR UPDATE` | Intentional fence. One active run per tenant; Product rows are not locked; cancel/reclaim wait at the current item boundary rather than stealing mid-write |
+| L16 | Long **successful** `preview` holds the bulk **run** row `FOR UPDATE` | Intentional fence. One active run per tenant; Product rows are not locked; cancel/reclaim wait at the current item boundary rather than stealing mid-write |
 | L17 | After Txn B commits, cancel and the worker serialize on the next lock; a worker that already entered the next Txn B may finish one more product | Same cooperative-boundary residual as RuleApplication batches. Test C pins the in-flight-Txn-B case. Not a steal of a committed run |
+| L18 | After a `preview` exception, `BaseRepository` rollback releases the fence before classification | Required by current repository behaviour. Classified txn re-takes `_lock_owned`. Gap may allow reclaim; then classified txn writes nothing and the new owner resumes the still-pending item |
+| L19 | Version-number `ConflictError` burns a Celery retry | Transient concurrency, not a provider failure. Budget is still `retries` 0/1/2 then `>=3` run fail. Exactly-once is on the durable candidate after a successful retry |
 
 ---
 
@@ -2039,16 +2128,19 @@ Remaining LOWs:
 2. Repositories (scoped + lookup) + isolation tests
 3. Service: create (rollback-on-IntegrityError) / claim /
    `_lock_owned` / `get_ai_provider` preflight / txn A attempt /
-   txn B resolve+preview (run `FOR UPDATE` held) / txn C late-missing /
+   txn B success-only preview (run `FOR UPDATE` held) /
+   classified-outcome txn after preview exception /
    finalize / fail / cancel / reclaim / fingerprint / store validation
 4. Tasks: `_PipelineBulkLeaseHolder`, `_run`, publish after commit,
-   process wrapper (re-raise vs exhaustion mark-failed), reconcile
+   process wrapper (`retries` 0/1/2 re-raise; `>=3` mark-failed),
+   reconcile
 5. `celery_app` imports + beat + `verify_celery_broker.py` names
 6. Schemas + four HTTP routes
 7. Integration tests (API, concurrent A/B/C real constraint races,
    mixed foreign `product_id` NULL, late-missing `productId` null,
-   fencing A/B/C, retry exhaustion, queue harness, recovery,
-   attemptCount, store 404 / store-during-run, preflight not-configured)
+   Stage 8 version-number `ConflictError` retry, fencing A/B/C,
+   retry 0/1/2/3, queue harness, recovery, attemptCount, store 404 /
+   store-during-run, preflight not-configured)
 8. `verify_pipeline_bulk_broker.py` + CI celery-broker step: real run
    through RabbitMQ + duplicate delivery
 9. Docs: completion, CHANGELOG, roadmap, PHASE_9_PLAN
@@ -2104,17 +2196,26 @@ end-to-end review when Claude becomes available again.
 | Attack | Severity | Resolution |
 |---|---|---|
 | Stale worker writes after recovery | HIGH | `_lock_owned` `FOR UPDATE` + lease match; lost → zero writes. Not an item `WHERE lease_token` |
-| Run lease changing during provider I/O | HIGH | Txn B holds the run row until commit; reclaim `UPDATE` waits then matches 0 |
+| Repository rollback underneath Txn B | HIGH | Txn B is success-only; never terminalize after `preview` exception on that session |
+| Stale run lock assumed to survive rollback | HIGH | locks considered gone; classified txn re-takes `_lock_owned` |
+| `ConflictError` after version-number race | HIGH | re-raise; item pending; task/concurrency retry; not provider retry |
+| Item terminalized without new `_lock_owned` | HIGH | forbidden for every `preview` failure |
+| Counters written after implicit new transaction | HIGH | classified txn only, after rollback, pending check |
+| Partial preview effects committed after failure | HIGH | Txn B rollback drops candidate / `product_id` / analysis rows |
+| Stage 8 preview race | HIGH | acknowledged; `ConflictError` retry test |
+| `retries` 0/1/2/3 off-by-one | HIGH | 0,1,2 re-raise; `>=3` return; no fourth retry |
+| Fourth retry | HIGH | wrapper **returns** failed/superseded; does not re-raise |
+| Stale worker terminalizing failure | HIGH | classified txn + exhaustion both `_lock_owned`; lost → zero writes |
+| Run lease changing during **successful** provider I/O | HIGH | Txn B holds the run row until success commit; reclaim waits then matches 0 |
 | Fake lease-token predicate on item rows | HIGH | forbidden; `lease_token` is on the run only |
 | Cancellation race vs in-flight preview | HIGH | cancel `_lock_row` waits; current item may commit; no next preview |
-| Final BaseTask exhaustion leaving run `running` | HIGH | task wrapper `_mark_pipeline_bulk_failed` when `retries >= max_retries` |
+| Final BaseTask exhaustion leaving run `running` | HIGH | wrapper `_mark_pipeline_bulk_failed` when `retries >= 3` |
 | Final failure overwriting a reclaimed run | HIGH | LeaseHolder + `_lock_owned`; stale lease writes nothing |
-| Fourth Celery retry after exhaustion | HIGH | wrapper **returns** failed/superseded; does not re-raise |
-| Product deleted after initial resolution | HIGH | rollback Txn B; Txn C `missing` with `product_id` NULL |
-| Missing item retaining `productId` | HIGH | create NULL; missing always NULL; Txn C pinned |
-| Duplicate candidate | BLOCKER | Item lock + unique `(run, submitted_product_id)` + `preview` in txn B with `succeeded` |
-| Progress double-count | BLOCKER | Increment only `pending → terminal` under row lock in txn B |
-| Provider subtype honesty | HIGH | `preview` raises new base `AIError`; preflight uses `get_ai_provider`; no live transient-provider claim |
+| Product deleted after initial resolution | HIGH | rollback Txn B; classified txn `missing` with `product_id` NULL |
+| Missing item retaining `productId` | HIGH | create NULL; missing always NULL; classified txn pinned |
+| Duplicate candidate | BLOCKER | Item lock + unique `(run, submitted_product_id)` + success-only Txn B |
+| Progress double-count | BLOCKER | Increment only `pending → terminal` under row lock (Txn B success or classified txn) |
+| Provider subtype honesty | HIGH | `preview` raises new base `AIError`; preflight uses `get_ai_provider`; `ConflictError` retry is not provider retry |
 | IntegrityError transaction recovery | HIGH | `rollback()` then re-read by key |
 | Cross-tenant FK integrity | HIGH | unique pairs + composite FKs; `product_id` NULL at create |
 | Auto-approval / publishing | BLOCKER | preview only; pin §6 |
@@ -2165,7 +2266,7 @@ end-to-end review when Claude becomes available again.
 | Lazy ORIGINAL snapshot false candidate-count | HIGH | harness counts pipeline-marked `AI_GENERATED` only |
 | Foreign/deleted store as product `missing` | HIGH | create-time 404; worker classifies `NotFoundError` by resource; run-level `store_not_found` |
 | `attemptCount` rolls back with preview | HIGH | txn A commits the increment before provider I/O |
-| Permanent 4xx retried three times | HIGH | Catch inside item loop; do not raise |
+| Permanent 4xx retried three times | HIGH | `AIError`/`ValidationError`/Product NotFound classified after rollback, no Celery retry. `ConflictError` from version-number race **is** retried (concurrency, not 4xx product validation) |
 | Provider retry duplicates candidates | HIGH | Terminal check before `preview` |
 
 After resolution: **BLOCKER 0, HIGH 0, MEDIUM 0.** LOWs in §44.
