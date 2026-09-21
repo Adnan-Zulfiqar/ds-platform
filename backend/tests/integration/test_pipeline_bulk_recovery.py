@@ -11,14 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import set_tenant_id
+from app.database.session import transaction as db_transaction
 from app.models.pipeline_bulk import PipelineBulkRun, PipelineBulkRunStatus
 from app.services.pipeline_bulk import (
     MAX_PIPELINE_BULK_RECOVERIES,
     STALE_AFTER,
     LeaseObservation,
+    PipelineBulkRunService,
 )
 from app.tasks import ai as ai_tasks
 from tests.integration.pipeline_bulk_harness import EnqueueRecorder, bind_queue, run_task
+from tests.integration.pipeline_bulk_live import live_bulk
 from tests.integration.test_pipeline_bulk_api import seed_product, seed_tenant
 from tests.integration.test_pipeline_bulk_queue import start_run
 
@@ -127,3 +130,76 @@ class TestRecovery:
         parked = await row(db_session, body["id"])
         assert parked.status is PipelineBulkRunStatus.FAILED
         assert parked.lease_token is None
+
+    async def test_reclaim_preserves_first_started_at(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ai_tasks, "transaction", db_transaction)
+        async with live_bulk(products=1, idempotency_key="started-at") as live:
+            assert live.run_id is not None
+            set_tenant_id(live.tenant_id)
+            async with live.session_factory() as session:
+                first = await PipelineBulkRunService(session).claim(live.run_id, task_id="worker-a")
+                await session.commit()
+            assert first.lease is not None
+            first_lease = first.lease.token
+
+            async with live.session_factory() as session:
+                run = (
+                    await session.execute(
+                        select(PipelineBulkRun).where(PipelineBulkRun.id == live.run_id)
+                    )
+                ).scalar_one()
+                first_started_at = run.started_at
+                assert first_started_at is not None
+                assert run.claimed_by_task_id == "worker-a"
+                run.heartbeat_at = datetime.now(UTC) - STALE_AFTER - timedelta(minutes=1)
+                await session.commit()
+
+            async with live.session_factory() as session:
+                aged = (
+                    await session.execute(
+                        select(PipelineBulkRun).where(PipelineBulkRun.id == live.run_id)
+                    )
+                ).scalar_one()
+                observed = LeaseObservation(
+                    run_id=aged.id,
+                    tenant_id=live.tenant_id,
+                    heartbeat_at=aged.heartbeat_at,
+                    lease_token=aged.lease_token,
+                    recovery_count=aged.recovery_count,
+                )
+
+            outcome = await ai_tasks._reconcile_one(observed)
+            assert outcome == "requeued"
+
+            set_tenant_id(live.tenant_id)
+            async with live.session_factory() as session:
+                reclaimed = (
+                    await session.execute(
+                        select(PipelineBulkRun).where(PipelineBulkRun.id == live.run_id)
+                    )
+                ).scalar_one()
+                assert reclaimed.status is PipelineBulkRunStatus.PENDING
+                assert reclaimed.started_at == first_started_at
+                assert reclaimed.recovery_count == 1
+                second = await PipelineBulkRunService(session).claim(
+                    live.run_id, task_id="worker-b"
+                )
+                await session.commit()
+            assert second.lease is not None
+            assert second.lease.token != first_lease
+
+            async with live.session_factory() as session:
+                after = (
+                    await session.execute(
+                        select(PipelineBulkRun).where(PipelineBulkRun.id == live.run_id)
+                    )
+                ).scalar_one()
+                assert after.status is PipelineBulkRunStatus.RUNNING
+                assert after.started_at == first_started_at
+                assert after.claimed_by_task_id == "worker-b"
+                assert after.lease_token != first_lease
+                assert after.heartbeat_at is not None
+                assert after.heartbeat_at > first_started_at
+                assert after.recovery_count == 1

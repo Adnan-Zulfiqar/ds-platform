@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.exceptions import AIError, AIProviderNotConfiguredError
-from app.core.exceptions import ConflictError, ValidationError
-from app.models.pipeline_bulk import PipelineBulkItemState, PipelineBulkRunItem
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.models.pipeline_bulk import PipelineBulkItemState, PipelineBulkRun, PipelineBulkRunItem
 from app.models.product import (
     ProductStatus,
     ProductVersion,
@@ -227,8 +227,9 @@ class TestQueueExecution:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         headers, tenant_id = await seed_tenant(client)
-        product = await seed_product(db_session, tenant_id)
-        body = await start_run(client, headers, [product.id], "no-provider")
+        first = await seed_product(db_session, tenant_id)
+        second = await seed_product(db_session, tenant_id)
+        body = await start_run(client, headers, [first.id, second.id], "no-provider")
 
         def _raise(_settings: object) -> None:
             raise AIProviderNotConfiguredError("AI_PROVIDER=openai has no implementation yet.")
@@ -236,20 +237,45 @@ class TestQueueExecution:
         monkeypatch.setattr(ai_tasks, "get_ai_provider", _raise)
         result = await run_task(monkeypatch, run_id=body["id"], tenant_id=tenant_id)
         assert result["status"] == "failed"
-        item = (
-            await db_session.execute(
-                select(PipelineBulkRunItem).where(
-                    PipelineBulkRunItem.run_id == uuid.UUID(body["id"])
+
+        items = (
+            (
+                await db_session.execute(
+                    select(PipelineBulkRunItem).where(
+                        PipelineBulkRunItem.run_id == uuid.UUID(body["id"])
+                    )
                 )
             )
+            .scalars()
+            .all()
+        )
+        assert len(items) == 2
+        assert {item.state for item in items} == {PipelineBulkItemState.FAILED}
+        assert {item.error_code for item in items} == {"ai_provider_not_configured"}
+        assert all(item.candidate_version_id is None for item in items)
+
+        run = (
+            await db_session.execute(
+                select(PipelineBulkRun).where(PipelineBulkRun.id == uuid.UUID(body["id"]))
+            )
         ).scalar_one()
-        assert item.state is PipelineBulkItemState.FAILED
-        assert item.error_code == "ai_provider_not_configured"
+        await db_session.refresh(run)
+        assert run.status.value == "failed"
+        assert run.total_count == 2
+        assert run.processed_count == 2
+        assert run.failed_count == 2
+        assert run.succeeded_count == 0
+        assert run.skipped_count == 0
+        assert run.missing_count == 0
+        assert run.processed_count == (
+            run.succeeded_count + run.failed_count + run.skipped_count + run.missing_count
+        )
+
         versions = (
             await db_session.execute(
                 select(func.count())
                 .select_from(ProductVersion)
-                .where(ProductVersion.product_id == product.id)
+                .where(ProductVersion.product_id.in_((first.id, second.id)))
                 .where(ProductVersion.source == ProductVersionSource.AI_GENERATED)
             )
         ).scalar_one()
@@ -307,6 +333,55 @@ class TestQueueExecution:
         ).scalar_one()
         assert item.state is PipelineBulkItemState.FAILED
         assert item.error_code == "validation_error"
+
+    async def test_preview_prompt_not_found_fails_the_item_not_missing(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        headers, tenant_id = await seed_tenant(client)
+        product = await seed_product(db_session, tenant_id)
+        body = await start_run(client, headers, [product.id], "prompt-missing")
+
+        async def _fail(self: ProductPipelineService, *args: object, **kwargs: object) -> None:
+            raise NotFoundError.for_resource("Prompt", "product_title_generator")
+
+        monkeypatch.setattr(ProductPipelineService, "preview", _fail)
+        result = await run_task(monkeypatch, run_id=body["id"], tenant_id=tenant_id)
+        assert result["status"] == "failed"
+
+        item = (
+            await db_session.execute(
+                select(PipelineBulkRunItem).where(
+                    PipelineBulkRunItem.run_id == uuid.UUID(body["id"])
+                )
+            )
+        ).scalar_one()
+        assert item.state is PipelineBulkItemState.FAILED
+        assert item.error_code == "not_found"
+        assert item.product_id is None
+        assert item.candidate_version_id is None
+
+        run = (
+            await db_session.execute(
+                select(PipelineBulkRun).where(PipelineBulkRun.id == uuid.UUID(body["id"]))
+            )
+        ).scalar_one()
+        await db_session.refresh(run)
+        assert run.failed_count == 1
+        assert run.missing_count == 0
+        assert run.processed_count == 1
+        assert run.status.value == "failed"
+        versions = (
+            await db_session.execute(
+                select(func.count())
+                .select_from(ProductVersion)
+                .where(ProductVersion.product_id == product.id)
+                .where(ProductVersion.source == ProductVersionSource.AI_GENERATED)
+            )
+        ).scalar_one()
+        assert versions == 0
 
     async def test_conflict_error_retries_and_creates_exactly_one_candidate(
         self,

@@ -208,7 +208,10 @@ Copied from RuleApplication:
 - `claimed_by_task_id` is identity
 - `lease_token` is the fence
 - claim under `FOR UPDATE`
-- pending → running + mint lease
+- pending → running + mint lease. `started_at` is set only when it is still
+NULL, so a stale reclaim (`running → pending`) does not rewrite the first
+successful claim time. Heartbeat, `claimed_by_task_id`, and `lease_token`
+still refresh on every valid new claim.
 - same task owns running → resume + mint new lease
 - other task owns live running → no-op
 - terminal → no-op
@@ -252,6 +255,7 @@ increment counters once, heartbeat, commit.
 - `AIError` → item `failed`, `error_code=ai_error` (or the exception code), no task retry
 - `ValidationError` / missing prompt variables → item `failed`, stable safe code, no task retry
 - product `NotFound` → `missing`, `product_id=NULL`, processed + missing once
+- any other `NotFound` (including `Prompt`) → item `failed` with `error_code=not_found`; **not** missing
 - store `NotFound` → **run-level** `store_not_found`, item not marked missing
 
 **`ConflictError`** from preview (Stage 8 race on
@@ -269,8 +273,11 @@ After a successful run claim, **before the first item**,
 `get_ai_provider(settings)` is called once (no completion).
 
 `AIProviderNotConfiguredError` → lease-conditionally mark remaining pending
-items `failed` with `errorCode=ai_provider_not_configured`, recompute counts,
-run `failed`, clear lease, **no** `BaseTask` retry, **no** `ProductVersion`.
+items `failed` with `errorCode=ai_provider_not_configured`. Item mutations are
+**flushed before** `_refresh_counts` because the session factory uses
+`autoflush=False`; a GROUP BY against unflushed pending rows would leave
+`processed_count`/`failed_count` at zero. Then recompute counts, run `failed`,
+clear lease, **no** `BaseTask` retry, **no** `ProductVersion`.
 
 Live `preview` converts provider failures into base `AIError(retryable=False)`.
 Stage 9 therefore does **not** claim live provider timeout / rate-limit retry.
@@ -450,7 +457,9 @@ were not behaviourally modified.
 | L8 | `store_not_found` leaves remaining items `pending` on a `failed` run | Plan: stop remaining generation; do not mark the current product missing. Remaining items are not executed because the run is terminal |
 | L9 | Local ebay C0 `.env` failure | Environment-only; CI checkout has no `.env` |
 
-No BLOCKER / HIGH / MEDIUM residuals remain after self-review.
+Independent review of `d44a24c` (H1 counters, M1 Prompt-as-missing, M2
+`started_at` overwrite) is remediated in the follow-up commit. No BLOCKER /
+HIGH / MEDIUM residuals remain after that remediation.
 
 ---
 

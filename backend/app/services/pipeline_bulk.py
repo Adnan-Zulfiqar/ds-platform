@@ -252,7 +252,10 @@ class PipelineBulkRunService(BaseService):
             run.status = PipelineBulkRunStatus.RUNNING
             run.claimed_by_task_id = task_id
             run.lease_token = token
-            run.started_at = now
+            # First successful claim only. Reclaim returns the run to pending;
+            # a later worker must not rewrite the public start time.
+            if run.started_at is None:
+                run.started_at = now
             run.heartbeat_at = now
             await self.flush()
             return ClaimOutcome(ClaimResult.CLAIMED, self._lease(run_id, task_id, token))
@@ -396,19 +399,35 @@ class PipelineBulkRunService(BaseService):
         if item is None or item.state is not PipelineBulkItemState.PENDING:
             return ItemStep.ALREADY_TERMINAL
 
-        resource = getattr(exc, "details", {}).get("resource") if hasattr(exc, "details") else None
-        if isinstance(exc, NotFoundError) and resource == "Store":
-            return ItemStep.STORE_NOT_FOUND
         if isinstance(exc, NotFoundError):
+            resource = None
+            details = getattr(exc, "details", None)
+            if isinstance(details, dict):
+                raw = details.get("resource")
+                if isinstance(raw, str):
+                    resource = raw
+            if resource == "Store":
+                return ItemStep.STORE_NOT_FOUND
+            if resource == "Product":
+                self._terminalize(
+                    run,
+                    item,
+                    state=PipelineBulkItemState.MISSING,
+                    error_code="product_not_found",
+                    error_message=_safe_text(str(exc), limit=_ERROR_MESSAGE_MAX),
+                )
+                await self.flush()
+                return ItemStep.MISSING
+            error_code = exc.code if isinstance(exc.code, str) and exc.code else "not_found"
             self._terminalize(
                 run,
                 item,
-                state=PipelineBulkItemState.MISSING,
-                error_code="product_not_found",
+                state=PipelineBulkItemState.FAILED,
+                error_code=error_code,
                 error_message=_safe_text(str(exc), limit=_ERROR_MESSAGE_MAX),
             )
             await self.flush()
-            return ItemStep.MISSING
+            return ItemStep.FAILED
 
         code = getattr(exc, "code", None)
         error_code = code if isinstance(code, str) and code else "ai_error"
@@ -463,6 +482,9 @@ class PipelineBulkRunService(BaseService):
             item.error_code = "ai_provider_not_configured"
             item.error_message = "AI provider is not configured."
             item.finished_at = now
+        # autoflush=False: GROUP BY in `_refresh_counts` would otherwise still
+        # see pending rows and leave run counters at zero.
+        await self.flush()
         await self._refresh_counts(run)
         run.status = PipelineBulkRunStatus.FAILED
         run.failure_reason = "AI provider is not configured."
