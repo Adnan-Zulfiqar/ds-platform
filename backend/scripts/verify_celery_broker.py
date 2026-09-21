@@ -32,6 +32,8 @@ REQUIRED_TASKS = (
     "orders.sync_all",
     "orders.cleanup",
     "cleanup.old_notifications",
+    "ai.process_pipeline_bulk_run",
+    "ai.reconcile_pipeline_bulk_runs",
 )
 
 
