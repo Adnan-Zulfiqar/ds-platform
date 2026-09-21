@@ -23,6 +23,12 @@ those APIs.
 | Alembic head | `0034` |
 | Production | Undeployed |
 
+**Wire-contract revision.** The approve route, publish route, preview DTO,
+bulk item field, and Studio catalogue in this document match the merged
+Stage 8 and Stage 9 handlers. Earlier wording that put `candidateVersionId`
+in those POST bodies, or that bulk-selected only published products, is
+withdrawn.
+
 Stage 10 consumes:
 
 - `docs/PHASE_9_PLAN.md`
@@ -50,7 +56,7 @@ One product:
 
 Many products:
 
-1. Select up to 50 catalogue products.
+1. Select up to 50 products from Drafts and from Published.
 2. Start one bulk preview run.
 3. Watch durable Postgres-backed progress.
 4. Open each successful item on its exact `candidateVersionId`.
@@ -93,8 +99,10 @@ What Stage 10 does not reuse as the Studio itself:
   does not add one.
 - WebSockets or SSE. The app does not have them.
 
-There is no shared Tabs primitive. Studio does not invent one. Comparison is
-a two-column layout, not a tab set inside the draft editor.
+There is no shared Tabs primitive and Stage 10 does not add a component
+library. Studio home uses two existing `Button`s with `role="tab"` for
+Drafts and Published. Comparison stays a two-column layout, not a tab inside
+the draft editor.
 
 `frontend/package.json` has `lint`, `typecheck`, and `build`. It has no unit
 test script. Stage 10 does not add a test runner. Behaviour is covered by
@@ -161,24 +169,44 @@ Route: `/ai-studio/products/[productId]`.
    for drafts and published products.
 2. Merchant picks tone (`professional` default, `persuasive`, `luxury`,
    `technical`, `friendly`) and an optional connected store.
-3. **Generate preview** calls `POST /products/{id}/pipeline/preview` with
-   `{ tone, storeId? }`.
-4. The page stores `approvalExpectedUpdatedAt` as token **T0** and renders
-   the returned `PipelinePreview`.
-5. Side-by-side comparison (section 7).
-6. Quality, image evidence, and readiness render from that payload only.
-7. **Approve this version** is a confirmed action. It means "make this exact
+3. **Generate preview** calls
+   `POST /products/{productId}/pipeline/preview` with `{ tone, storeId? }`.
+4. A normal fresh candidate is inactive. That response has
+   `candidateActive: false`, `publishable: false`, and a `pipelineBlockers`
+   entry whose `code` is `candidate_not_approved`. The page stores
+   `candidateVersionId` and `approvalExpectedUpdatedAt` as token **T0**, and
+   renders that object. Publish stays disabled. The pre-approval object is
+   never treated as permission to publish.
+5. Side-by-side comparison (section 7). Quality, image evidence, and
+   readiness render from the preview object currently on screen.
+6. **Approve this version** is a confirmed action. It means "make this exact
    candidate the active product version." It does not mean publish.
-   Body: `{ candidateVersionId, expectedUpdatedAt: T0 }`.
-8. On 200, replace the local token with `ProductDetail.updatedAt` (**T1**).
-   Invalidate product detail, versions, and list queries. Do not write the
-   candidate into the draft editor cache.
-9. **Publish** stays disabled until the server says the approved version is
-   publishable (`publishable` and `channelReadiness.canPublish`, and the
-   version is active). Publish sends **T1**, never T0.
-10. Success shows the Stage 8 `PipelinePublishResult` (reused Shopify publish
-    fields plus pipeline version ids). Links use the existing trusted URL
-    helpers.
+   `POST /products/{productId}/pipeline/versions/{candidateVersionId}/approve`
+   with body exactly `{ expectedUpdatedAt: T0 }`. The version id is only in
+   the URL.
+7. On 200, the body is `ProductDetailRead`. Replace the local token with
+   `updatedAt` (**T1**). Discard T0. Invalidate product detail, versions,
+   and list queries. Do not write the candidate into the draft editor cache.
+8. Immediately GET
+   `/products/{productId}/pipeline/versions/{candidateVersionId}/preview?storeId=<selected store>`.
+   Use that response for `candidateActive`, `channelReadiness`,
+   `pipelineBlockers`, `pipelineWarnings`, `publishable`, and the evidence
+   on screen. Do not keep the pre-approval preview for those fields. T1
+   stays the approve response's `updatedAt`. Do not copy
+   `approvalExpectedUpdatedAt` from this GET over T1.
+9. Publish becomes enabled only when that GET succeeded, `candidateActive`
+   is true, `publishable` is true, a store is selected, and the local token
+   is T1. A fresh candidate's `candidate_not_approved` blocker is gone on
+   that GET when approval stuck and no other blocker remains. If the GET
+   fails, Publish stays disabled and the merchant can retry the GET. Do not
+   generate a new candidate to recover a failed refresh.
+10. **Publish** calls
+    `POST /products/{productId}/pipeline/versions/{candidateVersionId}/publish`
+    with body exactly `{ storeId, expectedUpdatedAt: T1 }`. The version id
+    is only in the URL. Success is `ShopifyPublishResponse`, the same shape
+    as the existing `ShopifyPublishResult` type. It has no pipeline version
+    ids. The candidate id stays the one already on this page. Links use the
+    existing trusted URL helpers.
 
 If the merchant opens `?candidate=<id>` (from bulk, or from version history):
 
@@ -188,6 +216,14 @@ If the merchant opens `?candidate=<id>` (from bulk, or from version history):
 - 422 with reason `not_a_pipeline_candidate`: this is a legacy AI version.
   Show it as legacy (section 26) with Activate available. Do not show the
   pipeline Approve button.
+
+Changing the selected store does not call POST preview. GET the same
+`candidateVersionId` with the new `storeId`. `channelReadiness` and
+`publishable` on screen come only from that GET. While it is in flight,
+readiness for the previous store is not shown and Publish stays disabled.
+Before approval, T0 stays the value from the generate response. After
+approval, T1 stays the approve response. The GET is composition for an
+existing candidate, not a new candidate and not a new concurrency token.
 
 No step calls approve or publish by itself.
 
@@ -202,21 +238,28 @@ the proposal without scrolling past the whole current product. Approve and
 publish stay in a sticky footer so they are reachable without horizontal
 scroll.
 
-Fields that are actually on `PipelinePreview` / `PipelineProposal`:
+`PipelinePreviewResponse` is flat. There is no nested `candidate` object,
+no `candidate.versionNumber`, and no `candidate.source`.
 
 | Field | Current column | Candidate column |
 |---|---|---|
 | Title | `original.title` | `proposal.title` |
 | Description | `original.description` shown as text via the existing `stripHtml` helper | `proposal.description` as plain text (`whitespace-pre-wrap`). It is stored plain text |
-| Optimization score | `qualityBaseline` | `qualityScore` and `qualityDelta` |
-| Breakdown | — | `qualityBreakdown` labels from the server keys |
-| Version | active version number from product detail when present | `candidate.versionNumber` |
-| Source | — | `candidate.source` (`ai_generated`) |
+| Optimization score | `qualityBaseline.score` (and that object's `versionNumber` as meta) | `qualityScore` and `qualityDelta` |
+| Breakdown | — | `qualityBreakdown` as in section 8 |
+| Version | active version number from product detail when present | `candidateVersionNumber` |
+| What this column is | Current product | Label **AI candidate**. Do not read a `source` field; the response does not have one |
 | Provider | — | `provider` |
+| Active | — | `candidateActive` |
 | Synthetic | — | `isSynthetic` (section 16) |
 
-SEO title, meta description, tags, and image alt text live on `proposal`.
-The publish overlay does not write them. The UI labels that block **Proposal
+`proposal` is `PipelineListingViewRead`: `title`, `description`, `seoTitle`,
+`seoDescription`, `keywords`, `tags`. Image caption and alt text are not on
+`proposal`. They are `imageAnalysis.images[].analysis.captionProposal` and
+`altTextProposal` (section 9).
+
+SEO title, meta description, keywords, and tags are proposal evidence. The
+publish overlay does not write them. The UI labels that block **Proposal
 only — not sent to Shopify**. Stage 4 SEO is not implied to publish.
 
 Do not add fields the payload does not have. Do not render model rationale
@@ -232,10 +275,29 @@ accuracy, or probability.
 | API field | Label |
 |---|---|
 | `qualityScore` | Optimization score |
-| `qualityBaseline` | Previous optimization score |
+| `qualityBaseline` | Previous optimization score. The value is `{ versionNumber, score }`. Show `score`. Do not render the object as text |
 | `qualityDelta` | Change vs original |
 | `qualityScoreVersion` | shown as small meta ("Score version N"), not as a grade |
-| `qualityBreakdown` | one row per returned key, using the server's name |
+| `qualityBreakdown` | structured block below. Not a map of numbers |
+
+`qualityBreakdown` is `ProductVersionQualityBreakdownRead`:
+
+- `earned` and `applicableMax` — "Points earned" as `earned` of `applicableMax`
+- `dimensions.title` — points, max, applicable, length
+- `dimensions.description` — points, max, applicable, length
+- `dimensions.repetition` — points, max, applicable, and the four boolean
+  checks (`titleNotStuffed`, `descriptionNotPhraseStuffed`,
+  `descriptionNotDominated`, `descriptionDistinctFromTitle`) as text rows
+- `dimensions.keywordCoverage` — applicable, points, max, matched, total,
+  `source` (`search_topics`, `tags`, `meta_keywords`, or null), the
+  `keywords` array as text, and `truncated`
+- `seoFormat`, when present — three booleans: SEO title bound, SEO
+  description bound, keywords present. When null, omit the block
+
+Nested values are numbers, booleans, strings, arrays, or a nullable source.
+Render each field as itself. Do not stringify an object. Do not type the
+breakdown as `Record<string, number>` or `Record<string, any>`. `null`
+breakdown: "Score breakdown unavailable".
 
 Delta copy:
 
@@ -255,19 +317,36 @@ conversion, or ranking.
 Use `imageAnalysis` from the preview payload. Do not fetch supplier image
 bytes in the browser to re-run Stage 6.
 
-Per image (`PipelineImageEvidence`):
+The report is `productId` plus `images[]`. Each image has `imageId`,
+`position`, `status`, `errorCode`, and `analysis` (nullable). There is no
+`failureReason` and no status value `analyzed` or `failed`.
 
-| Server state | UI |
-|---|---|
-| `status: analyzed` and `analysis` object | Show the structured notes the server returned |
-| `status: unknown` or `analysis: null` | **Not analyzed**. This is not a failure |
-| `status: failed` | **Analysis unavailable** plus `failureReason` when present |
-| `synthetic: true` | Badge **Test caption** on that image's proposed alt text |
+Decide the row from the outer `status`, in this order:
 
-Product-level `status: unknown` with empty `images` is the same "Not
-analyzed" state, not an error banner.
+1. `fetchFailed` or `decodeFailed` — **Analysis unavailable**, plus `errorCode`
+   when set. This holds even when `analysis` is null.
+2. `unknown`, or `analysis == null` — **Not analyzed**. This is not a failure.
+3. `succeeded` — checks plus `analysis.captionProposal` and
+   `analysis.altTextProposal`.
+4. `checksOnly` — checks when `analysis.checks` is present. Caption and alt
+   text are unavailable. This is not a total failure.
+5. Any other string — **Analysis unavailable**. Do not crash.
 
-Proposed alt text is proposal copy (section 7), not a published alt.
+When `analysis.isSynthetic === true`, badge **Test caption** on that image's
+proposed caption and alt text.
+
+When `analysis.isSynthetic === true`, badge **Test caption** on that image's
+proposed caption and alt text.
+
+`analysis`, when present, also carries `imageAnalysisVersion`, `sourceUrl`,
+`contentSha256`, dimensions, `checks` (blur, duplicates, watermark),
+`provider`, `model`, `promptName`, and `promptVersion`. Show checks that are
+present. Do not invent a product-level analysis status; an empty `images`
+array is **Not analyzed**, not an error banner.
+
+Caption and alt text are evidence on the image, not fields of `proposal`,
+and they are not a published alt. Label them **Proposal only — not sent to
+Shopify**.
 
 ---
 
@@ -277,21 +356,29 @@ Readiness is server-authoritative. React does not re-implement blocker rules.
 
 Render, when present:
 
-- `channelReadiness.canPublish`
-- `channelReadiness.blockers[]` and `recommendations[]` (`code`, `message`,
-  `field`, `section`, `action`)
-- `pipelineBlockers[]` and `pipelineWarnings[]`
+- `channelReadiness.canPublish` when a store was passed and the server
+  returned readiness. With no `storeId`, `channelReadiness` is null and
+  `publishable` is false
+- `channelReadiness.blockers[]` and `recommendations[]`: `code`, `message`,
+  `field`, `section`, `action`
+- `pipelineBlockers[]` and `pipelineWarnings[]`: `code` and `message` only.
+  They have no `field`, `section`, or `action`
 - top-level `publishable`
 
-A blocker card shows `message`, and `field` / `section` when set. `action`
-may be mapped to an in-app link only when the code is one the Studio already
-knows (`connect_shopify` → store settings, `approve_candidate` → the approve
-control on this page). Unknown actions render as text.
+A card shows `message`, plus `field` / `section` when the channel item has
+them. A channel `action` may link to the draft editor or Integrations only
+when the string is one the app already uses (`Go to Overview`, `Go to
+Description`, `Go to Media`, `Go to Pricing`, `Go to Shipping`, `Choose a
+store`, `Open Integrations`, `Reload draft`). Any other action is text.
+`candidate_not_approved` is a pipeline blocker code. The Approve button on
+this page is how it clears. Do not invent an action named
+`approve_candidate` or `connect_shopify`.
 
-Publish is enabled only when `publishable` is true, a store is selected, the
-candidate is the active approved version, and the local token is T1. If the
-server disagrees, the button stays disabled and the blocker list is the
-explanation. The client does not invent a blocker the payload omitted.
+Publish is enabled only from the latest successful GET preview for the
+**selected** store (section 6), and only when that payload has
+`publishable: true` and `candidateActive: true`, a store is selected, and
+the local token is T1. The POST preview payload does not unlock Publish.
+The client does not invent a blocker the payload omitted.
 
 ---
 
@@ -302,28 +389,35 @@ draft form.
 
 ```text
 idle
-  → preview 201
-  → reviewing(T0 = approvalExpectedUpdatedAt, candidateVersionId)
-  → approve 200
-  → approved(T1 = response.updatedAt, candidateVersionId)
-  → publish(expectedUpdatedAt = T1)
+  → POST preview 201
+  → reviewing(T0 = approvalExpectedUpdatedAt, candidateVersionId,
+              candidateActive false, publishable false)
+  → POST .../versions/{candidateVersionId}/approve { expectedUpdatedAt: T0 }
+  → approved(T1 = ProductDetail.updatedAt)
+  → GET .../versions/{candidateVersionId}/preview?storeId=
+  → publishable state comes from that GET
+  → POST .../versions/{candidateVersionId}/publish
+       { storeId, expectedUpdatedAt: T1 }
 ```
 
 Rules:
 
-- T0 is saved only from `approvalExpectedUpdatedAt` on the preview that is
-  on screen (POST preview or GET preview).
-- The approve request sends that T0.
-- After approve 200, discard T0. The only publish token is
-  `ProductDetail.updatedAt` from that response.
-- A later refetch of product detail may refresh T1 if the merchant has not
-  started a newer preview. It must not put T0 back.
-- Starting a new preview replaces both the candidate and the token with the
-  new response's T0.
+- T0 is saved from `approvalExpectedUpdatedAt` on the POST preview response,
+  or on the GET that opened `?candidate=` before any approve.
+- Approve sends only that T0. The version id is the URL path.
+- After approve 200, discard T0. The publish token is
+  `ProductDetail.updatedAt` from that response and nothing else.
+- The following GET may show a new `approvalExpectedUpdatedAt`. Do not copy
+  it onto T1. Do not replace T1 with an older timestamp from any later
+  response. A newer product-detail `updatedAt` may replace T1 only when it
+  is strictly newer and the refreshed preview still has this candidate
+  active. Never write T0 back.
+- Starting a new preview replaces the candidate and stores that response's
+  T0. Publish is disabled again until a later approve and GET.
 - Publish never reads `approvalExpectedUpdatedAt`.
 
-`expectedUpdatedAt` on approve and publish is the ISO timestamp string the
-API returned, passed through unchanged.
+`expectedUpdatedAt` is the ISO timestamp string the API returned, passed
+through unchanged.
 
 ---
 
@@ -356,7 +450,10 @@ If the approve request times out or the connection drops:
 - Stage 8 treats a retry of the already-active candidate with the old T0 as
   a 200 no-op and returns the current `ProductDetail` whose `updatedAt` is
   T1.
-- The client stores that `updatedAt` as T1 and continues to publish.
+- The client stores that `updatedAt` as T1.
+- It then GETs the exact candidate preview for the selected store, the same
+  as a normal approve. Publish stays disabled until that GET says
+  `candidateActive` and `publishable`.
 
 The UI does not offer "generate again" as the recovery for a dropped
 response. Regeneration is a separate, explicit action.
@@ -377,10 +474,12 @@ Confirm button: **Approve version**. Cancel: **Keep current version**.
 
 After 200:
 
-- Badge **Approved** on the candidate.
-- Product queries invalidated (section 27).
-- T1 stored.
-- Publish stays subject to server readiness.
+- Badge **Approved** on the candidate (`candidateActive` from the follow-up
+  GET, not from the stale POST preview).
+- Product queries invalidated, and the exact candidate preview query
+  refetched (section 27).
+- T1 stored from the approve body.
+- Publish stays disabled until that refetch says `publishable`.
 - No Shopify request has been made. Copy under the badge says so.
 
 Approve is hidden when the candidate is already active (GET preview of the
@@ -390,28 +489,33 @@ approved version). Publish is the next step, still manual.
 
 ## 15. Publish UX
 
-Endpoint: `POST /products/{id}/pipeline/publish`.
+Endpoint:
+`POST /products/{productId}/pipeline/versions/{candidateVersionId}/publish`.
 
-Body: `{ candidateVersionId, storeId, expectedUpdatedAt: T1 }`.
+Body exactly: `{ storeId, expectedUpdatedAt: T1 }`. No `candidateVersionId`
+field.
 
 Not `POST /integrations/shopify/publish`. Stage 8 publish already calls the
-existing publisher.
+existing publisher. The response is `ShopifyPublishResponse` (`message`,
+`listingId`, `externalProductId`, `externalHandle`, `externalGraphqlId`,
+`shopDomain`, `storefrontUrl`, `adminUrl`, `onlineStorePublished`,
+`updated`). Reuse `ShopifyPublishResult`. Do not expect pipeline version ids
+in the body. The candidate id remains the route and the local review state.
 
 UI:
 
-- Store selector from connected stores. Required.
-- Readiness cards from section 10.
-- Button **Publish approved version**, disabled until section 10's conditions
-  hold.
+- Store selector from connected stores. Required. Changing it refetches GET
+  preview (section 6) and does not POST a new candidate.
+- Readiness cards from the GET for that store (section 10).
+- Button **Publish approved version**, disabled until section 6 step 9 holds.
 - In-flight label **Publishing…**. One in-flight request; the button ignores
   a second click.
-- Success: status, external id, and admin/storefront links from the result,
-  through existing URL helpers only.
+- Success: the fields above, through existing URL helpers only.
 - Failure: `ApiError` mapping in section 29. The candidate stays approved.
   The merchant can retry publish with the same T1 unless a 409 says the
-  product changed, in which case they reload the product and the token
-  updates from the refetched `updatedAt` only after a successful refetch
-  confirms the approved version is still active.
+  product changed, in which case they reload the product. The token updates
+  from a newer `updatedAt` only when the refreshed preview still shows this
+  candidate active. Do not publish with T0.
 
 ---
 
@@ -458,22 +562,36 @@ Lives on `/ai-studio`, not as a new checkbox column on the main Products
 table. The Products table keeps row click → product. Adding selection there
 would fight that click target and the mobile card layout.
 
-Studio home has its own catalogue list (same product query, page size 20):
+`GET /products` returns only products published to at least one channel.
+Imported unpublished products are `GET /drafts`. Studio home lists both.
+Optimization is part of the pre-publish workflow, so a Drafts-only merchant
+must be able to select here. No backend change: two existing hooks.
 
-- One checkbox per row, and per card below `lg`.
-- **Select page** selects only the ids on the current page that fit under
-  the cap.
-- Selection is a `Set` of product ids in component state, so it survives
-  pagination within the visit.
-- Header shows **n / 50 selected** and **Clear**.
-- At 50, further checkboxes are disabled. Copy: "You can optimize up to 50
-  products at a time."
+Tabs, default **Drafts**:
+
+| Tab | Query |
+|---|---|
+| Drafts | `useDrafts` |
+| Published | `useProducts` |
+
+Each tab uses page size 20 and the existing list query (`page`, `size`,
+search). The HTTP parameter is `size`. It is not `pageSize`.
+
+- One checkbox per row, and per card below `lg`, on both tabs.
+- **Select page** selects only the ids on the current page of the current
+  tab that fit under the cap.
+- Selection is one `Set` of product ids. It survives pagination and tab
+  changes for the visit. A product is not in both server lists, so the set
+  does not need de-duplication across lifecycles.
+- Header shows **n / 50 selected** and **Clear**, counting both tabs.
+- At 50, further checkboxes on either tab are disabled. Copy: "You can
+  optimize up to 50 products at a time."
 - The start request sends exactly the selected ids. It never slices a larger
   set down to 50 without telling the merchant, because the UI never lets the
   set exceed 50.
 
 There is no "select all products matching filters". Stage 9 accepts an
-explicit id list only.
+explicit id list only. Selecting only published products is not the design.
 
 ---
 
@@ -535,22 +653,31 @@ processed equals total. Do not show "100% success".
 
 ## 21. Bulk item review
 
-`GET /products/pipeline/runs/{runId}/items` with the existing page params
-(`page`, `pageSize` max 100, default 20). The UI does not request every item
-in a loop.
+`GET /products/pipeline/runs/{runId}/items` with `page` and `size` (default
+20, backend max from `ListQueryParams`). The query string uses `size`, not
+`pageSize`. The UI does not request every item in a loop.
 
-Each row (card below `lg`): product id (title from the product cache when
-that id was in the selection list; otherwise the id), item `status`,
-`attemptCount`, and `errorCode` / `errorMessage` when failed. Those strings
-are the API's safe codes, shown as text.
+The run summary field is `status`. The item field is `state`
+(`PipelineBulkItemState`): `pending`, `succeeded`, `failed`, `skipped`,
+`missing`. There is no item `status`.
 
-**Open review** renders only when `status === succeeded` and
-`candidateVersionId` is set. Link:
+Each row (card below `lg`): `submittedProductId` (title from the selection
+list when that id was selected; otherwise the id), `productId` when set,
+`state`, `attemptCount`, and `errorCode` / `errorMessage` when failed.
+Those strings are the API's safe codes, shown as text.
+
+**Open review** renders only when `state === "succeeded"` and `productId`
+is not null and `candidateVersionId` is not null. Link:
 
 `/ai-studio/products/{productId}?candidate={candidateVersionId}`
 
-using `productId` from the item. The review page loads that version. It does
-not pick the newest `ai_generated` row from version history.
+using `item.productId` and `item.candidateVersionId`. The review page loads
+that version. It does not pick the newest `ai_generated` row from version
+history.
+
+`state === "failed"`, `"skipped"`, `"pending"`, or `"missing"` does not show
+Open review. A `missing` item may have `productId: null`. Do not invent an
+id or a link for it.
 
 ---
 
@@ -565,8 +692,9 @@ instant."
 Then refetch the summary on the same query key. Item rows update from the
 server. The client does not mark leftover pending rows as skipped.
 
-`cancelled` is terminal. Polling stops. Historical pending rows may still
-say pending; the run status is the authority. Copy says that.
+`cancelled` is terminal. Polling stops. Historical rows may still have
+`state: "pending"`. The run `status` is the authority. Copy says that. Do
+not locally rewrite remaining items to `skipped`.
 
 ---
 
@@ -600,7 +728,7 @@ that run. It is not an error.
 | Sidebar | AI Studio | `/ai-studio` |
 | Studio home | a selected product's review, before a bulk run | `/ai-studio/products/{id}` |
 | Studio home after 202 | dashboard | `/ai-studio?run={runId}` |
-| Bulk item | Open review | `/ai-studio/products/{productId}?candidate={candidateVersionId}` |
+| Bulk item | Open review | `/ai-studio/products/{item.productId}?candidate={item.candidateVersionId}` only when `state` is `succeeded` and both ids are set |
 | Draft editor More menu | Open AI Studio | `/ai-studio/products/{id}` |
 | Published summary | Optimize in AI Studio | `/ai-studio/products/{id}` |
 | Catalogue row | AI Studio (replaces Optimize) | `/ai-studio/products/{id}` |
@@ -660,15 +788,21 @@ not look like a generic failure.
 Extend `productKeys` in `frontend/services/products.ts`:
 
 ```text
-productKeys.pipelinePreview(productId, versionId | "new")
+productKeys.pipelineCandidate(productId, candidateVersionId, storeId ?? null)
 productKeys.pipelineRun(runId)
 productKeys.pipelineRunItems(runId, query)
 ```
 
+POST preview is a mutation. It does not use a query key named `"new"`.
+The candidate key includes `storeId` because `channelReadiness` and
+`publishable` are composed for that store. A different store is a different
+cache entry. Do not read the previous store's entry while the new one loads.
+
 | Event | Invalidate |
 |---|---|
-| Preview 201 | that preview key only (the response is the cache) |
-| Approve 200 | `productKeys.detail(id)`, `versions(id)`, `productKeys.lists()`, `draftKeys.detail(id)` |
+| Preview 201 | Write the response into `pipelineCandidate(productId, candidateVersionId, storeId)` for the store that was sent (null when omitted). Do not leave a stale pre-approval entry for a different store marked publishable |
+| Approve 200 | `productKeys.detail(id)`, `versions(id)`, `productKeys.lists()`, `draftKeys.detail(id)`, and refetch `pipelineCandidate(productId, candidateVersionId, selectedStoreId)` |
+| Store change | Fetch `pipelineCandidate` for the same candidate and the new store. Keep T0 or T1 as section 6 says |
 | Publish 200 | detail, versions, lists, draft detail, draft listings / Shopify status keys already used by the editor publish mutation |
 | Bulk 202 | `pipelineRun(runId)` and items |
 | Cancel 200 | `pipelineRun(runId)` |
@@ -678,10 +812,10 @@ description into the draft editor's form state.
 
 Hooks to add beside the existing product hooks:
 
-- `usePipelinePreview` mutation
-- `usePipelineCandidate` query (GET preview)
-- `useApprovePipelineCandidate` mutation
-- `usePublishPipelineCandidate` mutation
+- `usePipelinePreview` mutation (`POST .../pipeline/preview`)
+- `usePipelineCandidate` query (`GET .../pipeline/versions/{versionId}/preview`, key includes store id)
+- `useApprovePipelineCandidate` mutation (`POST .../pipeline/versions/{versionId}/approve`, body `{ expectedUpdatedAt }` only)
+- `usePublishPipelineCandidate` mutation (`POST .../pipeline/versions/{versionId}/publish`, body `{ storeId, expectedUpdatedAt }` only, response `ShopifyPublishResult`)
 - `usePipelineRun` query (section 20 interval)
 - `usePipelineRunItems` query
 - `useStartPipelineRun` mutation
@@ -701,43 +835,78 @@ with the button removal, and the backend route still stays.
 Add hand-written mirrors to `frontend/types/api.ts`. No OpenAPI codegen in
 this stage. No `any` on these types.
 
-Families:
+Families, matching the camelCase wire:
 
-- `PipelineTone`
-- `PipelinePreviewRequest`, `PipelinePreview` (response)
-- `PipelineProposal`, `PipelineVersionSummary`
-- `PipelineImageAnalysis`, `PipelineImageEvidence`
-- `PipelineQualityBreakdown` (record of string → number, values as returned)
-- `PipelineReadiness`, `PipelineReadinessIssue`
-- `PipelineApproveRequest`
-- `PipelinePublishRequest`, `PipelinePublishResult`
+- `PipelinePreviewRequest` — `{ tone, storeId? }`
+- `PipelinePreview` — flat `PipelinePreviewResponse`: `productId`,
+  `candidateVersionId`, `candidateVersionNumber`, `candidateActive`,
+  `sourceUpdatedAt`, `approvalExpectedUpdatedAt`, `original`, `proposal`,
+  `qualityScore`, `qualityBaseline`, `qualityDelta`, `qualityScoreVersion`,
+  `qualityBreakdown`, `imageAnalysis`, `isSynthetic`, `provider`,
+  `channelReadiness`, `pipelineBlockers`, `pipelineWarnings`, `publishable`.
+  No nested `candidate`. No `source` on this object
+- `PipelineListingView` — `title`, `description`, `seoTitle`,
+  `seoDescription`, `keywords`, `tags`
+- `PipelineCheckItem` — `code`, `message`
+- `ProductVersionQualityBaseline` — `versionNumber`, `score`
+- `ProductVersionQualityBreakdown` — `earned`, `applicableMax`,
+  `dimensions` (`title`, `description`, `repetition`, `keywordCoverage`),
+  optional `seoFormat`. Nested fields are the Stage 5 numbers, booleans,
+  strings, string arrays, and nullable `source`. Not `Record<string, number>`
+- `PipelineImageAnalysisReport` — `productId`, `images`
+- `PipelineImageAnalysisItem` — `imageId`, `position`, `status`,
+  `errorCode`, `analysis`
+- `PipelineImageAnalysisEvidence` — `status`, `errorCode`, `checks`,
+  `captionProposal`, `altTextProposal`, `isSynthetic`, `provider`, `model`,
+  `promptName`, `promptVersion`, and the Stage 6 measurement fields
+- Item `status` union used by the UI: `succeeded`, `checksOnly`,
+  `fetchFailed`, `decodeFailed`, `unknown`, plus a string fallback so an
+  unknown status does not fail the type parse
+- `PipelineApproveRequest` — `{ expectedUpdatedAt }` only
+- `PipelinePublishRequest` — `{ storeId, expectedUpdatedAt }` only
+- Publish result: existing `ShopifyPublishResult`. Do not add
+  `PipelinePublishResult`
+- `channelReadiness`: existing `ShopifyPublishReadiness`
 - `PipelineBulkRunCreate`, `PipelineBulkRun`, `PipelineBulkRunItem`
-- `PipelineBulkRunStatus`, `PipelineBulkItemStatus`
+- `PipelineBulkRunStatus` — run `status`
+- `PipelineBulkItemState` — item `state`, not `PipelineBulkItemStatus`
 
-Timestamps stay `string` (ISO), matching the rest of `api.ts`.
+`PipelineBulkRunItem` fields: `submittedProductId`, `productId` (nullable),
+`state`, `candidateVersionId` (nullable), `errorCode`, `errorMessage`,
+`attemptCount`, `finishedAt`.
+
+Timestamps stay `string` (ISO), matching the rest of `api.ts`. No `any`.
 
 ---
 
 ## 29. Error-code mapping
 
-Branch on `ApiError.code` and, for `conflict` / `validation_error`, on
-`details[].type === "reason"` and `details[].message` equal to the stable
-reason. Never branch on the human `message` of the envelope.
+Branch on `ApiError.code`. Never branch on the envelope `message`.
+
+Reason identity is a `details` entry with `type: "reason"` and `message` equal
+to the stable reason (`stale_preview`, `draft_version_stale`,
+`not_a_pipeline_candidate`, `pipeline_candidate_requires_approval`,
+`candidate_not_approved`, `synthetic_publish_blocked`). A missing store is
+`code: "not_found"` plus a `details` entry `type: "resource"` and
+`message: "Store"`. That is not a code named `store_not_found`.
 
 | Condition | Merchant copy | Action |
 |---|---|---|
 | 401 | Session expired | Existing auth redirect |
 | 403 `permission_denied` | AI Studio is for owners and admins | Permission panel |
-| 404 `not_found` | Product or run not found | Not-found state. Do not say which other tenant owns it |
+| 404 `not_found` | Product, run, or version not found | Not-found state. Do not say which other tenant owns it |
+| 404 `not_found` with `details` `type: "resource"` and `message: "Store"` | That store is not connected | Reselect store. This is not a code named `store_not_found` |
 | 422 `validation_error` | Show `details` field messages | Fix the form. Includes more than 50 ids if a client bug sends them |
 | 409 reason `stale_preview` | This product changed after the preview | Generate fresh preview |
 | 409 reason `draft_version_stale` | The draft changed after the preview | Generate fresh preview |
-| 409 `pipeline_bulk_run_active` | Another bulk optimization is running | Section 23 |
+| 422 reason `not_a_pipeline_candidate` | This version is not a pipeline candidate | Legacy panel (section 26) |
+| 422 reason `pipeline_candidate_requires_approval` | Approve this version in AI Studio | Link to the review route |
+| 409 `pipeline_bulk_run_active` | Another bulk optimization is running | Section 23. This code is stable |
 | 409 `conflict` without those reasons | Someone else updated this product or this run key | Reload. Do not blind-retry with a new key |
 | `ai_provider_not_configured` / unavailable | AI is not configured for this workspace | No retry loop |
 | reason `synthetic_publish_blocked` | Test previews cannot be published | None. Banner stays |
-| reason `candidate_not_approved` | Approve this version before publishing | Focus approve |
-| `store_not_found` | That store is not connected | Reselect store |
+| reason `candidate_not_approved` | Approve this version before publishing | Focus approve. Also the normal blocker on a fresh preview |
+| run `status: "failed"` with `failureReason` | Show `failureReason` as text on the run | Includes a store that disappeared during a bulk run. That is run state, not an HTTP code `store_not_found` |
 | `internal_error` | Something went wrong. Reference `requestId` | No stack trace |
 
 ---
@@ -777,14 +946,16 @@ default on the sticky bar).
 | State | UI |
 |---|---|
 | Studio first load | Skeleton list |
-| No products | Existing empty pattern: import or open drafts |
-| No candidate yet | Short explanation and Generate preview |
+| No products on the open tab | Drafts: import. Published: nothing published yet. The other tab stays available |
+| No candidate yet | Short explanation and Generate preview. Publish disabled |
 | Generating | Button busy, live region "Generating preview" |
-| Candidate ready | Comparison |
-| Approving / Publishing | Button busy |
-| Approved | Badge plus publish panel |
-| Published | Result panel |
-| Bulk idle | Selection list |
+| Candidate ready | Comparison. Fresh candidate shows not approved. Publish disabled |
+| Approving | Button busy |
+| Approved, preview refresh in flight | Approved badge. Publish disabled |
+| Approved, refreshed preview publishable | Publish enabled |
+| Publishing | Button busy |
+| Published | `ShopifyPublishResult` panel. No pipeline ids |
+| Bulk idle | Drafts tab (default) and Published tab |
 | Bulk pending / running | Counts and progress |
 | Bulk empty items page | "No items on this page" |
 | Partial / failed / completed / cancelled | Status word from section 20 |
@@ -857,39 +1028,86 @@ Playwright, route-mocked, unless noted.
 **Single product** (`ai-product-studio.spec.ts`):
 
 - Admin opens `/ai-studio/products/{id}`
-- Generate preview posts tone and optional store
-- Side-by-side title and description from the fixture
+- POST `/products/{id}/pipeline/preview` body is `{ tone, storeId? }` only
+- Response is flat: `candidateVersionId`, `candidateVersionNumber`,
+  `candidateActive: false`. No nested `candidate`. No `source` field is read
+- Side-by-side title and description from `original` and `proposal`
 - Description fixture containing HTML-like text is rendered as text, not as
   live markup
-- Approve request body `expectedUpdatedAt` equals the preview's
-  `approvalExpectedUpdatedAt` (T0)
-- Approve response `updatedAt` (T1, different from T0) is what publish sends
+- SEO and tags render from `proposal` and are labeled not sent to Shopify.
+  Alt text renders from `imageAnalysis.images[].analysis.altTextProposal`,
+  not from `proposal`
+- POST preview fixture includes `publishable: false` and
+  `pipelineBlockers` containing `candidate_not_approved`. Publish is disabled
+- Approve is
+  `POST /products/{id}/pipeline/versions/{candidateVersionId}/approve`
+- Approve body is exactly `{ expectedUpdatedAt }` equal to T0
+  (`approvalExpectedUpdatedAt`). The body has no `candidateVersionId`
+- Approve response `updatedAt` is T1, different from T0
+- Client then GETs
+  `/products/{id}/pipeline/versions/{candidateVersionId}/preview?storeId=`
+  for the selected store
+- That GET fixture has `candidateActive: true`, `publishable: true`, and no
+  `candidate_not_approved`. Publish becomes enabled
+- If that GET fails, Publish stays disabled
+- Publish is
+  `POST /products/{id}/pipeline/versions/{candidateVersionId}/publish`
+- Publish body is exactly `{ storeId, expectedUpdatedAt: T1 }`. No
+  `candidateVersionId` in the body
+- Publish fixture is `ShopifyPublishResult` (`listingId`,
+  `externalProductId`, `adminUrl`, `storefrontUrl`, and the other existing
+  fields). The test does not require pipeline version ids on it
+- Changing the store GETs preview again with the new `storeId` and does not
+  POST preview. The previous store's `publishable` is not what enables the
+  button
 - `stale_preview` keeps the candidate and disables approve until Generate
   fresh preview
-- A failed approve transport, then a retry, sends T0 again and adopts T1
-  from the 200 body
+- A failed approve transport, then a retry, sends T0 again on the version
+  URL and adopts T1 from the 200 body, then GETs preview before publish
 - Synthetic fixture: banner "Test AI preview", publish disabled; a forced
-  publish error `synthetic_publish_blocked` matches the copy
+  publish error reason `synthetic_publish_blocked` matches the copy
 - Unknown product: not-found
+- GET preview 422 reason `not_a_pipeline_candidate` shows the legacy panel
+  and Activate, not pipeline Approve
 - Admin sees the nav item
 - Member/viewer fixture: no nav item; direct URL shows the permission panel
   and does not call preview
 - Quality labels say "Optimization score" and "Change vs original", and do
   not say "confidence"
-- Image `status: unknown` renders "Not analyzed"
+- Quality fixture is the nested breakdown (`earned`, `applicableMax`,
+  `dimensions.title`, `dimensions.description`, `dimensions.repetition`,
+  `dimensions.keywordCoverage`, optional `seoFormat`). A dimension object is
+  not rendered as `[object Object]`
+- Image outer `status: "unknown"` or `analysis: null` renders "Not analyzed"
+- `status: "succeeded"` shows checks and caption/alt proposals
+- `status: "checksOnly"` shows checks and does not call the row a failure
+- `status: "fetchFailed"` and `"decodeFailed"` render "Analysis unavailable"
+  and `errorCode` when set
+- An unrecognized image status does not throw
 - Blocker `message` from the fixture is shown; the client does not add one
 
 **Bulk** (`ai-product-studio-bulk.spec.ts`):
 
-- Select rows, count visible, cannot check a 51st
-- Start returns 202; body length ≤ 50
+- Drafts tab is default and a draft row can be selected
+- Published tab can be selected, and a published row can be selected in the
+  same set
+- The set survives a page change and a tab change
+- The 51st check is refused. Count reads n / 50. Start body length is at
+  most 50
+- List requests use `page` and `size`, not `pageSize`
+- Start returns 202
 - Retry of the same confirm sends the same `idempotencyKey`
-- Pending then running updates the live region
-- Interval effect: a terminal status does not schedule another poll (assert
-  no further run GET after the terminal response, within a bounded wait)
+- Pending then running updates the live region from run `status`
+- Interval effect: a terminal run `status` does not schedule another poll
+  (assert no further run GET after the terminal response, within a bounded
+  wait)
 - Partial fixture shows Partial, not a success headline
-- Failed and missing rows show `errorCode`
-- Open review href contains the fixture `candidateVersionId`
+- Item fixture field is `state`, not `status`
+- `state: "succeeded"` with `productId` and `candidateVersionId` shows Open
+  review. The href is
+  `/ai-studio/products/{productId}?candidate={candidateVersionId}`
+- `state: "failed"` does not show Open review
+- `state: "missing"` with `productId: null` does not show Open review
 - Cancel posts cancel and shows the cooperative copy
 - 409 `pipeline_bulk_run_active` shows the banner and does not post again
 - Mobile viewport: cards, sticky action reachable
@@ -965,14 +1183,18 @@ migration `0035`.
 |---|---|
 | Merchant still one click from silent activation | Primary optimize controls removed |
 | Activate on a pipeline row | Sheet has no Activate for `ai_generated`; GET preview classifies first |
-| Publish sent with T0 | Token state drops T0 on approve 200; publish reads T1 only |
-| Lost T1 | Retry approve; adopt `updatedAt` from the 200 |
+| Publish sent with T0 | Approve stores T1 from `ProductDetail.updatedAt`. Publish body sends that T1. GET preview does not replace it |
+| Lost T1 | Retry approve on the same version URL with T0; adopt `updatedAt` from the 200; then GET preview |
+| Stale pre-approval `publishable: false` left on screen | Approve is followed by GET of that candidate. Publish waits on that GET |
+| Readiness from the wrong store | Candidate query key includes `storeId`. Store change refetches GET and hides the previous readiness |
+| Item `status` instead of `state` | Open review reads `item.state` |
+| Drafts omitted from bulk | Home tabs use `useDrafts` and `useProducts` under one 50-cap set |
 | Draft autosave clobbers or is clobbered by AI | Studio is a different route and does not write the editor cache |
 | Score read as model confidence | Fixed labels in section 8 |
 | HTML in model output | Candidate description is plain text, not `dangerouslySetInnerHTML` |
 | Stub text treated as shippable | Test AI preview banner; publish disabled |
 | Client-side readiness drift | Buttons follow `publishable` and server blockers |
-| Wrong publish URL | Only the pipeline publish hook |
+| Wrong publish URL | `POST .../pipeline/versions/{versionId}/publish`. Body is `{ storeId, expectedUpdatedAt }` only |
 | Idempotency key churn | Key tied to the confirm snapshot, not to each `fetch` |
 | 51 ids | Checkbox cap before the request |
 | Poll after terminal | `refetchInterval` returns false |
@@ -1027,31 +1249,39 @@ end-to-end review when Claude becomes available again.
 
 ## Self-review
 
-Reviewed against the failure list in the Stage 10 planning brief.
+Reviewed against the wire-contract remediation list.
 
 | Attack | Result |
 |---|---|
+| Wrong approve URL | Closed: `POST /products/{productId}/pipeline/versions/{versionId}/approve` |
+| `candidateVersionId` in the approve body | Closed: body is `{ expectedUpdatedAt: T0 }` only |
+| Wrong publish URL | Closed: `POST /products/{productId}/pipeline/versions/{versionId}/publish` |
+| `candidateVersionId` in the publish body | Closed: body is `{ storeId, expectedUpdatedAt: T1 }` only |
+| Version ids expected on the publish response | Closed: `ShopifyPublishResult` only. Candidate id stays on the route |
+| Stale pre-approve `publishable` used after approval | Closed: Publish waits on the follow-up GET |
+| `candidateActive` never refreshed | Closed: that GET is required before Publish enables |
+| Readiness for the wrong store | Closed: query key includes `storeId` |
+| Store switch recomposes by POST preview | Closed: store switch is GET of the same candidate |
+| `item.status` instead of `item.state` | Closed: `PipelineBulkItemState` |
+| Successful bulk item never opens review | Closed: `state === "succeeded"` plus both ids, exact href |
+| Nested `candidate` object | Closed: flat `candidateVersionId` and `candidateVersionNumber` |
+| Invented `candidate.source` | Closed: the column is labeled AI candidate |
+| Alt text read from `proposal` | Closed: `imageAnalysis.images[].analysis.altTextProposal` |
+| Fictional image statuses | Closed: `succeeded`, `checksOnly`, `fetchFailed`, `decodeFailed`, `unknown` |
+| Invented `failureReason` on an image | Closed: `errorCode` |
+| Quality breakdown as a number map | Closed: `ProductVersionQualityBreakdownRead` |
+| Published-only bulk catalogue | Closed: Drafts and Published tabs, one 50-cap set |
+| `pageSize` sent on the wire | Closed: `page` and `size` |
+| `store_not_found` as a Stage 8 code | Closed: `not_found` plus resource `Store`. Run failure uses `failureReason` |
+| Legacy Activate regression | Closed: `original` rows still Activate. `ai_generated` goes to Studio |
+| T0 reused for publish | Closed: section 11 |
+| T1 lost | Closed: section 13, then GET preview |
+| Stage 8/9 semantic change | Closed: no backend change |
+| Backend scope creep | Closed: section 34 |
+| Stage 11 or deployment creep | Closed: sections 41 and 42 |
 | Legacy optimize still bypasses review | Closed: removed from primary UI; backend route kept |
-| Pipeline candidate shows Activate | Closed: no Activate on `ai_generated` rows; GET preview splits legacy vs pipeline |
-| Publish uses T0 | Closed: section 11 |
-| T1 lost after approve | Closed: section 13 |
-| Merchant edits overwritten | Closed: no shared form state; stale preview does not auto-write |
-| Quality score called confidence | Closed: section 8 |
-| Unsafe HTML | Closed: plain text for proposal description |
-| Synthetic shown as production AI | Closed: section 16 |
-| Client readiness rules | Closed: section 10 |
-| Wrong publish endpoint | Closed: pipeline publish only |
 | Auto approve / auto publish | Closed: both require a confirm |
-| New idempotency key on HTTP retry | Closed: section 19 |
-| More than 50 ids | Closed: section 18 |
-| Polling after terminal | Closed: section 20 |
-| Celery from the browser | Closed: GET run only |
-| Guessing newest candidate | Closed: `candidateVersionId` |
-| Foreign resource leak | Closed: 404/403 copy |
-| Viewer/Member treated as authorized because the button is hidden | Closed: section 17 states the API is the control |
-| Second editor | Closed: one review route |
-| Mobile catalogue regression | Closed: Products table selection unchanged |
-| Stage 8/9 redesign | Closed: no backend change |
-| Stage 11 or deploy creep | Closed: sections 41 and 42 |
+| Polling after terminal, or Celery from the browser | Closed: GET run, interval stops |
+| Guessing the newest candidate | Closed: `candidateVersionId` from the item or the route |
 
 **BLOCKER 0. HIGH 0. MEDIUM 0.** LOWs are section 40 only.
