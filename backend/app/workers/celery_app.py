@@ -88,6 +88,7 @@ celery_app.conf.update(
         "app.tasks.shipments",
         "app.tasks.analytics",
         "app.tasks.notifications",
+        "app.tasks.ai",
     ),
     # Periodic schedule, executed by a beat process (`celery -A ... beat`).
     # Intervals are deliberately conservative — every scheduled sync spends
@@ -123,6 +124,10 @@ celery_app.conf.update(
         # one indexed query when nothing is wrong.
         "pricing-reconcile-applications": {
             "task": "pricing.reconcile_applications",
+            "schedule": 60 * 5,
+        },
+        "ai-reconcile-pipeline-bulk-runs": {
+            "task": "ai.reconcile_pipeline_bulk_runs",
             "schedule": 60 * 5,
         },
         "automation-run": {
