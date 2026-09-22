@@ -100,9 +100,9 @@ What Stage 10 does not reuse as the Studio itself:
 - WebSockets or SSE. The app does not have them.
 
 There is no shared Tabs primitive and Stage 10 does not add a component
-library. Studio home uses two existing `Button`s with `role="tab"` for
-Drafts and Published. Comparison stays a two-column layout, not a tab inside
-the draft editor.
+library. Studio home uses two ordinary `Button`s as a Drafts / Published
+lifecycle toggle with `aria-pressed` (section 18). Comparison stays a
+two-column layout, not a tab inside the draft editor.
 
 `frontend/package.json` has `lint`, `typecheck`, and `build`. It has no unit
 test script. Stage 10 does not add a test runner. Behaviour is covered by
@@ -174,45 +174,63 @@ Route: `/ai-studio/products/[productId]`.
 4. A normal fresh candidate is inactive. That response has
    `candidateActive: false`, `publishable: false`, and a `pipelineBlockers`
    entry whose `code` is `candidate_not_approved`. The page stores
-   `candidateVersionId` and `approvalExpectedUpdatedAt` as token **T0**, and
-   renders that object. Publish stays disabled. The pre-approval object is
-   never treated as permission to publish.
-5. Side-by-side comparison (section 7). Quality, image evidence, and
+   `candidateVersionId` and treats `approvalExpectedUpdatedAt` as the
+   **approvalToken (T0)** only. Publish stays disabled. Never publish with
+   an inactive candidate's token.
+5. Immediately after a successful generate,
+   `router.replace(/ai-studio/products/{productId}?candidate={candidateVersionId})`
+   so refresh and Back reopen the exact candidate via GET. Do not POST
+   preview again on reload.
+6. Side-by-side comparison (section 7). Quality, image evidence, and
    readiness render from the preview object currently on screen.
-6. **Approve this version** is a confirmed action. It means "make this exact
+7. **Approve this version** is a confirmed action. It means "make this exact
    candidate the active product version." It does not mean publish.
    `POST /products/{productId}/pipeline/versions/{candidateVersionId}/approve`
    with body exactly `{ expectedUpdatedAt: T0 }`. The version id is only in
-   the URL.
-7. On 200, the body is `ProductDetailRead`. Replace the local token with
-   `updatedAt` (**T1**). Discard T0. Invalidate product detail, versions,
-   and list queries. Do not write the candidate into the draft editor cache.
-8. Immediately GET
+   the URL. Approve is shown only when `candidateActive === false`.
+8. On 200, the body is `ProductDetailRead`. Discard the approvalToken.
+   Set **currentPublishToken** from `updatedAt` (**T1**). Invalidate product
+   detail, versions, and list queries. Do not write the candidate into the
+   draft editor cache.
+9. Immediately GET
    `/products/{productId}/pipeline/versions/{candidateVersionId}/preview?storeId=<selected store>`.
    Use that response for `candidateActive`, `channelReadiness`,
    `pipelineBlockers`, `pipelineWarnings`, `publishable`, and the evidence
-   on screen. Do not keep the pre-approval preview for those fields. T1
-   stays the approve response's `updatedAt`. Do not copy
-   `approvalExpectedUpdatedAt` from this GET over T1.
-9. Publish becomes enabled only when that GET succeeded, `candidateActive`
-   is true, `publishable` is true, a store is selected, and the local token
-   is T1. A fresh candidate's `candidate_not_approved` blocker is gone on
-   that GET when approval stuck and no other blocker remains. If the GET
-   fails, Publish stays disabled and the merchant can retry the GET. Do not
-   generate a new candidate to recover a failed refresh.
-10. **Publish** calls
+   on screen. Do not keep the pre-approval preview for those fields.
+   Normally the GET has `candidateActive: true` and
+   `approvalExpectedUpdatedAt === T1`. If that field is a later **T2**
+   because `Product.updatedAt` moved after approval, and
+   `candidateActive` is still true, promote `currentPublishToken = T2`.
+   Pipeline publish needs the current product token. Never force a stale
+   T1 over a newer server token. Never write an inactive T0 into the
+   publish token.
+10. Publish becomes enabled only when that GET succeeded,
+    `candidateActive` is true, `publishable` is true, a store is selected,
+    and `currentPublishToken` is set. If the GET fails, Publish stays
+    disabled and the merchant can retry the GET. Do not generate a new
+    candidate to recover a failed refresh.
+11. **Publish** calls
     `POST /products/{productId}/pipeline/versions/{candidateVersionId}/publish`
-    with body exactly `{ storeId, expectedUpdatedAt: T1 }`. The version id
-    is only in the URL. Success is `ShopifyPublishResponse`, the same shape
-    as the existing `ShopifyPublishResult` type. It has no pipeline version
-    ids. The candidate id stays the one already on this page. Links use the
+    with body exactly `{ storeId, expectedUpdatedAt: currentPublishToken }`.
+    The version id is only in the URL. Success is
+    `ShopifyPublishResponse`, the same shape as the existing
+    `ShopifyPublishResult` type. It has no pipeline version ids. The
+    candidate id stays the one already on this page. Links use the
     existing trusted URL helpers.
 
-If the merchant opens `?candidate=<id>` (from bulk, or from version history):
+If the merchant opens `?candidate=<id>` (bulk deep-link, version history,
+refresh, or return visit):
 
 - `GET /products/{id}/pipeline/versions/{id}/preview?storeId=`
-- 200: this is a pipeline candidate. Continue the review flow. T0 is
-  `approvalExpectedUpdatedAt` from this GET.
+- 200 and `candidateActive === false`: this is an inactive pipeline
+  candidate. `approvalExpectedUpdatedAt` is the **approvalToken (T0)**.
+  Show Approve. Do not enable Publish. Do not treat that value as a
+  publish token.
+- 200 and `candidateActive === true`: this candidate is already approved.
+  Hide Approve. Set `currentPublishToken = approvalExpectedUpdatedAt`
+  from this GET (that field is `product.updated_at` at composition time).
+  Enable Publish only when `publishable` is true and a store is selected.
+  No approve request is required in this browser session.
 - 422 with reason `not_a_pipeline_candidate`: this is a legacy AI version.
   Show it as legacy (section 26) with Activate available. Do not show the
   pipeline Approve button.
@@ -221,9 +239,8 @@ Changing the selected store does not call POST preview. GET the same
 `candidateVersionId` with the new `storeId`. `channelReadiness` and
 `publishable` on screen come only from that GET. While it is in flight,
 readiness for the previous store is not shown and Publish stays disabled.
-Before approval, T0 stays the value from the generate response. After
-approval, T1 stays the approve response. The GET is composition for an
-existing candidate, not a new candidate and not a new concurrency token.
+Token meaning follows `candidateActive` on the response (section 11).
+The GET is composition for an existing candidate, not a new candidate.
 
 No step calls approve or publish by itself.
 
@@ -245,13 +262,17 @@ no `candidate.versionNumber`, and no `candidate.source`.
 |---|---|---|
 | Title | `original.title` | `proposal.title` |
 | Description | `original.description` shown as text via the existing `stripHtml` helper | `proposal.description` as plain text (`whitespace-pre-wrap`). It is stored plain text |
-| Optimization score | `qualityBaseline.score` (and that object's `versionNumber` as meta) | `qualityScore` and `qualityDelta` |
-| Breakdown | — | `qualityBreakdown` as in section 8 |
 | Version | active version number from product detail when present | `candidateVersionNumber` |
 | What this column is | Current product | Label **AI candidate**. Do not read a `source` field; the response does not have one |
 | Provider | — | `provider` |
 | Active | — | `candidateActive` |
 | Synthetic | — | `isSynthetic` (section 16) |
+
+Scores do **not** live in these columns. Stage 5 always compares the
+candidate to the original supplier snapshot (`qualityBaseline.versionNumber`
+is 1), not to the current listing or a previous AI version. Put
+`qualityScore`, `qualityBaseline`, `qualityDelta`, and `qualityBreakdown` in
+a distinct score/evidence panel (section 8).
 
 `proposal` is `PipelineListingViewRead`: `title`, `description`, `seoTitle`,
 `seoDescription`, `keywords`, `tags`. Image caption and alt text are not on
@@ -269,16 +290,28 @@ that was not returned.
 
 ## 8. Quality score UX
 
-Stage 5 scores are deterministic. The UI must not call them confidence,
-accuracy, or probability.
+Stage 5 scores are a deterministic rubric. The UI must not call them
+confidence, accuracy, conversion probability, or ranking prediction.
+
+`qualityBaseline` is always the **original** supplier snapshot (version
+number 1). Every AI-generated version is scored against that original, never
+against the previous AI version or against the current listing in the left
+column. The current product may be original, legacy AI, or another approved
+pipeline version; baseline does not describe that column.
+
+Render scores in a distinct panel, not under Current vs AI candidate text:
 
 | API field | Label |
 |---|---|
 | `qualityScore` | Optimization score |
-| `qualityBaseline` | Previous optimization score. The value is `{ versionNumber, score }`. Show `score`. Do not render the object as text |
+| `qualityBaseline.score` | Original baseline score |
+| `qualityBaseline.versionNumber` | Original baseline version (normally 1) |
 | `qualityDelta` | Change vs original |
-| `qualityScoreVersion` | shown as small meta ("Score version N"), not as a grade |
+| `qualityScoreVersion` | small meta ("Score version N"), not a grade |
 | `qualityBreakdown` | structured block below. Not a map of numbers |
+
+Do not say "previous score", "previous optimization", "current score",
+"current-version score", or "change vs current".
 
 `qualityBreakdown` is `ProductVersionQualityBreakdownRead`:
 
@@ -299,11 +332,11 @@ Render each field as itself. Do not stringify an object. Do not type the
 breakdown as `Record<string, number>` or `Record<string, any>`. `null`
 breakdown: "Score breakdown unavailable".
 
-Delta copy:
+Delta copy (always vs original baseline):
 
-- positive: "Higher than the current version"
-- zero: "Same as the current version"
-- negative: "Lower than the current version"
+- positive: "Higher than the original baseline"
+- zero: "Same as the original baseline"
+- negative: "Lower than the original baseline"
 
 That sentence describes the score arithmetic only. It does not claim sales,
 conversion, or ranking.
@@ -331,9 +364,6 @@ Decide the row from the outer `status`, in this order:
 4. `checksOnly` — checks when `analysis.checks` is present. Caption and alt
    text are unavailable. This is not a total failure.
 5. Any other string — **Analysis unavailable**. Do not crash.
-
-When `analysis.isSynthetic === true`, badge **Test caption** on that image's
-proposed caption and alt text.
 
 When `analysis.isSynthetic === true`, badge **Test caption** on that image's
 proposed caption and alt text.
@@ -377,44 +407,67 @@ this page is how it clears. Do not invent an action named
 Publish is enabled only from the latest successful GET preview for the
 **selected** store (section 6), and only when that payload has
 `publishable: true` and `candidateActive: true`, a store is selected, and
-the local token is T1. The POST preview payload does not unlock Publish.
-The client does not invent a blocker the payload omitted.
+`currentPublishToken` is set (from approve response and/or active-candidate
+GET — section 11). The inactive POST preview payload does not unlock
+Publish. The client does not invent a blocker the payload omitted.
 
 ---
 
-## 11. T0 / T1 concurrency state machine
+## 11. Approval and publish token state machine
 
 Held in React state on the review page only. Not in Zustand. Not in the
 draft form.
 
+`approvalExpectedUpdatedAt` is always `product.updated_at` at compose time.
+Its meaning depends on `candidateActive`. Do not treat the field name as
+always meaning T0.
+
+| `candidateActive` | Field meaning | Allowed use |
+|---|---|---|
+| `false` | **approvalToken (T0)** | Approve body only. Never publish |
+| `true` | **currentPublishToken** | Publish body. Approve is hidden |
+
 ```text
 idle
-  → POST preview 201
-  → reviewing(T0 = approvalExpectedUpdatedAt, candidateVersionId,
-              candidateActive false, publishable false)
-  → POST .../versions/{candidateVersionId}/approve { expectedUpdatedAt: T0 }
-  → approved(T1 = ProductDetail.updatedAt)
+  → POST preview 201 (inactive)
+  → reviewing(approvalToken = approvalExpectedUpdatedAt,
+              candidateVersionId, candidateActive false, publishable false)
+  → router.replace(?candidate=candidateVersionId)
+  → POST .../versions/{candidateVersionId}/approve
+       { expectedUpdatedAt: approvalToken }
+  → ProductDetail.updatedAt = T1 → currentPublishToken = T1
   → GET .../versions/{candidateVersionId}/preview?storeId=
-  → publishable state comes from that GET
+  → readiness / candidateActive / publishable from that GET
+  → if GET.candidateActive and GET.approvalExpectedUpdatedAt is later (T2):
+       currentPublishToken = T2
   → POST .../versions/{candidateVersionId}/publish
-       { storeId, expectedUpdatedAt: T1 }
+       { storeId, expectedUpdatedAt: currentPublishToken }
+
+OR open / reload ?candidate= already active:
+  → GET preview (candidateActive true)
+  → currentPublishToken = approvalExpectedUpdatedAt
+  → Approve hidden
+  → publish when publishable and store selected
+  → no approve call in this session
 ```
 
 Rules:
 
-- T0 is saved from `approvalExpectedUpdatedAt` on the POST preview response,
-  or on the GET that opened `?candidate=` before any approve.
-- Approve sends only that T0. The version id is the URL path.
-- After approve 200, discard T0. The publish token is
-  `ProductDetail.updatedAt` from that response and nothing else.
-- The following GET may show a new `approvalExpectedUpdatedAt`. Do not copy
-  it onto T1. Do not replace T1 with an older timestamp from any later
-  response. A newer product-detail `updatedAt` may replace T1 only when it
-  is strictly newer and the refreshed preview still has this candidate
-  active. Never write T0 back.
-- Starting a new preview replaces the candidate and stores that response's
-  T0. Publish is disabled again until a later approve and GET.
-- Publish never reads `approvalExpectedUpdatedAt`.
+- Never publish with the pre-approval token of an inactive candidate.
+- Approve sends only the inactive approvalToken. Version id is the URL path.
+- After approve 200, discard approvalToken. Set currentPublishToken from
+  `ProductDetail.updatedAt` immediately, then GET for readiness.
+- If the follow-up GET (or a later store-change GET) reports
+  `candidateActive: true` and a later `approvalExpectedUpdatedAt`, promote
+  currentPublishToken to that value. Do not keep a stale T1 only because
+  approve produced it first.
+- Reloading `?candidate=` for an active candidate sets currentPublishToken
+  from that GET. Publish can work with no approve in this session.
+- Starting a new preview replaces the candidate, stores a new approvalToken,
+  clears currentPublishToken, and disables Publish until approve + GET (or
+  until a later GET shows the new candidate already active, which should not
+  happen for a fresh generate).
+- Publish never uses an inactive candidate's `approvalExpectedUpdatedAt`.
 
 `expectedUpdatedAt` is the ISO timestamp string the API returned, passed
 through unchanged.
@@ -424,8 +477,8 @@ through unchanged.
 ## 12. Stale-preview recovery
 
 Approve can return 409 `conflict` with a `details` entry `type: "reason"`
-and `message: "stale_preview"` (the product changed after T0). Also
-`draft_version_stale` when the draft's active version moved.
+and `message: "stale_preview"` (the product changed after the approvalToken).
+Also `draft_version_stale` when the draft's active version moved.
 
 UX for both:
 
@@ -445,14 +498,17 @@ UX for both:
 If the approve request times out or the connection drops:
 
 - The same `candidateVersionId` stays selected.
-- T0 stays in state because the client never received a replacement.
+- The approvalToken stays in state because the client never received a
+  replacement.
 - The merchant may press Approve again.
-- Stage 8 treats a retry of the already-active candidate with the old T0 as
-  a 200 no-op and returns the current `ProductDetail` whose `updatedAt` is
-  T1.
-- The client stores that `updatedAt` as T1.
+- Stage 8 treats a retry of the already-active candidate with the old
+  approvalToken as a 200 no-op and returns the current `ProductDetail`
+  whose `updatedAt` is the current publish token.
+- The client stores that `updatedAt` as `currentPublishToken`.
 - It then GETs the exact candidate preview for the selected store, the same
-  as a normal approve. Publish stays disabled until that GET says
+  as a normal approve. If that GET reports a later
+  `approvalExpectedUpdatedAt` while `candidateActive` is true, promote
+  `currentPublishToken` to it. Publish stays disabled until that GET says
   `candidateActive` and `publishable`.
 
 The UI does not offer "generate again" as the recovery for a dropped
@@ -478,12 +534,15 @@ After 200:
   GET, not from the stale POST preview).
 - Product queries invalidated, and the exact candidate preview query
   refetched (section 27).
-- T1 stored from the approve body.
+- `currentPublishToken` set from the approve response `updatedAt`, then
+  promoted if the follow-up GET reports a later active-candidate token
+  (section 11).
 - Publish stays disabled until that refetch says `publishable`.
 - No Shopify request has been made. Copy under the badge says so.
 
-Approve is hidden when the candidate is already active (GET preview of the
-approved version). Publish is the next step, still manual.
+Approve is hidden when `candidateActive === true` (including reopen of an
+already-approved candidate with no approve call in this session). Publish
+is the next step, still manual.
 
 ---
 
@@ -492,8 +551,8 @@ approved version). Publish is the next step, still manual.
 Endpoint:
 `POST /products/{productId}/pipeline/versions/{candidateVersionId}/publish`.
 
-Body exactly: `{ storeId, expectedUpdatedAt: T1 }`. No `candidateVersionId`
-field.
+Body exactly: `{ storeId, expectedUpdatedAt: currentPublishToken }`. No
+`candidateVersionId` field.
 
 Not `POST /integrations/shopify/publish`. Stage 8 publish already calls the
 existing publisher. The response is `ShopifyPublishResponse` (`message`,
@@ -505,17 +564,19 @@ in the body. The candidate id remains the route and the local review state.
 UI:
 
 - Store selector from connected stores. Required. Changing it refetches GET
-  preview (section 6) and does not POST a new candidate.
+  preview (section 6) and does not POST a new candidate. An active-candidate
+  GET may also refresh `currentPublishToken` (section 11).
 - Readiness cards from the GET for that store (section 10).
-- Button **Publish approved version**, disabled until section 6 step 9 holds.
+- Button **Publish approved version**, disabled until section 6 step 10
+  holds.
 - In-flight label **Publishing…**. One in-flight request; the button ignores
   a second click.
 - Success: the fields above, through existing URL helpers only.
 - Failure: `ApiError` mapping in section 29. The candidate stays approved.
-  The merchant can retry publish with the same T1 unless a 409 says the
-  product changed, in which case they reload the product. The token updates
-  from a newer `updatedAt` only when the refreshed preview still shows this
-  candidate active. Do not publish with T0.
+  The merchant can retry publish with the current publish token unless a 409
+  says the product changed, in which case they reload the product. A later
+  active-candidate GET may promote `currentPublishToken`. Do not publish
+  with an inactive approvalToken.
 
 ---
 
@@ -567,24 +628,31 @@ Imported unpublished products are `GET /drafts`. Studio home lists both.
 Optimization is part of the pre-publish workflow, so a Drafts-only merchant
 must be able to select here. No backend change: two existing hooks.
 
-Tabs, default **Drafts**:
+Lifecycle view toggles, default **Drafts**. These are two ordinary
+`Button`s, not an ARIA tab widget:
 
-| Tab | Query |
-|---|---|
-| Drafts | `useDrafts` |
-| Published | `useProducts` |
+| Control | Query | Active state |
+|---|---|---|
+| Drafts | `useDrafts` | `aria-pressed={activeLifecycle === "drafts"}` |
+| Published | `useProducts` | `aria-pressed={activeLifecycle === "published"}` |
 
-Each tab uses page size 20 and the existing list query (`page`, `size`,
+Do **not** set `role="tab"`, `role="tablist"`, or `role="tabpanel"`. A lone
+`role="tab"` without the full tabs pattern is inaccessible. Each button is
+natively operable with Tab, Enter, and Space. The content region has an
+accessible heading or label that identifies **Drafts** or **Published**.
+No custom ArrowLeft / ArrowRight tab implementation.
+
+Each view uses page size 20 and the existing list query (`page`, `size`,
 search). The HTTP parameter is `size`. It is not `pageSize`.
 
-- One checkbox per row, and per card below `lg`, on both tabs.
+- One checkbox per row, and per card below `lg`, on both views.
 - **Select page** selects only the ids on the current page of the current
-  tab that fit under the cap.
-- Selection is one `Set` of product ids. It survives pagination and tab
+  view that fit under the cap.
+- Selection is one `Set` of product ids. It survives pagination and view
   changes for the visit. A product is not in both server lists, so the set
   does not need de-duplication across lifecycles.
-- Header shows **n / 50 selected** and **Clear**, counting both tabs.
-- At 50, further checkboxes on either tab are disabled. Copy: "You can
+- Header shows **n / 50 selected** and **Clear**, counting both views.
+- At 50, further checkboxes on either view are disabled. Copy: "You can
   optimize up to 50 products at a time."
 - The start request sends exactly the selected ids. It never slices a larger
   set down to 50 without telling the merchant, because the UI never lets the
@@ -802,7 +870,7 @@ cache entry. Do not read the previous store's entry while the new one loads.
 |---|---|
 | Preview 201 | Write the response into `pipelineCandidate(productId, candidateVersionId, storeId)` for the store that was sent (null when omitted). Do not leave a stale pre-approval entry for a different store marked publishable |
 | Approve 200 | `productKeys.detail(id)`, `versions(id)`, `productKeys.lists()`, `draftKeys.detail(id)`, and refetch `pipelineCandidate(productId, candidateVersionId, selectedStoreId)` |
-| Store change | Fetch `pipelineCandidate` for the same candidate and the new store. Keep T0 or T1 as section 6 says |
+| Store change | Fetch `pipelineCandidate` for the same candidate and the new store. Token meaning follows `candidateActive` on the response (section 11) |
 | Publish 200 | detail, versions, lists, draft detail, draft listings / Shopify status keys already used by the editor publish mutation |
 | Bulk 202 | `pipelineRun(runId)` and items |
 | Cancel 200 | `pipelineRun(runId)` |
@@ -935,6 +1003,10 @@ default on the sticky bar).
 - Dialogs use the existing dialog primitive (focus trap, Escape).
 - After preview lands, focus moves to the candidate heading once. After
   approve, focus moves to the Approved banner once. Not on each refetch.
+- Drafts / Published lifecycle controls are ordinary buttons with
+  `aria-pressed` (section 18). No `role="tab"`. Keyboard: Tab to reach,
+  Enter or Space to switch. The list region is labeled with the active
+  lifecycle name.
 - `prefers-reduced-motion`: no extra animation beyond what Button/Skeleton
   already do. Progress is a numeric percent, not a required animation.
 - Checkboxes are real inputs, not clickable divs.
@@ -946,16 +1018,17 @@ default on the sticky bar).
 | State | UI |
 |---|---|
 | Studio first load | Skeleton list |
-| No products on the open tab | Drafts: import. Published: nothing published yet. The other tab stays available |
+| No products on the open view | Drafts: import. Published: nothing published yet. The other view stays available |
 | No candidate yet | Short explanation and Generate preview. Publish disabled |
 | Generating | Button busy, live region "Generating preview" |
 | Candidate ready | Comparison. Fresh candidate shows not approved. Publish disabled |
 | Approving | Button busy |
 | Approved, preview refresh in flight | Approved badge. Publish disabled |
+| Already-approved candidate reopened | Approve hidden. Publish enabled when `publishable` and store selected |
 | Approved, refreshed preview publishable | Publish enabled |
 | Publishing | Button busy |
 | Published | `ShopifyPublishResult` panel. No pipeline ids |
-| Bulk idle | Drafts tab (default) and Published tab |
+| Bulk idle | Drafts view (default) and Published view |
 | Bulk pending / running | Counts and progress |
 | Bulk empty items page | "No items on this page" |
 | Partial / failed / completed / cancelled | Status word from section 20 |
@@ -1039,11 +1112,15 @@ Playwright, route-mocked, unless noted.
   not from `proposal`
 - POST preview fixture includes `publishable: false` and
   `pipelineBlockers` containing `candidate_not_approved`. Publish is disabled
+- After generate, URL contains `?candidate={candidateVersionId}`
+- Reload that URL: GET exact candidate preview; same candidate is shown;
+  POST preview is **not** repeated automatically
 - Approve is
   `POST /products/{id}/pipeline/versions/{candidateVersionId}/approve`
-- Approve body is exactly `{ expectedUpdatedAt }` equal to T0
-  (`approvalExpectedUpdatedAt`). The body has no `candidateVersionId`
-- Approve response `updatedAt` is T1, different from T0
+- Approve body is exactly `{ expectedUpdatedAt }` equal to the inactive
+  approvalToken (`approvalExpectedUpdatedAt`). The body has no
+  `candidateVersionId`
+- Approve response `updatedAt` is T1, different from the approvalToken
 - Client then GETs
   `/products/{id}/pipeline/versions/{candidateVersionId}/preview?storeId=`
   for the selected store
@@ -1052,18 +1129,25 @@ Playwright, route-mocked, unless noted.
 - If that GET fails, Publish stays disabled
 - Publish is
   `POST /products/{id}/pipeline/versions/{candidateVersionId}/publish`
-- Publish body is exactly `{ storeId, expectedUpdatedAt: T1 }`. No
-  `candidateVersionId` in the body
+- Publish body is exactly `{ storeId, expectedUpdatedAt: currentPublishToken }`.
+  No `candidateVersionId` in the body
 - Publish fixture is `ShopifyPublishResult` (`listingId`,
   `externalProductId`, `adminUrl`, `storefrontUrl`, and the other existing
   fields). The test does not require pipeline version ids on it
+- Open
+  `/ai-studio/products/{productId}?candidate={candidateId}` with GET fixture
+  `candidateActive: true`, `approvalExpectedUpdatedAt: T1`,
+  `publishable: true`, `isSynthetic: false`, valid channel readiness:
+  Approve is **not** shown; no approve request is made; Publish can enable;
+  publish path and body use that T1 as `expectedUpdatedAt`
 - Changing the store GETs preview again with the new `storeId` and does not
   POST preview. The previous store's `publishable` is not what enables the
   button
 - `stale_preview` keeps the candidate and disables approve until Generate
   fresh preview
-- A failed approve transport, then a retry, sends T0 again on the version
-  URL and adopts T1 from the 200 body, then GETs preview before publish
+- A failed approve transport, then a retry, sends the approvalToken again on
+  the version URL and adopts `updatedAt` from the 200 body, then GETs
+  preview before publish
 - Synthetic fixture: banner "Test AI preview", publish disabled; a forced
   publish error reason `synthetic_publish_blocked` matches the copy
 - Unknown product: not-found
@@ -1072,8 +1156,13 @@ Playwright, route-mocked, unless noted.
 - Admin sees the nav item
 - Member/viewer fixture: no nav item; direct URL shows the permission panel
   and does not call preview
-- Quality labels say "Optimization score" and "Change vs original", and do
-  not say "confidence"
+- Quality panel (current listing already optimized / non-original) fixture:
+  `qualityBaseline: { versionNumber: 1, score: 61 }`, `qualityScore: 78`,
+  `qualityDelta: 17`. Visible labels: Original baseline score 61,
+  Optimization score 78, Change vs original +17. Page does **not** call 61
+  "current score" or "previous optimization score", and does **not** say
+  "Higher than the current version". Copy is "Higher than the original
+  baseline". Labels do not say "confidence"
 - Quality fixture is the nested breakdown (`earned`, `applicableMax`,
   `dimensions.title`, `dimensions.description`, `dimensions.repetition`,
   `dimensions.keywordCoverage`, optional `seoFormat`). A dimension object is
@@ -1088,10 +1177,13 @@ Playwright, route-mocked, unless noted.
 
 **Bulk** (`ai-product-studio-bulk.spec.ts`):
 
-- Drafts tab is default and a draft row can be selected
-- Published tab can be selected, and a published row can be selected in the
+- Drafts view is default and a draft row can be selected
+- Published view can be selected, and a published row can be selected in the
   same set
-- The set survives a page change and a tab change
+- Drafts and Published toggles are reachable by keyboard; Enter/Space
+  switches the view; active control has `aria-pressed="true"` and inactive
+  has `aria-pressed="false"`; no `role="tab"` is required
+- The set survives a page change and a view change
 - The 51st check is refused. Count reads n / 50. Start body length is at
   most 50
 - List requests use `page` and `size`, not `pageSize`
@@ -1183,12 +1275,16 @@ migration `0035`.
 |---|---|
 | Merchant still one click from silent activation | Primary optimize controls removed |
 | Activate on a pipeline row | Sheet has no Activate for `ai_generated`; GET preview classifies first |
-| Publish sent with T0 | Approve stores T1 from `ProductDetail.updatedAt`. Publish body sends that T1. GET preview does not replace it |
-| Lost T1 | Retry approve on the same version URL with T0; adopt `updatedAt` from the 200; then GET preview |
+| Publish sent with inactive approvalToken | Publish only when `candidateActive` and `currentPublishToken` come from approve response and/or active GET |
+| Already-approved reopen has no publish token | Active GET sets `currentPublishToken` from `approvalExpectedUpdatedAt`; Approve stays hidden |
+| Lost publish token after approve | Retry approve; adopt `updatedAt`; GET may promote a later active token |
 | Stale pre-approval `publishable: false` left on screen | Approve is followed by GET of that candidate. Publish waits on that GET |
 | Readiness from the wrong store | Candidate query key includes `storeId`. Store change refetches GET and hides the previous readiness |
+| Exact candidate lost on refresh | After generate, `router.replace` with `?candidate=`; reload GETs that id and does not POST preview |
+| Baseline scored as current / previous AI | Score panel labels original baseline; delta is vs original |
+| Incomplete `role="tab"` | Lifecycle toggles use `aria-pressed` buttons only |
 | Item `status` instead of `state` | Open review reads `item.state` |
-| Drafts omitted from bulk | Home tabs use `useDrafts` and `useProducts` under one 50-cap set |
+| Drafts omitted from bulk | Home views use `useDrafts` and `useProducts` under one 50-cap set |
 | Draft autosave clobbers or is clobbered by AI | Studio is a different route and does not write the editor cache |
 | Score read as model confidence | Fixed labels in section 8 |
 | HTML in model output | Candidate description is plain text, not `dangerouslySetInnerHTML` |
@@ -1249,39 +1345,40 @@ end-to-end review when Claude becomes available again.
 
 ## Self-review
 
-Reviewed against the wire-contract remediation list.
+Reviewed against the active-candidate / quality / accessibility remediation
+list, and against prior wire-contract fixes that must not regress.
 
 | Attack | Result |
 |---|---|
-| Wrong approve URL | Closed: `POST /products/{productId}/pipeline/versions/{versionId}/approve` |
-| `candidateVersionId` in the approve body | Closed: body is `{ expectedUpdatedAt: T0 }` only |
-| Wrong publish URL | Closed: `POST /products/{productId}/pipeline/versions/{versionId}/publish` |
-| `candidateVersionId` in the publish body | Closed: body is `{ storeId, expectedUpdatedAt: T1 }` only |
-| Version ids expected on the publish response | Closed: `ShopifyPublishResult` only. Candidate id stays on the route |
+| Active approved candidate reopened with no publish token | Closed: active GET sets `currentPublishToken` from `approvalExpectedUpdatedAt` |
+| Approve hidden + Publish disabled forever | Closed: Publish does not require an approve call in this session |
+| Active GET token treated as pre-approval T0 | Closed: meaning follows `candidateActive` (section 11) |
+| Publishing an inactive candidate with T0 | Closed: Publish requires `candidateActive` and `currentPublishToken` |
+| Newer current product token ignored after approval | Closed: active GET may promote T2 |
+| Reload generating a duplicate candidate | Closed: `router.replace` with `?candidate=`; reload GETs only |
+| Exact candidate identity lost after refresh | Closed: durable query param |
+| Quality baseline described as current | Closed: Original baseline score / version |
+| Quality baseline described as previous AI version | Closed: original snapshot only |
+| Delta described as change vs current | Closed: Change vs original / original baseline copy |
+| Fake or incomplete `role="tab"` | Closed: `aria-pressed` buttons only |
+| Inaccessible Drafts/Published switching | Closed: Tab / Enter / Space; pressed state exposed |
+| Wrong approve URL | Closed: `POST .../pipeline/versions/{versionId}/approve` |
+| `candidateVersionId` in the approve body | Closed: body is `{ expectedUpdatedAt }` only |
+| Wrong publish URL | Closed: `POST .../pipeline/versions/{versionId}/publish` |
+| `candidateVersionId` in the publish body | Closed: body is `{ storeId, expectedUpdatedAt }` only |
+| Version ids expected on the publish response | Closed: `ShopifyPublishResult` only |
 | Stale pre-approve `publishable` used after approval | Closed: Publish waits on the follow-up GET |
-| `candidateActive` never refreshed | Closed: that GET is required before Publish enables |
 | Readiness for the wrong store | Closed: query key includes `storeId` |
 | Store switch recomposes by POST preview | Closed: store switch is GET of the same candidate |
 | `item.status` instead of `item.state` | Closed: `PipelineBulkItemState` |
-| Successful bulk item never opens review | Closed: `state === "succeeded"` plus both ids, exact href |
-| Nested `candidate` object | Closed: flat `candidateVersionId` and `candidateVersionNumber` |
-| Invented `candidate.source` | Closed: the column is labeled AI candidate |
-| Alt text read from `proposal` | Closed: `imageAnalysis.images[].analysis.altTextProposal` |
-| Fictional image statuses | Closed: `succeeded`, `checksOnly`, `fetchFailed`, `decodeFailed`, `unknown` |
-| Invented `failureReason` on an image | Closed: `errorCode` |
-| Quality breakdown as a number map | Closed: `ProductVersionQualityBreakdownRead` |
-| Published-only bulk catalogue | Closed: Drafts and Published tabs, one 50-cap set |
+| Published-only bulk catalogue | Closed: Drafts and Published views, one 50-cap set |
 | `pageSize` sent on the wire | Closed: `page` and `size` |
-| `store_not_found` as a Stage 8 code | Closed: `not_found` plus resource `Store`. Run failure uses `failureReason` |
-| Legacy Activate regression | Closed: `original` rows still Activate. `ai_generated` goes to Studio |
-| T0 reused for publish | Closed: section 11 |
-| T1 lost | Closed: section 13, then GET preview |
-| Stage 8/9 semantic change | Closed: no backend change |
-| Backend scope creep | Closed: section 34 |
-| Stage 11 or deployment creep | Closed: sections 41 and 42 |
+| Nested `candidate` / invented `source` | Closed: flat DTO; label AI candidate |
+| Fictional image statuses / `failureReason` | Closed: Stage 6 vocabulary + `errorCode` |
+| Quality breakdown as a number map | Closed: nested Stage 5 shape |
+| Alt text read from `proposal` | Closed: under `imageAnalysis` |
+| Backend / Stage 11 / deployment creep | Closed: docs only; no implementation |
 | Legacy optimize still bypasses review | Closed: removed from primary UI; backend route kept |
 | Auto approve / auto publish | Closed: both require a confirm |
-| Polling after terminal, or Celery from the browser | Closed: GET run, interval stops |
-| Guessing the newest candidate | Closed: `candidateVersionId` from the item or the route |
 
 **BLOCKER 0. HIGH 0. MEDIUM 0.** LOWs are section 40 only.
