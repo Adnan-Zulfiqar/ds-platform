@@ -187,7 +187,8 @@ Route: `/ai-studio/products/[productId]`.
    candidate the active product version." It does not mean publish.
    `POST /products/{productId}/pipeline/versions/{candidateVersionId}/approve`
    with body exactly `{ expectedUpdatedAt: T0 }`. The version id is only in
-   the URL. Approve is shown only when `candidateActive === false`.
+   the URL. Approve is shown only when `candidateActive === false` and there
+   is no `stale_preview` pipeline blocker (section 12).
 8. On 200, the body is `ProductDetailRead`. Discard the approvalToken.
    Set **currentPublishToken** from `updatedAt` (**T1**). Invalidate product
    detail, versions, and list queries. Do not write the candidate into the
@@ -224,16 +225,26 @@ refresh, or return visit):
 - `GET /products/{id}/pipeline/versions/{id}/preview?storeId=`
 - 200 and `candidateActive === false`: this is an inactive pipeline
   candidate. `approvalExpectedUpdatedAt` is the **approvalToken (T0)**.
-  Show Approve. Do not enable Publish. Do not treat that value as a
-  publish token.
+  Do not enable Publish. Do not treat that value as a publish token.
+  - If `pipelineBlockers` contains `code === "stale_preview"`: the server
+    already knows this candidate is stale relative to the product. Keep the
+    candidate visible. Show the stale-preview banner. **Approve is not
+    actionable.** Primary action is **Generate fresh preview**, only after
+    an explicit click. Do not POST approve just to rediscover the same
+    stale. Do not auto-regenerate. Do not discard merchant edits. The UI
+    reads only the blocker code; it does not reimplement
+    `sourceUpdatedAt` comparison.
+  - If there is no `stale_preview` blocker: show an actionable Approve.
 - 200 and `candidateActive === true`: this candidate is already approved.
   Hide Approve. Set `currentPublishToken = approvalExpectedUpdatedAt`
   from this GET (that field is `product.updated_at` at composition time).
   Enable Publish only when `publishable` is true and a store is selected.
   No approve request is required in this browser session.
-- 422 with reason `not_a_pipeline_candidate`: this is a legacy AI version.
-  Show it as legacy (section 26) with Activate available. Do not show the
-  pipeline Approve button.
+- 422 with reason `not_a_pipeline_candidate`: this version cannot be
+  reviewed as a valid pipeline candidate. That is the ordinary path for
+  unmarked legacy AI rows, but Stage 7 also returns the same reason for
+  malformed pipeline metadata. Follow section 26. Do not show the pipeline
+  Approve button.
 
 Changing the selected store does not call POST preview. GET the same
 `candidateVersionId` with the new `storeId`. `channelReadiness` and
@@ -476,20 +487,34 @@ through unchanged.
 
 ## 12. Stale-preview recovery
 
-Approve can return 409 `conflict` with a `details` entry `type: "reason"`
-and `message: "stale_preview"` (the product changed after the approvalToken).
-Also `draft_version_stale` when the draft's active version moved.
+Two paths reach the same merchant recovery. The server stays authoritative.
 
-UX for both:
+**A. Pre-existing stale candidate (GET already knows).**
+
+When an inactive candidate's GET preview includes
+`pipelineBlockers` with `code === "stale_preview"`:
 
 - Keep the candidate on screen.
 - Banner: the product changed after this preview was generated.
-- Approve disabled.
+- Approve is disabled / not actionable. Do not POST approve.
+- Publish stays disabled.
 - One action: **Generate fresh preview**. It runs only after the click.
 - Do not auto-regenerate.
 - Do not copy the candidate into the product or the draft form.
 - Do not clear the merchant's draft editor if they have it open in another
   tab. Studio does not share that form.
+- Do not reimplement `sourceUpdatedAt` vs `product.updatedAt` in React.
+  Read only the blocker code.
+
+**B. Concurrent race after a fresh GET (approve 409).**
+
+Even when GET had no `stale_preview` blocker, another editor can change the
+product before Approve. Approve can then return 409 `conflict` with a
+`details` entry `type: "reason"` and `message: "stale_preview"`, or
+`draft_version_stale` when the draft's active version moved.
+
+UX for that 409 is the same banner, disabled Approve, and
+**Generate fresh preview** as in A. Do not blind-retry Approve.
 
 ---
 
@@ -540,9 +565,11 @@ After 200:
 - Publish stays disabled until that refetch says `publishable`.
 - No Shopify request has been made. Copy under the badge says so.
 
-Approve is hidden when `candidateActive === true` (including reopen of an
-already-approved candidate with no approve call in this session). Publish
-is the next step, still manual.
+Approve is shown only when `candidateActive === false` and there is no
+`stale_preview` pipeline blocker. Approve is hidden when
+`candidateActive === true` (including reopen of an already-approved
+candidate with no approve call in this session). Publish is the next step,
+still manual.
 
 ---
 
@@ -839,15 +866,29 @@ Sheet behaviour:
 
 The review page classifies:
 
-- GET preview 200 → pipeline review (approve / publish).
-- GET preview 422 reason `not_a_pipeline_candidate` → legacy AI version.
-  Show title and date, and an **Activate** button that calls the existing
-  activate endpoint. Pipeline rows never reach that button, so the merchant
-  does not hit `pipeline_candidate_requires_approval` from a primary control.
+- GET preview 200 → pipeline review (approve / publish), subject to the
+  inactive stale-blocker rules in sections 6 and 12.
+- GET preview 422 reason `not_a_pipeline_candidate` → this version cannot be
+  reviewed as a valid pipeline candidate. That is the ordinary path for an
+  unmarked legacy AI row. Stage 7's strict parser also returns the same
+  reason for malformed or corrupt pipeline metadata, so the UI must not
+  claim the row is a proven clean legacy version.
 
-If activate still returns that 422 (a race, or a client bug), the alert says
-this version has to be approved in AI Studio, with the same link. It does
-not look like a generic failure.
+For that 422 panel:
+
+- Show title and date.
+- Offer the existing **Activate** action (normal legacy restore).
+- If Activate succeeds: normal restore flow.
+- If Activate returns `validation_error` with reason
+  `not_a_pipeline_candidate`: stop. Do not loop. Do not redirect back to the
+  same broken action. Copy: "This version cannot be activated because its AI
+  version metadata is invalid." No auto mutation. No backend bypass.
+- If Activate returns `pipeline_candidate_requires_approval`: show Studio /
+  pipeline guidance with the review link.
+
+Do not claim that pipeline-marked rows never reach Activate. Malformed
+pipeline metadata can classify into the same 422 branch. Backend fail-closed
+behaviour already blocks unsafe activation.
 
 ---
 
@@ -965,15 +1006,16 @@ to the stable reason (`stale_preview`, `draft_version_stale`,
 | 404 `not_found` | Product, run, or version not found | Not-found state. Do not say which other tenant owns it |
 | 404 `not_found` with `details` `type: "resource"` and `message: "Store"` | That store is not connected | Reselect store. This is not a code named `store_not_found` |
 | 422 `validation_error` | Show `details` field messages | Fix the form. Includes more than 50 ids if a client bug sends them |
-| 409 reason `stale_preview` | This product changed after the preview | Generate fresh preview |
+| 409 reason `stale_preview` | This product changed after the preview | Generate fresh preview (also surfaced as a GET `pipelineBlockers` code before Approve — section 12) |
 | 409 reason `draft_version_stale` | The draft changed after the preview | Generate fresh preview |
-| 422 reason `not_a_pipeline_candidate` | This version is not a pipeline candidate | Legacy panel (section 26) |
+| 422 reason `not_a_pipeline_candidate` | This version cannot be reviewed as a valid pipeline candidate | Section 26 panel. Ordinary legacy Activate may apply; corrupt metadata must fail closed without a loop |
 | 422 reason `pipeline_candidate_requires_approval` | Approve this version in AI Studio | Link to the review route |
 | 409 `pipeline_bulk_run_active` | Another bulk optimization is running | Section 23. This code is stable |
 | 409 `conflict` without those reasons | Someone else updated this product or this run key | Reload. Do not blind-retry with a new key |
-| `ai_provider_not_configured` / unavailable | AI is not configured for this workspace | No retry loop |
+| 503 `ai_error` on single-product POST preview | AI preview is unavailable right now. May show `requestId` | No automatic retry loop. Merchant may click Generate preview again. Do **not** diagnose missing provider config from this code alone. Stage 8 catches provider failures inside prompt execution and re-raises a base `AIError`, so single preview does **not** reliably return `ai_provider_not_configured` |
+| Bulk run / item failure after Stage 9 provider preflight | Show the durable run `failureReason` / item `errorCode` as returned | Stage 9 may terminalize a run when the provider is not configured. That is durable bulk state, not proof that Stage 8 single preview returns `ai_provider_not_configured`. Do not change PromptService or ProductOptimizationService in Stage 10 |
 | reason `synthetic_publish_blocked` | Test previews cannot be published | None. Banner stays |
-| reason `candidate_not_approved` | Approve this version before publishing | Focus approve. Also the normal blocker on a fresh preview |
+| reason `candidate_not_approved` | Approve this version before publishing | Focus approve when Approve is actionable. Also the normal blocker on a fresh preview |
 | run `status: "failed"` with `failureReason` | Show `failureReason` as text on the run | Includes a store that disappeared during a bulk run. That is run state, not an HTTP code `store_not_found` |
 | `internal_error` | Something went wrong. Reference `requestId` | No stack trace |
 
@@ -1143,16 +1185,32 @@ Playwright, route-mocked, unless noted.
 - Changing the store GETs preview again with the new `storeId` and does not
   POST preview. The previous store's `publishable` is not what enables the
   button
-- `stale_preview` keeps the candidate and disables approve until Generate
-  fresh preview
+- GET exact inactive candidate with
+  `pipelineBlockers` including both `candidate_not_approved` and
+  `stale_preview`: stale banner visible; candidate remains visible; Approve
+  is not actionable; Publish disabled; Generate fresh preview visible; zero
+  approve requests. Clicking Generate fresh preview is the only moment
+  `POST /products/{id}/pipeline/preview` runs
+- An apparently fresh inactive candidate that gets 409 `stale_preview` on
+  approve: same stale banner and Generate fresh preview; no blind approve
+  retry
 - A failed approve transport, then a retry, sends the approvalToken again on
   the version URL and adopts `updatedAt` from the 200 body, then GETs
   preview before publish
+- POST pipeline preview returns 503 with `code: "ai_error"` and a
+  `requestId`: safe "AI preview is unavailable right now" copy; `requestId`
+  may be shown; no automatic retry loop; no fabricated "provider is not
+  configured" diagnosis; merchant can explicitly click Generate preview
+  again
 - Synthetic fixture: banner "Test AI preview", publish disabled; a forced
   publish error reason `synthetic_publish_blocked` matches the copy
 - Unknown product: not-found
-- GET preview 422 reason `not_a_pipeline_candidate` shows the legacy panel
-  and Activate, not pipeline Approve
+- GET preview 422 reason `not_a_pipeline_candidate` shows the non-pipeline
+  panel with Activate available (ordinary legacy path), not pipeline Approve
+- Activate returning `validation_error` reason `not_a_pipeline_candidate`
+  shows the invalid-metadata copy and does not loop
+- Activate returning `pipeline_candidate_requires_approval` shows Studio
+  guidance
 - Admin sees the nav item
 - Member/viewer fixture: no nav item; direct URL shows the permission panel
   and does not call preview
@@ -1278,6 +1336,9 @@ migration `0035`.
 | Publish sent with inactive approvalToken | Publish only when `candidateActive` and `currentPublishToken` come from approve response and/or active GET |
 | Already-approved reopen has no publish token | Active GET sets `currentPublishToken` from `approvalExpectedUpdatedAt`; Approve stays hidden |
 | Lost publish token after approve | Retry approve; adopt `updatedAt`; GET may promote a later active token |
+| GET already says stale but Approve still enabled | Inactive GET with `stale_preview` blocker disables Approve; no doomed POST |
+| Concurrent stale after a fresh GET | 409 `stale_preview` / `draft_version_stale` still opens section 12 recovery |
+| Single preview treated as `ai_provider_not_configured` | Stage 8 single preview surfaces `ai_error` (503); bulk provider preflight stays Stage 9 durable state |
 | Stale pre-approval `publishable: false` left on screen | Approve is followed by GET of that candidate. Publish waits on that GET |
 | Readiness from the wrong store | Candidate query key includes `storeId`. Store change refetches GET and hides the previous readiness |
 | Exact candidate lost on refresh | After generate, `router.replace` with `?candidate=`; reload GETs that id and does not POST preview |
@@ -1313,6 +1374,11 @@ migration `0035`.
 5. **Stage 9 completion doc** still mentions older pre-remediation test
    counts. Refreshing that doc is not part of Stage 10 planning or the
    Studio implementation.
+6. **`not_a_pipeline_candidate` is not proof of a clean legacy version.**
+   Stage 7 returns the same reason for unmarked legacy AI rows and for
+   malformed pipeline metadata. The UI offers Activate for the ordinary
+   case, and fail-closed copy without a loop if Activate returns the same
+   reason. Backend already blocks unsafe activation.
 
 No blocker, high, or medium items remain in this plan.
 
@@ -1345,38 +1411,25 @@ end-to-end review when Claude becomes available again.
 
 ## Self-review
 
-Reviewed against the active-candidate / quality / accessibility remediation
-list, and against prior wire-contract fixes that must not regress.
+Reviewed against the final stale-candidate / provider-error / classification
+remediation list, and against prior wire and reopen fixes that must not
+regress.
 
 | Attack | Result |
 |---|---|
-| Active approved candidate reopened with no publish token | Closed: active GET sets `currentPublishToken` from `approvalExpectedUpdatedAt` |
-| Approve hidden + Publish disabled forever | Closed: Publish does not require an approve call in this session |
-| Active GET token treated as pre-approval T0 | Closed: meaning follows `candidateActive` (section 11) |
-| Publishing an inactive candidate with T0 | Closed: Publish requires `candidateActive` and `currentPublishToken` |
-| Newer current product token ignored after approval | Closed: active GET may promote T2 |
-| Reload generating a duplicate candidate | Closed: `router.replace` with `?candidate=`; reload GETs only |
-| Exact candidate identity lost after refresh | Closed: durable query param |
-| Quality baseline described as current | Closed: Original baseline score / version |
-| Quality baseline described as previous AI version | Closed: original snapshot only |
-| Delta described as change vs current | Closed: Change vs original / original baseline copy |
-| Fake or incomplete `role="tab"` | Closed: `aria-pressed` buttons only |
-| Inaccessible Drafts/Published switching | Closed: Tab / Enter / Space; pressed state exposed |
-| Wrong approve URL | Closed: `POST .../pipeline/versions/{versionId}/approve` |
-| `candidateVersionId` in the approve body | Closed: body is `{ expectedUpdatedAt }` only |
-| Wrong publish URL | Closed: `POST .../pipeline/versions/{versionId}/publish` |
-| `candidateVersionId` in the publish body | Closed: body is `{ storeId, expectedUpdatedAt }` only |
-| Version ids expected on the publish response | Closed: `ShopifyPublishResult` only |
-| Stale pre-approve `publishable` used after approval | Closed: Publish waits on the follow-up GET |
-| Readiness for the wrong store | Closed: query key includes `storeId` |
-| Store switch recomposes by POST preview | Closed: store switch is GET of the same candidate |
-| `item.status` instead of `item.state` | Closed: `PipelineBulkItemState` |
-| Published-only bulk catalogue | Closed: Drafts and Published views, one 50-cap set |
-| `pageSize` sent on the wire | Closed: `page` and `size` |
-| Nested `candidate` / invented `source` | Closed: flat DTO; label AI candidate |
-| Fictional image statuses / `failureReason` | Closed: Stage 6 vocabulary + `errorCode` |
-| Quality breakdown as a number map | Closed: nested Stage 5 shape |
-| Alt text read from `proposal` | Closed: under `imageAnalysis` |
+| GET already says stale but Approve still enabled | Closed: inactive GET `stale_preview` blocker disables Approve |
+| Stale candidate produces a guaranteed failing POST | Closed: no approve when that blocker is present |
+| Client reimplements staleness | Closed: reads only `pipelineBlockers` code |
+| Race-created stale preview no longer handled | Closed: section 12 path B keeps 409 recovery |
+| `ai_provider_not_configured` falsely promised by single preview | Closed: Stage 8 single preview uses `ai_error` |
+| `ai_error` missing from single-preview UX | Closed: section 29 and Playwright case |
+| Bulk provider semantics confused with HTTP preview | Closed: Stage 9 durable preflight kept separate |
+| Corrupt pipeline metadata labelled guaranteed legacy | Closed: section 26 softens the claim |
+| Corrupt candidate Activate loops forever | Closed: fail-closed copy; no loop |
+| Active-candidate token regression | Closed: sections 6 and 11 unchanged in intent |
+| Original-baseline wording regression | Closed: section 8 |
+| Accessibility regression | Closed: `aria-pressed` buttons only |
+| Exact routes/bodies / item.state / drafts+published | Closed: prior remediations preserved |
 | Backend / Stage 11 / deployment creep | Closed: docs only; no implementation |
 | Legacy optimize still bypasses review | Closed: removed from primary UI; backend route kept |
 | Auto approve / auto publish | Closed: both require a confirm |
