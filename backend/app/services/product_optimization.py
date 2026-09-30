@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.ai.exceptions import AIError
 from app.core.exceptions import NotFoundError, ValidationError
@@ -384,7 +385,16 @@ class ProductOptimizationService(BaseService):
             prompt_execution_id=None,
             created_by_user_id=None,
         )
+        # Review finding G-2. Recording the snapshot moves only the AI cache
+        # bookkeeping (`ai_version` None -> 1); the merchant-visible content is
+        # exactly what it was. Keeping `updated_at` means the first preview —
+        # single or bulk — does not invalidate the token an open draft editor
+        # holds, so its next save is not a surprise 409. Setting the column
+        # explicitly is what stops the `onupdate=now()` default firing.
+        preserved_token = product.updated_at
         self._apply_active_version(product, original)
+        product.updated_at = preserved_token
+        flag_modified(product, "updated_at")
         await self.flush()
         return original
 
