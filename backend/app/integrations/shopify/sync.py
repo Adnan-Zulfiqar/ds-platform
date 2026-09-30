@@ -11,8 +11,9 @@ from typing import Any, Final
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.core.sanitize import sanitize_html
 from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.shopify.client import ShopifyClient
@@ -22,11 +23,11 @@ from app.models.order import (
     OrderSource,
     PaymentStatus,
 )
-from app.models.product import Product
-from app.models.shopify import ListingSyncStatus
+from app.models.product import Product, ProductVersion
+from app.models.shopify import ListingContentSource, ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform
 from app.repositories.order import OrderRepository
-from app.repositories.product import ProductRepository
+from app.repositories.product import ProductRepository, ProductVersionRepository
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
@@ -47,11 +48,36 @@ class ShopifyListingOverlay:
 
     SEO, tags, images, variants, and handle stay on the merchant Product.
     The pipeline sanitizes `body_html` before constructing this; the
-    publisher must not sanitize again.
+    publisher must not sanitize again. `version_id` is the approved
+    `ProductVersion` the text came from — recorded on the listing so later
+    ordinary publishes know AI text is live.
     """
 
     title: str
     body_html: str
+    version_id: uuid.UUID
+
+
+def overlay_from_published_version(version: ProductVersion) -> ShopifyListingOverlay:
+    """Rebuild the overlay for an AI version that is already live.
+
+    `ProductVersion.content` is immutable, and this exact text passed the
+    Stage 7 publish checks when it first went live, so rebuilding it is a
+    re-send of what Shopify already shows — not a new approval.
+    """
+    content = version.content if isinstance(version.content, dict) else {}
+    title = content.get("title")
+    if type(title) is not str or not title.strip():
+        # Fail closed: an unreadable live version must never degrade into
+        # "send the draft text instead".
+        raise ConflictError(
+            "The AI version live on Shopify can no longer be read. "
+            "Choose explicitly whether to replace it with your draft text.",
+            details={"reason": "published_ai_content_unavailable"},
+        )
+    description = content.get("description")
+    body_html = sanitize_html(description if isinstance(description, str) else "") or ""
+    return ShopifyListingOverlay(title=title, body_html=body_html, version_id=version.id)
 
 
 def _apply_listing_overlay(
@@ -80,6 +106,7 @@ class ShopifySyncService(BaseService):
         super().__init__(session)
         self.shopify = ShopifyService(session)
         self.products = ProductRepository(session)
+        self.versions = ProductVersionRepository(session)
         self.listings = StoreListingRepository(session)
         self.orders = OrderRepository(session)
         self.stores = StoreRepository(session)
@@ -187,8 +214,18 @@ class ShopifySyncService(BaseService):
         product_id: uuid.UUID,
         expected_updated_at: datetime | None = None,
         listing_overlay: ShopifyListingOverlay | None = None,
+        replace_ai_content: bool = False,
     ) -> dict[str, Any]:
         """Create or update a Shopify product for a DropPilot catalogue product.
+
+        Content source (review finding E-1). Approved AI text that is live on
+        this store is never silently replaced. When the listing records
+        ``content_source = ai_version`` and no new overlay is supplied, the
+        live AI title/description are re-sent from that immutable version —
+        for the editor's Publish button, for Celery, and for every retry
+        alike. Only ``replace_ai_content=True``, which the HTTP layer sets
+        from an explicit merchant confirmation, sends the draft text instead.
+        Celery callers have no way to pass it.
 
         Ordering (UX-L2B-R2):
 
@@ -233,6 +270,12 @@ class ShopifySyncService(BaseService):
 
         product = await self._load_product(product_id)
         listing = await self.listings.get_for_product(store_id=store_id, product_id=product_id)
+        listing_overlay, content_source = await self._resolve_listing_content(
+            listing=listing,
+            product_id=product_id,
+            listing_overlay=listing_overlay,
+            replace_ai_content=replace_ai_content,
+        )
         # Provider client only after auth, ownership, version, readiness, lock.
         client, connection = await self.shopify.client_for_store(store_id)
 
@@ -373,6 +416,10 @@ class ShopifySyncService(BaseService):
                 "status": ListingSyncStatus.SYNCED,
                 "last_synced_at": now,
                 "last_error": None,
+                "content_source": content_source,
+                "content_version_id": (
+                    listing_overlay.version_id if listing_overlay is not None else None
+                ),
             }
 
             if listing is None:
@@ -395,6 +442,10 @@ class ShopifySyncService(BaseService):
                 "admin_url": admin_url,
                 "online_store_published": online_store_published,
                 "updated": True,
+                "content_source": content_source.value,
+                "content_version_id": (
+                    str(listing_overlay.version_id) if listing_overlay is not None else None
+                ),
             }
         except Exception as exc:
             if listing is not None:
@@ -406,6 +457,53 @@ class ShopifySyncService(BaseService):
                 )
             await self.shopify.mark_error(connection, str(exc))
             raise
+
+    async def _resolve_listing_content(
+        self,
+        *,
+        listing: StoreListing | None,
+        product_id: uuid.UUID,
+        listing_overlay: ShopifyListingOverlay | None,
+        replace_ai_content: bool,
+    ) -> tuple[ShopifyListingOverlay | None, ListingContentSource]:
+        """Decide which title/description this publish sends. Runs under the lock."""
+        if listing_overlay is not None:
+            # A pipeline publish: the merchant explicitly chose this version.
+            return listing_overlay, ListingContentSource.AI_VERSION
+        live_ai = (
+            listing is not None
+            and listing.content_source is ListingContentSource.AI_VERSION
+            and listing.content_version_id is not None
+        )
+        if not live_ai:
+            return None, ListingContentSource.PRODUCT
+        assert listing is not None and listing.content_version_id is not None
+        if replace_ai_content:
+            self.logger.info(
+                "shopify_publish_replaces_ai_content",
+                product_id=str(product_id),
+                listing_id=str(listing.id),
+                replaced_version_id=str(listing.content_version_id),
+            )
+            return None, ListingContentSource.PRODUCT
+        version = await self.versions.get_by_id_for_product(
+            product_id=product_id,
+            version_id=listing.content_version_id,
+            populate_existing=True,
+        )
+        if version is None:
+            raise ConflictError(
+                "The AI version live on Shopify can no longer be read. "
+                "Choose explicitly whether to replace it with your draft text.",
+                details={"reason": "published_ai_content_unavailable"},
+            )
+        self.logger.info(
+            "shopify_publish_preserves_ai_content",
+            product_id=str(product_id),
+            listing_id=str(listing.id),
+            version_id=str(version.id),
+        )
+        return overlay_from_published_version(version), ListingContentSource.AI_VERSION
 
     @staticmethod
     async def _create_or_adopt(

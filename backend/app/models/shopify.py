@@ -15,9 +15,11 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -38,6 +40,20 @@ class ListingSyncStatus(StrEnum):
     SYNCED = "synced"
     ERROR = "error"
     REMOVED = "removed"
+
+
+class ListingContentSource(StrEnum):
+    """Where the title and description live on the channel come from.
+
+    ``product`` is the merchant's own draft text. ``ai_version`` means an
+    approved pipeline ``ProductVersion`` was published through the overlay
+    and is what the storefront shows. The distinction exists so an ordinary
+    publish can never silently put the draft text back over approved AI text
+    (review finding E-1): only an explicit merchant choice may do that.
+    """
+
+    PRODUCT = "product"
+    AI_VERSION = "ai_version"
 
 
 class ShopifyConnection(IdentifiedBase):
@@ -122,6 +138,18 @@ class StoreListing(TenantScopedBase):
             "product_id",
             "status",
         ),
+        # The published AI version must belong to this listing's own product
+        # and tenant. Enforced by the database, not only by the publisher.
+        ForeignKeyConstraint(
+            ["tenant_id", "product_id", "content_version_id"],
+            ["product_versions.tenant_id", "product_versions.product_id", "product_versions.id"],
+            name="fk_store_listings_content_version_product_tenant",
+        ),
+        CheckConstraint(
+            "(content_source = 'ai_version' AND content_version_id IS NOT NULL) "
+            "OR (content_source = 'product' AND content_version_id IS NULL)",
+            name="content_source_version",
+        ),
     )
 
     store_id: Mapped[uuid.UUID] = mapped_column(
@@ -170,8 +198,28 @@ class StoreListing(TenantScopedBase):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Which text the channel currently shows. Written only on a successful
+    #: publish, so a failed attempt never changes what the merchant is told
+    #: is live.
+    content_source: Mapped[ListingContentSource] = mapped_column(
+        Enum(
+            ListingContentSource,
+            name="listing_content_source",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+        default=ListingContentSource.PRODUCT,
+        server_default=ListingContentSource.PRODUCT.value,
+    )
+    #: The approved pipeline version whose title/description is live when
+    #: ``content_source`` is ``ai_version``; otherwise NULL.
+    content_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
+
 
 __all__ = [
+    "ListingContentSource",
     "ListingSyncStatus",
     "ShopifyConnection",
     "StoreListing",
