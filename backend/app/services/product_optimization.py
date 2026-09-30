@@ -35,6 +35,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.ai.exceptions import AIError
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.sanitize import html_to_plain_text
+from app.domain.pipeline_metadata import content_has_any_pipeline_metadata_key
 from app.models.ai_prompt import PromptExecution, PromptExecutionStatus
 from app.models.product import Product, ProductAIStatus, ProductVersion, ProductVersionSource
 from app.repositories.product import ProductRepository, ProductVersionRepository
@@ -54,11 +55,6 @@ _SEO_PROMPT = "seo_optimizer"
 #: large prompt.
 _MAX_FEATURES_CHARS = 2000
 
-_PIPELINE_METADATA_KEYS = (
-    "pipelineCandidateVersion",
-    "pipelineSourceUpdatedAt",
-    "isSynthetic",
-)
 _REASON_NOT_A_PIPELINE_CANDIDATE = "not_a_pipeline_candidate"
 _REASON_PIPELINE_REQUIRES_APPROVAL = "pipeline_candidate_requires_approval"
 
@@ -67,20 +63,6 @@ _REASON_PIPELINE_REQUIRES_APPROVAL = "pipeline_candidate_requires_approval"
 class PipelineCandidateMetadata:
     source_updated_at: datetime
     is_synthetic: bool
-
-
-def content_has_any_pipeline_metadata_key(content: object) -> bool:
-    """True when any pipeline key is present, even if the values are garbage.
-
-    `activate_version` uses this to split unmarked legacy/ORIGINAL rows from
-    a corrupt pipeline object. Type checking belongs in
-    `parse_pipeline_candidate_metadata`, not here — a bool `True` marker
-    must still be treated as a pipeline row so it cannot be activated as
-    if it were a legacy optimize version (`True == 1` in Python).
-    """
-    if not isinstance(content, dict):
-        return False
-    return any(key in content for key in _PIPELINE_METADATA_KEYS)
 
 
 def parse_pipeline_candidate_metadata(content: object) -> PipelineCandidateMetadata:

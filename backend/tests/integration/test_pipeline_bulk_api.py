@@ -353,7 +353,7 @@ class TestStart:
         assert first.status_code == 202
         second = await client.post(
             RUNS,
-            json={"productIds": [str(product.id)], "idempotencyKey": "clash", "tone": "casual"},
+            json={"productIds": [str(product.id)], "idempotencyKey": "clash", "tone": "friendly"},
             headers=headers,
         )
         assert second.status_code == 409

@@ -9,12 +9,13 @@ from pydantic import Field
 
 from app.models.pipeline_bulk import PipelineBulkItemState, PipelineBulkRunStatus
 from app.schemas.base import CamelCaseModel
+from app.schemas.product import AIToneName
 
 
 class PipelineBulkRunCreateRequest(CamelCaseModel):
     product_ids: list[uuid.UUID] = Field(min_length=1)
     idempotency_key: str = Field(min_length=1, max_length=128)
-    tone: str = Field(default="professional", min_length=1, max_length=64)
+    tone: AIToneName = "professional"
     store_id: uuid.UUID | None = None
 
 
