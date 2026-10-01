@@ -221,11 +221,12 @@ async function fetchProductVersions(id: string): Promise<Page<ProductVersion>> {
 /** Version history for a product's AI optimisation — newest first. */
 export function useProductVersions(
   id: string,
+  options: { enabled?: boolean } = {},
 ): UseQueryResult<Page<ProductVersion>> {
   return useQuery({
     queryKey: productKeys.versions(id),
     queryFn: () => fetchProductVersions(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options.enabled ?? true),
   });
 }
 
@@ -256,6 +257,13 @@ export function useOptimizeProduct(productId: string) {
         queryKey: productKeys.versions(productId),
       });
       void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+      // The draft editor reads the same Product row through `draftKeys`.
+      // This changes its `updatedAt`, so the draft cache must not keep the
+      // old token (review finding I-1). An open editor adopts the new token
+      // from the response itself; a refetch alone never re-hydrates it.
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.detail(productId),
+      });
     },
   });
 }
@@ -264,7 +272,16 @@ export function useOptimizeProduct(productId: string) {
  * Activate a version — including the original — rolling the product back
  * or forward to it.
  */
-export function useActivateProductVersion(productId: string) {
+export function useActivateProductVersion(
+  productId: string,
+  options: {
+    /** Runs even if the calling component unmounted while the request was in
+     * flight (e.g. the history sheet was closed). A `mutate(..., { onSuccess })`
+     * callback would silently not run then, and an open editor would miss the
+     * new token (review finding I-1). */
+    onActivated?: (product: ProductDetail) => void;
+  } = {},
+) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -274,7 +291,8 @@ export function useActivateProductVersion(productId: string) {
       );
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (product) => {
+      options.onActivated?.(product);
       void queryClient.invalidateQueries({
         queryKey: productKeys.detail(productId),
       });
@@ -282,6 +300,13 @@ export function useActivateProductVersion(productId: string) {
         queryKey: productKeys.versions(productId),
       });
       void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
+      // The draft editor reads the same Product row through `draftKeys`.
+      // This changes its `updatedAt`, so the draft cache must not keep the
+      // old token (review finding I-1). An open editor adopts the new token
+      // from the response itself; a refetch alone never re-hydrates it.
+      void queryClient.invalidateQueries({
+        queryKey: draftKeys.detail(productId),
+      });
     },
   });
 }

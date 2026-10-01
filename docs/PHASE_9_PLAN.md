@@ -431,10 +431,9 @@ the local `.env`-exists failure did not reproduce there). Merged into
 run 35392825501 10/10. Stage 5 is COMPLETE / MERGED / GREEN. Production
 undeployed — `main` unchanged.
 
-**CLAUDE RETURN REVIEW CHECKPOINT:** All commits from the Stage 5
-takeover onward require a fresh Claude end-to-end review when Claude
-becomes available again. Cursor review of the takeover work is not a
-substitute.
+**CLAUDE RETURN REVIEW CHECKPOINT:** done 2026-09-30 — see the end of
+this section and
+[REVIEW_REMEDIATION_STAGE_5_9.md](REVIEW_REMEDIATION_STAGE_5_9.md).
 
 ### Stage 6 — Image analysis: COMPLETE / MERGED / GREEN
 
@@ -448,7 +447,7 @@ Reviewed head `ae67907faf1abda197c76e441d62c501ad6bbeae`. Merged into
 parents `979e7cca`, `ae67907`). PR CI 35447520423 10/10; post-merge develop
 CI 35449956506 10/10. Migration `0033`. Pillow `12.3.0`. Production
 undeployed — `main` unchanged. `StubProvider` only — no live vision-model
-quality claim. Claude has not reviewed Stage 6.
+quality claim. Claude return review 2026-09-30 accepted Stage 6; residuals remediated (B-3).
 
 Deterministic blur (variance of Laplacian) and byte-identical duplicates
 (Phase A then B); captions/alt text only through `analyse_image`;
@@ -471,8 +470,8 @@ parents `85e11772`, `d42c1a46`). PR CI 35472626657 10/10; post-merge
 develop CI 35474423524 10/10. Independent implementation review PASS
 (BLOCKER 0, HIGH 0, MEDIUM 0). Production undeployed — `main` unchanged.
 Stages 8–11 not started. No new HTTP route, no frontend, no migration,
-no Celery, no deploy. Alembic head remains `0033`. Claude has not
-reviewed Stage 7.
+no Celery, no deploy. Alembic head remained `0033`. Claude return review
+2026-09-30 accepted Stage 7 in code; see E-1 below.
 
 `ProductPipelineService` (preview / get_preview / approve / publish) and
 a private `_generate_version` core are in place. `generate_candidate`
@@ -491,7 +490,7 @@ is fail-closed (exact int `1`, offset-aware timestamp, exact bool
 `isSynthetic`). Synthetic or unverified provenance cannot reach a sales
 channel. Title/body length is fail-closed (512 approve / 255 publish /
 64_000 body). Publish is an operation, not a durable StoreListing
-provenance. `pipelineSourceUpdatedAt` is an inactive-candidate approval
+provenance — superseded by review finding E-1: the listing now records `content_source` and the live version, and ordinary publishes keep it. `pipelineSourceUpdatedAt` is an inactive-candidate approval
 fingerprint only.
 
 ### Stage 8 — API: COMPLETE / MERGED / GREEN
@@ -504,7 +503,7 @@ Reviewed head `f88c34c89ad030e1fe11b1ac44aaf0965cd65ae6`. Merged into
 `develop` as `91a7069e73957822550ac47dc14fab0c30d1608a`. Post-merge CI
 35529859035 10/10. Production undeployed — `main` unchanged. No migration
 (Alembic head was still `0033` at merge). No frontend. No Celery. Claude
-has not reviewed Stage 8.
+return review 2026-09-30 accepted Stage 8.
 
 Four `RequireAdmin` routes on `/api/v1/products`: POST
 `/{id}/pipeline/preview` (201), GET
@@ -516,16 +515,16 @@ Lost-approve retry with T0 is 200 no-op returning current T1. NULL/empty
 `ProductImage.analysis` projects as `analysis: null`. Existing Shopify
 publisher only; AI SEO is not overlaid.
 
-### Stage 9 — Celery bulk: COMPLETE / UNMERGED / AWAITING INDEPENDENT REVIEW
+### Stage 9 — Celery bulk: COMPLETE / MERGED / GREEN
 
 Contract: [PHASE_9_STAGE_9_PLAN.md](PHASE_9_STAGE_9_PLAN.md). Report:
 [PHASE_9_STAGE_9_COMPLETION.md](PHASE_9_STAGE_9_COMPLETION.md).
 
 Plan PR [#23](https://github.com/Adnan-Zulfiqar/ds-platform/pull/23), accepted
 head `5e453b7`, merge `e65b2f5`, post-merge CI 35619263921 10/10.
-Implementation on `feat/phase-9-stage-9-bulk-ai` from that merge. Not merged.
-Stages 10–11 not started. Production undeployed — `main` unchanged. Migration
-`0034`. No frontend. No deploy. Claude has not reviewed Stage 9.
+Implementation PR [#24](https://github.com/Adnan-Zulfiqar/ds-platform/pull/24) merged into `develop` as `72e7692`; post-merge CI 35656740281 10/10.
+Stage 10 plan only; Stage 11 not started. Production undeployed — `main` unchanged. Migration
+`0034`. No frontend. No deploy. Claude return review 2026-09-30 accepted Stage 9 in code; H-1..H-5, A-2, B-2, D-1 remediated.
 
 One sequential Celery task generates inactive pipeline preview candidates
 only. Durable progress in PostgreSQL. One-active-run is a partial unique
@@ -534,6 +533,13 @@ classified failure transaction, ConflictError task retry, retries 0/1/2
 re-raise and ≥3 owner-fail-and-return. Real RabbitMQ harness plus duplicate
 delivery. Provider retryability is not claimed.
 
-CLAUDE RETURN REVIEW CHECKPOINT:
-All commits from Stage 5 takeover onward require a fresh Claude
-end-to-end review when Claude becomes available again.
+Review remediation (finding H-3 onward) changes this: the task now has a
+1500 s / 1680 s limit (under RabbitMQ's 30-minute consumer timeout) and
+yields to a continuation message instead of failing; an unexpected error
+fails its item, not the run; cancel never waits on the worker.
+
+CLAUDE RETURN REVIEW CHECKPOINT — DONE 2026-09-30.
+All commits from the Stage 5 takeover onward received the fresh Claude
+end-to-end review. Findings and their status:
+[REVIEW_REMEDIATION_STAGE_5_9.md](REVIEW_REMEDIATION_STAGE_5_9.md). The
+remediation itself needs an independent review before it merges.

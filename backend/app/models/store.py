@@ -64,6 +64,9 @@ class Store(TenantScopedBase):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "slug", name="uq_stores_tenant_slug"),
+        # Redundant as identity; exists so tenant-owned rows can reference a
+        # store with a composite (tenant_id, store_id) FK (review finding B-2).
+        UniqueConstraint("tenant_id", "id", name="uq_stores_tenant_id_id"),
         Index("ix_stores_tenant_status", "tenant_id", "status"),
         Index("ix_stores_tenant_platform", "tenant_id", "platform"),
     )

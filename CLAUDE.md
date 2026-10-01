@@ -117,10 +117,22 @@ cross-tenant data leak, which is the worst failure mode this platform has.
 - `sort_by` and filter fields are validated against a **per-model allowlist**.
   Resolving a client-supplied string to a column without one is an injection
   vector.
-- Only two repositories are unscoped, both documented in their own modules:
-  `TenantRepository` (the tenants table sits above the boundary) and
-  `AuthenticationUserRepository` (login must find a user before a tenant is
-  known). **Do not add a third without explicit approval.**
+- Unscoped data access is a short, closed list, each documented in its own
+  module (review finding A-1 corrected the earlier "only two"):
+  - request path: `TenantRepository` (the tenants table sits above the
+    boundary) and `AuthenticationUserRepository` (login must find a user
+    before a tenant is known);
+  - platform reference data, not tenant-owned: `RoleRepository`,
+    `PromptRepository`;
+  - cross-tenant maintenance that runs before any tenant context:
+    `ShopifyMaintenanceRepository`, `IntegrationMaintenanceRepository`,
+    `EbayComplianceLedgerRepository`;
+  - single-question lookups that return ids only, never a renderable row:
+    `RuleApplicationTenantLookup`, `PipelineBulkRunTenantLookup`,
+    `PipelineBulkRunSweep`.
+
+  **Do not add to this list without explicit approval**, and never on a
+  request path.
 - If an unscoped query is genuinely required, put it in a separate,
   explicitly-named class. Never add a bypass method to a scoped repository —
   it is one autocomplete away from being used on an ordinary request path.
@@ -229,8 +241,11 @@ Full detail: [docs/Authentication.md](docs/Authentication.md).
 
 ## 10. Git workflow
 
-- `main` is always deployable. Branch for work: `feat/`, `fix/`, `chore/`,
-  `docs/`.
+- `develop` is the application integration branch: feature, fix and docs
+  PRs target it. `main` carries the Agent Bridge / repository
+  infrastructure and is **not** the application source branch; never merge
+  `develop` into `main` without an explicit owner decision. Branch for work:
+  `feat/`, `fix/`, `chore/`, `docs/`.
 - Conventional Commits. Imperative mood. The body explains *why*.
 - Small, single-purpose pull requests. A 2,000-line PR gets rubber-stamped; a
   200-line PR gets reviewed.
@@ -282,9 +297,10 @@ Implement **only** the current phase. Building ahead is not helpfulness — it
 creates code nobody asked for, that nobody reviewed against a requirement, and
 that constrains the design of the phase it pre-empts.
 
-Reserved modules exist for exactly this reason: `app/api/v1/products/` and its
-siblings hold a registered router and no endpoints. Leave them that way until
-their phase.
+Reserved modules exist for exactly this reason: a module created ahead of its
+phase holds a registered router and no endpoints. Leave it that way until its
+phase. (`app/api/v1/products/` was the original example; its phases have
+since shipped and it now carries the catalogue and AI pipeline routes.)
 
 ### Per-phase sequence
 

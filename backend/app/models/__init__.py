@@ -58,6 +58,7 @@ from app.models.order import (
 from app.models.pipeline_bulk import (
     PipelineBulkItemState,
     PipelineBulkRun,
+    PipelineBulkRunCancelRequest,
     PipelineBulkRunItem,
     PipelineBulkRunStatus,
 )
@@ -133,6 +134,7 @@ __all__ = [
     "PaymentStatus",
     "PipelineBulkItemState",
     "PipelineBulkRun",
+    "PipelineBulkRunCancelRequest",
     "PipelineBulkRunItem",
     "PipelineBulkRunStatus",
     "PriceChange",

@@ -42,11 +42,14 @@ class CountingPublishShopify:
         self.products_by_id: dict[tuple[str, str], dict[str, Any]] = {}
         self.creates: list[dict[str, Any]] = []
         self.puts: list[str] = []
+        #: Product bodies sent by PUT, in order — what an update actually wrote.
+        self.put_bodies: list[dict[str, Any]] = []
         self.gets: list[dict[str, Any]] = []
         self._next_id = 9000
         self.hold_first_create: asyncio.Event | None = None
         self.first_create_reached: asyncio.Event | None = None
         self.fail_next_create_with: Exception | None = None
+        self.fail_next_put_with: Exception | None = None
         self.drop_create_response: bool = False
         self._create_hold_consumed = False
 
@@ -115,11 +118,16 @@ class _FakeRestClient:
 
     async def put(self, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
         self.wire.puts.append(path)
+        if self.wire.fail_next_put_with is not None:
+            exc = self.wire.fail_next_put_with
+            self.wire.fail_next_put_with = None
+            raise exc
         external_id = path.strip("/").split("/")[1].removesuffix(".json")
         existing = self.wire.products_by_id.get((self.shop_domain, external_id))
         if existing is None:
             raise AssertionError(f"PUT for unknown product {external_id}")
         body = (json_body or {}).get("product") or {}
+        self.wire.put_bodies.append(dict(body))
         existing = {**existing, **{k: v for k, v in body.items() if k != "variants"}}
         self.wire.products_by_id[(self.shop_domain, external_id)] = existing
         handle = str(existing.get("handle") or "")

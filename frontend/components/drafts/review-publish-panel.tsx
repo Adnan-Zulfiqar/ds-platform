@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Store } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import type { EditorTab } from "@/components/drafts/editor-header";
 import type { ShopifyState } from "@/lib/editor-lifecycle";
@@ -53,6 +61,12 @@ type ReviewPublishPanelProps = {
   /** A conflict is unresolved; saving (and therefore publishing) is paused. */
   hasEditingConflict: boolean;
   onPublish: () => void;
+  /** Set when the selected store shows an approved AI version's title and
+   * description (review finding E-1). Ordinary publishing keeps that text;
+   * `onReplaceAiContent` is the explicit, confirmed way to send the draft
+   * text instead. */
+  liveAiContent: { versionNumber: number | null } | null;
+  onReplaceAiContent: () => void;
   onOpenSection: (tab: EditorTab) => void;
   onContinueEditing: () => void;
 };
@@ -131,10 +145,13 @@ export function ReviewPublishPanel({
   shopify,
   hasEditingConflict,
   onPublish,
+  liveAiContent,
+  onReplaceAiContent,
   onOpenSection,
   onContinueEditing,
 }: ReviewPublishPanelProps) {
   const summaryRef = useRef<HTMLDivElement | null>(null);
+  const [replaceDialogOpen, setReplaceDialogOpen] = useState(false);
   const blockers = readiness?.blockers ?? [];
   const recommendations = readiness?.recommendations ?? [];
   const hasStore = Boolean(storeId);
@@ -291,6 +308,73 @@ export function ReviewPublishPanel({
         ) : null}
       </div>
 
+      {liveAiContent && hasStore ? (
+        <div
+          className="rounded-md border border-border/80 bg-background p-3"
+          data-testid="publish-ai-content-live"
+        >
+          <p className="text-sm font-medium text-foreground">
+            Shopify shows your approved AI text
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The title and description on this store come from approved AI
+            version{" "}
+            {liveAiContent.versionNumber !== null ? liveAiContent.versionNumber : "(unknown)"}.
+            Publishing keeps them. Your other changes are still sent, and your
+            draft text is unchanged.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-3 h-11 min-h-11"
+            disabled={!canPublish || publishPending}
+            onClick={() => setReplaceDialogOpen(true)}
+            data-testid="replace-ai-content-open"
+          >
+            Use my draft text instead…
+          </Button>
+        </div>
+      ) : null}
+
+      <Dialog open={replaceDialogOpen} onOpenChange={setReplaceDialogOpen}>
+        <DialogContent data-testid="replace-ai-content-dialog">
+          <DialogHeader>
+            <DialogTitle>Replace the AI text on Shopify?</DialogTitle>
+            <DialogDescription>
+              Shopify will show your draft title and description instead of
+              approved AI version{" "}
+              {liveAiContent?.versionNumber !== null && liveAiContent?.versionNumber !== undefined
+                ? liveAiContent.versionNumber
+                : "(unknown)"}
+              . The AI version stays in your version history.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-11 min-h-11"
+              onClick={() => setReplaceDialogOpen(false)}
+              data-testid="replace-ai-content-cancel"
+            >
+              Keep AI text
+            </Button>
+            <Button
+              type="button"
+              className="h-11 min-h-11"
+              disabled={!canPublish || publishPending}
+              onClick={() => {
+                setReplaceDialogOpen(false);
+                onReplaceAiContent();
+              }}
+              data-testid="replace-ai-content-confirm"
+            >
+              Replace and publish
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {saveFailureReason ? (
         <Alert variant="destructive" data-testid="publish-save-failure">
           <AlertDescription>
@@ -369,7 +453,13 @@ export function ReviewPublishPanel({
           ) : (
             <Store className="mr-1.5 h-4 w-4" aria-hidden />
           )}
-          {publishPending ? "Publishing…" : onShopify ? "Update Shopify" : "Publish to Store"}
+          {publishPending
+            ? "Publishing…"
+            : liveAiContent && hasStore
+              ? "Update Shopify (keep AI text)"
+              : onShopify
+                ? "Update Shopify"
+                : "Publish to Store"}
         </Button>
         {!canPublish ? (
           <p

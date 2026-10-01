@@ -10,6 +10,10 @@ venv/
 htmlcov/
 .coverage
 coverage.xml
+# Celery beat's schedule database (dbm/sqlite, plus -shm/-wal siblings).
+# Generated at runtime; the compose files now write it to /tmp, but an older
+# container or a host `celery beat` still drops it in the working directory.
+celerybeat-schedule*
 
 # ---- Node ----
 node_modules/

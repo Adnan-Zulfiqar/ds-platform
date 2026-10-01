@@ -17,20 +17,40 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useActivateProductVersion, useProductVersions } from "@/services/products";
-import type { ProductVersion } from "@/types/api";
+import type { ProductDetail, ProductVersion } from "@/types/api";
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
 }
 
+type ActivationOptions = {
+  /** Why Activate cannot run right now (e.g. unsaved editor changes). */
+  activationBlockedReason?: string | null;
+  /** Called as an activation request starts, so an open editor can note
+   * whether the merchant edits while it runs. */
+  onActivationStart?: () => void;
+  /** Receives the authoritative product after a successful activation, so
+   * an open editor can adopt its new `updatedAt` (review finding I-1). */
+  onActivated?: (product: ProductDetail) => void;
+};
+
 function VersionRow({
   version,
   productId,
+  activationBlockedReason = null,
+  onActivationStart,
+  onActivated,
 }: {
   version: ProductVersion;
   productId: string;
-}) {
-  const activate = useActivateProductVersion(productId);
+} & ActivationOptions) {
+  // Hook-level callback, not `mutate(..., { onSuccess })`: closing the sheet
+  // unmounts this row, and a per-call callback would then never run.
+  const activate = useActivateProductVersion(productId, { onActivated });
+  // Review finding I-2: the API refuses plain Activate for pipeline
+  // candidates (422 pipeline_candidate_requires_approval), so the control
+  // is not offered. Approval is a separate, reviewed flow.
+  const pipelineCandidate = version.isPipelineCandidate === true;
 
   return (
     <div data-testid="product-version-row" className="space-y-1 rounded-lg border p-3">
@@ -38,16 +58,24 @@ function VersionRow({
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">Version {version.versionNumber}</span>
           <Badge variant={version.source === "original" ? "secondary" : "default"}>
-            {version.source === "original" ? "Original" : "AI generated"}
+            {version.source === "original"
+              ? "Original"
+              : pipelineCandidate
+                ? "AI candidate"
+                : "AI generated"}
           </Badge>
           {version.active ? <Badge variant="outline">Active</Badge> : null}
         </div>
-        {!version.active ? (
+        {!version.active && !pipelineCandidate ? (
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => activate.mutate(version.id)}
-            disabled={activate.isPending}
+            onClick={() => {
+              onActivationStart?.();
+              activate.mutate(version.id);
+            }}
+            disabled={activate.isPending || Boolean(activationBlockedReason)}
+            data-testid="version-activate"
           >
             {activate.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -59,6 +87,17 @@ function VersionRow({
       </div>
       {/* AI-generated text, rendered as plain text — never dangerouslySetInnerHTML. */}
       {version.title ? <p className="line-clamp-2 text-sm">{version.title}</p> : null}
+      {pipelineCandidate && !version.active ? (
+        <p className="text-xs text-muted-foreground" data-testid="version-pipeline-candidate-note">
+          AI candidate awaiting review. It is approved in the AI review flow, not activated
+          from here.
+        </p>
+      ) : null}
+      {!version.active && !pipelineCandidate && activationBlockedReason ? (
+        <p className="text-xs text-muted-foreground" data-testid="version-activate-blocked">
+          {activationBlockedReason}
+        </p>
+      ) : null}
       <p className="text-xs text-muted-foreground">{formatDate(version.createdAt)}</p>
       {activate.isError ? (
         <Alert variant="destructive">
@@ -73,7 +112,12 @@ function VersionRow({
   );
 }
 
-function VersionHistoryList({ productId }: { productId: string }) {
+function VersionHistoryList({
+  productId,
+  activationBlockedReason,
+  onActivationStart,
+  onActivated,
+}: { productId: string } & ActivationOptions) {
   const { data, isPending, isError, error, refetch } = useProductVersions(productId);
 
   if (isPending) {
@@ -110,7 +154,14 @@ function VersionHistoryList({ productId }: { productId: string }) {
   return (
     <div className="space-y-3">
       {data.items.map((version) => (
-        <VersionRow key={version.id} version={version} productId={productId} />
+        <VersionRow
+          key={version.id}
+          version={version}
+          productId={productId}
+          activationBlockedReason={activationBlockedReason}
+          onActivationStart={onActivationStart}
+          onActivated={onActivated}
+        />
       ))}
     </div>
   );
@@ -131,6 +182,9 @@ export function ProductVersionHistorySheet({
   onOpenChange,
   hideTrigger = false,
   compact = false,
+  activationBlockedReason = null,
+  onActivationStart,
+  onActivated,
 }: {
   productId: string;
   productTitle: string;
@@ -141,7 +195,7 @@ export function ProductVersionHistorySheet({
   hideTrigger?: boolean;
   /** Icon-only trigger, named "History" for assistive technology (catalogue rows). */
   compact?: boolean;
-}) {
+} & ActivationOptions) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = openProp ?? uncontrolledOpen;
   const setOpen = onOpenChange ?? setUncontrolledOpen;
@@ -174,7 +228,16 @@ export function ProductVersionHistorySheet({
           <SheetDescription>{productTitle}</SheetDescription>
         </SheetHeader>
 
-        <div className="mt-6">{open ? <VersionHistoryList productId={productId} /> : null}</div>
+        <div className="mt-6">
+          {open ? (
+            <VersionHistoryList
+              productId={productId}
+              activationBlockedReason={activationBlockedReason}
+              onActivationStart={onActivationStart}
+              onActivated={onActivated}
+            />
+          ) : null}
+        </div>
       </SheetContent>
     </Sheet>
   );

@@ -16,12 +16,15 @@ inside it:
 ## Branching
 
 ```
-main            always deployable
+develop         application integration branch — PRs target this
 ├── feat/...    new functionality
 ├── fix/...     bug fixes
 ├── chore/...   tooling, dependencies
 └── docs/...    documentation
+main            Agent Bridge / repository infrastructure — not the app source
 ```
+
+`develop` is never merged into `main` without an explicit owner decision.
 
 Branch names are lowercase and hyphenated: `feat/aliexpress-product-import`.
 
