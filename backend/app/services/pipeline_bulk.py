@@ -3,6 +3,8 @@
 Creates inactive pipeline candidates through ``ProductPipelineService.preview``.
 Does not approve, activate, or publish. Durable progress lives on the run and
 item rows; Celery delivery is at-least-once and is not merchant truth.
+
+All SQL lives in ``app.repositories.pipeline_bulk`` (review finding A-2).
 """
 
 from __future__ import annotations
@@ -16,11 +18,12 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import ColumnElement, and_, func, or_, select, update
+from sqlalchemy import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    AppError,
     ConflictError,
     NotFoundError,
     PipelineBulkRunActiveError,
@@ -34,8 +37,14 @@ from app.models.pipeline_bulk import (
 )
 from app.models.product import ProductStatus
 from app.repositories.pipeline_bulk import (
+    PipelineBulkRunCancelRequestRepository,
     PipelineBulkRunItemRepository,
     PipelineBulkRunRepository,
+    RunLeaseRow,
+    RunLocked,
+)
+from app.repositories.pipeline_bulk import (
+    stale_running_predicate as _stale_running_predicate,
 )
 from app.repositories.product import ProductRepository
 from app.repositories.store import StoreRepository
@@ -44,10 +53,19 @@ from app.services.product_pipeline import ProductPipelineService
 
 MAX_PIPELINE_BULK_PRODUCTS = 50
 MAX_PIPELINE_BULK_RECOVERIES = 3
+#: Review finding H-5. An item that has been attempted this many times without
+#: reaching a terminal state is failed on its own, instead of every further
+#: attempt spending the whole run's Celery retry budget.
+MAX_PIPELINE_BULK_ITEM_ATTEMPTS = 3
 STALE_AFTER = timedelta(minutes=20)
 
 _ERROR_MESSAGE_MAX = 500
 _FAILURE_REASON_MAX = 500
+_CANCELLED_WHILE_RUNNING = "Cancelled while running. Candidates already generated were kept."
+
+#: Kept as a name for existing callers and tests; the row type is the
+#: repository's.
+LeaseObservation = RunLeaseRow
 
 
 def pipeline_bulk_fingerprint(
@@ -71,14 +89,7 @@ def pipeline_bulk_fingerprint(
 
 def stale_running_predicate(*, now: datetime | None = None) -> ColumnElement[bool]:
     """One definition for the reconciler sweep and the reclaim UPDATE."""
-    cutoff = (now or datetime.now(UTC)) - STALE_AFTER
-    return or_(
-        PipelineBulkRun.heartbeat_at < cutoff,
-        and_(
-            PipelineBulkRun.heartbeat_at.is_(None),
-            func.coalesce(PipelineBulkRun.started_at, PipelineBulkRun.created_at) < cutoff,
-        ),
-    )
+    return _stale_running_predicate(cutoff=(now or datetime.now(UTC)) - STALE_AFTER)
 
 
 class ClaimResult(StrEnum):
@@ -99,6 +110,7 @@ class ItemStep(StrEnum):
     FAILED = "failed"
     MISSING = "missing"
     STORE_NOT_FOUND = "store_not_found"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,12 +133,11 @@ class AttemptOutcome:
 
 
 @dataclass(frozen=True, slots=True)
-class LeaseObservation:
-    run_id: uuid.UUID
-    tenant_id: uuid.UUID
-    heartbeat_at: datetime | None
-    lease_token: uuid.UUID | None
-    recovery_count: int
+class CancelOutcome:
+    run: PipelineBulkRun
+    #: Set when the worker held the run and the cancel was recorded for it
+    #: to honour at the next item boundary (finding H-2).
+    cancel_requested_at: datetime | None
 
 
 def _safe_text(value: str, *, limit: int) -> str:
@@ -141,6 +152,7 @@ class PipelineBulkRunService(BaseService):
         super().__init__(session)
         self.runs = PipelineBulkRunRepository(session)
         self.items = PipelineBulkRunItemRepository(session)
+        self.cancel_requests = PipelineBulkRunCancelRequestRepository(session)
         self.products = ProductRepository(session)
         self.stores = StoreRepository(session)
         self.pipeline = ProductPipelineService(session)
@@ -175,7 +187,7 @@ class PipelineBulkRunService(BaseService):
             await self.stores.get_by_id_or_raise(store_id)
 
         fingerprint = pipeline_bulk_fingerprint(product_ids=ordered, tone=tone, store_id=store_id)
-        existing = await self._find_by_key(key)
+        existing = await self.runs.find_by_idempotency_key(key)
         if existing is not None:
             if existing.request_fingerprint != fingerprint:
                 raise ConflictError(
@@ -215,7 +227,7 @@ class PipelineBulkRunService(BaseService):
             await self.flush()
         except IntegrityError as exc:
             await self.session.rollback()
-            concurrent = await self._find_by_key(key)
+            concurrent = await self.runs.find_by_idempotency_key(key)
             if concurrent is not None:
                 if concurrent.request_fingerprint != fingerprint:
                     raise ConflictError(
@@ -231,6 +243,9 @@ class PipelineBulkRunService(BaseService):
             raise NotFoundError.for_resource("PipelineBulkRun", run_id)
         return found
 
+    async def cancel_requested_at(self, run_id: uuid.UUID) -> datetime | None:
+        return await self.cancel_requests.requested_at(run_id)
+
     async def list_items(
         self, run_id: uuid.UUID, params: Any
     ) -> tuple[Sequence[PipelineBulkRunItem], int]:
@@ -243,9 +258,16 @@ class PipelineBulkRunService(BaseService):
         await self.flush()
 
     async def claim(self, run_id: uuid.UUID, *, task_id: str | None) -> ClaimOutcome:
-        run = await self._lock_row(run_id)
+        run = await self.runs.lock(run_id)
         if run is None:
             return ClaimOutcome(ClaimResult.UNKNOWN)
+        if run.status in (PipelineBulkRunStatus.PENDING, PipelineBulkRunStatus.RUNNING) and (
+            await self.cancel_requests.requested_at(run_id) is not None
+        ):
+            # A cancel recorded while a previous worker held the row, which
+            # that worker never got to honour (crash, reclaim). Honour it now.
+            await self._cancel_locked(run)
+            return ClaimOutcome(ClaimResult.NOT_CLAIMABLE)
         now = datetime.now(UTC)
         token = uuid.uuid4()
         if run.status is PipelineBulkRunStatus.PENDING:
@@ -277,7 +299,7 @@ class PipelineBulkRunService(BaseService):
         Hold the lock for the rest of this transaction. A reclaim UPDATE waits
         until commit, then sees a moved heartbeat and matches zero rows.
         """
-        locked = await self._lock_row(lease.run_id)
+        locked = await self.runs.lock(lease.run_id)
         if locked is None:
             return None
         if locked.status is not PipelineBulkRunStatus.RUNNING:
@@ -286,31 +308,35 @@ class PipelineBulkRunService(BaseService):
             return None
         return locked
 
-    async def _lock_row(self, run_id: uuid.UUID) -> PipelineBulkRun | None:
-        return (
-            (
-                await self.session.execute(
-                    select(PipelineBulkRun)
-                    .where(PipelineBulkRun.tenant_id == self._tenant_id())
-                    .where(PipelineBulkRun.id == run_id)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                )
-            )
-            .scalars()
-            .first()
-        )
-
     async def claim_attempt(self, run_id: uuid.UUID, *, lease: PipelineBulkLease) -> AttemptOutcome:
-        """Txn A: durable attempt claim. No provider call. Item stays pending."""
+        """Txn A: durable attempt claim. No provider call. Item stays pending.
+
+        Also the item boundary where a recorded cancel is honoured (H-2) and
+        where an item out of attempts is failed on its own (H-5).
+        """
         run = await self._lock_owned(lease)
         if run is None:
             return AttemptOutcome(ItemStep.LOST)
+        if await self.cancel_requests.requested_at(run_id) is not None:
+            await self._cancel_locked(run)
+            return AttemptOutcome(ItemStep.CANCELLED)
         item = await self.items.lock_next_pending(run_id)
         if item is None:
             return AttemptOutcome(ItemStep.NO_PENDING)
         if item.state is not PipelineBulkItemState.PENDING:
             return AttemptOutcome(ItemStep.ALREADY_TERMINAL, item.id)
+        if item.attempt_count >= MAX_PIPELINE_BULK_ITEM_ATTEMPTS:
+            self._terminalize(
+                run,
+                item,
+                state=PipelineBulkItemState.FAILED,
+                error_code="item_attempts_exhausted",
+                error_message=(
+                    f"Stopped after {MAX_PIPELINE_BULK_ITEM_ATTEMPTS} attempts on this product."
+                ),
+            )
+            await self.flush()
+            return AttemptOutcome(ItemStep.FAILED, item.id)
         item.attempt_count += 1
         if item.started_at is None:
             item.started_at = datetime.now(UTC)
@@ -391,7 +417,12 @@ class PipelineBulkRunService(BaseService):
         lease: PipelineBulkLease,
         exc: BaseException,
     ) -> ItemStep:
-        """Fresh fenced transaction after Txn B rolled back a preview exception."""
+        """Fresh fenced transaction after Txn B rolled back a preview exception.
+
+        Domain failures keep their own code. Anything else (finding H-5) is
+        recorded as ``unexpected_error`` with the exception type only — the
+        message of an arbitrary exception is not a safe thing to show.
+        """
         run = await self._lock_owned(lease)
         if run is None:
             return ItemStep.LOST
@@ -429,14 +460,20 @@ class PipelineBulkRunService(BaseService):
             await self.flush()
             return ItemStep.FAILED
 
-        code = getattr(exc, "code", None)
-        error_code = code if isinstance(code, str) and code else "ai_error"
+        if isinstance(exc, AppError):
+            # AppError messages are written to be shown to a merchant.
+            code = getattr(exc, "code", None)
+            error_code = code if isinstance(code, str) and code else "ai_error"
+            message = _safe_text(str(exc), limit=_ERROR_MESSAGE_MAX)
+        else:
+            error_code = "unexpected_error"
+            message = f"Generation failed unexpectedly ({type(exc).__name__})."
         self._terminalize(
             run,
             item,
             state=PipelineBulkItemState.FAILED,
             error_code=error_code,
-            error_message=_safe_text(str(exc), limit=_ERROR_MESSAGE_MAX),
+            error_message=message,
         )
         await self.flush()
         return ItemStep.FAILED
@@ -451,7 +488,7 @@ class PipelineBulkRunService(BaseService):
         run.status = PipelineBulkRunStatus.FAILED
         run.failure_reason = "Store was not found."
         run.finished_at = datetime.now(UTC)
-        run.lease_token = None
+        self._release(run)
         await self.flush()
         return run
 
@@ -461,21 +498,7 @@ class PipelineBulkRunService(BaseService):
         run = await self._lock_owned(lease)
         if run is None or run.status is not PipelineBulkRunStatus.RUNNING:
             return None
-        pending = (
-            (
-                await self.session.execute(
-                    select(PipelineBulkRunItem)
-                    .where(PipelineBulkRunItem.tenant_id == self._tenant_id())
-                    .where(PipelineBulkRunItem.run_id == run_id)
-                    .where(PipelineBulkRunItem.state == PipelineBulkItemState.PENDING)
-                    .where(PipelineBulkRunItem.deleted_at.is_(None))
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        pending = await self.items.lock_pending(run_id)
         now = datetime.now(UTC)
         for item in pending:
             item.state = PipelineBulkItemState.FAILED
@@ -489,8 +512,8 @@ class PipelineBulkRunService(BaseService):
         run.status = PipelineBulkRunStatus.FAILED
         run.failure_reason = "AI provider is not configured."
         run.finished_at = now
-        run.lease_token = None
         run.heartbeat_at = now
+        self._release(run)
         await self.flush()
         return run
 
@@ -501,17 +524,28 @@ class PipelineBulkRunService(BaseService):
         if run is None:
             return None
         await self._refresh_counts(run)
-        if run.status is PipelineBulkRunStatus.CANCELLED:
-            run.lease_token = None
-            await self.flush()
-            return run
-        if run.status is not PipelineBulkRunStatus.RUNNING:
-            return None
         run.status = self._terminal_status(run)
         run.finished_at = datetime.now(UTC)
-        run.lease_token = None
+        self._release(run)
         await self.flush()
         return run
+
+    async def yield_for_continuation(self, run_id: uuid.UUID, *, lease: PipelineBulkLease) -> bool:
+        """Hand an unfinished run back to the queue under the fence (H-3).
+
+        Used when the task nears its time limit. The run returns to pending
+        with its progress, start time and retry budget intact; the caller
+        publishes a fresh message that claims it like any pending run.
+        """
+        run = await self._lock_owned(lease)
+        if run is None:
+            return False
+        run.status = PipelineBulkRunStatus.PENDING
+        run.heartbeat_at = None
+        run.enqueued_at = datetime.now(UTC)
+        self._release(run)
+        await self.flush()
+        return True
 
     async def fail(
         self, run_id: uuid.UUID, reason: str, *, lease: PipelineBulkLease
@@ -523,101 +557,91 @@ class PipelineBulkRunService(BaseService):
         run.status = PipelineBulkRunStatus.FAILED
         run.failure_reason = _safe_text(reason, limit=_FAILURE_REASON_MAX)
         run.finished_at = datetime.now(UTC)
-        run.lease_token = None
+        self._release(run)
         await self.flush()
         return run
 
-    async def cancel(self, run_id: uuid.UUID) -> PipelineBulkRun:
-        run = await self._lock_row(run_id)
+    async def cancel(
+        self, run_id: uuid.UUID, *, requested_by_user_id: uuid.UUID | None = None
+    ) -> CancelOutcome:
+        """Cancel without ever waiting on a worker's lock (finding H-2).
+
+        Tries the run row with ``NOWAIT`` inside a savepoint. Free: cancel
+        now. Held by a worker mid-item: record a request the worker honours
+        at the next item boundary, and return immediately.
+        """
+        try:
+            async with self.session.begin_nested():
+                run = await self.runs.lock(run_id, nowait=True)
+        except RunLocked:
+            current = await self.get(run_id)
+            if current.status not in (PipelineBulkRunStatus.PENDING, PipelineBulkRunStatus.RUNNING):
+                return CancelOutcome(current, await self.cancel_requests.requested_at(run_id))
+            await self.cancel_requests.request(
+                run_id=run_id, requested_by_user_id=requested_by_user_id
+            )
+            return CancelOutcome(current, await self.cancel_requests.requested_at(run_id))
         if run is None:
             raise NotFoundError.for_resource("PipelineBulkRun", run_id)
         if run.status is PipelineBulkRunStatus.CANCELLED:
-            return run
+            return CancelOutcome(run, await self.cancel_requests.requested_at(run_id))
         if run.status not in (PipelineBulkRunStatus.PENDING, PipelineBulkRunStatus.RUNNING):
             raise ConflictError(f"A run that is {run.status.value} cannot be cancelled.")
+        await self._cancel_locked(run)
+        return CancelOutcome(run, await self.cancel_requests.requested_at(run_id))
+
+    async def _cancel_locked(self, run: PipelineBulkRun) -> None:
+        """Cancel a run whose row this transaction holds."""
         was_running = run.status is PipelineBulkRunStatus.RUNNING
         run.status = PipelineBulkRunStatus.CANCELLED
         run.finished_at = datetime.now(UTC)
         if was_running:
-            run.failure_reason = "Cancelled while running. Candidates already generated were kept."
+            run.failure_reason = _CANCELLED_WHILE_RUNNING
+        # Finding H-4: a cancelled run holds no lease. The worker that had it
+        # is fenced by status anyway; clearing makes the row say so.
+        self._release(run)
         await self._refresh_counts(run)
         await self.flush()
-        return run
+
+    @staticmethod
+    def _release(run: PipelineBulkRun) -> None:
+        """No worker holds this run any more. ``claimed_by_task_id`` is kept
+        as the record of which task last ran it."""
+        run.lease_token = None
 
     async def observe(self, run_id: uuid.UUID) -> LeaseObservation | None:
-        row = (
-            (
-                await self.session.execute(
-                    select(
-                        PipelineBulkRun.id,
-                        PipelineBulkRun.tenant_id,
-                        PipelineBulkRun.heartbeat_at,
-                        PipelineBulkRun.lease_token,
-                        PipelineBulkRun.recovery_count,
-                    )
-                    .where(PipelineBulkRun.tenant_id == self._tenant_id())
-                    .where(PipelineBulkRun.id == run_id)
-                )
-            )
-            .tuples()
-            .first()
-        )
-        if row is None:
-            return None
-        return LeaseObservation(
-            run_id=row[0],
-            tenant_id=row[1],
-            heartbeat_at=row[2],
-            lease_token=row[3],
-            recovery_count=row[4],
-        )
+        return await self.runs.observe_lease(run_id)
 
     async def reclaim_stale(self, *, observed: LeaseObservation) -> bool:
-        cleared = await self.session.execute(
-            update(PipelineBulkRun)
-            .where(PipelineBulkRun.id == observed.run_id)
-            .where(PipelineBulkRun.tenant_id == self._tenant_id())
-            .where(PipelineBulkRun.status == PipelineBulkRunStatus.RUNNING)
-            .where(PipelineBulkRun.recovery_count == observed.recovery_count)
-            .where(PipelineBulkRun.recovery_count < MAX_PIPELINE_BULK_RECOVERIES)
-            .where(PipelineBulkRun.heartbeat_at.is_not_distinct_from(observed.heartbeat_at))
-            .where(PipelineBulkRun.lease_token.is_not_distinct_from(observed.lease_token))
-            .where(stale_running_predicate())
-            .values(
-                status=PipelineBulkRunStatus.PENDING,
-                claimed_by_task_id=None,
-                lease_token=None,
-                heartbeat_at=None,
-                enqueued_at=None,
-                recovery_count=PipelineBulkRun.recovery_count + 1,
-            )
-            .returning(PipelineBulkRun.id)
-            .execution_options(synchronize_session=False)
+        return await self.runs.conditional_transition(
+            observed=observed,
+            cutoff=datetime.now(UTC) - STALE_AFTER,
+            below_recovery_ceiling=MAX_PIPELINE_BULK_RECOVERIES,
+            at_or_above_recovery_ceiling=None,
+            values={
+                "status": PipelineBulkRunStatus.PENDING,
+                "claimed_by_task_id": None,
+                "lease_token": None,
+                "heartbeat_at": None,
+                "enqueued_at": None,
+                "recovery_count": PipelineBulkRun.recovery_count + 1,
+            },
         )
-        return cleared.scalars().first() is not None
 
     async def abandon_stale(self, *, observed: LeaseObservation) -> bool:
-        parked = await self.session.execute(
-            update(PipelineBulkRun)
-            .where(PipelineBulkRun.id == observed.run_id)
-            .where(PipelineBulkRun.tenant_id == self._tenant_id())
-            .where(PipelineBulkRun.status == PipelineBulkRunStatus.RUNNING)
-            .where(PipelineBulkRun.recovery_count == observed.recovery_count)
-            .where(PipelineBulkRun.recovery_count >= MAX_PIPELINE_BULK_RECOVERIES)
-            .where(PipelineBulkRun.heartbeat_at.is_not_distinct_from(observed.heartbeat_at))
-            .where(PipelineBulkRun.lease_token.is_not_distinct_from(observed.lease_token))
-            .where(stale_running_predicate())
-            .values(
-                status=PipelineBulkRunStatus.FAILED,
-                lease_token=None,
-                claimed_by_task_id=None,
-                failure_reason="Abandoned after exceeding the recovery ceiling.",
-                finished_at=datetime.now(UTC),
-            )
-            .returning(PipelineBulkRun.id)
-            .execution_options(synchronize_session=False)
+        return await self.runs.conditional_transition(
+            observed=observed,
+            cutoff=datetime.now(UTC) - STALE_AFTER,
+            below_recovery_ceiling=None,
+            at_or_above_recovery_ceiling=MAX_PIPELINE_BULK_RECOVERIES,
+            values={
+                "status": PipelineBulkRunStatus.FAILED,
+                "lease_token": None,
+                "claimed_by_task_id": None,
+                "failure_reason": "Abandoned after exceeding the recovery ceiling.",
+                "finished_at": datetime.now(UTC),
+            },
         )
-        return parked.scalars().first() is not None
 
     def _terminalize(
         self,
@@ -648,16 +672,7 @@ class PipelineBulkRunService(BaseService):
         run.heartbeat_at = datetime.now(UTC)
 
     async def _refresh_counts(self, run: PipelineBulkRun) -> None:
-        rows = (
-            await self.session.execute(
-                select(PipelineBulkRunItem.state, func.count())
-                .where(PipelineBulkRunItem.tenant_id == self._tenant_id())
-                .where(PipelineBulkRunItem.run_id == run.id)
-                .where(PipelineBulkRunItem.deleted_at.is_(None))
-                .group_by(PipelineBulkRunItem.state)
-            )
-        ).all()
-        counts = {state: int(n) for state, n in rows}
+        counts = await self.items.count_by_state(run.id)
         run.succeeded_count = counts.get(PipelineBulkItemState.SUCCEEDED, 0)
         run.failed_count = counts.get(PipelineBulkItemState.FAILED, 0)
         run.skipped_count = counts.get(PipelineBulkItemState.SKIPPED, 0)
@@ -675,21 +690,14 @@ class PipelineBulkRunService(BaseService):
             return PipelineBulkRunStatus.PARTIAL
         return PipelineBulkRunStatus.FAILED
 
-    async def _find_by_key(self, key: str) -> PipelineBulkRun | None:
-        query = (
-            select(PipelineBulkRun)
-            .where(PipelineBulkRun.tenant_id == self._tenant_id())
-            .where(PipelineBulkRun.idempotency_key == key.strip())
-            .where(PipelineBulkRun.deleted_at.is_(None))
-        )
-        return (await self.session.execute(query)).scalars().first()
-
 
 __all__ = [
+    "MAX_PIPELINE_BULK_ITEM_ATTEMPTS",
     "MAX_PIPELINE_BULK_PRODUCTS",
     "MAX_PIPELINE_BULK_RECOVERIES",
     "STALE_AFTER",
     "AttemptOutcome",
+    "CancelOutcome",
     "ClaimOutcome",
     "ClaimResult",
     "ItemStep",

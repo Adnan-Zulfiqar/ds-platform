@@ -37,6 +37,10 @@ class PipelineBulkRunRead(CamelCaseModel):
     skipped_count: int
     missing_count: int
     failure_reason: str | None
+    #: Set when a cancel was asked for while a worker was mid-item (review
+    #: finding H-2). ``status`` stays ``running`` until the worker honours it
+    #: at the next item boundary; it then becomes ``cancelled``.
+    cancel_requested_at: datetime | None = None
 
 
 class PipelineBulkRunItemRead(CamelCaseModel):

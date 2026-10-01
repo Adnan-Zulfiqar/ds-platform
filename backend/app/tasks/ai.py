@@ -1,6 +1,13 @@
 """Celery tasks for bulk pipeline preview runs (Phase 9 Stage 9).
 
 Payload is one run id. Tenant authority is the durable row, not ``_context``.
+
+Time limits (review finding H-3). RabbitMQ closes a channel whose delivery
+stays unacknowledged past ``consumer_timeout`` (30 minutes by default), and
+``task_acks_late`` acknowledges only on completion. The hard limit therefore
+stays under 30 minutes. A run that needs longer is not failed: near the soft
+limit the task hands the run back to pending under its fence and publishes a
+continuation, so progress, start time and the retry budget carry over.
 """
 
 from __future__ import annotations
@@ -11,26 +18,25 @@ from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
-import sqlalchemy as sa
+from celery.exceptions import SoftTimeLimitExceeded
 
-from app.ai.exceptions import AIError, AIProviderNotConfiguredError
+from app.ai.exceptions import AIProviderNotConfiguredError
 from app.ai.factory import get_ai_provider
 from app.core.config import settings
 from app.core.context import clear_context, get_request_id, set_request_id, set_tenant_id
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import ConflictError
 from app.core.logging import get_logger
 from app.database.session import dispose_engine, transaction
-from app.models.pipeline_bulk import PipelineBulkRun, PipelineBulkRunStatus
-from app.repositories.pipeline_bulk import PipelineBulkRunTenantLookup
+from app.repositories.pipeline_bulk import PipelineBulkRunSweep, PipelineBulkRunTenantLookup
 from app.services.pipeline_bulk import (
     MAX_PIPELINE_BULK_PRODUCTS,
     MAX_PIPELINE_BULK_RECOVERIES,
+    STALE_AFTER,
     ClaimResult,
     ItemStep,
     LeaseObservation,
     PipelineBulkLease,
     PipelineBulkRunService,
-    stale_running_predicate,
 )
 from app.workers.base import BaseTask, enqueue
 from app.workers.celery_app import celery_app
@@ -42,8 +48,14 @@ _T = TypeVar("_T")
 _SUPERSEDED = "superseded"
 _RECONCILE_LIMIT = 50
 PENDING_GRACE = timedelta(minutes=2)
+#: Finding H-1: once the sweep has republished a pending run, it waits this
+#: long before sending it again, instead of every five-minute tick.
+REPUBLISH_AFTER = timedelta(minutes=15)
 SAFE_FAILURE_REASON = "Task exhausted retries"
 _MAX_ITEMS = MAX_PIPELINE_BULK_PRODUCTS
+#: Under RabbitMQ's default 30-minute ``consumer_timeout`` (finding H-3).
+SOFT_TIME_LIMIT_SECONDS = 1500
+TIME_LIMIT_SECONDS = 1680
 
 
 def _run(coro: Coroutine[Any, Any, _T]) -> _T:
@@ -80,12 +92,13 @@ async def _resolve_tenant(run_id: uuid.UUID) -> uuid.UUID | None:
 
 
 class _PipelineBulkLeaseHolder:
-    """Carries the lease out of processing for the task's exhaustion path."""
+    """Carries the lease and progress out of processing for the task wrapper."""
 
-    __slots__ = ("lease",)
+    __slots__ = ("lease", "processed")
 
     def __init__(self) -> None:
         self.lease: PipelineBulkLease | None = None
+        self.processed = 0
 
 
 async def _process_pipeline_bulk_run(
@@ -122,22 +135,26 @@ async def _process_pipeline_bulk_run(
                 marked = await PipelineBulkRunService(session).fail_provider_not_configured(
                     run_id, lease=lease
                 )
-            if marked is None:
-                holder.lease = None
-                return {"status": _SUPERSEDED, "processed": 0}
             holder.lease = None
+            if marked is None:
+                return {"status": _SUPERSEDED, "processed": 0}
             return {"status": marked.status.value, "processed": marked.processed_count}
 
-        processed = 0
         for _ in range(_MAX_ITEMS + 1):
             async with transaction() as session:
                 attempt = await PipelineBulkRunService(session).claim_attempt(run_id, lease=lease)
             if attempt.step is ItemStep.LOST:
                 holder.lease = None
-                return {"status": _SUPERSEDED, "processed": processed}
-            if attempt.step is ItemStep.NO_PENDING:
-                break
-            if attempt.item_id is None:
+                return {"status": _SUPERSEDED, "processed": holder.processed}
+            if attempt.step is ItemStep.CANCELLED:
+                holder.lease = None
+                logger.info("pipeline_bulk_cancel_honoured", run_id=str(run_id))
+                return {"status": "cancelled", "processed": holder.processed}
+            if attempt.step is ItemStep.FAILED:
+                # Out of attempts; failed on its own, move to the next item.
+                holder.processed += 1
+                continue
+            if attempt.step is ItemStep.NO_PENDING or attempt.item_id is None:
                 break
 
             try:
@@ -145,57 +162,45 @@ async def _process_pipeline_bulk_run(
                     step = await PipelineBulkRunService(session).process_item_success(
                         run_id, attempt.item_id, lease=lease
                     )
-            except ConflictError:
+            except (ConflictError, SoftTimeLimitExceeded):
+                # Concurrency: retry the task (bounded per item by the attempt
+                # cap). Time limit: the task wrapper yields the run.
                 raise
-            except (AIError, ValidationError, NotFoundError) as exc:
+            except Exception as exc:
+                # Finding H-5: whatever the preview raised belongs to this
+                # item. Record it and carry on with the others; only a failure
+                # to *record* it (e.g. the database is down) escapes to retry.
+                logger.warning(
+                    "pipeline_bulk_item_failed",
+                    run_id=str(run_id),
+                    item_id=str(attempt.item_id),
+                    error_type=type(exc).__name__,
+                )
                 async with transaction() as session:
                     classified = await PipelineBulkRunService(session).classify_failure(
                         run_id, attempt.item_id, lease=lease, exc=exc
                     )
                 if classified is ItemStep.LOST:
                     holder.lease = None
-                    return {"status": _SUPERSEDED, "processed": processed}
+                    return {"status": _SUPERSEDED, "processed": holder.processed}
                 if classified is ItemStep.STORE_NOT_FOUND:
-                    async with transaction() as session:
-                        failed = await PipelineBulkRunService(session).fail_store_not_found(
-                            run_id, lease=lease
-                        )
-                    if failed is None:
-                        holder.lease = None
-                        return {"status": _SUPERSEDED, "processed": processed}
-                    holder.lease = None
-                    return {"status": failed.status.value, "processed": failed.processed_count}
-                processed += 1
+                    return await _fail_store_not_found(run_id, lease, holder)
+                holder.processed += 1
                 continue
 
             if step is ItemStep.LOST:
                 holder.lease = None
-                return {"status": _SUPERSEDED, "processed": processed}
+                return {"status": _SUPERSEDED, "processed": holder.processed}
             if step is ItemStep.STORE_NOT_FOUND:
-                async with transaction() as session:
-                    failed = await PipelineBulkRunService(session).fail_store_not_found(
-                        run_id, lease=lease
-                    )
-                if failed is None:
-                    holder.lease = None
-                    return {"status": _SUPERSEDED, "processed": processed}
-                holder.lease = None
-                return {"status": failed.status.value, "processed": failed.processed_count}
-            if step in (
-                ItemStep.SUCCEEDED,
-                ItemStep.SKIPPED,
-                ItemStep.MISSING,
-                ItemStep.ALREADY_TERMINAL,
-            ):
-                if step is not ItemStep.ALREADY_TERMINAL:
-                    processed += 1
+                return await _fail_store_not_found(run_id, lease, holder)
+            if step in (ItemStep.SUCCEEDED, ItemStep.SKIPPED, ItemStep.MISSING):
+                holder.processed += 1
 
         async with transaction() as session:
             finished = await PipelineBulkRunService(session).finalize(run_id, lease=lease)
-        if finished is None:
-            holder.lease = None
-            return {"status": _SUPERSEDED, "processed": processed}
         holder.lease = None
+        if finished is None:
+            return {"status": _SUPERSEDED, "processed": holder.processed}
         result = {
             "status": finished.status.value,
             "processed": finished.processed_count,
@@ -210,6 +215,28 @@ async def _process_pipeline_bulk_run(
         clear_context()
 
 
+async def _fail_store_not_found(
+    run_id: uuid.UUID, lease: PipelineBulkLease, holder: _PipelineBulkLeaseHolder
+) -> dict[str, Any]:
+    async with transaction() as session:
+        failed = await PipelineBulkRunService(session).fail_store_not_found(run_id, lease=lease)
+    holder.lease = None
+    if failed is None:
+        return {"status": _SUPERSEDED, "processed": holder.processed}
+    return {"status": failed.status.value, "processed": failed.processed_count}
+
+
+async def _with_run_tenant(run_id: uuid.UUID, work: Any) -> Any:
+    tenant_id = await _resolve_tenant(run_id)
+    if tenant_id is None:
+        return None
+    set_tenant_id(tenant_id)
+    try:
+        return await work()
+    finally:
+        clear_context()
+
+
 async def _mark_pipeline_bulk_failed(
     run_id: uuid.UUID, reason: str, lease: PipelineBulkLease | None
 ) -> bool:
@@ -220,11 +247,8 @@ async def _mark_pipeline_bulk_failed(
             reason="worker did not hold the lease",
         )
         return False
-    tenant_id = await _resolve_tenant(run_id)
-    if tenant_id is None:
-        return False
-    set_tenant_id(tenant_id)
-    try:
+
+    async def work() -> bool:
         async with transaction() as session:
             marked = await PipelineBulkRunService(session).fail(run_id, reason, lease=lease)
         if marked is None:
@@ -235,16 +259,28 @@ async def _mark_pipeline_bulk_failed(
             )
             return False
         return True
-    finally:
-        clear_context()
+
+    return bool(await _with_run_tenant(run_id, work))
+
+
+async def _yield_pipeline_bulk_run(run_id: uuid.UUID, lease: PipelineBulkLease | None) -> bool:
+    """Return the run to pending under the fence; the caller republishes."""
+    if lease is None:
+        return False
+
+    async def work() -> bool:
+        async with transaction() as session:
+            return await PipelineBulkRunService(session).yield_for_continuation(run_id, lease=lease)
+
+    return bool(await _with_run_tenant(run_id, work))
 
 
 @celery_app.task(
     base=BaseTask,
     bind=True,
     name="ai.process_pipeline_bulk_run",
-    soft_time_limit=4500,
-    time_limit=4800,
+    soft_time_limit=SOFT_TIME_LIMIT_SECONDS,
+    time_limit=TIME_LIMIT_SECONDS,
 )
 def process_pipeline_bulk_run(self: Any, run_id: str, **_: Any) -> dict[str, Any]:
     identifier = uuid.UUID(run_id)
@@ -252,58 +288,48 @@ def process_pipeline_bulk_run(self: Any, run_id: str, **_: Any) -> dict[str, Any
     holder = _PipelineBulkLeaseHolder()
     try:
         return _run(_process_pipeline_bulk_run(identifier, task_id, holder))
+    except SoftTimeLimitExceeded:
+        if holder.processed > 0 and _run(_yield_pipeline_bulk_run(identifier, holder.lease)):
+            # Progress was made: continue in a fresh message, not a retry.
+            publish_pipeline_bulk_run(identifier)
+            logger.info("pipeline_bulk_yielded", run_id=run_id, processed=holder.processed)
+            return {"status": "yielded", "processed": holder.processed}
+        # No item finished inside a whole time slice: that is a failure, and
+        # it spends the retry budget like any other.
+        return _retry_or_fail(self, identifier, holder, SoftTimeLimitExceeded())
     except Exception as exc:
-        if self.request.retries >= self.max_retries:
-            logger.error(
-                "pipeline_bulk_exhausted_retries",
-                run_id=run_id,
-                error=str(exc),
-            )
-            recorded = _run(
-                _mark_pipeline_bulk_failed(identifier, SAFE_FAILURE_REASON, holder.lease)
-            )
-            return {"status": "failed" if recorded else _SUPERSEDED, "processed": 0}
-        raise
+        return _retry_or_fail(self, identifier, holder, exc)
+
+
+def _retry_or_fail(
+    task: Any, identifier: uuid.UUID, holder: _PipelineBulkLeaseHolder, exc: Exception
+) -> dict[str, Any]:
+    if task.request.retries >= task.max_retries:
+        logger.error(
+            "pipeline_bulk_exhausted_retries",
+            run_id=str(identifier),
+            error=str(exc),
+        )
+        recorded = _run(_mark_pipeline_bulk_failed(identifier, SAFE_FAILURE_REASON, holder.lease))
+        return {"status": "failed" if recorded else _SUPERSEDED, "processed": 0}
+    raise exc
 
 
 async def _stale_runs() -> list[LeaseObservation]:
     async with transaction() as session:
-        rows = await session.execute(
-            sa.select(
-                PipelineBulkRun.id,
-                PipelineBulkRun.tenant_id,
-                PipelineBulkRun.heartbeat_at,
-                PipelineBulkRun.lease_token,
-                PipelineBulkRun.recovery_count,
-            )
-            .where(PipelineBulkRun.status == PipelineBulkRunStatus.RUNNING)
-            .where(stale_running_predicate())
-            .order_by(PipelineBulkRun.heartbeat_at.asc().nullsfirst())
-            .limit(_RECONCILE_LIMIT)
+        return await PipelineBulkRunSweep(session).stale_running(
+            cutoff=datetime.now(UTC) - STALE_AFTER, limit=_RECONCILE_LIMIT
         )
-        return [
-            LeaseObservation(
-                run_id=row[0],
-                tenant_id=row[1],
-                heartbeat_at=row[2],
-                lease_token=row[3],
-                recovery_count=row[4],
-            )
-            for row in rows.all()
-        ]
 
 
 async def _unpublished_runs() -> list[tuple[uuid.UUID, uuid.UUID]]:
-    cutoff = datetime.now(UTC) - PENDING_GRACE
+    now = datetime.now(UTC)
     async with transaction() as session:
-        rows = await session.execute(
-            sa.select(PipelineBulkRun.id, PipelineBulkRun.tenant_id)
-            .where(PipelineBulkRun.status == PipelineBulkRunStatus.PENDING)
-            .where(PipelineBulkRun.created_at < cutoff)
-            .order_by(PipelineBulkRun.created_at.asc())
-            .limit(_RECONCILE_LIMIT)
+        return await PipelineBulkRunSweep(session).pending_to_republish(
+            created_before=now - PENDING_GRACE,
+            enqueued_before=now - REPUBLISH_AFTER,
+            limit=_RECONCILE_LIMIT,
         )
-        return [(row[0], row[1]) for row in rows.all()]
 
 
 async def _republish(run_id: uuid.UUID, tenant_id: uuid.UUID) -> str:
@@ -376,7 +402,10 @@ def reconcile_pipeline_bulk_runs(self: Any, **_: Any) -> dict[str, int]:
 
 __all__ = [
     "PENDING_GRACE",
+    "REPUBLISH_AFTER",
     "SAFE_FAILURE_REASON",
+    "SOFT_TIME_LIMIT_SECONDS",
+    "TIME_LIMIT_SECONDS",
     "process_pipeline_bulk_run",
     "publish_pipeline_bulk_run",
     "reconcile_pipeline_bulk_runs",
