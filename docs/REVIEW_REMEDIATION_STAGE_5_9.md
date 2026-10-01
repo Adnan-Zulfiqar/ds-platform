@@ -9,9 +9,10 @@ from `72e76921`. The Stage 10 plan corrections live on PR #25's branch,
 **Every finding from the review is listed here. None was dropped.** Status
 is one of `FIXED`, `EXTERNAL BLOCKER`, `VERIFIED/NO CHANGE`, `DEFERRED`.
 
-Nothing here is merged or deployed. **CI did not start** on any of these
-heads (GitHub Actions billing, J-1), so every result below is from local,
-isolated runs. Local results are not a substitute for CI.
+Nothing here is merged or deployed, and nothing has been independently
+accepted: everything below is **author verification** (Claude wrote this
+remediation). As of 2026-10-01 GitHub Actions runs again; the CI results
+for head `47fd036` are recorded in "CI results" below.
 
 ## How the work was verified
 
@@ -33,8 +34,8 @@ isolated runs. Local results are not a substitute for CI.
 | E-1 | MEDIUM | FIXED | `store_listings.content_source` + `content_version_id` (migration `0035`, composite `(tenant_id, product_id, version)` FK, source/version check). `publish_product` re-sends a live AI version by default for every caller (editor HTTP, Celery, retries); only `replaceAiContent` from an explicit, confirmed merchant choice sends the draft; an unreadable live version fails closed (409 `published_ai_content_unavailable`). Responses and listing reads expose the source. Editor shows the state and the confirmation. | `tests/integration/test_listing_content_source.py` (13); `frontend/tests/e2e/review-remediation.spec.ts` E-1 block (4) | `4df816c`, `d7dc574` |
 | G-1 | MEDIUM | FIXED (plan + test) | Stage 10 plan Approve copy corrected and the four states (draft / approved AI / published / next publish source) defined — on PR #25. Backend acceptance test pins that approval changes only the AI cache. | `TestApprovalAloneChangesNothingOnShopify`; existing `test_approve_activates_the_exact_candidate` | `9b45c72`; plan commit on PR #25 |
 | I-1 | MEDIUM | FIXED | Optimize/Activate refuse to start on a dirty or conflicted editor; invalidate the draft cache; on success re-baseline the editor from the returned product when nothing was edited meanwhile; edits made mid-request get a notice and the server's 409 review, never a silent re-base. Activation callback moved to `useMutation` options (a per-call callback did not run once the sheet closed — found by these tests). | review-remediation.spec.ts I-1 block (6) | `d7dc574` |
-| L-1 | MEDIUM | EXTERNAL BLOCKER | None — environment, not code. See below. | Name-only SET/EMPTY check | — |
-| J-1 | HIGH | EXTERNAL BLOCKER | None — GitHub billing. See below. | — | — |
+| L-1 | MEDIUM | EXTERNAL BLOCKER (partly resolved) | None — environment, not code. Rechecked 2026-10-01: provider app keys now SET; `SECURITY_ENCRYPTION_KEYS` still EMPTY. See below. | Name-only SET/EMPTY check | — |
+| J-1 | HIGH | RESOLVED (external) | GitHub Actions starts again from 2026-10-01. No workaround was ever added. | CI run 36855448085 | — |
 | A-1 | LOW | FIXED | `CLAUDE.md` §4 lists the actual unscoped data-access classes by purpose instead of "only two". | doc | docs commit |
 | A-2 | LOW | FIXED | All bulk SQL moved to `app/repositories/pipeline_bulk.py`; the cross-tenant sweep is a separate `PipelineBulkRunSweep` returning ids only. Run-row lock is now `FOR NO KEY UPDATE` (still serialises every writer; no longer blocks FK `KEY SHARE`). | `tests/unit/test_pipeline_bulk_repository_scoping.py` (20); all Stage 9 integration suites | `7b7985d`, `ebb841f` |
 | B-1 | LOW | FIXED | `next_version_number` states the tenant predicate. | scoping test above | `7b7985d` |
@@ -65,28 +66,66 @@ isolated runs. Local results are not a substitute for CI.
 |---|---|---|---|---|
 | N-1 | HIGH (deploy) | FIXED | Lightsail beat had no `--schedule` on a read-only root filesystem and died at startup with `OSError 30` — no scheduled task (reconcilers, order sync) would have run. Reproduced against the worker image with `--read-only`. | `dc0315d` |
 | N-2 | MEDIUM | FIXED | Closing the history sheet mid-activation skipped the token adoption (React Query per-call callbacks do not run after unmount). | `d7dc574` |
-| N-3 | HIGH (deploy) | DEFERRED | `npm ci` reports `next@15.1.6` as affected by CVE-2025-66478 (React Server Components). A framework upgrade needs its own full regression and is not mixed into this PR. **Owner:** repository owner. **Prerequisite:** separate dependency PR (Next.js and React patch releases), full Playwright run. **Blocks deployment; does not block Stage 10 planning.** | — |
+| N-3 | HIGH (deploy) | FIX IN SEPARATE PR #28 (unmerged) | `next@15.1.6` was affected by CVE-2025-66478. The current advisory database shows the 15.1 line unmaintained and two critical 2026-09-08 RCEs fixed only from 15.5.24, so #28 moves to `next` 15.5.27 / `react` 19.0.8, plus a no-JS rendering fix the upgrade needed. Not mixed into this PR. **Blocks deployment until #28 merges.** | PR #28 |
+| N-4 | MEDIUM | FIXED in PR #27 (cherry-picked here as `47fd036`) | CI installed `-e ".[dev]"` from pyproject ranges and picked up SQLAlchemy 2.1.1 (lock: 2.0.52): 70 mypy errors on unchanged code (runs 36802573335, 36802617578). CI now installs the hash lock with `--no-deps`. | `test_ci_installs_from_lock.py` | `78c7f06` / `47fd036` |
+| N-5 | LOW | OPEN (develop baseline) | On run 36855424195 (develop + #27) six Playwright tests passed only on retry: `global-rules.spec.ts` (:215, :429, :566, :603), `global-rules-impact.spec.ts:300`, `draft-editor-real-conflict.spec.ts:211`. None flaked on this branch's run. Owner: follow-up after #26/#28 merge. | — | — |
 
 ## External blockers (owner action required)
 
-**J-1 — GitHub Actions did not start.** Runs 35721345516 and 35724967705
-(PR #25, head `ef125ed`) were refused with "recent account payments have
-failed or your spending limit needs to be increased". No workaround was
-added and no check was weakened. **Owner:** repository owner — resolve
-Settings → Billing & plans, then re-run CI on every open head. Until then
-every affected PR is **BLOCKED — CI DID NOT START** and must not merge.
+**J-1 — GitHub Actions (resolved 2026-10-01).** Runs 35721345516 and
+35724967705 (PR #25, head `ef125ed`) were refused for billing. From
+2026-10-01 jobs start again; no workaround was ever added and no check was
+weakened.
 
-**L-1 — blank local integration credentials.** The developer `.env` and
-`backend/.env` are the example template (re-created 2026-09-17); the
-running backend and worker have `SECURITY_ENCRYPTION_KEYS`,
-`SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `ALIEXPRESS_APP_KEY`,
-`ALIEXPRESS_APP_SECRET` **EMPTY** (names checked only; no value was read or
-printed). The code fails closed correctly. No key was generated and no
+**L-1 — local integration credentials (rechecked 2026-10-01, names only).**
+The root `.env` changed on 2026-10-01 and the backend and worker were
+restarted: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `ALIEXPRESS_APP_KEY`,
+`ALIEXPRESS_APP_SECRET` are now **SET** in both containers.
+`SECURITY_ENCRYPTION_KEYS` is still **EMPTY** everywhere (root `.env`,
+`backend/.env`, both containers), so connecting or reading any provider
+credential still fails closed with "Credential encryption is not configured
+on this server." No value was read or printed, no key was generated and no
 environment file was edited. **Owner:** repository owner — restore the
-original values from the secure backup or password manager. **The same
-historic Fernet key(s) must be restored**, or every existing encrypted
-connection row becomes undecryptable. Until then, local real-provider
-verification is blocked.
+**same historic Fernet key(s)** from the secure backup; a new key would make
+every existing encrypted connection row undecryptable. `backend/.env` (read
+by the bind-mounted app) is still the example template and is shadowed by
+the container environment; reconcile it when restoring.
+
+## CI results (GitHub Actions)
+
+| PR / head | Run | Result |
+|---|---|---|
+| #26 `47fd036` (this branch + lock fix) | 36855448085 | **10/10 success.** Backend: ruff, format (468 files), mypy (236 files), full pytest **3460 passed, 0 failed**. Celery broker harness, Docker builds, compose config and smoke all success. Playwright **733 passed, 9 skipped, 0 flaky** |
+| #27 `78c7f06` (develop + lock fix) | 36855424195 | 10/10 success; Playwright 716 passed, 6 flaky (N-5), 9 skipped |
+
+The 8 local failures recorded below were environment-only; on CI's Linux
+checkout the same suite has none.
+
+## Reviewer handoff (independent acceptance still required)
+
+Author: Claude. Not independently accepted. To accept PR #26:
+
+1. **Range:** `git log 72e7692..47fd036` — 16 commits. Merge order: #27
+   (identical CI commit) first, then #26, then #28; #25 only after #26.
+2. **Highest-risk areas to read line by line:**
+   - `integrations/shopify/sync.py::_resolve_listing_content` and migration
+     `0035`: the E-1 publish-source contract (the default must preserve live
+     AI text for every caller; only `replaceAiContent` may replace it).
+   - `services/pipeline_bulk.py` + `repositories/pipeline_bulk.py`: the
+     `FOR NO KEY UPDATE` lock change, `NOWAIT` cancel in a savepoint, the
+     cancel-request table, time-slice continuation in `tasks/ai.py`.
+   - `services/product_optimization.py::_ensure_original_snapshot`: the
+     deliberate `updated_at` preservation (G-2).
+   - `frontend/components/drafts/draft-product-editor.tsx`: the new
+     `hydrateFromServer` transition 3 and `adoptAfterProductAction`.
+   - `ai/image_fetch.py`: NAT64 handling must not weaken any existing check.
+3. **Evidence to re-run:** `tests/integration/test_listing_content_source.py`,
+   `test_pipeline_bulk_*.py`, `test_preview_token_stability.py`,
+   `tests/unit/test_image_fetch*.py`, `test_oauth_state_single_use.py`,
+   `frontend/tests/e2e/review-remediation.spec.ts`.
+4. **Explicit judgement calls for the reviewer:** H-2's `running` +
+   `cancelRequestedAt` response shape; G-2's choice to not move the token
+   for snapshot bookkeeping; the removal of finalize's CANCELLED branch.
 
 ## Local gate results (code head `6e7d25e`)
 
