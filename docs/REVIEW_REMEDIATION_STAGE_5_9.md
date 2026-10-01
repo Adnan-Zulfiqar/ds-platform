@@ -149,6 +149,116 @@ Isolated containers only. **Not a substitute for CI, which did not run.**
 | `docker compose config -q` (local; Lightsail with placeholder values) | pass / pass |
 | Health checks against real images | new beat check PASS (old worker-ping FAIL); nginx `localhost` → `::1` confirmed |
 
+## Status update 2026-10-01 (second pass)
+
+### PR map and integration order
+
+| Order | PR | Branch | Head | Purpose |
+|---|---|---|---|---|
+| 1 | #27 | `ci/install-backend-from-lock` | `78c7f06` | N-4: CI installs the hash lock |
+| 2 | #26 | `fix/stage5-9-review-remediation` | (this head) | Stage 5–9 remediation; carries #27's commit as `47fd036` (same change, merges cleanly after #27) |
+| 3 | #28 | `security/next-react-advisories` | `ce0e3e2` | N-3: next 15.5.27, react 19.0.8, no-JS fix |
+| 4 | #29 | `security/axios-1-20` | `02f7105` | axios 1.20.0 |
+| 5 | #30 | `security/tiptap-and-dev-transitives` | `23daed7` | tiptap 3.31.4, js-yaml, brace-expansion; #29 merged in to pre-resolve their adjacent `package.json` lines |
+| 6 | #31 | `fix/global-rules-list-refresh` | `4ee7dde` | N-5: rule dialog waits for the list refetch |
+| 7 | #25 | `docs/phase-9-stage-10-plan` | `1dfa568` | Stage 10 plan; rebase on `develop` after #26 |
+
+All six branches (#27 → #31) merge onto `develop` 72e7692 in this order
+**without conflicts** (verified with a throwaway local merge). #28–#31 each
+carry #27's commit; it drops out of their diffs once #27 merges.
+
+### Dependency-security assessment (frontend, actual installed graph)
+
+| Package | Installed (develop) | Exposure | Advisories | Fixed by |
+|---|---|---|---|---|
+| `next` | 15.1.6 | production | GHSA-9qr9-h5gf-34mp (CVE-2025-66478, critical, 2025-12-03) and 32 later `next` advisories incl. GHSA-2xp9-vwfh-vxw4 and GHSA-p293-qw3h-jr36 (critical RCEs, 2026-09-08, fixed ≥15.5.24) | #28 → 15.5.27 |
+| `react`, `react-dom` | 19.0.0 | production | react-server-dom RSC advisories through GHSA-wx67-qw84-cm4g (fixed 19.0.8) | #28 → 19.0.8 |
+| `sharp` (via `next`) | per next 15.1.6 | production (image optimisation, unused here) | GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c | #28 (newer next) |
+| `axios` | 1.19.0 (direct) | production | 12 advisories, 7 high (see #29) | #29 → 1.20.0 |
+| `@tiptap/*` | 3.30.1 | production (description editor) | GHSA-j95f-988m-3j2f (high), GHSA-cp6q-959q-f8rh | #30 → 3.31.4 |
+| `js-yaml` | 4.3.0 | dev/CI only (eslintrc) | GHSA-5p4m-2wfm-xmqj, GHSA-2883-xcg3-v3hh | #30 → 4.3.2 |
+| `brace-expansion` | 1.1.18, 5.0.9 | dev/CI only (minimatch) | GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p | #30 → 1.1.21 / 5.0.12 |
+| `postcss` bundled in `next` | 8.4.31 (exact pin in next 15.5.27) | build-time only, first-party CSS | GHSA-6g55-p6wh-862q (high), GHSA-r28c-9q8g-f849 (high), GHSA-qx2v-qp2m-jg93, GHSA-fxqj-rqcc-2cmp | **Open.** Verified: 15.5.27 is the newest 15.x and pins 8.4.31; next 16.3.8 pins 8.5.23 (past every range) — needs the Next 16 major. The app's own postcss is 8.5.28 |
+
+**Combined result** with #28 + #29 + #30 merged: `npm audit` reports only
+`next` (moderate aggregate) and its bundled `postcss` (high). No blind
+override, forced audit fix or unrelated major upgrade was used.
+
+**Not cleared by `npm audit`:** the Next.js September 2026 security release
+(blog post 2026-09-30, fixes shipped in 15.5.27) postponed one critical and
+one high fix "pending upstream coordination" with no public detail. They
+are tracked as open; watch the Next.js security blog. None of the seven
+shipped issues applies here (no `images.remotePatterns`, `next/image`,
+`use cache`, Draft Mode, Pages Router or root catch-all).
+
+### N-5 flakes
+
+Five of six (global-rules.spec.ts) shared one cause: rule dialogs closed
+before the list refetch landed (`invalidateRule` did not return its
+promise). Fixed in #31 with a deterministic regression test that fails
+without the fix. The remaining two — global-rules-impact.spec.ts:300 (FK
+`validation_error` on create right after registration) and
+draft-editor-real-conflict.spec.ts:211 (editor not visible in 30 s) — did
+not reproduce locally (5×, retries off) and are left open rather than
+masked.
+
+### L-1 diagnosis (names and counts only; no value read)
+
+- Supported name: `SECURITY_ENCRYPTION_KEYS` (comma-separated Fernet keys,
+  newest first; `SecuritySettings.encryption_keys`).
+- Loading: compose `env_file: [.env]` (repo root) into backend, worker and
+  beat; pydantic also reads `.env` and `backend/.env`, but process
+  environment wins.
+- **The key is missing, not mis-routed.** It is empty or absent in the root
+  `.env`, `backend/.env`, both examples, the Windows User, Machine and
+  Process environment, and every DropPilot container.
+- **No encrypted data exists locally:** `aliexpress_connections`,
+  `shopify_connections` and `ebay_connections` hold 0 rows in both the
+  `droppilot` and `droppilot_test` databases (Postgres volume created
+  2026-09-17 08:57, after the `.env` was regenerated).
+- Consequence: restoring the original key preserves nothing locally, but is
+  still the only correct choice if that key is (or will be) used elsewhere.
+  A brand-new key is safe **for this local database only** and must never
+  be copied to a deployment that holds data encrypted with the old one.
+  This is the owner's decision; no key was generated.
+
+### CI evidence per PR (exact head, run)
+
+| PR | Head | Run | Jobs | Backend pytest | Playwright |
+|---|---|---|---|---|---|
+| #26 | `8d7cd2e` | [36862031542](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/36862031542) | 10/10 | 3460 passed | 733 passed, 9 skipped, 0 flaky |
+| #27 | `78c7f06` | [36855424195](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/36855424195) | 10/10 | 3370 passed | 716 passed, **6 flaky**, 9 skipped |
+| #28 | `ce0e3e2` | [36861832686](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/36861832686) | 10/10 | 3370 passed | **722 passed, 9 skipped, 0 failed, 0 flaky** (full suite after the loading.tsx fix) |
+| #29 | `02f7105` | [36877363551](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/36877363551) | 10/10 | 3370 passed | 721 passed, **1 flaky** (`global-rules-impact.spec.ts:635`), 9 skipped |
+| #31 | `4ee7dde` | [36886676046](https://github.com/Adnan-Zulfiqar/ds-platform/actions/runs/36886676046) | 10/10 | 3370 passed | 723 passed, 9 skipped, 0 flaky |
+| #30 | `23daed7` | 36886931099 | in progress when this was written | — | — |
+
+(3370 vs 3460: branches cut from `develop` lack this branch's 90 new tests.)
+A green run on an earlier commit is not carried forward to a later one.
+This ledger commit itself triggers a fresh run on #26.
+
+### Integration rehearsal (local, not CI)
+
+`develop` + #27 + #26 + #28 + #29 + #30 + #31 merged in order (throwaway
+merge `71ae0ed`, never pushed):
+
+- backend: ruff, format (468), mypy (236) clean; alembic head `0036`;
+  pytest **3452 passed, 8 failed** — the same 8 environment-only failures
+  (no `git` and a root `HOME` in the container) that pass on CI;
+- Playwright full suite (CI-equivalent container, retries 2): **734 passed,
+  9 skipped, 0 failed, 0 flaky**;
+- `npm audit`: only the bundled `postcss` via `next` remains.
+
+### Open after this pass
+
+- `global-rules-impact.spec.ts` flakes (:300 on #27's run, :635 on #29's
+  run) — not reproduced locally; different code path from #31's fix. Open.
+- `draft-editor-real-conflict.spec.ts:211` — not reproduced. Open.
+- Bundled `postcss` in `next` 15.5 — needs the Next 16 major. Open.
+- Two postponed Next.js upstream fixes (1 critical, 1 high) — not yet
+  published. Open, track.
+- `SECURITY_ENCRYPTION_KEYS` — owner restores (L-1 above).
+
 ## Deviation from the requested setup
 
 Two isolated worktrees were requested. This session's tooling only permits
