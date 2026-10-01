@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+import { useCanUseStudio } from "@/components/ai-studio/studio-access";
 import { ProductThumbnail } from "@/components/drafts/editor-header/product-thumbnail";
 import { ProductNotFound } from "@/components/products/product-not-found";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { stripHtml } from "@/lib/ai-studio/text";
 import { ApiError } from "@/lib/api-client";
 import { EXTERNAL_LINK_REL, isTrustedShopifyHttpsUrl } from "@/lib/external-link";
 import { deriveListingLifecycle, draftNewerThanSync } from "@/lib/listing-lifecycle";
@@ -37,17 +39,6 @@ import { useProduct } from "@/services/products";
  * as unavailable, never treated as "not published".
  */
 
-function stripHtml(html: string): string {
-  // The server already sanitises descriptions; this renders them as text
-  // regardless, so nothing on this page ever interprets markup. Script and
-  // style bodies go with their tags — their text is not description.
-  return html
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/(script|style)>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function shortTitle(title: string, max = 48): string {
   return title.length <= max ? title : `${title.slice(0, max - 1)}…`;
 }
@@ -60,6 +51,7 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
   const router = useRouter();
   const productQuery = useProduct(productId);
   const listingsQuery = useDraftListings(productId);
+  const { allowed: canUseStudio } = useCanUseStudio();
   const lifecycle = deriveListingLifecycle(listingsQuery);
 
   // Confirmed not published → this is a draft; take the merchant to where it
@@ -277,6 +269,13 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
             </a>
           </Button>
         )}
+        {canUseStudio ? (
+          <Button asChild variant="outline" className="min-h-11">
+            <Link href={`/ai-studio/products/${productId}`} data-testid="published-ai-studio-link">
+              Optimize in AI Studio
+            </Link>
+          </Button>
+        ) : null}
         <Button asChild variant="ghost" className="min-h-11">
           <Link href="/products">
             <ArrowLeft className="mr-2 h-4 w-4" aria-hidden="true" />

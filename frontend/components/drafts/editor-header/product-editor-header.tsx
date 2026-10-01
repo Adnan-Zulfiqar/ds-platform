@@ -44,7 +44,6 @@ interface ProductEditorHeaderProps {
   storesError: boolean;
   seoScore: SeoScore | null | undefined;
   refreshing: boolean;
-  optimizing: boolean;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
   onPreview: () => void;
@@ -53,7 +52,8 @@ interface ProductEditorHeaderProps {
   onResolveConflict: () => void;
   onRetryListings: () => void;
   onRefresh: () => void;
-  onOptimize: () => void;
+  /** Review route for this product in AI Studio (replaces the legacy Optimize). */
+  aiStudioHref: string;
   onViewHistory: () => void;
 }
 
@@ -82,7 +82,6 @@ export function ProductEditorHeader({
   storesError,
   seoScore,
   refreshing,
-  optimizing,
   inspectorOpen,
   onToggleInspector,
   onPreview,
@@ -91,7 +90,7 @@ export function ProductEditorHeader({
   onResolveConflict,
   onRetryListings,
   onRefresh,
-  onOptimize,
+  aiStudioHref,
   onViewHistory,
 }: ProductEditorHeaderProps) {
   const featuredImage = product.images[0]?.url ?? null;
@@ -125,10 +124,9 @@ export function ProductEditorHeader({
 
   const menuProps = {
     refreshing,
-    optimizing,
     hasExternalUrl: Boolean(product.externalUrl),
     onRefresh,
-    onOptimize,
+    aiStudioHref,
     onOpenAliExpress: openSupplier,
     onViewHistory,
   };
