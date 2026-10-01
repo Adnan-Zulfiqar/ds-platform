@@ -16,6 +16,7 @@ from sqlalchemy import ColumnElement, Exists, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.context import require_tenant_id
 from app.core.exceptions import NotFoundError, ShopifyPublishBusyError
 from app.models.product import (
     ImportStatus,
@@ -529,8 +530,13 @@ class ProductVersionRepository(TenantScopedRepository[ProductVersion]):
         return (await self.session.execute(query)).scalar_one_or_none()
 
     async def next_version_number(self, product_id: uuid.UUID) -> int:
+        # Tenant predicate stated here (review finding B-1) rather than relying
+        # on the caller having already checked the product. Deliberately *not*
+        # the soft-delete filter of `_base_query`: the unique constraint on
+        # (product_id, version_number) counts every row, so must this.
         query = select(func.max(ProductVersion.version_number)).where(
-            ProductVersion.product_id == product_id
+            ProductVersion.product_id == product_id,
+            ProductVersion.tenant_id == require_tenant_id(),
         )
         current = (await self.session.execute(query)).scalar_one_or_none()
         return (current or 0) + 1

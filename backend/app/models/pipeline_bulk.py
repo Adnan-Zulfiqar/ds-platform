@@ -86,11 +86,13 @@ class PipelineBulkRun(TenantScopedBase):
             "heartbeat_at",
             postgresql_where=text("status = 'running'"),
         ),
+        # Composite with tenant_id (review finding B-2): the database, not only
+        # the service, refuses a run that names another tenant's store.
         ForeignKeyConstraint(
-            ["store_id"],
-            ["stores.id"],
+            ["tenant_id", "store_id"],
+            ["stores.tenant_id", "stores.id"],
             ondelete="RESTRICT",
-            name="fk_pipeline_bulk_runs_store",
+            name="fk_pipeline_bulk_runs_store_tenant",
         ),
     )
 
@@ -194,9 +196,41 @@ class PipelineBulkRunItem(TenantScopedBase):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PipelineBulkRunCancelRequest(TenantScopedBase):
+    """A merchant asked to cancel while a worker held the run row.
+
+    Review finding H-2. The worker keeps the run ``FOR UPDATE`` across one
+    whole item (image fetch plus three prompt calls), so a cancel that also
+    wanted that lock would hang the HTTP request for that long. The request
+    is written here instead — a different row, no wait — and the worker
+    honours it at the next item boundary under its own fence. Kept after it
+    is honoured, as the record of who asked and when.
+    """
+
+    __tablename__ = "pipeline_bulk_run_cancel_requests"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "run_id", name="uq_pipeline_bulk_run_cancel_requests_tenant_run"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"],
+            ["pipeline_bulk_runs.tenant_id", "pipeline_bulk_runs.id"],
+            ondelete="CASCADE",
+            name="fk_pipeline_bulk_run_cancel_requests_run_tenant",
+        ),
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 __all__ = [
     "PipelineBulkItemState",
     "PipelineBulkRun",
+    "PipelineBulkRunCancelRequest",
     "PipelineBulkRunItem",
     "PipelineBulkRunStatus",
 ]
