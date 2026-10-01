@@ -1,11 +1,28 @@
 # Phase 9 Stage 10 — AI Product Studio frontend plan
 
 **Status:** Planning only. Stage 10 is not implemented.
-**Date:** 2026-09-21
+**Date:** 2026-09-21. **Amended:** 2026-10-01 for the Claude return review
+(findings G-1, E-1, I-1, I-2, G-3, H-2 — see section 0).
 
 This document is the implementation contract for the merchant UI over the
-Stage 7, Stage 8, and Stage 9 APIs already on `develop`. It does not change
-those APIs.
+Stage 7, Stage 8 and Stage 9 APIs on `develop`, **as amended by the review
+remediation branch `fix/stage5-9-review-remediation`**. Stage 10
+implementation must not start until that branch has been independently
+reviewed, has run green CI, and is merged: this plan relies on contracts it
+adds.
+
+---
+
+## 0. Return-review amendments (2026-10-01)
+
+| Finding | What changed in this plan |
+|---|---|
+| G-1 | The Approve copy claimed approval "replaces the current product text". It does not. Section 5a defines the four content states; section 14 carries copy that matches the implemented behaviour |
+| E-1 | Published AI text is no longer silently replaced by an ordinary publish. The listing records `contentSource` / `contentVersionId`; sections 5a, 15, 28 and 29 use them |
+| I-1 | Every Stage 10 action that writes the Product row follows the token rule in section 27a |
+| I-2 | `ProductVersionRead.isPipelineCandidate` now exists; section 26 uses it |
+| G-3 | Tone is a server allowlist (`AITone`); section 28 |
+| H-2 | Bulk cancel can return `running` with `cancelRequestedAt`; section 22 |
 
 ---
 
@@ -18,9 +35,10 @@ those APIs.
 | `origin/develop` at planning start | `72e76921fc80b203133423ad3bd92bd380c7e02b` |
 | `origin/main` | `3ce66d488e94ad3805fe24903deda99691c234a6` (unchanged) |
 | Stage 7 | Fully closed |
-| Stage 8 | Fully closed (PR #23, merge `e65b2f5`) |
+| Stage 8 | Fully closed (PR #22, merge `91a7069`). Corrected 2026-10-01: an earlier revision named PR #23, which is the Stage 9 plan |
 | Stage 9 | Fully closed (PR #24, merge `72e7692`, post-merge CI `35656740281` 10/10) |
-| Alembic head | `0034` |
+| Review remediation | `fix/stage5-9-review-remediation` — prerequisite; unmerged when this was amended |
+| Alembic head | `0034` on `develop`; `0036` once the remediation merges |
 | Production | Undeployed |
 
 **Wire-contract revision.** The approve route, publish route, preview DTO,
@@ -160,6 +178,41 @@ it is presentation. The API still returns 403.
 
 ---
 
+## 5a. Content states (review finding G-1)
+
+Four things the merchant must never confuse. The review route shows each
+under its own name and never uses one name for another.
+
+| State | Where it lives | Changed by | Not changed by |
+|---|---|---|---|
+| **Current draft** — the title and description the merchant edits | `Product.title` / `Product.description` (`original.*` on the preview) | The draft editor only | Approve, publish, generate |
+| **Approved AI version** — the candidate the merchant approved | The active `ProductVersion`; `optimizedTitle` / `optimizedDescription` mirror it | Approve; Activate of another version in history | Draft edits, publish |
+| **Published on Shopify** — what the store shows | The listing's `contentSource` (`product` / `ai_version`) and `contentVersionId` | A successful publish | Approve, draft edits, generate |
+| **Next publish source** — what the next publish sends | Derived by the server | — | — |
+
+What the next publish sends (enforced by the backend, not the UI):
+
+| Action | Store shows before | Title/description sent | Store shows after |
+|---|---|---|---|
+| **Publish approved version** (pipeline publish, this page) | anything | that approved AI version | `ai_version` (that version) |
+| Ordinary publish (draft editor, Celery, retries) | draft text | current draft | `product` |
+| Ordinary publish | an AI version | **that same AI version** — kept | `ai_version` (unchanged) |
+| Ordinary publish after the confirmed **Use my draft text instead** | an AI version | current draft | `product` |
+
+**What approval changes:** only the approved AI version and its mirror
+fields. It does not change the draft, does not contact Shopify, and does not
+change what the next ordinary publish sends.
+
+**What publishing changes:** only what the store shows, and the listing's
+`contentSource` / `contentVersionId`. It never writes the draft.
+
+The review route shows a **Live on Shopify** line for the selected store,
+from `GET /drafts/{id}/listings`: "Your draft text" or "Approved AI version
+N". It never infers this from `candidateActive` — an approved version is not
+necessarily a published one.
+
+---
+
 ## 6. Single-product workflow
 
 Route: `/ai-studio/products/[productId]`.
@@ -259,7 +312,9 @@ No step calls approve or publish by itself.
 
 ## 7. Side-by-side comparison
 
-Desktop (`lg` and up): two columns, **Current** and **AI candidate**.
+Desktop (`lg` and up): two columns, **Current draft** and **AI candidate**
+(G-1: the left column is the draft text, which approval never changes — not
+"the current product" or "what is live").
 
 Below `lg`: the same blocks stacked, candidate first so the merchant sees
 the proposal without scrolling past the whole current product. Approve and
@@ -274,7 +329,7 @@ no `candidate.versionNumber`, and no `candidate.source`.
 | Title | `original.title` | `proposal.title` |
 | Description | `original.description` shown as text via the existing `stripHtml` helper | `proposal.description` as plain text (`whitespace-pre-wrap`). It is stored plain text |
 | Version | active version number from product detail when present | `candidateVersionNumber` |
-| What this column is | Current product | Label **AI candidate**. Do not read a `source` field; the response does not have one |
+| What this column is | **Current draft** | Label **AI candidate**. Do not read a `source` field; the response does not have one |
 | Provider | — | `provider` |
 | Active | — | `candidateActive` |
 | Synthetic | — | `isSynthetic` (section 16) |
@@ -548,10 +603,14 @@ changed.
 
 Confirm dialog title: **Approve this AI version?**
 
-Body: "This replaces the current product text with this exact candidate. It
-does not publish to Shopify."
+Body (review finding G-1 — the earlier "This replaces the current product
+text" was false; approval never writes the draft):
 
-Confirm button: **Approve version**. Cancel: **Keep current version**.
+"Makes this the approved AI version. Your current draft text remains
+unchanged. Nothing changes on Shopify until you publish."
+
+Confirm button: **Approve version**. Cancel: **Not now**. ("Keep current
+version" is withdrawn: it implied the draft would otherwise change.)
 
 After 200:
 
@@ -563,7 +622,10 @@ After 200:
   promoted if the follow-up GET reports a later active-candidate token
   (section 11).
 - Publish stays disabled until that refetch says `publishable`.
-- No Shopify request has been made. Copy under the badge says so.
+- No Shopify request has been made. Copy under the badge: "Approved. Your
+  draft and your Shopify listing are unchanged."
+- The **Current draft** column (section 7) does not change; the section 5a
+  **Live on Shopify** line does not change.
 
 Approve is shown only when `candidateActive === false` and there is no
 `stale_preview` pipeline blocker. Approve is hidden when
@@ -585,8 +647,17 @@ Not `POST /integrations/shopify/publish`. Stage 8 publish already calls the
 existing publisher. The response is `ShopifyPublishResponse` (`message`,
 `listingId`, `externalProductId`, `externalHandle`, `externalGraphqlId`,
 `shopDomain`, `storefrontUrl`, `adminUrl`, `onlineStorePublished`,
-`updated`). Reuse `ShopifyPublishResult`. Do not expect pipeline version ids
-in the body. The candidate id remains the route and the local review state.
+`updated`, and since the remediation `contentSource` / `contentVersionId`).
+Reuse `ShopifyPublishResult`. A successful pipeline publish returns
+`contentSource: "ai_version"` and `contentVersionId` equal to this
+candidate; the UI then shows **Live on Shopify: Approved AI version N**.
+The candidate id remains the route and the local review state.
+
+Durability (review finding E-1): once published, this AI text stays live.
+Later ordinary publishes from the draft editor, Celery or retries re-send it.
+The draft editor's Review & publish panel says so and offers **Use my draft
+text instead…** behind a confirmation — already implemented by the
+remediation branch; Stage 10 must not add a second replacement path.
 
 UI:
 
@@ -784,6 +855,13 @@ instant."
 
 `POST /products/pipeline/runs/{runId}/cancel`.
 
+Since review finding H-2, cancel never waits on the worker. If a product is
+mid-generation the response is still `status: "running"` with
+`cancelRequestedAt` set; the worker stops at the next product boundary and
+the run becomes `cancelled`. While `cancelRequestedAt` is set and status is
+`running`, show **Cancelling…**, keep polling (section 20), and disable the
+Cancel button. A second click is harmless (idempotent) but not offered.
+
 Then refetch the summary on the same query key. Item rows update from the
 server. The client does not mark leftover pending rows as skipped.
 
@@ -853,8 +931,10 @@ review path. That is the ambiguity this stage exists to remove.
 
 ## 26. Version-history activation conflict
 
-`ProductVersionRead` cannot flag a pipeline candidate. Stage 10 does not add
-that field.
+Amended for review finding I-2: `ProductVersionRead.isPipelineCandidate` now
+exists (true for any row carrying pipeline metadata, malformed included), and
+the remediation branch already removed Activate from those rows. Stage 10
+only adds the link.
 
 Sheet behaviour:
 
@@ -862,7 +942,11 @@ Sheet behaviour:
 |---|---|
 | Active version | Current badge. No Activate |
 | Inactive, `source === original` | **Activate** (restore). This is the pre-AI snapshot path Stage 7 still allows |
-| Inactive, `source === ai_generated` | **Review in AI Studio** linking to `?candidate=`. No Activate button on the sheet |
+| Inactive, `isPipelineCandidate === true` | **Review in AI Studio** linking to `?candidate=`. No Activate (already true) |
+| Inactive, `source === ai_generated`, `isPipelineCandidate === false` | **Activate** — a legacy optimize version, which Stage 7 still allows |
+
+Activate on the sheet obeys section 27a (blocked while the editor is dirty
+or conflicted; the editor adopts the returned token).
 
 The review page classifies:
 
@@ -891,6 +975,28 @@ pipeline metadata can classify into the same 422 branch. Backend fail-closed
 behaviour already blocks unsafe activation.
 
 ---
+
+## 27a. Product-row writes and open editors (review finding I-1)
+
+Approve, Activate and legacy Optimize all write the Product row and move its
+`updatedAt`. The rule the remediation branch implemented in the draft editor
+applies to every Stage 10 action that does this:
+
+- The action does not start from inside the draft editor while it is dirty
+  or conflicted; the merchant is told to save first.
+- On success, invalidate **both** `productKeys.detail(id)` and
+  `draftKeys.detail(id)`. An editor that started the action and has not been
+  edited since re-baselines from the returned product.
+- If the merchant edited while the request ran, nothing is adopted
+  silently: they are told, and the server's 409 review runs on the next
+  save.
+- Put the success callback on the `useMutation` options, not on
+  `mutate(…, { onSuccess })`: a per-call callback does not run if the
+  component unmounts mid-request (found while testing I-1).
+
+The Studio route is a separate page from the editor. Approving there while
+the editor is open in another tab is a genuine concurrent change, and the
+editor's existing 409 review handles it; that is intended, not a defect.
 
 ## 27. React Query design
 
@@ -984,6 +1090,15 @@ Families, matching the camelCase wire:
 `state`, `candidateVersionId` (nullable), `errorCode`, `errorMessage`,
 `attemptCount`, `finishedAt`.
 
+`PipelineBulkRun` also carries `cancelRequestedAt` (nullable, H-2).
+
+Already added by the remediation branch — reuse, do not redefine:
+`AITone` (the five tones; the server rejects anything else with 422),
+`ListingContentSource`, `StoreListing.contentSource` / `contentVersionId`,
+`ShopifyPublishResult.contentSource` / `contentVersionId`,
+`ProductVersion.isPipelineCandidate`. `PipelinePreviewRequest.tone` is
+`AITone`, not `string`.
+
 Timestamps stay `string` (ISO), matching the rest of `api.ts`. No `any`.
 
 ---
@@ -1011,6 +1126,8 @@ to the stable reason (`stale_preview`, `draft_version_stale`,
 | 422 reason `not_a_pipeline_candidate` | This version cannot be reviewed as a valid pipeline candidate | Section 26 panel. Ordinary legacy Activate may apply; corrupt metadata must fail closed without a loop |
 | 422 reason `pipeline_candidate_requires_approval` | Approve this version in AI Studio | Link to the review route |
 | 409 `pipeline_bulk_run_active` | Another bulk optimization is running | Section 23. This code is stable |
+| 409 reason `published_ai_content_unavailable` (ordinary publish) | The AI text live on Shopify can no longer be read | Offer only the explicit **Use my draft text instead…** path. Never retry silently (E-1) |
+| 422 `validation_error` on `tone` | Choose one of the listed tones | A client bug; the select only offers `AITone` values (G-3) |
 | 409 `conflict` without those reasons | Someone else updated this product or this run key | Reload. Do not blind-retry with a new key |
 | 503 `ai_error` on single-product POST preview | AI preview is unavailable right now. May show `requestId` | No automatic retry loop. Merchant may click Generate preview again. Do **not** diagnose missing provider config from this code alone. Stage 8 catches provider failures inside prompt execution and re-raises a base `AIError`, so single preview does **not** reliably return `ai_provider_not_configured` |
 | Bulk run / item failure after Stage 9 provider preflight | Show the durable run `failureReason` / item `errorCode` as returned | Stage 9 may terminalize a run when the provider is not configured. That is durable bulk state, not proof that Stage 8 single preview returns `ai_provider_not_configured`. Do not change PromptService or ProductOptimizationService in Stage 10 |
@@ -1116,11 +1233,13 @@ No backend files. No migration.
 
 ## 34. Backend-gap assessment
 
-**No backend change in Stage 10.**
+**No backend change in Stage 10.** The backend changes this plan relies on
+(`contentSource`, `isPipelineCandidate`, tone allowlist, non-blocking cancel)
+are delivered by the review remediation branch, not by Stage 10.
 
 | Gap | Class | Why it does not block |
 |---|---|---|
-| Version list cannot mark pipeline vs legacy | LOW | GET preview classifies before any Activate control is shown for `ai_generated` rows |
+| ~~Version list cannot mark pipeline vs legacy~~ | closed | `isPipelineCandidate` added by the remediation (I-2) |
 | 409 active-run has no run id, and there is no list endpoint | LOW | Same browser stores the id from the 202 it started. Another device gets an honest message and does not retry. A list endpoint would be a new contract and is out of scope |
 | `ProductVersionRead` has no `isSynthetic` | LOW | Synthetic is on the pipeline preview payload, which is what the review screen renders |
 
@@ -1233,6 +1352,27 @@ Playwright, route-mocked, unless noted.
 - An unrecognized image status does not throw
 - Blocker `message` from the fixture is shown; the client does not add one
 
+**Content states — acceptance** (review finding G-1, same spec):
+
+- The Approve dialog body is exactly "Makes this the approved AI version.
+  Your current draft text remains unchanged. Nothing changes on Shopify until
+  you publish." and contains no "replaces"
+- After approve 200: the **Current draft** column is unchanged; the **Live
+  on Shopify** line is unchanged; no `/integrations/shopify/publish` or
+  pipeline publish request was made
+- Listing fixture `contentSource: "product"` → "Live on Shopify: Your draft
+  text"; `contentSource: "ai_version"` with this candidate's id →
+  "Approved AI version N"; with another version's id → that version's number,
+  not this candidate's
+- After pipeline publish 200 with `contentSource: "ai_version"` the line
+  updates from the refetched listing, not from local state
+- An approved but unpublished candidate never shows as live
+
+The backend half of these states is already covered on the remediation
+branch (`test_listing_content_source.py`, including
+`TestApprovalAloneChangesNothingOnShopify`) and the editor half by
+`review-remediation.spec.ts`. Stage 10 must keep both green.
+
 **Bulk** (`ai-product-studio-bulk.spec.ts`):
 
 - Drafts view is default and a draft row can be selected
@@ -1302,11 +1442,14 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 
 Playwright: the two new specs plus the regression specs above.
 
-Backend: no source change, so no new backend tests and no pytest obligation
-from this stage.
+Backend: no source change in Stage 10, so no new backend tests from this
+stage.
 
-PR CI on the implementation PR: 10/10. Alembic head remains `0034`. No
-migration `0035`.
+Prerequisite: `fix/stage5-9-review-remediation` merged with green CI.
+
+PR CI on the implementation PR: 10/10 — **actually run**, not assumed. If
+GitHub Actions does not start (as on 2026-09-22), the PR stays unmerged.
+Alembic head is `0036` (from the remediation); Stage 10 adds no migration.
 
 ---
 
@@ -1403,9 +1546,12 @@ stays undeployed.
 
 ## 43. Claude checkpoint
 
-CLAUDE RETURN REVIEW CHECKPOINT:
-All commits from Stage 5 takeover onward require a fresh Claude
-end-to-end review when Claude becomes available again.
+CLAUDE RETURN REVIEW CHECKPOINT — done 2026-09-30. The review found two
+MEDIUM gaps in this plan (G-1 false Approve copy; E-1 no answer for what
+happens to published AI text) and a set of backend contracts it now relies
+on. Both are amended above (section 0). This amended plan, and the
+remediation branch, need a fresh independent review before either merges,
+and Stage 10 implementation does not start before that.
 
 ---
 
@@ -1433,5 +1579,9 @@ regress.
 | Backend / Stage 11 / deployment creep | Closed: docs only; no implementation |
 | Legacy optimize still bypasses review | Closed: removed from primary UI; backend route kept |
 | Auto approve / auto publish | Closed: both require a confirm |
+| Approve copy claims the draft is replaced (G-1) | Closed 2026-10-01: section 14 copy; section 5a states |
+| Published AI text silently reverted by a later publish (E-1) | Closed 2026-10-01: enforced by the backend on the remediation branch; section 15 |
+| Product-row write leaves an open editor with a stale token (I-1) | Closed 2026-10-01: section 27a |
+| Stage 8 baseline cited the wrong PR | Closed 2026-10-01: section 1 |
 
 **BLOCKER 0. HIGH 0. MEDIUM 0.** LOWs are section 40 only.
