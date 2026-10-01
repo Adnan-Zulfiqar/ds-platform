@@ -1,15 +1,23 @@
 # Phase 9 Stage 10 — AI Product Studio frontend plan
 
-**Status:** Planning only. Stage 10 is not implemented.
+**Status:** Plan reconciled with `develop` @ `df0e41f`; implementation
+starting (2026-10-02).
 **Date:** 2026-09-21. **Amended:** 2026-10-01 for the Claude return review
-(findings G-1, E-1, I-1, I-2, G-3, H-2 — see section 0).
+(findings G-1, E-1, I-1, I-2, G-3, H-2 — see section 0); 2026-10-02 contract
+reconciliation (section 0a).
 
 This document is the implementation contract for the merchant UI over the
-Stage 7, Stage 8 and Stage 9 APIs on `develop`, **as amended by the review
-remediation branch `fix/stage5-9-review-remediation`**. Stage 10
-implementation must not start until that branch has been independently
-reviewed, has run green CI, and is merged: this plan relies on contracts it
-adds.
+Stage 7, Stage 8 and Stage 9 APIs on `develop`, as amended by the review
+remediation. That remediation merged into `develop` as `2b71f65` (PR #26,
+CI 10/10 on its head) on 2026-10-01.
+
+**Entry gate, changed by the owner.** The 2026-10-01 text required an
+independent review of the remediation before Stage 10 began. The owner's
+autonomous-completion roadmap (2026-10-01) moved Cursor's independent review
+to the end of implementation; the remediation was integrated as
+`AUTHOR_VERIFIED — INTEGRATED — CURSOR_REVIEW_PENDING`. Recorded in
+`docs/completion/DECISIONS.md` D-001. The independent review is deferred,
+not waived.
 
 ---
 
@@ -23,6 +31,61 @@ adds.
 | I-2 | `ProductVersionRead.isPipelineCandidate` now exists; section 26 uses it |
 | G-3 | Tone is a server allowlist (`AITone`); section 28 |
 | H-2 | Bulk cancel can return `running` with `cancelRequestedAt`; section 22 |
+
+---
+
+## 0a. Contract reconciliation against `develop` @ `df0e41f` (2026-10-02)
+
+Every contract below was re-read from the backend code on `develop`
+(routers, schemas, services). **Where this section and a later section
+disagree, this section wins.** Everything not listed matched the code:
+paths, approve and publish bodies, 201/202 statuses, the active-candidate
+approve no-op, `pipeline_bulk_run_active` without a run id, item `state` vs
+run `status`, `cancelRequestedAt`, the tone list, readiness action strings,
+and Store not-found as `not_found` with a `resource: Store` detail.
+
+**Error envelope.** `details` is a list of `{field, message, type}`. A
+service `details={"reason": X}` reaches the client as
+`{type: "reason", message: X}`. The client reads reasons with a helper that
+finds `type === "reason"`. Codes attached to reasons:
+
+| Reason | HTTP / code |
+|---|---|
+| `candidate_not_approved`, `synthetic_publish_blocked`, `ai_provenance_unverified`, `candidate_title_not_publishable`, `candidate_description_too_long`, `candidate_content_invalid`, `original_not_approvable`, `not_a_pipeline_candidate`, `pipeline_candidate_requires_approval`, `publish_blocked`, `destination_mismatch`, `selling_currency_mismatch` | 422 `validation_error` |
+| `stale_preview`, `draft_version_stale`, `published_ai_content_unavailable` | 409 `conflict` |
+| — | 409 `shopify_publish_busy` (product lock waited > 30 s) |
+| — | 409 `pipeline_bulk_run_active` (empty `details`) |
+| — | 429 `rate_limit_exceeded` (bulk start: 10 per 60 s per tenant+user; idempotent retries count) |
+| — | 503 `ai_error` (single preview generation failure) |
+
+**Corrections to later sections.**
+
+| # | Section | Plan said | Code on develop |
+|---|---|---|---|
+| 1 | §3 | store picker `useShopifyStores` | `useStores({ size: 50 })` (`services/stores.ts`) filtered to `platform === "shopify"`, as the draft editor does |
+| 2 | §3 | list helper `toQuery` | `toListParams` (`services/list-query.ts`) |
+| 3 | §3, §6 | `stripHtml` is shared | private in `published-product-summary.tsx` and `draft-preview-panel.tsx`; Stage 10 extracts one shared helper |
+| 4 | §4 | `ProductVersion` has prices | no prices anywhere; the frontend type also lacks `seoTitle`, `seoDescription`, `keywords` and the `quality*` fields — added in Stage 10 |
+| 5 | §4 | sheet shows Activate on every inactive row | already hidden when `isPipelineCandidate` (I-2) |
+| 6 | §7, §28 | proposal keywords/tags arrays | `keywords: string \| null`; `proposal.tags` is always `[]` — Studio does not show AI tags |
+| 7 | §8 | repetition booleans on `repetition` | under `dimensions.repetition.checks.{titleNotStuffed, descriptionNotPhraseStuffed, descriptionNotDominated, descriptionDistinctFromTitle}` |
+| 8 | §8, §28 | `seoFormat` optional | always present, nullable: `{seoTitleWithinRequestedBound, seoDescriptionWithinRequestedBound, keywordsPresent}` |
+| 9 | §9 | failed image has `analysis: null` | `fetchFailed` / `decodeFailed` carry an `analysis` object with `checks: null` and `errorCode` (an exception class name); `unknown` means nothing stored |
+| 10 | §12 | `draft_version_stale` = active version moved | it fires when `expectedUpdatedAt` ≠ `Product.updatedAt` |
+| 11 | §21 | items page size 20 by default | backend default 25, max 100; Studio sends `size=20` explicitly |
+| 12 | §18 | search param "search" | `q` |
+| 13 | §22 | cancel always 200 | cancel on `completed` / `partial` / `failed` → 409 `conflict`; already cancelled → 200 (idempotent) |
+| 14 | §19, §29 | no 429 | bulk start can return 429 `rate_limit_exceeded` with `Retry-After`; the UI shows the wait and does not auto-retry |
+| 15 | §29 | >50 ids shows `details` messages | the service 422 for >50 has no `details`; the UI prevents it client-side (50-cap) and shows `message` if it ever happens |
+| 16 | §29 | publish errors | add `publish_blocked` (with a `blocker_codes` detail, comma-separated), `shopify_publish_busy`, `ai_provenance_unverified`, `candidate_title_not_publishable`, `candidate_description_too_long`, `destination_mismatch`, `selling_currency_mismatch` |
+| 17 | §29 | approve errors | add `original_not_approvable`, `candidate_content_invalid` |
+| 18 | §23 | run id field `runId` | `id` on `PipelineBulkRunRead` |
+| 19 | §5a, §35 | "Approved AI version N" from the listing | the listing has only `contentVersionId`; the number comes from the current candidate when ids match, else from the versions list (`useProductVersions`, page 1, size 50), else "an approved AI version" |
+| 20 | §6 step 3 | unknown store fails fast | a bad `storeId` 404s only after analysis and generation ran; the UI sends only ids from the connected-store list |
+| 21 | §26, §27a | Activate uses a token | Activate takes no body and no token; editor rules adopt `updatedAt` from its response only |
+| 22 | §39 | "Sheet has no Activate for `ai_generated`" | superseded by §26: legacy `ai_generated` rows with `isPipelineCandidate: false` keep Activate |
+| 23 | §40 item 2 | "Version list has no pipeline flag" | withdrawn; `isPipelineCandidate` exists (I-2) |
+| 24 | §28 | bulk run/item fields | run: `id, status, idempotencyKey, tone, storeId, heartbeatAt, recoveryCount, startedAt, finishedAt, createdAt, totalCount, processedCount, succeededCount, failedCount, skippedCount, missingCount, failureReason, cancelRequestedAt`; item: `submittedProductId, productId \| null, state, candidateVersionId \| null, errorCode, errorMessage, attemptCount, finishedAt` |
 
 ---
 
@@ -1475,7 +1538,7 @@ Alembic head is `0036` (from the remediation); Stage 10 adds no migration.
 | Risk | Mitigation in this plan |
 |---|---|
 | Merchant still one click from silent activation | Primary optimize controls removed |
-| Activate on a pipeline row | Sheet has no Activate for `ai_generated`; GET preview classifies first |
+| Activate on a pipeline row | Sheet has no Activate where `isPipelineCandidate` is true (legacy `ai_generated` rows keep it, §26); GET preview classifies first |
 | Publish sent with inactive approvalToken | Publish only when `candidateActive` and `currentPublishToken` come from approve response and/or active GET |
 | Already-approved reopen has no publish token | Active GET sets `currentPublishToken` from `approvalExpectedUpdatedAt`; Approve stays hidden |
 | Lost publish token after approve | Retry approve; adopt `updatedAt`; GET may promote a later active token |
@@ -1508,8 +1571,9 @@ Alembic head is `0036` (from the remediation); Stage 10 adds no migration.
 1. **Cross-device active run.** Another browser that did not start the run
    cannot deep-link it after 409, because the API does not return the run id.
    The UI says so and does not retry. A list endpoint is not part of Stage 10.
-2. **Version list has no pipeline flag.** Classification is a GET preview
-   when the merchant opens the candidate, not a badge on every history row.
+2. ~~**Version list has no pipeline flag.**~~ Withdrawn 2026-10-02:
+   `isPipelineCandidate` exists (I-2). It marks malformed pipeline rows too,
+   so a GET preview still classifies a row before the merchant acts on it.
 3. **No frontend unit runner.** Assertions live in Playwright. This stage
    does not add Vitest.
 4. **Legacy hook may remain uncalled.** The backend route stays. Primary UI
@@ -1549,9 +1613,15 @@ stays undeployed.
 CLAUDE RETURN REVIEW CHECKPOINT — done 2026-09-30. The review found two
 MEDIUM gaps in this plan (G-1 false Approve copy; E-1 no answer for what
 happens to published AI text) and a set of backend contracts it now relies
-on. Both are amended above (section 0). This amended plan, and the
-remediation branch, need a fresh independent review before either merges,
-and Stage 10 implementation does not start before that.
+on. Both are amended above (section 0). The 2026-10-01 text required a
+fresh independent review before either merged and before Stage 10 began.
+
+2026-10-02: the owner moved the independent (Cursor) review to the end of
+implementation (`docs/completion/DECISIONS.md` D-001). The remediation is
+integrated (`2b71f65`) as author-verified with review pending; this plan was
+reconciled with the merged code (section 0a) and implementation starts on
+that basis. Cursor reviews plan and implementation together; checkpoint
+`docs/reviews/cursor/checkpoints/DP-CR-009.md`.
 
 ---
 
