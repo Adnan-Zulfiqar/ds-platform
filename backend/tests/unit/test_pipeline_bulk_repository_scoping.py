@@ -1,8 +1,9 @@
-"""Tenant isolation for the SQL moved out of the bulk service (A-2) and for
-the version-number query (B-1).
+"""Tenant isolation for pipeline bulk run repositories.
 
-No database: each repository method runs against a session double that
-records the statement it was given, and the compiled SQL is inspected.
+Compiled-SQL inspection, no database. Required for every new tenant-scoped
+repository. The method-level tests below cover the SQL moved out of the bulk
+service (review finding A-2) and the version-number query (B-1): each method
+runs against a session double that records the statement it was given.
 Behaviour against real rows is covered by the Stage 9 integration suites.
 """
 
@@ -18,6 +19,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from app.core.context import MissingTenantContextError, clear_context, set_tenant_id
+from app.repositories.base import TenantScopedRepository
 from app.repositories.pipeline_bulk import (
     PipelineBulkRunCancelRequestRepository,
     PipelineBulkRunItemRepository,
@@ -27,6 +29,54 @@ from app.repositories.pipeline_bulk import (
 from app.repositories.product import ProductVersionRepository
 
 pytestmark = pytest.mark.unit
+
+REPOSITORIES: list[tuple[type[TenantScopedRepository[object]], str]] = [
+    (PipelineBulkRunRepository, "pipeline_bulk_runs"),  # type: ignore[list-item]
+    (PipelineBulkRunItemRepository, "pipeline_bulk_run_items"),  # type: ignore[list-item]
+    (
+        PipelineBulkRunCancelRequestRepository,  # type: ignore[list-item]
+        "pipeline_bulk_run_cancel_requests",
+    ),
+]
+
+
+def _compile(query: object) -> str:
+    return str(
+        query.compile(  # type: ignore[attr-defined]
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+
+@pytest.mark.parametrize(("repository_class", "table"), REPOSITORIES)
+def test_every_read_is_filtered_by_the_bound_tenant(
+    repository_class: type, table: str, tenant_id: uuid.UUID
+) -> None:
+    set_tenant_id(tenant_id)
+    sql = _compile(repository_class(MagicMock())._base_query())
+
+    assert f"{table}.tenant_id" in sql
+    assert str(tenant_id) in sql
+
+
+@pytest.mark.parametrize(("repository_class", "table"), REPOSITORIES)
+def test_every_read_excludes_soft_deleted_rows(
+    repository_class: type, table: str, tenant_id: uuid.UUID
+) -> None:
+    set_tenant_id(tenant_id)
+    sql = _compile(repository_class(MagicMock())._base_query())
+
+    assert "deleted_at IS NULL" in sql
+
+
+@pytest.mark.parametrize(("repository_class", "table"), REPOSITORIES)
+def test_a_missing_tenant_context_raises_rather_than_returning_everything(
+    repository_class: type, table: str
+) -> None:
+    clear_context()
+    with pytest.raises(MissingTenantContextError):
+        repository_class(MagicMock())._base_query()
 
 
 class _RecordingSession:
