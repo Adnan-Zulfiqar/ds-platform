@@ -584,7 +584,15 @@ export interface StoreListing {
   lastError: string | null;
   publishedAt: string | null;
   lastFailedSyncAt: string | null;
+  /** What the store shows (review finding E-1): the draft text, or an
+   * approved AI version that ordinary publishing keeps until the merchant
+   * explicitly replaces it. Optional so older fixtures still type-check. */
+  contentSource?: ListingContentSource;
+  contentVersionId?: string | null;
 }
+
+/** Which text a channel listing currently shows. */
+export type ListingContentSource = "product" | "ai_version";
 
 export interface ShopifyPublishResult {
   message: string;
@@ -597,6 +605,8 @@ export interface ShopifyPublishResult {
   adminUrl: string | null;
   onlineStorePublished: boolean | null;
   updated: boolean;
+  contentSource?: ListingContentSource;
+  contentVersionId?: string | null;
 }
 
 /** One server-authoritative publish blocker or recommendation. */
@@ -641,14 +651,20 @@ export interface ProductVersion {
   title: string | null;
   description: string | null;
   active: boolean;
+  /** A Stage 7 pipeline candidate (including malformed metadata). Plain
+   * Activate is refused for these; approval is a separate flow (I-2). */
+  isPipelineCandidate?: boolean;
   aiProvider: string | null;
   promptExecutionId: string | null;
   createdByUserId: string | null;
   createdAt: string;
 }
 
+/** The tones the API accepts for AI generation (review finding G-3). */
+export type AITone = "professional" | "persuasive" | "luxury" | "technical" | "friendly";
+
 export interface ProductOptimizePayload {
-  tone?: string;
+  tone?: AITone;
 }
 
 export interface ProductOptimizeResult {
