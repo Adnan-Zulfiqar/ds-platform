@@ -1,19 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { isApiReachable } from "./helpers/auth";
-import {
-  registerViaApi,
-  seedCatalogueViaApi,
-  signInWithAccount,
-} from "./helpers/catalogue";
+import { API_URL, isApiReachable } from "./helpers/auth";
+import { registerViaApi, signInWithAccount } from "./helpers/catalogue";
+import { canSeed, seedDrafts } from "./helpers/seed";
 
 /**
- * Phase 9 stage 3 — product optimisation foundation UI.
+ * Product optimisation in the catalogue, after Phase 9 Stage 10.
+ *
+ * The Stage 3 "Optimize with AI" button generated *and activated* AI text in
+ * one click. Stage 10 retired it from every primary screen in favour of AI
+ * Studio, where nothing is approved or published without a confirmation.
  *
  * Two layers:
- * 1. Route-mocked specs that always run (button, history empty state, error).
- * 2. Live-seeded specs that exercise StubProvider end-to-end when AliExpress
- *    OAuth+import can complete; otherwise skip — same posture as products.spec.
+ * 1. Route-mocked catalogue: the row links to AI Studio and nothing calls the
+ *    legacy endpoint (which the backend keeps).
+ * 2. Live: a draft seeded straight into the test database (no AliExpress
+ *    OAuth) goes through the real API with StubProvider — preview, approve,
+ *    and the server refusing to publish synthetic text.
  */
 
 const PRODUCT_ID = "11111111-1111-1111-1111-111111111111";
@@ -83,17 +86,22 @@ test.beforeAll(async () => {
   );
 });
 
-test.describe("Product optimization foundation (mocked catalogue)", () => {
+test.describe("Catalogue entry point (mocked catalogue)", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("shows the optimize button, AI status, and history control", async ({
+  test("rows link to AI Studio, keep the AI status and history control, and never optimize in place", async ({
     page,
     request,
   }) => {
+    let optimizeCalls = 0;
     // API registration + UI sign-in avoids UI-registration flakes under parallel load.
     const { account } = await registerViaApi(request);
     await signInWithAccount(page, account);
     await mockProductList(page, "not_optimized");
+    await page.route("**/api/v1/products/*/optimize", (route) => {
+      optimizeCalls += 1;
+      return route.fulfill({ status: 500, body: "{}" });
+    });
     await page.goto("/products");
 
     // `product-row` is the table row only (the phone card is `product-card`
@@ -102,16 +110,16 @@ test.describe("Product optimization foundation (mocked catalogue)", () => {
     const row = page.getByTestId("product-row");
     await expect(row).toHaveCount(1);
     await expect(row.getByTestId("ai-status-badge")).toHaveText("Not optimized");
-    await expect(
-      page.getByRole("button", { name: "Optimize with AI" }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Optimize with AI" })).toHaveCount(0);
+    await expect(row.getByRole("link", { name: "AI Studio" })).toHaveAttribute(
+      "href",
+      `/ai-studio/products/${PRODUCT_ID}`,
+    );
     await expect(page.getByRole("button", { name: "History" })).toBeVisible();
+    expect(optimizeCalls).toBe(0);
   });
 
-  test("version history sheet shows the empty state before any optimisation", async ({
-    page,
-    request,
-  }) => {
+  test("version history points an empty product at AI Studio", async ({ page, request }) => {
     const { account } = await registerViaApi(request);
     await signInWithAccount(page, account);
     await mockProductList(page, "not_optimized");
@@ -121,14 +129,7 @@ test.describe("Product optimization foundation (mocked catalogue)", () => {
         contentType: "application/json",
         body: JSON.stringify({
           items: [],
-          meta: {
-            page: 1,
-            size: 50,
-            totalItems: 0,
-            totalPages: 0,
-            hasNext: false,
-            hasPrevious: false,
-          },
+          meta: { page: 1, size: 50, totalItems: 0, totalPages: 0, hasNext: false, hasPrevious: false },
         }),
       });
     });
@@ -137,71 +138,62 @@ test.describe("Product optimization foundation (mocked catalogue)", () => {
     await page.getByRole("button", { name: "History" }).click();
 
     await expect(page.getByRole("heading", { name: "Version history" })).toBeVisible();
-    await expect(page.getByText(/Not optimized yet/i)).toBeVisible();
-  });
-
-  test("surfaces an error when optimisation fails", async ({ page, request }) => {
-    const { account } = await registerViaApi(request);
-    await signInWithAccount(page, account);
-    await mockProductList(page, "not_optimized");
-    await page.route(`**/api/v1/products/${PRODUCT_ID}/optimize`, async (route) => {
-      await route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({
-          code: "ai_provider_unavailable",
-          message: "AI provider is not configured.",
-          details: [],
-          requestId: "e2e-opt-fail",
-        }),
-      });
-    });
-
-    await page.goto("/products");
-    await page.getByRole("button", { name: "Optimize with AI" }).click();
-
-    // Next.js also mounts a route announcer with role=alert — scope to the row.
-    await expect(
-      page.getByTestId("product-row").getByText("AI provider is not configured."),
-    ).toBeVisible();
+    await expect(page.getByText(/No AI versions yet\. Use AI Studio/)).toBeVisible();
+    await expect(page.getByText(/Optimize with AI/)).toHaveCount(0);
   });
 });
 
-test.describe("Product optimization foundation (live seed)", () => {
+test.describe("AI Studio with StubProvider (live backend, seeded draft)", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("optimises a seeded product and shows version history", async ({
-    page,
-    request,
-  }) => {
-    const seeded = await seedCatalogueViaApi(request);
-    test.skip(
-      seeded === null,
-      "Catalogue seeding failed — OAuth or import could not complete against this backend.",
+  test("preview, approve, and the server refusing to publish synthetic text", async ({ page, request }) => {
+    test.skip(!(await canSeed()), "Draft seeding is not available in this environment.");
+    const { account, accessToken, tenantId } = await registerViaApi(request);
+    await seedDrafts(tenantId, 1, { prefix: "Studio lamp" });
+    const auth = { Authorization: `Bearer ${accessToken}` };
+    const drafts = await request.get(`${API_URL}/api/v1/drafts`, { headers: auth });
+    expect(drafts.ok(), await drafts.text()).toBeTruthy();
+    const productId = ((await drafts.json()) as { items: { id: string }[] }).items[0]?.id;
+    expect(productId).toBeTruthy();
+
+    await signInWithAccount(page, account);
+    await page.goto(`/ai-studio/products/${productId}`);
+
+    const generated = page.waitForResponse(
+      (r) => r.url().endsWith(`/products/${productId}/pipeline/preview`) && r.request().method() === "POST",
     );
+    await page.getByTestId("ai-studio-generate").click();
+    expect((await generated).status()).toBe(201);
+    await expect(page).toHaveURL(/\?candidate=/);
+    await expect(page.getByTestId("ai-studio-test-preview")).toContainText("Test AI preview");
+    const candidateId = new URL(page.url()).searchParams.get("candidate");
+    expect(candidateId).toBeTruthy();
 
-    await signInWithAccount(page, seeded.account);
-    await page.goto("/drafts");
-
-    const row = page.getByTestId("draft-row");
-    await expect(row).toHaveCount(1);
-    await expect(row.getByTestId("ai-status-badge")).toHaveText("Not optimized");
-
-    const optimizeResponse = page.waitForResponse(
-      (r) => r.url().includes("/optimize") && r.request().method() === "POST",
+    const approved = page.waitForResponse(
+      (r) => r.url().endsWith(`/pipeline/versions/${candidateId}/approve`) && r.request().method() === "POST",
     );
-    await page.getByRole("button", { name: "Optimize with AI" }).click();
-    expect((await optimizeResponse).status()).toBe(201);
+    await page.getByTestId("ai-studio-approve").click();
+    await page.getByTestId("ai-studio-approve-confirm").click();
+    expect((await approved).status()).toBe(200);
+    await expect(page.getByTestId("ai-studio-approved")).toBeVisible();
+    await expect(page.getByTestId("ai-studio-approved-badge")).toBeVisible();
+    // Synthetic text never gets a publish button that works.
+    await expect(page.getByTestId("ai-studio-publish")).toBeDisabled();
 
-    await expect(row.getByTestId("ai-status-badge")).toHaveText("Optimized", {
-      timeout: 15_000,
-    });
-
-    await page.getByRole("button", { name: "History" }).click();
-    await expect(page.getByRole("heading", { name: "Version history" })).toBeVisible();
-    await expect(page.getByTestId("product-version-row")).toHaveCount(2);
-    await expect(page.getByText("Original")).toBeVisible();
-    await expect(page.getByText("AI generated")).toBeVisible();
-    await expect(page.getByText("Active")).toBeVisible();
+    // And the server refuses it even when asked directly.
+    const product = await request.get(`${API_URL}/api/v1/products/${productId}`, { headers: auth });
+    const updatedAt = ((await product.json()) as { updatedAt: string }).updatedAt;
+    const forced = await request.post(
+      `${API_URL}/api/v1/products/${productId}/pipeline/versions/${candidateId}/publish`,
+      {
+        headers: auth,
+        data: { storeId: "00000000-0000-4000-8000-000000000000", expectedUpdatedAt: updatedAt },
+      },
+    );
+    expect(forced.status()).toBe(422);
+    const body = (await forced.json()) as { details: { type: string; message: string }[] };
+    expect(body.details).toContainEqual(
+      expect.objectContaining({ type: "reason", message: "synthetic_publish_blocked" }),
+    );
   });
 });
