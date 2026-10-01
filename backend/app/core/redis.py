@@ -88,6 +88,25 @@ async def close_redis_clients() -> None:
     logger.info("redis_clients_closed")
 
 
+async def take_once(client: Redis[str], key: str) -> str | None:
+    """Read a single-use value and delete it, atomically.
+
+    A ``MULTI``/``EXEC`` transaction rather than ``GETDEL``: the supported
+    baseline is Redis 3.0.504, and ``GETDEL`` arrived in 6.2. The guarantee is
+    the same — Redis runs the queued GET and DEL with no other client's
+    command in between, so of two concurrent callers exactly one sees the
+    value. Same pattern as the eBay OAuth state and the Google nonce.
+    Raises ``RedisError``; callers map it to their own refusal.
+    """
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.get(key)
+        pipe.delete(key)
+        raw, _ = await pipe.execute()
+    if raw is None:
+        return None
+    return raw if isinstance(raw, str) else bytes(raw).decode("utf-8")
+
+
 async def check_redis_health() -> bool:
     try:
         return bool(await get_redis(RedisPurpose.CACHE).ping())
@@ -178,4 +197,5 @@ __all__ = [
     "check_redis_health",
     "close_redis_clients",
     "get_redis",
+    "take_once",
 ]

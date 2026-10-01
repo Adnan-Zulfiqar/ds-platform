@@ -24,7 +24,7 @@ from app.core.encryption import (
 )
 from app.core.exceptions import NotFoundError, ShopifyCurrencyRefreshError
 from app.core.logging import get_logger
-from app.core.redis import RedisPurpose, get_redis
+from app.core.redis import RedisPurpose, get_redis, take_once
 from app.domain.money import normalise_currency
 from app.integrations.shopify.auth import (
     OAuthState,
@@ -199,10 +199,12 @@ class ShopifyService(BaseService):
         client = get_redis(RedisPurpose.CACHE)
         key = f"{_STATE_KEY_PREFIX}{state}"
         try:
-            raw = await client.get(key)
+            # One atomic read-and-delete (`take_once`), so two
+            # concurrent callbacks carrying the same state cannot both pass
+            # (review finding C-1). GET-then-DELETE left that window open.
+            raw = await take_once(client, key)
             if raw is None:
                 raise ShopifyOAuthStateError()
-            await client.delete(key)
         except RedisError as exc:
             raise ShopifyOAuthStateError() from exc
         data = json.loads(raw)
@@ -231,10 +233,10 @@ class ShopifyService(BaseService):
         client = get_redis(RedisPurpose.CACHE)
         key = f"{_INSTALL_TICKET_PREFIX}{token}"
         try:
-            raw = await client.get(key)
+            # Atomic single use, same reasoning as `_consume_state` (C-1).
+            raw = await take_once(client, key)
             if raw is None:
                 raise ShopifyInstallTicketError()
-            await client.delete(key)
         except RedisError as exc:
             raise ShopifyInstallTicketError() from exc
         data = json.loads(raw)

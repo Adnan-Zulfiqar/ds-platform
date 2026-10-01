@@ -306,16 +306,24 @@ function invalidateRule(
   queryClient: ReturnType<typeof useQueryClient>,
   kind: RuleKind,
   id?: string,
-) {
-  void queryClient.invalidateQueries({ queryKey: globalRuleKeys.lists(kind) });
+): Promise<unknown> {
+  // Returned, not fired and forgotten: a mutation's onSuccess that returns a
+  // promise holds `mutateAsync` until it settles. The rule dialogs close when
+  // `mutateAsync` resolves, so without this a saved rule was missing from the
+  // list until the refetch landed — visible to merchants on a slow request,
+  // and the cause of CI flakes in global-rules.spec.ts (N-5).
+  const pending: Promise<unknown>[] = [
+    queryClient.invalidateQueries({ queryKey: globalRuleKeys.lists(kind) }),
+  ];
   if (id) {
-    void queryClient.invalidateQueries({
-      queryKey: globalRuleKeys.detail(kind, id),
-    });
-    void queryClient.invalidateQueries({
-      queryKey: [...globalRuleKeys.kind(kind), "history", id],
-    });
+    pending.push(
+      queryClient.invalidateQueries({ queryKey: globalRuleKeys.detail(kind, id) }),
+      queryClient.invalidateQueries({
+        queryKey: [...globalRuleKeys.kind(kind), "history", id],
+      }),
+    );
   }
+  return Promise.all(pending);
 }
 
 export function useCreatePricingRule(): UseMutationResult<

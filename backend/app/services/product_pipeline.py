@@ -281,7 +281,9 @@ class ProductPipelineService(BaseService):
                 "The sanitized description exceeds the Shopify body length.",
                 details={"reason": "candidate_description_too_long"},
             )
-        overlay = ShopifyListingOverlay(title=title, body_html=safe_body_html)
+        overlay = ShopifyListingOverlay(
+            title=title, body_html=safe_body_html, version_id=version.id
+        )
         return await self.shopify_sync.publish_product(
             store_id=store_id,
             product_id=product_id,

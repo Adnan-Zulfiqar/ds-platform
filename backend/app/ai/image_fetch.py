@@ -14,6 +14,7 @@ connection URL. The body is streamed and aborted at 5 MiB; `read()` /
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from collections.abc import Callable, Sequence
@@ -27,6 +28,18 @@ from app.core.exceptions import AppError
 MAX_BODY: Final[int] = 5_242_880
 CONNECT_TIMEOUT_SECONDS: Final[float] = 3.0
 READ_TIMEOUT_SECONDS: Final[float] = 10.0
+#: Whole-fetch budget across DNS, every redirect hop and the body (review
+#: finding B-3). The per-read timeout alone let a host that trickles one
+#: chunk every few seconds hold a fetch — and the bulk run's row lock —
+#: until the 5 MiB cap.
+TOTAL_DEADLINE_SECONDS: Final[float] = 30.0
+#: RFC 6052 well-known NAT64 prefix. Python reports it as globally
+#: reachable whatever IPv4 address it embeds, so ``64:ff9b::a9fe:a9fe`` (the
+#: metadata service, through a NAT64 gateway) would pass ``is_global``.
+NAT64_WELL_KNOWN: Final = ipaddress.IPv6Network("64:ff9b::/96")
+#: Deprecated IPv4-compatible addresses (RFC 4291 §2.5.5.1). ``::127.0.0.1``
+#: is also reported as global; nothing legitimate serves images from one.
+IPV4_COMPATIBLE: Final = ipaddress.IPv6Network("::/96")
 MAX_REDIRECTS: Final[int] = 3
 REDIRECT_STATUSES: Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 ALLOWED_MEDIA_TYPES: Final[frozenset[str]] = frozenset({"image/jpeg", "image/jpg", "image/png"})
@@ -158,12 +171,32 @@ def normalize_ip(raw: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     return addr
 
 
+def _reachable_target(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """The address whose reachability actually decides the hop.
+
+    A NAT64 address is judged by the IPv4 address it embeds — that is where
+    the packet ends up. IPv4-compatible addresses are refused outright.
+    """
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr in NAT64_WELL_KNOWN:
+            return ipaddress.IPv4Address(int(addr) & 0xFFFF_FFFF)
+        if addr in IPV4_COMPATIBLE:
+            raise ImageFetchNotGlobalAddress
+    return addr
+
+
 def choose_connectable(raw_addrs: Sequence[str]) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Allow a hop only when every resolved address is globally reachable."""
+    """Allow a hop only when every resolved address is globally reachable.
+
+    The connection still targets the address as resolved; only the judgement
+    looks through NAT64 to the embedded IPv4 address.
+    """
     if not raw_addrs:
         raise ImageFetchDnsFailure
     normalised = [normalize_ip(raw) for raw in raw_addrs]
-    if any(not addr.is_global for addr in normalised):
+    if any(not _reachable_target(addr).is_global for addr in normalised):
         raise ImageFetchNotGlobalAddress
     return normalised[0]
 
@@ -239,6 +272,13 @@ class ImageFetcher:
         self._client_factory = client_factory or httpx.AsyncClient
 
     async def fetch(self, url: str) -> bytes:
+        try:
+            async with asyncio.timeout(TOTAL_DEADLINE_SECONDS):
+                return await self._fetch_hops(url)
+        except TimeoutError as exc:
+            raise ImageFetchTimeout from exc
+
+    async def _fetch_hops(self, url: str) -> bytes:
         logical_url = url
         redirects_seen = 0
         while True:
@@ -261,7 +301,9 @@ class ImageFetcher:
             chosen = choose_connectable([logical_hostname])
         else:
             try:
-                resolved = self._resolver(logical_hostname)
+                # `getaddrinfo` blocks; run it off the event loop so one slow
+                # resolver cannot stall every other request (finding B-3).
+                resolved = await asyncio.to_thread(self._resolver, logical_hostname)
             except ImageFetchError:
                 raise
             except OSError as exc:
@@ -338,12 +380,15 @@ __all__ = [
     "ALLOWED_MEDIA_TYPES",
     "BLOCKED_HOSTNAMES",
     "CONNECT_TIMEOUT_SECONDS",
+    "IPV4_COMPATIBLE",
     "JPEG_MAGIC",
     "MAX_BODY",
     "MAX_REDIRECTS",
+    "NAT64_WELL_KNOWN",
     "PNG_MAGIC",
     "READ_TIMEOUT_SECONDS",
     "REDIRECT_STATUSES",
+    "TOTAL_DEADLINE_SECONDS",
     "ClientFactory",
     "HostnameResolver",
     "ImageFetchBadContentType",

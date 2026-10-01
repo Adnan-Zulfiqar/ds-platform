@@ -93,7 +93,11 @@ class TestListingOverlay:
         body = _merchant_body()
         _apply_listing_overlay(
             body,
-            ShopifyListingOverlay(title="Approved AI title", body_html="<p>Sanitized</p>"),
+            ShopifyListingOverlay(
+                title="Approved AI title",
+                body_html="<p>Sanitized</p>",
+                version_id=uuid.uuid4(),
+            ),
         )
         assert body["title"] == "Approved AI title"
         assert body["body_html"] == "<p>Sanitized</p>"

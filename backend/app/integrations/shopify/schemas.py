@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import Field
 
+from app.models.shopify import ListingContentSource
 from app.schemas.base import CamelCaseModel
 
 
@@ -104,6 +106,10 @@ class ShopifyPublishRequest(CamelCaseModel):
     #: Optimistic concurrency token from the draft the merchant just saved.
     #: When supplied, publish refuses a stale draft before any provider call.
     expected_updated_at: datetime | None = None
+    #: Explicit merchant confirmation to replace approved AI text that is live
+    #: on this store with the draft text. Default false preserves it
+    #: (review finding E-1). Ignored when the listing shows draft text.
+    replace_ai_content: bool = False
 
 
 class ShopifyPublishCheckItem(CamelCaseModel):
@@ -148,6 +154,32 @@ class ShopifyPublishResponse(CamelCaseModel):
     admin_url: str | None = None
     online_store_published: bool | None = None
     updated: bool = True
+    #: What this publish left live: ``product`` (draft text) or
+    #: ``ai_version`` (an approved AI version, named by ``content_version_id``).
+    content_source: ListingContentSource = ListingContentSource.PRODUCT
+    content_version_id: uuid.UUID | None = None
+
+    @classmethod
+    def from_result(cls, result: dict[str, Any]) -> ShopifyPublishResponse:
+        """One mapping for the ordinary and the pipeline publish routes."""
+        external_id = str(result["external_product_id"])
+        raw_version = result.get("content_version_id")
+        return cls(
+            message=f"Published to Shopify product {external_id}.",
+            listing_id=uuid.UUID(str(result["listing_id"])),
+            external_product_id=external_id,
+            external_handle=result.get("external_handle"),
+            external_graphql_id=result.get("external_graphql_id"),
+            shop_domain=result.get("shop_domain"),
+            storefront_url=result.get("storefront_url"),
+            admin_url=result.get("admin_url"),
+            online_store_published=result.get("online_store_published"),
+            updated=bool(result.get("updated", True)),
+            content_source=ListingContentSource(
+                result.get("content_source") or ListingContentSource.PRODUCT.value
+            ),
+            content_version_id=uuid.UUID(str(raw_version)) if raw_version else None,
+        )
 
 
 class StoreListingRead(CamelCaseModel):
@@ -166,6 +198,11 @@ class StoreListingRead(CamelCaseModel):
     last_error: str | None = None
     published_at: datetime | None = None
     last_failed_sync_at: datetime | None = None
+    #: ``product``: the store shows the draft text. ``ai_version``: it shows
+    #: the approved AI version ``content_version_id``, and an ordinary publish
+    #: keeps it unless the merchant explicitly replaces it.
+    content_source: ListingContentSource = ListingContentSource.PRODUCT
+    content_version_id: uuid.UUID | None = None
 
 
 class ShopifySyncRequest(CamelCaseModel):

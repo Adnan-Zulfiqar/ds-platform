@@ -420,6 +420,11 @@ Full pytest (isolated `droppilot_test` on `127.0.0.1:5499`):
 
 **3363 passed / 1 skipped / 1 failed / 474.39s**
 
+> Correction (Claude return review, 2026-09-30, finding K-2): those are the
+> pre-remediation local counts. The authoritative number for the merged
+> code is post-merge CI run 35656740281 on `72e7692`: **3367 passed**, 0
+> failed, all 10 jobs green.
+
 The sole failure is environment-only:
 
 `tests/integration/test_ebay_c0_security.py::TestNoGeneratedOrSecretFiles::test_no_env_file_was_added_to_the_repository`

@@ -84,7 +84,8 @@ class TestMigration0034:
         version = (
             await db_session.execute(text("SELECT version_num FROM alembic_version"))
         ).scalar()
-        assert version == "0034"
+        # 0034's objects must exist at any later head; revisions are 4-digit.
+        assert version is not None and version >= "0034"
 
         indexes = (
             (
@@ -352,7 +353,7 @@ class TestStart:
         assert first.status_code == 202
         second = await client.post(
             RUNS,
-            json={"productIds": [str(product.id)], "idempotencyKey": "clash", "tone": "casual"},
+            json={"productIds": [str(product.id)], "idempotencyKey": "clash", "tone": "friendly"},
             headers=headers,
         )
         assert second.status_code == 409

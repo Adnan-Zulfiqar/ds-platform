@@ -59,7 +59,7 @@ import {
   invalidatePublishReadiness,
   usePublishReadiness,
 } from "@/services/publish-readiness";
-import { useOptimizeProduct } from "@/services/products";
+import { useOptimizeProduct, useProductVersions } from "@/services/products";
 import { useStores } from "@/services/stores";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -139,6 +139,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const updateDraft = useUpdateDraft(productId);
   const refreshDraft = useRefreshDraft(productId);
   const optimizeProduct = useOptimizeProduct(productId);
+  // Only to name the AI version live on a store; not fetched otherwise.
+  const versionsQuery = useProductVersions(productId, {
+    enabled: Boolean(
+      listingsQuery.data?.some((row) => row.contentSource === "ai_version"),
+    ),
+  });
   // Store guidance copy and the Review & publish store list. Read once per
   // mount (React Query's staleTime), not polled: UX-L2D-07 removed a 15 s
   // interval that re-requested the list for every open editor to catch a
@@ -192,6 +198,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishSaveFailure, setPublishSaveFailure] =
     useState<PublishSaveFailureReason | null>(null);
   const publishInFlightRef = useRef(false);
+  // Review finding I-1: why Optimize / Activate refused to run, or that the
+  // product changed under in-progress edits.
+  const [productActionNotice, setProductActionNotice] = useState<string | null>(null);
+  const activationEpochRef = useRef(0);
 
   function markDirty() {
     dirtyEpochRef.current += 1;
@@ -227,6 +237,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
+  // Optimize and Activate write the Product row. Starting one over unsaved
+  // edits would turn the merchant's own next save into a conflict (I-1).
+  const productActionBlockedReason = isConflicted
+    ? "Resolve the editing conflict first."
+    : dirty
+      ? "Save your changes first. This action updates the product, and your unsaved edits would then conflict with it."
+      : null;
   // Focus target for the moment a conflict is detected (UX-L2D-05,
   // adapted from the reviewed historical branch). Only the `none ->
   // detected` transition moves focus: returning from the review dialog or
@@ -376,10 +393,16 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   /** Adopt a server version as the editor's new baseline: its values become
    * the form, its `updatedAt` becomes the active concurrency token.
    *
-   * The *only* three safe transitions, all of them explicit:
+   * The *only* safe transitions, all of them explicit:
    *   1. the first successful load of a draft (nothing to lose yet);
    *   2. a confirmed "Reload latest version" (merchant chose to discard);
-   *   3. — reserved — any future transition must be added here deliberately,
+   *   3. an editor-initiated product-row action (Optimize, Activate a
+   *      version) succeeded, it could only start on a clean editor, and no
+   *      edit has happened since it started — see `adoptAfterProductAction`
+   *      (review finding I-1). Nothing unsaved exists to lose, and the
+   *      returned product is the authoritative state *including* any change
+   *      made elsewhere, so adopting it hides nothing;
+   *   4. — reserved — any future transition must be added here deliberately,
    *      with the same "is there unsaved work?" question answered first.
    *
    * Note what is *not* on that list: "React Query gave us a new object".
@@ -391,6 +414,39 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     applyDraftToForm(detail);
     setSavedUpdatedAt(detail.updatedAt);
     hydratedFromRef.current = detail.id;
+  }
+
+  /** Review finding I-1. Optimize and Activate write the Product row and
+   * move its `updatedAt`. Without this, the editor kept the old token and
+   * its next save hit a 409 the merchant did not cause.
+   *
+   * Both actions refuse to start while the editor is dirty or conflicted
+   * (`productActionBlockedReason`). On success, if no edit happened since
+   * the action started, the returned product becomes the baseline
+   * (transition 3 above). If the merchant typed while it ran, nothing is
+   * adopted silently: they are told the next save will ask them to review. */
+  function adoptAfterProductAction(product: ProductDetail, editEpochAtStart: number) {
+    if (dirtyEpochRef.current === editEpochAtStart) {
+      hydrateFromServer(product);
+      setProductActionNotice(null);
+      return;
+    }
+    setProductActionNotice(
+      "This product was updated while you were editing. Your next save will ask you to review both versions.",
+    );
+  }
+
+  function runOptimize() {
+    if (productActionBlockedReason) {
+      setProductActionNotice(productActionBlockedReason);
+      return;
+    }
+    setProductActionNotice(null);
+    const editEpochAtStart = dirtyEpochRef.current;
+    optimizeProduct.mutate(
+      {},
+      { onSuccess: (result) => adoptAfterProductAction(result.product, editEpochAtStart) },
+    );
   }
 
   useEffect(() => {
@@ -503,6 +559,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       // check is against what was *actually* persisted, not a value
       // computed client-side.
       setSavedUpdatedAt(saved.updatedAt);
+      setProductActionNotice(null);
       invalidatePublishReadiness(queryClient, productId);
       void queryClient.invalidateQueries({
         queryKey: draftKeys.seoScore(productId),
@@ -718,6 +775,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         setSaveState("idle");
       }
       setSavedUpdatedAt(saved.updatedAt);
+      setProductActionNotice(null);
       hydratedFromRef.current = saved.id;
       clearConflict();
       void queryClient.invalidateQueries({
@@ -776,7 +834,10 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, title, description, seoTitle, seoDescription, slug, tags]);
 
-  async function handlePublish() {
+  /** `replaceAiContent` is set only from the confirmed "Use my draft text
+   * instead" dialog (review finding E-1). Every other publish keeps approved
+   * AI text that is live on the store; the server enforces that too. */
+  async function handlePublish(options: { replaceAiContent?: boolean } = {}) {
     setPublishError(null);
     setPublishOk(null);
     setPublishResult(null);
@@ -823,11 +884,19 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           productId,
           storeId: publishStoreId,
           expectedUpdatedAt,
+          ...(options.replaceAiContent ? { replaceAiContent: true } : {}),
         },
       );
       setPublishResult(result);
       setPublishResultAt(Date.now());
-      setPublishOk(result.message || "Publish completed.");
+      const baseMessage = result.message || "Publish completed.";
+      setPublishOk(
+        result.contentSource === "ai_version"
+          ? `${baseMessage} Shopify kept your approved AI title and description.`
+          : options.replaceAiContent
+            ? `${baseMessage} Shopify now shows your draft title and description.`
+            : baseMessage,
+      );
       void refetch();
       void queryClient.invalidateQueries({
         queryKey: draftKeys.listings(productId),
@@ -902,6 +971,20 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
     null;
+  // Review finding E-1: does the selected store show approved AI text?
+  const selectedStoreListing =
+    listingsQuery.data?.find((row) => row.storeId === publishStoreId) ?? null;
+  const liveAiVersionId =
+    selectedStoreListing?.contentSource === "ai_version"
+      ? (selectedStoreListing.contentVersionId ?? null)
+      : null;
+  const liveAiContent = liveAiVersionId
+    ? {
+        versionNumber:
+          versionsQuery.data?.items.find((version) => version.id === liveAiVersionId)
+            ?.versionNumber ?? null,
+      }
+    : null;
   // One derivation for every surface that talks about state -- header,
   // save indicator, primary action, mobile bar, post-publish panel, Review
   // & publish. `savedUpdatedAt` is the version the server last confirmed,
@@ -1017,7 +1100,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         onResolveConflict={focusConflictBanner}
         onRetryListings={() => void listingsQuery.refetch()}
         onRefresh={() => void refreshDraft.mutateAsync()}
-        onOptimize={() => optimizeProduct.mutate({})}
+        onOptimize={runOptimize}
         onViewHistory={() => setHistoryOpen(true)}
       />
 
@@ -1037,7 +1120,18 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         open={historyOpen}
         onOpenChange={setHistoryOpen}
         hideTrigger
+        activationBlockedReason={productActionBlockedReason}
+        onActivationStart={() => {
+          activationEpochRef.current = dirtyEpochRef.current;
+        }}
+        onActivated={(product) => adoptAfterProductAction(product, activationEpochRef.current)}
       />
+
+      {productActionNotice ? (
+        <Alert data-testid="editor-product-action-notice">
+          <AlertDescription>{productActionNotice}</AlertDescription>
+        </Alert>
+      ) : null}
 
       {optimizeProduct.isError ? (
         <Alert variant="destructive">
@@ -1547,6 +1641,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               shopify={lifecycle.shopify}
               hasEditingConflict={isConflicted}
               onPublish={() => void handlePublish()}
+              liveAiContent={liveAiContent}
+              onReplaceAiContent={() => void handlePublish({ replaceAiContent: true })}
               onOpenSection={(next) => selectTab(next)}
               onContinueEditing={() => selectTab("overview")}
             />

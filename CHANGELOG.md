@@ -10,10 +10,29 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude return review remediation, Stages 5–9 (on
+  `fix/stage5-9-review-remediation`; unmerged, awaiting independent
+  review).** Published AI text is no longer silently replaced by an
+  ordinary publish: `store_listings.content_source` / `content_version_id`
+  (migration `0035`) and an explicit, confirmed `replaceAiContent` (E-1).
+  Editor actions no longer cause self-made 409s (I-1, G-2); history offers
+  no invalid Activate (I-2); tone allowlist (G-3); bulk-run composite store
+  FK, Stage 9 schema drift and cancellation requests (migration `0036`;
+  B-2, D-1, H-2); non-blocking cancel, bounded republish, time-slice
+  continuation, per-item failure policy (H-1..H-5); atomic OAuth state use
+  on the Redis 3.0 baseline (C-1); NAT64 / IPv4-compatible SSRF residuals,
+  whole-fetch deadline and off-loop DNS (B-3); beat schedule path and real
+  health checks, including a Lightsail beat that could not start on its
+  read-only filesystem (J-4, K-4). Ledger:
+  [REVIEW_REMEDIATION_STAGE_5_9.md](docs/REVIEW_REMEDIATION_STAGE_5_9.md).
+
 ### Added
 
-- **Phase 9 Stage 9 — Celery bulk pipeline preview (implementation on
-  `feat/phase-9-stage-9-bulk-ai`; unmerged, awaiting independent review).**
+- **Phase 9 Stage 9 — Celery bulk pipeline preview (merged into `develop`
+  2026-09-21 via PR #24, merge `72e7692`; post-merge CI 35656740281
+  10/10).**
   Durable `pipeline_bulk_runs` / `pipeline_bulk_run_items` (migration
   `0034`). One sequential `ai.process_pipeline_bulk_run` task on the
   default queue creates inactive Stage 7 preview candidates only — no
