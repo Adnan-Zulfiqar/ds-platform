@@ -105,7 +105,7 @@ checkout the same suite has none.
 
 Author: Claude. Not independently accepted. To accept PR #26:
 
-1. **Range:** `git log 72e7692..47fd036` — 16 commits. Merge order: #27
+1. **Range:** `git log 72e7692..1f37ff1` — 16 commits (15 code/test/doc commits to `47fd036`, plus this ledger update). Merge order: #27
    (identical CI commit) first, then #26, then #28; #25 only after #26.
 2. **Highest-risk areas to read line by line:**
    - `integrations/shopify/sync.py::_resolve_listing_content` and migration
