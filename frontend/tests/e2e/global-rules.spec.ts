@@ -190,6 +190,35 @@ test.describe("Pricing rules", () => {
     await expect(row.getByTestId("rule-version")).toHaveText("1");
   });
 
+  test("the dialog closes only once the saved rule is in the list", async ({ page }) => {
+    // Regression for N-5: the dialog used to close as soon as the POST
+    // returned, while the list refetch was still in flight, so the new rule
+    // was briefly missing. Slow the list refetch on purpose; the row must
+    // already be there the moment the dialog is gone.
+    await openRules(page);
+    let slowListResponses = 0;
+    await page.route(
+      (url) => /\/api\/v1\/global-rules\/pricing$/.test(url.pathname),
+      async (route) => {
+        if (route.request().method() === "GET") {
+          slowListResponses += 1;
+          await new Promise((resolve) => setTimeout(resolve, 3_000));
+        }
+        return route.fallback();
+      },
+    );
+    await page.getByTestId("new-pricing-rule").click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Rule name").fill("Slow list rule");
+    await dialog.getByLabel("Markup percentage").fill("40");
+    await dialog.getByRole("button", { name: "Create rule" }).click();
+    await expect(dialog).toBeHidden({ timeout: 15_000 });
+    await expect(
+      page.getByTestId("rule-row").filter({ hasText: "Slow list rule" }),
+    ).toBeVisible({ timeout: 500 });
+    expect(slowListResponses).toBeGreaterThan(0);
+  });
+
   test("each strategy shows only the fields it uses", async ({ page }) => {
     await openRules(page);
     await page.getByTestId("new-pricing-rule").click();
@@ -887,12 +916,21 @@ test.describe("Responsive and theme", () => {
         "Rule History",
       ]) {
         await section(page, name);
-        const overflow = await page.evaluate(
-          () =>
-            document.documentElement.scrollWidth >
-            document.documentElement.clientWidth + 1,
-        );
-        expect(overflow, `${name} overflows at ${viewport.name}`).toBe(false);
+        // Polled, not sampled once (review finding J-3): CI failed this on
+        // mobile once and passed on retry — a single read straight after
+        // switching section can land mid-transition. A layout that really
+        // overflows stays overflowing for the whole window and still fails.
+        await expect
+          .poll(
+            () =>
+              page.evaluate(
+                () =>
+                  document.documentElement.scrollWidth >
+                  document.documentElement.clientWidth + 1,
+              ),
+            { message: `${name} overflows at ${viewport.name}`, timeout: 5_000 },
+          )
+          .toBe(false);
       }
     });
   }

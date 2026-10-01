@@ -926,20 +926,9 @@ async def publish_to_shopify(
         store_id=payload.store_id,
         product_id=payload.product_id,
         expected_updated_at=payload.expected_updated_at,
+        replace_ai_content=payload.replace_ai_content,
     )
-    external_id = str(result["external_product_id"])
-    return ShopifyPublishResponse(
-        message=f"Published to Shopify product {external_id}.",
-        listing_id=UUID(str(result["listing_id"])),
-        external_product_id=external_id,
-        external_handle=result.get("external_handle"),
-        external_graphql_id=result.get("external_graphql_id"),
-        shop_domain=result.get("shop_domain"),
-        storefront_url=result.get("storefront_url"),
-        admin_url=result.get("admin_url"),
-        online_store_published=result.get("online_store_published"),
-        updated=bool(result.get("updated", True)),
-    )
+    return ShopifyPublishResponse.from_result(result)
 
 
 @router.post(

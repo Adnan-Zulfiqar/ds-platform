@@ -14,6 +14,7 @@ correct.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Path, Query, status
@@ -87,8 +88,10 @@ def _publish_pipeline_bulk_after_commit(session: DbSession, run_id: uuid.UUID) -
     event.listen(session.sync_session, "after_commit", on_commit, once=True)
 
 
-def _to_bulk_run(run: object) -> PipelineBulkRunRead:
-    return PipelineBulkRunRead.model_validate(run)
+def _to_bulk_run(run: object, cancel_requested_at: datetime | None = None) -> PipelineBulkRunRead:
+    read = PipelineBulkRunRead.model_validate(run)
+    read.cancel_requested_at = cancel_requested_at
+    return read
 
 
 def _to_bulk_item(item: object) -> PipelineBulkRunItemRead:
@@ -233,19 +236,7 @@ def _pipeline_preview_to_response(preview: PipelinePreview) -> PipelinePreviewRe
 
 def _shopify_publish_response(result: dict[str, Any]) -> ShopifyPublishResponse:
     """Same mapping as ``POST /integrations/shopify/publish`` — not a second contract."""
-    external_id = str(result["external_product_id"])
-    return ShopifyPublishResponse(
-        message=f"Published to Shopify product {external_id}.",
-        listing_id=uuid.UUID(str(result["listing_id"])),
-        external_product_id=external_id,
-        external_handle=result.get("external_handle"),
-        external_graphql_id=result.get("external_graphql_id"),
-        shop_domain=result.get("shop_domain"),
-        storefront_url=result.get("storefront_url"),
-        admin_url=result.get("admin_url"),
-        online_store_published=result.get("online_store_published"),
-        updated=bool(result.get("updated", True)),
-    )
+    return ShopifyPublishResponse.from_result(result)
 
 
 @router.get(
@@ -465,8 +456,9 @@ async def get_pipeline_bulk_run(
     _authorized: RequireAdmin,
     run_id: Annotated[uuid.UUID, Path()],
 ) -> PipelineBulkRunRead:
-    run = await PipelineBulkRunService(session).get(run_id)
-    return _to_bulk_run(run)
+    service = PipelineBulkRunService(session)
+    run = await service.get(run_id)
+    return _to_bulk_run(run, await service.cancel_requested_at(run_id))
 
 
 @router.get(
@@ -496,11 +488,15 @@ async def list_pipeline_bulk_run_items(
 )
 async def cancel_pipeline_bulk_run(
     session: DbSession,
-    _authorized: RequireAdmin,
+    principal: RequireAdmin,
     run_id: Annotated[uuid.UUID, Path()],
 ) -> PipelineBulkRunRead:
-    run = await PipelineBulkRunService(session).cancel(run_id)
-    return _to_bulk_run(run)
+    """Never waits on the worker. Mid-item, the response is still ``running``
+    with ``cancelRequestedAt`` set; poll until ``cancelled``."""
+    outcome = await PipelineBulkRunService(session).cancel(
+        run_id, requested_by_user_id=principal.user_id
+    )
+    return _to_bulk_run(outcome.run, outcome.cancel_requested_at)
 
 
 @router.get(

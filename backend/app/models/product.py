@@ -623,6 +623,11 @@ class ProductVersion(TenantScopedBase):
     __table_args__ = (
         UniqueConstraint("product_id", "version_number", name="uq_product_versions_product_number"),
         UniqueConstraint("tenant_id", "id", name="uq_product_versions_tenant_id_id"),
+        # Lets `store_listings` pin its published AI version to the listing's
+        # own product with one composite FK (review finding E-1).
+        UniqueConstraint(
+            "tenant_id", "product_id", "id", name="uq_product_versions_tenant_product_id"
+        ),
         Index("ix_product_versions_tenant_product", "tenant_id", "product_id"),
         # Partial unique index: at most one row per product may have
         # `active = true`, enforced by the database rather than a

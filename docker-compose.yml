@@ -169,8 +169,26 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+    # The schedule file goes to /tmp, not the working directory: /app is the
+    # bind-mounted ./backend, so the default path wrote celerybeat-schedule*
+    # into the repository (review finding K-4).
     command: >
       celery -A app.workers.celery_app.celery_app beat --loglevel=info
+      --schedule=/tmp/celerybeat-schedule
+    # Overrides the worker image's HEALTHCHECK, which pings a *worker* and so
+    # can never succeed for beat (review finding J-4). Beat rewrites its
+    # schedule file whenever it sends a task; the shortest schedule is five
+    # minutes, so a file untouched for fifteen means the scheduler is stuck.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /tmp -maxdepth 1 -name 'celerybeat-schedule*' -mmin -15 | grep -q .",
+        ]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
     networks: [droppilot]
 
   frontend:
@@ -202,7 +220,10 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on: [backend, frontend]
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/nginx-health"]
+      # 127.0.0.1, not localhost: in the alpine image localhost resolves to ::1
+      # first and nginx listens on IPv4 only, so the probe was refused and the
+      # container reported unhealthy while serving fine (review finding J-4).
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/nginx-health"]
       interval: 30s
       timeout: 5s
       retries: 3

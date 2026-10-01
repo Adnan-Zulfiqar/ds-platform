@@ -212,7 +212,7 @@ class TestOptimize:
 
         response = await client.post(
             f"/api/v1/products/{product['id']}/optimize",
-            json={"tone": "playful"},
+            json={"tone": "luxury"},
             headers=headers,
         )
         assert response.status_code == 201, response.text

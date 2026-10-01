@@ -24,6 +24,7 @@ from typing import Any, Literal, TypeVar
 
 from pydantic import Field, field_validator
 
+from app.domain.pipeline_metadata import content_has_any_pipeline_metadata_key
 from app.integrations.aliexpress.catalog import normalise_product_id
 from app.integrations.shopify.schemas import ShopifyPublishReadinessResponse
 from app.models.product import (
@@ -525,6 +526,10 @@ class ProductVersionRead(CamelCaseModel):
     quality_baseline: ProductVersionQualityBaselineRead | None = None
     quality_breakdown: ProductVersionQualityBreakdownRead | None = None
     active: bool
+    #: True for a Stage 7 pipeline candidate (including one whose metadata is
+    #: malformed). The history list uses it to offer "review" instead of the
+    #: plain Activate the API refuses for these rows (review finding I-2).
+    is_pipeline_candidate: bool = False
     ai_provider: str | None = None
     prompt_execution_id: uuid.UUID | None = None
     created_by_user_id: uuid.UUID | None = None
@@ -559,6 +564,7 @@ class ProductVersionRead(CamelCaseModel):
                 ProductVersionQualityBreakdownRead, content.get("qualityBreakdown")
             ),
             active=version.active,
+            is_pipeline_candidate=content_has_any_pipeline_metadata_key(version.content),
             ai_provider=version.ai_provider,
             prompt_execution_id=version.prompt_execution_id,
             created_by_user_id=version.created_by_user_id,
@@ -658,10 +664,17 @@ class PipelineImageAnalysisReportRead(CamelCaseModel):
     images: list[PipelineImageAnalysisItemRead]
 
 
+#: The tones AI Studio offers (review finding G-3). ``tone`` is substituted
+#: verbatim into every generation prompt, so the server accepts only these
+#: rather than any 64-character string a client chooses to send. Stored run
+#: rows keep a plain string, so reading an older run never fails.
+AIToneName = Literal["professional", "persuasive", "luxury", "technical", "friendly"]
+
+
 class PipelinePreviewRequest(CamelCaseModel):
     """Generate an inactive pipeline candidate. Does not activate or publish."""
 
-    tone: str = Field(default="professional", min_length=1, max_length=64)
+    tone: AIToneName = "professional"
     store_id: uuid.UUID | None = None
 
 
@@ -711,7 +724,7 @@ class ProductOptimizeRequest(CamelCaseModel):
     brand, features) is read from the product's own current fields.
     """
 
-    tone: str = Field(default="professional", min_length=1, max_length=64)
+    tone: AIToneName = "professional"
 
 
 class ProductOptimizeResponse(CamelCaseModel):
