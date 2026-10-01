@@ -76,7 +76,9 @@ async def test_the_commit_happens_before_the_success_response_is_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
-    monkeypatch.setattr(deps, "session_factory", lambda: _RecordingSession(events, fail_commit=False))
+    monkeypatch.setattr(
+        deps, "session_factory", lambda: _RecordingSession(events, fail_commit=False)
+    )
 
     response = await _post(_app(events))
 
@@ -88,7 +90,9 @@ async def test_a_failed_commit_is_never_reported_as_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
-    monkeypatch.setattr(deps, "session_factory", lambda: _RecordingSession(events, fail_commit=True))
+    monkeypatch.setattr(
+        deps, "session_factory", lambda: _RecordingSession(events, fail_commit=True)
+    )
 
     response = await _post(_app(events))
 
