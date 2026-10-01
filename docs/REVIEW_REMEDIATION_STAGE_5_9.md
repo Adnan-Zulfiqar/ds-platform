@@ -88,6 +88,28 @@ historic Fernet key(s) must be restored**, or every existing encrypted
 connection row becomes undecryptable. Until then, local real-provider
 verification is blocked.
 
+## Local gate results (code head `6e7d25e`)
+
+Isolated containers only. **Not a substitute for CI, which did not run.**
+
+| Gate | Result |
+|---|---|
+| `ruff check .` | pass |
+| `ruff format --check .` | 467 files already formatted |
+| `mypy app` | Success, 236 source files |
+| `alembic heads` | `0036` (single head) |
+| Migration round trip | 0036 → 0034 → 0032 → 0036 pass |
+| `alembic check` | 0 items on any table this branch touches; 35 historic items elsewhere (were 43) |
+| Full pytest (whole repo, disposable Postgres 17 + Redis 7) | **3449 passed, 8 failed, 0 skipped**, 331 s. All 8 are environment-only and pass on the host: 7 exec-bit tests need `git` (absent in the container), 1 home-directory test fails as root. Backup/restore drill ran (pg 17 client tools installed) and passed |
+| Committed-secret checker | PASS |
+| Celery broker harness (`verify_celery_broker.py`, `verify_pipeline_bulk_broker.py`, real RabbitMQ 4 + worker) | both PASSED |
+| Frontend lint / typecheck | pass / pass |
+| Frontend production build | pass |
+| Playwright, full suite, chromium, CI-equivalent container | **733 passed, 9 skipped, 0 failed, 0 flaky**, 17.6 min (CI baseline on `72e7692`: 721 passed, 1 flaky, 9 skipped) |
+| Playwright `review-remediation.spec.ts`, `--repeat-each=3` | 33/33 |
+| `docker compose config -q` (local; Lightsail with placeholder values) | pass / pass |
+| Health checks against real images | new beat check PASS (old worker-ping FAIL); nginx `localhost` → `::1` confirmed |
+
 ## Deviation from the requested setup
 
 Two isolated worktrees were requested. This session's tooling only permits
