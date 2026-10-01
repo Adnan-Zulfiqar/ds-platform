@@ -887,12 +887,21 @@ test.describe("Responsive and theme", () => {
         "Rule History",
       ]) {
         await section(page, name);
-        const overflow = await page.evaluate(
-          () =>
-            document.documentElement.scrollWidth >
-            document.documentElement.clientWidth + 1,
-        );
-        expect(overflow, `${name} overflows at ${viewport.name}`).toBe(false);
+        // Polled, not sampled once (review finding J-3): CI failed this on
+        // mobile once and passed on retry — a single read straight after
+        // switching section can land mid-transition. A layout that really
+        // overflows stays overflowing for the whole window and still fails.
+        await expect
+          .poll(
+            () =>
+              page.evaluate(
+                () =>
+                  document.documentElement.scrollWidth >
+                  document.documentElement.clientWidth + 1,
+              ),
+            { message: `${name} overflows at ${viewport.name}`, timeout: 5_000 },
+          )
+          .toBe(false);
       }
     });
   }
