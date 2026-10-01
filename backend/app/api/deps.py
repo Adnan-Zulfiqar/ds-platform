@@ -69,7 +69,16 @@ async def get_db_session() -> AsyncGenerator[AsyncSession]:
         await session.close()
 
 
-DbSession = Annotated[AsyncSession, Depends(get_db_session)]
+# scope="function": FastAPI (0.118+) runs the exit code of a default
+# ("request"-scoped) yield dependency *after* the response has been sent. With
+# that default the commit above happened after the client already had its
+# 2xx — a client that acted on it (register, then create) could reference rows
+# not yet committed, and a failing commit was reported as success. Function
+# scope commits before the response leaves. Only this dependency yields; a
+# request-scoped yield dependency may not depend on it (FastAPI refuses at
+# start-up), which keeps the ordering from being undone silently.
+# CURSOR-REVIEW[DP-CR-018]: see docs/reviews/cursor/checkpoints/DP-CR-018.md.
+DbSession = Annotated[AsyncSession, Depends(get_db_session, scope="function")]
 
 
 def get_cache() -> CacheClient:
