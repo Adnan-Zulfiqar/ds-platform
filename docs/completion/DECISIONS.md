@@ -1,0 +1,105 @@
+# Autonomous completion — decision log
+
+Decisions taken while executing the owner's autonomous-completion roadmap
+(`DropPilot_Claude_Autonomous_Completion_Roadmap.md`, issued 2026-10-01,
+supplied by the owner outside the repository). Each entry records the
+alternative and the trade-off. Newest last.
+
+---
+
+## D-001 — Development/review policy change (2026-10-01)
+
+**Decision.** The owner authorised autonomous completion and moved Cursor's
+independent review to the end of implementation. Author-verified work may be
+integrated into `develop` when its required checks pass on the exact head.
+Each such integration is recorded as
+`AUTHOR_VERIFIED — INTEGRATED — CURSOR_REVIEW_PENDING`.
+
+**Conflict stated, not hidden.** `CLAUDE.md` §12 says "Stop. Do not roll into
+the next phase", and earlier conversation instructions required an
+independent review before each stage merged. `CLAUDE.md` itself says an
+explicit owner instruction wins but must be named out loud. This entry is
+that statement. The technical quality gates in §12, the security rules in §7
+and the honesty rules in §13 are **not** relaxed.
+
+**Unchanged.** Historical review documents keep their original verdicts.
+No FAIL/NOT ACCEPTED result was edited. Independent review status of every
+item stays `PENDING` until Cursor actually reviews it. `main` is not touched
+and nothing is deployed.
+
+## D-002 — Release scope (2026-10-01)
+
+**In release** (the owner confirmed this list on 2026-10-01):
+
+1. Phase 9 Stage 10 — AI Product Studio (`docs/PHASE_9_STAGE_10_PLAN.md`, PR #25).
+2. Phase 9 Stage 11 — "Docs, gates, tag — Completion report"
+   (`docs/PHASE_9_PLAN.md` §3).
+3. Draft Editor stages 6–8 (`docs/DRAFT_PRODUCT_EDITOR_PLAN.md`, "Stage progress").
+4. Open remediation findings (`docs/REVIEW_REMEDIATION_STAGE_5_9.md`).
+
+**Out of release, with the source that says so.** `PROJECT_ROADMAP.md`,
+"Later phases": *"Not scheduled, and listed only so that architectural seams
+are built with them in mind. Nothing here is committed to a phase number."*
+That covers additional store channels (eBay EBAY-C2…C6, WooCommerce, Etsy,
+TikTok), Shopify fulfilment push, the remainder of real FX (M24B/M24C),
+subscription billing, team management, admin panel and outbound email.
+`docs/ebay/MASTER_EBAY_ROADMAP.md` lists C2–C6 as "not started". They are
+recorded in the scope matrix as `FUTURE` with this citation, not deleted.
+
+**Alternative rejected.** Treating every roadmap row as release scope would
+start several unplanned phases (billing, eBay listings) that have no
+approved plan; the completion roadmap forbids inventing product direction.
+
+## D-003 — Lockfile toolchain (2026-10-01)
+
+**Decision.** Lockfile edits use npm 11 (`npx -y npm@11 install
+--package-lock-only`); installs use Node 22's bundled npm (`npm ci`), as CI
+and `docker/frontend.Dockerfile` do.
+
+**Why.** No `packageManager` or `engines` field pins npm. `develop`'s
+lockfile carries `libc` arrays that npm 10.9.x drops when it rewrites
+entries; npm uses them to choose the glibc or musl build of native optional
+packages. npm 11 preserves them. Verified: `npm ci` on `node:22-alpine` and
+`node:22-bookworm-slim` (npm 10.9.9) installs only the matching native
+binary and does not rewrite the lockfile.
+
+**Alternative rejected.** Declaring `packageManager: npm@11` would change
+what CI and the Docker image install with — a toolchain change outside the
+dependency fixes. Recorded for Cursor as a possible follow-up.
+
+## D-004 — Local-only encryption key (2026-10-01, AUT-03)
+
+**Decision.** A new Fernet key was generated and written to the
+repository-root `.env` of the local development checkout. No value was
+printed, logged, passed as an argument or committed.
+
+**Conditions verified immediately before writing** (roadmap §8.2):
+
+1. Destination is the local Docker Compose project `droppilot` on the
+   owner's workstation; no deployment reads that file.
+2. `SECURITY_ENCRYPTION_KEYS` was empty in the root `.env` and
+   `backend/.env`, unset in the Windows User/Machine/Process environment and
+   empty in the backend, worker and beat containers.
+3. Every column written by `app.core.encryption` was inspected read-only in
+   both local databases (`droppilot`, `droppilot_test`):
+   `aliexpress_connections` (3 columns), `shopify_connections` (1),
+   `ebay_connections` (2), `stores.encrypted_credentials` — 0 non-null values.
+   `stores` had not been checked in the earlier L-1 diagnosis.
+4. No backup file or backup volume exists locally; only the scripts.
+5. `encrypt()` raises `EncryptionNotConfiguredError` when no key is set, so
+   no worker could write ciphertext between the check and the write.
+
+**Load path.** Compose `env_file: [.env]` → process environment of backend,
+worker and beat; the process environment outranks pydantic's file sources.
+Only those three services were recreated (`--no-deps`); no volume was
+touched. Round trip through the application's own `encrypt`/`decrypt`
+succeeded in backend and worker.
+
+**Limits.** Host-run backends read `backend/.env` after the root `.env`;
+its empty entry was left as it was, so a host-run backend still reports no
+key. The key must never be copied into a deployment.
+
+## D-005 — Merge permission incident (2026-10-01)
+
+Recorded in `BLOCKERS.md` (B-001). The integration branch built while
+diagnosing it was deleted locally and never pushed.
