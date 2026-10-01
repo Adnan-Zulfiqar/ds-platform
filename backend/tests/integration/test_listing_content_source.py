@@ -137,6 +137,51 @@ class TestPipelinePublishRecordsTheSource:
         assert draft_title != AI_TITLE
 
 
+class TestApprovalAloneChangesNothingOnShopify:
+    """Review finding G-1 — what approval does and does not change.
+
+    Approve makes the candidate the active version (the AI cache on the
+    product). It does not change the draft text, the store, or which text the
+    next ordinary publish sends. Only a pipeline publish puts AI text live.
+    """
+
+    async def test_after_approve_the_next_ordinary_publish_still_sends_the_draft(
+        self, shopify_wire: CountingPublishShopify
+    ) -> None:
+        async with live_publish_targets() as (live,):
+            await _ordinary_publish(live)
+            puts_before = len(shopify_wire.put_bodies)
+            creates_before = len(shopify_wire.creates)
+            async with own_publish_session(live) as session:
+                product = await ProductRepository(session).get_by_id_or_raise(live.product_id)
+                draft_title = product.title
+                await ProductOptimizationService(session)._ensure_original_snapshot(product)
+                await session.refresh(product)
+                version = await _insert_pipeline_candidate(
+                    session, product, title=AI_TITLE, description=AI_BODY
+                )
+                approved = await ProductPipelineService(session).approve(
+                    product.id, version_id=version.id, expected_updated_at=product.updated_at
+                )
+                approved_title = approved.title
+                approved_optimized = approved.optimized_title
+                await session.commit()
+            listing_after_approve = await _listing(live)
+            puts_after_approve = len(shopify_wire.put_bodies)
+            await _ordinary_publish(live)
+            listing_after_publish = await _listing(live)
+
+        # Approval: the AI cache moves, the draft text and the store do not.
+        assert approved_title == draft_title
+        assert approved_optimized == AI_TITLE
+        assert puts_after_approve == puts_before
+        assert len(shopify_wire.creates) == creates_before
+        assert listing_after_approve.content_source is ListingContentSource.PRODUCT
+        # The next ordinary publish sends the draft, not the approved version.
+        assert shopify_wire.put_bodies[-1]["title"] == draft_title
+        assert listing_after_publish.content_source is ListingContentSource.PRODUCT
+
+
 class TestOrdinaryPublishPreservesLiveAiText:
     async def test_ordinary_publish_resends_the_ai_text_not_the_draft(
         self, shopify_wire: CountingPublishShopify
