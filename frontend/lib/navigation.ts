@@ -9,6 +9,7 @@ import {
   Settings,
   ShoppingCart,
   SlidersHorizontal,
+  Sparkles,
   Store,
   Tags,
   Truck,
@@ -16,6 +17,8 @@ import {
   Warehouse,
 } from "lucide-react";
 import type { ComponentType } from "react";
+
+import type { RoleName } from "@/types/api";
 
 /**
  * The single source of truth for application navigation.
@@ -60,6 +63,12 @@ export interface NavItem {
    * `/settings/integrations`), so the parent does not light up on every child.
    */
   exact?: boolean;
+  /**
+   * Roles that see this item. Omitted means everyone. Presentation only:
+   * the API enforces the same boundary, so hiding an item is about not
+   * offering a page whose every action would be refused.
+   */
+  roles?: readonly RoleName[];
 }
 
 export interface NavSection {
@@ -114,6 +123,14 @@ export const NAV_SECTIONS: readonly NavSection[] = [
         icon: History,
         status: "ready",
         description: "Import jobs, failures, and retries.",
+      },
+      {
+        href: "/ai-studio",
+        label: "AI Studio",
+        icon: Sparkles,
+        status: "ready",
+        description: "Generate AI proposals and review them before approving or publishing.",
+        roles: ["owner", "admin"],
       },
     ],
   },
