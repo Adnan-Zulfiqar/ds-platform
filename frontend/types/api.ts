@@ -658,18 +658,240 @@ export interface ProductVersion {
   promptExecutionId: string | null;
   createdByUserId: string | null;
   createdAt: string;
+  /** Stage 4 SEO proposal fields; optional so older fixtures still type-check. */
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  keywords?: string | null;
+  qualityScore?: number | null;
 }
 
 /** The tones the API accepts for AI generation (review finding G-3). */
 export type AITone = "professional" | "persuasive" | "luxury" | "technical" | "friendly";
 
-export interface ProductOptimizePayload {
-  tone?: AITone;
+// ---------------------------------------------------------------------------
+// Phase 9 Stage 10 — AI Product Studio (Stage 7/8/9 pipeline wire contracts).
+// Hand-written mirrors of backend/app/schemas/product.py and pipeline_bulk.py,
+// checked against develop @ df0e41f (PHASE_9_STAGE_10_PLAN.md §0a).
+// ---------------------------------------------------------------------------
+
+/** `original` and `proposal` on a preview. `keywords` is one string, and the
+ * backend always sends `proposal.tags` as `[]`. */
+export interface PipelineListingView {
+  title: string | null;
+  description: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  keywords: string | null;
+  tags: string[];
 }
 
-export interface ProductOptimizeResult {
-  product: ProductDetail;
-  version: ProductVersion;
+/** A pipeline blocker or warning: code and message only. */
+export interface PipelineCheckItem {
+  code: string;
+  message: string;
+}
+
+export interface ProductVersionQualityBaseline {
+  versionNumber: number;
+  score: number;
+}
+
+export interface QualityLengthDimension {
+  points: number;
+  max: number;
+  applicable: boolean;
+  length: number;
+}
+
+export interface QualityRepetitionDimension {
+  points: number;
+  max: number;
+  applicable: boolean;
+  checks: {
+    titleNotStuffed: boolean;
+    descriptionNotPhraseStuffed: boolean;
+    descriptionNotDominated: boolean;
+    descriptionDistinctFromTitle: boolean;
+  };
+}
+
+export interface QualityKeywordCoverageDimension {
+  applicable: boolean;
+  points: number;
+  max: number;
+  matched: number;
+  total: number;
+  source: "search_topics" | "tags" | "meta_keywords" | null;
+  keywords: string[];
+  truncated: boolean;
+}
+
+export interface QualitySeoFormat {
+  seoTitleWithinRequestedBound: boolean;
+  seoDescriptionWithinRequestedBound: boolean;
+  keywordsPresent: boolean;
+}
+
+export interface ProductVersionQualityBreakdown {
+  earned: number;
+  applicableMax: number;
+  dimensions: {
+    title: QualityLengthDimension;
+    description: QualityLengthDimension;
+    repetition: QualityRepetitionDimension;
+    keywordCoverage: QualityKeywordCoverageDimension;
+  };
+  seoFormat: QualitySeoFormat | null;
+}
+
+/** Known image-analysis statuses, plus a string fallback so an unknown value
+ * from a newer backend does not break parsing. */
+export type PipelineImageStatus =
+  | "succeeded"
+  | "checksOnly"
+  | "fetchFailed"
+  | "decodeFailed"
+  | "unknown"
+  | (string & {});
+
+export interface PipelineImageChecks {
+  blur: {
+    applicable: boolean;
+    blurScore: number;
+    isBlurry: boolean;
+    threshold: number;
+    workingSize: number;
+  };
+  duplicates: {
+    applicable: boolean;
+    contentSha256: string;
+    duplicateOfImageIds: string[];
+  };
+  watermark: { applicable: boolean; reason: string };
+}
+
+export interface PipelineImageAnalysisEvidence {
+  imageAnalysisVersion: number;
+  sourceUrl: string;
+  contentSha256: string | null;
+  byteLength: number | null;
+  decodedWidth: number | null;
+  decodedHeight: number | null;
+  decodedFormat: string | null;
+  status: PipelineImageStatus;
+  errorCode: string | null;
+  checks: PipelineImageChecks | null;
+  captionProposal: string | null;
+  altTextProposal: string | null;
+  isSynthetic: boolean | null;
+  provider: string | null;
+  model: string | null;
+  promptName: string | null;
+  promptVersion: number | null;
+}
+
+export interface PipelineImageAnalysisItem {
+  imageId: string;
+  position: number;
+  status: PipelineImageStatus;
+  errorCode: string | null;
+  analysis: PipelineImageAnalysisEvidence | null;
+}
+
+export interface PipelineImageAnalysisReport {
+  productId: string;
+  images: PipelineImageAnalysisItem[];
+}
+
+export interface PipelinePreviewRequest {
+  tone: AITone;
+  storeId?: string;
+}
+
+/** `PipelinePreviewResponse`. Flat: no nested `candidate`, no `source`.
+ * `approvalExpectedUpdatedAt` is always `Product.updatedAt` at compose time;
+ * it is an approval token while `candidateActive` is false and the publish
+ * token once it is true (plan §11). */
+export interface PipelinePreview {
+  productId: string;
+  candidateVersionId: string;
+  candidateVersionNumber: number;
+  candidateActive: boolean;
+  sourceUpdatedAt: string;
+  approvalExpectedUpdatedAt: string;
+  original: PipelineListingView;
+  proposal: PipelineListingView;
+  qualityScore: number | null;
+  qualityBaseline: ProductVersionQualityBaseline | null;
+  qualityDelta: number | null;
+  qualityScoreVersion: number | null;
+  qualityBreakdown: ProductVersionQualityBreakdown | null;
+  imageAnalysis: PipelineImageAnalysisReport;
+  isSynthetic: boolean;
+  provider: string | null;
+  channelReadiness: ShopifyPublishReadiness | null;
+  pipelineBlockers: PipelineCheckItem[];
+  pipelineWarnings: PipelineCheckItem[];
+  publishable: boolean;
+}
+
+export interface PipelineApproveRequest {
+  expectedUpdatedAt: string;
+}
+
+export interface PipelinePublishRequest {
+  storeId: string;
+  expectedUpdatedAt: string;
+}
+
+export type PipelineBulkRunStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled";
+
+/** Bulk item field is `state`, not `status`. */
+export type PipelineBulkItemState = "pending" | "succeeded" | "failed" | "skipped" | "missing";
+
+export interface PipelineBulkRunCreate {
+  productIds: string[];
+  idempotencyKey: string;
+  tone: AITone;
+  storeId?: string;
+}
+
+export interface PipelineBulkRun {
+  id: string;
+  status: PipelineBulkRunStatus;
+  idempotencyKey: string;
+  tone: AITone;
+  storeId: string | null;
+  heartbeatAt: string | null;
+  recoveryCount: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  totalCount: number;
+  processedCount: number;
+  succeededCount: number;
+  failedCount: number;
+  skippedCount: number;
+  missingCount: number;
+  failureReason: string | null;
+  cancelRequestedAt: string | null;
+}
+
+export interface PipelineBulkRunItem {
+  submittedProductId: string;
+  productId: string | null;
+  state: PipelineBulkItemState;
+  candidateVersionId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  attemptCount: number;
+  finishedAt: string | null;
 }
 
 export interface ProductImportRecord {
