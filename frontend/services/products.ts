@@ -3,6 +3,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
@@ -11,15 +12,21 @@ import { toListParams } from "@/services/list-query";
 import type {
   ListQuery,
   Page,
+  PipelineApproveRequest,
+  PipelineBulkRun,
+  PipelineBulkRunCreate,
+  PipelineBulkRunItem,
+  PipelinePreview,
+  PipelinePreviewRequest,
+  PipelinePublishRequest,
   Product,
   ProductDetail,
   ProductDuplicateCheckResponse,
   ProductImportPayload,
   ProductImportRecord,
-  ProductOptimizePayload,
-  ProductOptimizeResult,
   ProductVersion,
   ProductWorkspaceCounts,
+  ShopifyPublishResult,
 } from "@/types/api";
 
 import { draftKeys } from "@/services/drafts";
@@ -46,7 +53,27 @@ export const productKeys = {
     [...productKeys.all, "duplicate-check", externalId] as const,
   versions: (id: string) => [...productKeys.detail(id), "versions"] as const,
   workspaceCounts: () => [...productKeys.all, "workspace-counts"] as const,
+  // AI Studio (Phase 9 Stage 10). The candidate key carries the store because
+  // `channelReadiness` and `publishable` are composed for that store: another
+  // store is another cache entry, never the previous store's answer.
+  pipelineCandidate: (productId: string, versionId: string, storeId: string | null) =>
+    [...productKeys.detail(productId), "pipeline", versionId, storeId] as const,
+  pipelineRuns: () => [...productKeys.all, "pipeline-runs"] as const,
+  pipelineRun: (runId: string) => [...productKeys.pipelineRuns(), runId] as const,
+  pipelineRunItems: (runId: string, query: ListQuery) =>
+    [...productKeys.pipelineRun(runId), "items", query] as const,
 };
+
+/**
+ * Generation runs image analysis and three prompt executions inside the
+ * request, and publish may wait up to 30 s for the product lock before it
+ * calls Shopify. The 30 s client default would report a timeout for work that
+ * is still completing on the server, so these two calls get longer budgets.
+ * A timeout is still possible and is shown as "outcome unknown", never as a
+ * failure.
+ */
+const PIPELINE_PREVIEW_TIMEOUT_MS = 120_000;
+const PIPELINE_PUBLISH_TIMEOUT_MS = 90_000;
 
 async function fetchProducts(query: ListQuery): Promise<Page<Product>> {
   const { data } = await apiClient.get<Page<Product>>("/products", {
@@ -231,44 +258,6 @@ export function useProductVersions(
 }
 
 /**
- * Generate a new AI-optimised title and description for a product.
- *
- * Uses `StubProvider` — no real AI key is configured on this platform yet
- * (Phase 9 stages 1–2), so the result is deterministic, clearly-synthetic
- * text. Invalidates the product's detail and version-history caches, both
- * of which the response changes.
- */
-export function useOptimizeProduct(productId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (payload: ProductOptimizePayload = {}) => {
-      const { data } = await apiClient.post<ProductOptimizeResult>(
-        `/products/${productId}/optimize`,
-        payload,
-      );
-      return data;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: productKeys.detail(productId),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: productKeys.versions(productId),
-      });
-      void queryClient.invalidateQueries({ queryKey: productKeys.lists() });
-      // The draft editor reads the same Product row through `draftKeys`.
-      // This changes its `updatedAt`, so the draft cache must not keep the
-      // old token (review finding I-1). An open editor adopts the new token
-      // from the response itself; a refetch alone never re-hydrates it.
-      void queryClient.invalidateQueries({
-        queryKey: draftKeys.detail(productId),
-      });
-    },
-  });
-}
-
-/**
  * Activate a version — including the original — rolling the product back
  * or forward to it.
  */
@@ -307,6 +296,206 @@ export function useActivateProductVersion(
       void queryClient.invalidateQueries({
         queryKey: draftKeys.detail(productId),
       });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// AI Studio — Phase 9 Stage 10 (PHASE_9_STAGE_10_PLAN.md §27)
+// ---------------------------------------------------------------------------
+
+/** Every product cache the pipeline's product-row writes can make stale. */
+function invalidateProductRow(queryClient: QueryClient, productId: string): Promise<unknown> {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: productKeys.detail(productId), exact: true }),
+    queryClient.invalidateQueries({ queryKey: productKeys.versions(productId) }),
+    queryClient.invalidateQueries({ queryKey: productKeys.lists() }),
+    // The draft editor reads the same Product row through `draftKeys`; an
+    // approval moves its `updatedAt` (review finding I-1, plan §27a).
+    queryClient.invalidateQueries({ queryKey: draftKeys.detail(productId) }),
+  ]);
+}
+
+/** Generate a new inactive candidate. Never approves, never publishes. */
+export function usePipelinePreview(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: PipelinePreviewRequest) => {
+      const { data } = await apiClient.post<PipelinePreview>(
+        `/products/${productId}/pipeline/preview`,
+        payload,
+        { timeout: PIPELINE_PREVIEW_TIMEOUT_MS },
+      );
+      return data;
+    },
+    onSuccess: (preview, payload) => {
+      // Seed exactly the entry the page reads next, for the store that was
+      // sent, so the following render does not GET what was just returned.
+      queryClient.setQueryData(
+        productKeys.pipelineCandidate(productId, preview.candidateVersionId, payload.storeId ?? null),
+        preview,
+      );
+      // A first preview snapshots the original; history gains a row.
+      void queryClient.invalidateQueries({ queryKey: productKeys.versions(productId) });
+    },
+  });
+}
+
+/** Read one exact candidate composed for one store (plan §6). */
+export function usePipelineCandidate(
+  productId: string,
+  versionId: string | null,
+  storeId: string | null,
+): UseQueryResult<PipelinePreview> {
+  return useQuery({
+    queryKey: productKeys.pipelineCandidate(productId, versionId ?? "", storeId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<PipelinePreview>(
+        `/products/${productId}/pipeline/versions/${versionId}/preview`,
+        { params: storeId ? { storeId } : {} },
+      );
+      return data;
+    },
+    enabled: Boolean(productId) && Boolean(versionId),
+    // A 4xx here is a classification (not a pipeline candidate, gone), not a
+    // blip; retrying would only delay the panel that explains it.
+    retry: false,
+  });
+}
+
+/**
+ * Approve exactly one candidate with the inactive approval token (T0).
+ *
+ * Invalidation lives on the hook, not on `mutate(…, { onSuccess })`: a
+ * per-call callback is skipped if the page unmounts mid-request, and the
+ * editor's token would then go stale (review finding I-1).
+ */
+export function useApprovePipelineCandidate(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { versionId: string; expectedUpdatedAt: string }) => {
+      const body: PipelineApproveRequest = { expectedUpdatedAt: input.expectedUpdatedAt };
+      const { data } = await apiClient.post<ProductDetail>(
+        `/products/${productId}/pipeline/versions/${input.versionId}/approve`,
+        body,
+      );
+      return data;
+    },
+    onSuccess: async (_product, input) => {
+      await invalidateProductRow(queryClient, productId);
+      // Every store's composition of this candidate is now out of date.
+      await queryClient.invalidateQueries({
+        queryKey: [...productKeys.detail(productId), "pipeline", input.versionId],
+      });
+    },
+  });
+}
+
+/** Publish an approved candidate through the existing Shopify publisher. */
+export function usePublishPipelineCandidate(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { versionId: string; storeId: string; expectedUpdatedAt: string }) => {
+      const body: PipelinePublishRequest = {
+        storeId: input.storeId,
+        expectedUpdatedAt: input.expectedUpdatedAt,
+      };
+      const { data } = await apiClient.post<ShopifyPublishResult>(
+        `/products/${productId}/pipeline/versions/${input.versionId}/publish`,
+        body,
+        { timeout: PIPELINE_PUBLISH_TIMEOUT_MS },
+      );
+      return data;
+    },
+    // Settled, not success: a timed-out publish may still have reached
+    // Shopify, so what the store shows is re-read either way.
+    onSettled: async (_result, _error, input) => {
+      await Promise.all([
+        invalidateProductRow(queryClient, productId),
+        queryClient.invalidateQueries({ queryKey: draftKeys.listings(productId) }),
+        queryClient.invalidateQueries({
+          queryKey: [...productKeys.detail(productId), "pipeline", input.versionId],
+        }),
+      ]);
+    },
+  });
+}
+
+/** Start a bulk preview run (Stage 9). 202 with the run; replays on the same key. */
+export function useStartPipelineRun() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: PipelineBulkRunCreate) => {
+      const { data } = await apiClient.post<PipelineBulkRun>("/products/pipeline/runs", payload);
+      return data;
+    },
+    onSuccess: (run) => {
+      queryClient.setQueryData(productKeys.pipelineRun(run.id), run);
+    },
+  });
+}
+
+/**
+ * One bulk run, polled every 5 s until it reaches a terminal status (plan
+ * §20). Unmounting the page drops the observer and so stops the interval.
+ */
+export function usePipelineRun(runId: string | null): UseQueryResult<PipelineBulkRun> {
+  return useQuery({
+    queryKey: productKeys.pipelineRun(runId ?? ""),
+    queryFn: async () => {
+      const { data } = await apiClient.get<PipelineBulkRun>(`/products/pipeline/runs/${runId}`);
+      return data;
+    },
+    enabled: Boolean(runId),
+    retry: false,
+    refetchInterval: (query) => {
+      const run = query.state.data;
+      if (!run) return false;
+      return run.status === "pending" || run.status === "running" ? 5_000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function usePipelineRunItems(
+  runId: string | null,
+  query: ListQuery,
+  options: { refetchInterval?: number | false } = {},
+): UseQueryResult<Page<PipelineBulkRunItem>> {
+  return useQuery({
+    queryKey: productKeys.pipelineRunItems(runId ?? "", query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<PipelineBulkRunItem>>(
+        `/products/pipeline/runs/${runId}/items`,
+        { params: toListParams(query) },
+      );
+      return data;
+    },
+    enabled: Boolean(runId),
+    placeholderData: keepPreviousData,
+    refetchInterval: options.refetchInterval ?? false,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** Cancel is cooperative (H-2): it may return `running` + `cancelRequestedAt`. */
+export function useCancelPipelineRun(runId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<PipelineBulkRun>(
+        `/products/pipeline/runs/${runId}/cancel`,
+      );
+      return data;
+    },
+    onSuccess: (run) => {
+      queryClient.setQueryData(productKeys.pipelineRun(run.id), run);
+      void queryClient.invalidateQueries({ queryKey: productKeys.pipelineRun(run.id) });
     },
   });
 }
