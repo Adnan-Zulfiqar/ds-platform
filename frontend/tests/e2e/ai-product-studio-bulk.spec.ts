@@ -88,7 +88,10 @@ test.describe("Selection", () => {
     await page.getByRole("button", { name: "Select page" }).click();
     await expect(page.getByTestId("ai-studio-selection-count")).toHaveText("50 / 50 selected");
     await expect(page.getByTestId("ai-studio-cap-note")).toHaveText("You can optimize up to 50 products at a time.");
-    await expect(page.getByRole("checkbox", { name: "Published product 19", exact: true })).toBeDisabled();
+    // Every checkbox on this page is now selected; an unselected one is refused.
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect(page.getByRole("checkbox", { name: "Published product 20", exact: true })).toBeDisabled();
+    await expect(page.getByTestId("ai-studio-selection-count")).toHaveText("50 / 50 selected");
   });
 });
 
