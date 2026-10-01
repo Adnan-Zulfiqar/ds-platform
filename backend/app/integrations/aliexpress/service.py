@@ -35,7 +35,7 @@ from app.core.encryption import (
     is_encryption_configured,
 )
 from app.core.exceptions import ValidationError
-from app.core.redis import RedisPurpose, get_redis
+from app.core.redis import RedisPurpose, get_redis, take_once
 from app.integrations.aliexpress.auth import (
     OAuthState,
     build_authorization_url,
@@ -412,6 +412,9 @@ class AliExpressService(BaseService):
         """Look up and delete a state token.
 
         Deleting on read makes it single-use, so a replayed callback fails.
+        `take_once` does both atomically (review finding C-1): with a separate
+        GET and DELETE, two concurrent callbacks could both read the state
+        before either deleted it.
         """
         if not token:
             raise AliExpressOAuthStateError()
@@ -419,9 +422,7 @@ class AliExpressService(BaseService):
         key = f"{_STATE_KEY_PREFIX}{token}"
         try:
             client = get_redis(RedisPurpose.SESSION)
-            raw = await client.get(key)
-            if raw:
-                await client.delete(key)
+            raw = await take_once(client, key)
         except RedisError as exc:
             self.logger.error("aliexpress_state_lookup_failed", error=str(exc))
             raise AliExpressOAuthStateError() from exc
