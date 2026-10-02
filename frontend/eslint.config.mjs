@@ -35,15 +35,6 @@ const eslintConfig = [
       // rather than error so it can be used briefly during development, but it
       // stays visible in review.
       "@typescript-eslint/no-explicit-any": "warn",
-      // New in eslint-config-next 16 (React Compiler-era react-hooks rules).
-      // They flag 23 existing call sites in 13 files that pass review and
-      // tests today. Kept visible as warnings so the security upgrade that
-      // introduced them stays a focused change; fixing those sites is
-      // tracked separately (docs/completion/DECISIONS.md D-009). No rule that
-      // existed before the upgrade is relaxed.
-      "react-hooks/refs": "warn",
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/purity": "warn",
     },
   },
 ];

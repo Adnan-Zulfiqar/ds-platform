@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import { BulkStartDialog } from "@/components/ai-studio/bulk-start-dialog";
 import { RunDashboard } from "@/components/ai-studio/run-dashboard";
@@ -20,6 +20,11 @@ import { useStores } from "@/services/stores";
 import type { PipelineBulkRun, Product } from "@/types/api";
 
 type Lifecycle = "drafts" | "published";
+
+function subscribeToStorage(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
 const PAGE_SIZE = 20;
 
 /**
@@ -40,8 +45,6 @@ export function StudioHome() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  // Titles of everything ever shown, so the run dashboard can name items.
-  const titles = useRef(new Map<string, string>());
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const query = { page, size: PAGE_SIZE, ...(search ? { q: search } : {}) };
@@ -54,14 +57,14 @@ export function StudioHome() {
     [stores.data],
   );
 
-  for (const product of list.data?.items ?? []) titles.current.set(product.id, product.title);
-
-  // Read after mount: sessionStorage does not exist during server rendering,
-  // and reading it in render would make the two HTML trees differ.
-  const [storedRun, setStoredRun] = useState<string | null>(null);
-  useEffect(() => {
-    setStoredRun(tenantId ? readActiveRun(tenantId) : null);
-  }, [tenantId, runId]);
+  // sessionStorage is an external store with no server value: the server
+  // snapshot (null) is also the hydration value, so the two HTML trees agree.
+  // Another tab writing the key fires "storage"; this tab re-reads on render.
+  const storedRun = useSyncExternalStore(
+    subscribeToStorage,
+    () => (tenantId ? readActiveRun(tenantId) : null),
+    () => null,
+  );
   const atCap = selected.size >= MAX_BULK_SELECTION;
   // "Select page" acts on the rows of the page being shown. While a view or
   // page loads, the list is empty or still shows the previous page
@@ -107,7 +110,7 @@ export function StudioHome() {
         <Button asChild variant="outline" size="sm">
           <Link href="/ai-studio">New selection</Link>
         </Button>
-        <RunDashboard runId={runId} titles={titles.current} />
+        <RunDashboard runId={runId} />
       </div>
     );
   }

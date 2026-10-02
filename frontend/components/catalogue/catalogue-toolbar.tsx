@@ -37,10 +37,14 @@ export function CatalogueToolbar({ state, noun, totalItems, busy }: CatalogueToo
   const [draft, setDraft] = useState(state.query.q);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Back/forward or a shared link changes the URL under us; mirror it.
-  useEffect(() => {
+  // Back/forward or a shared link changes the URL under us; mirror it. Done
+  // while rendering (React’s "adjust state when a prop changes" pattern), not
+  // in an effect that would render once with the stale text first.
+  const [mirroredQ, setMirroredQ] = useState(state.query.q);
+  if (mirroredQ !== state.query.q) {
+    setMirroredQ(state.query.q);
     setDraft(state.query.q);
-  }, [state.query.q]);
+  }
 
   useEffect(() => {
     return () => {

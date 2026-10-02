@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { ApplicationBehaviourPanel } from "@/components/global-rules/application-behaviour-panel";
 import { ImpactPanel } from "@/components/global-rules/impact-panel";
@@ -129,22 +130,18 @@ function isSectionId(value: string | null): value is SectionId {
 }
 
 export function GlobalRulesWorkspace() {
-  const [active, setActiveState] = useState<SectionId>("pricing");
+  const searchParams = useSearchParams();
+  const [active, setActiveState] = useState<SectionId>(() => {
+    const section = searchParams.get("section");
+    if (isSectionId(section)) return section;
+    return searchParams.get("application") ? "impact" : "pricing";
+  });
 
   // The open section lives in the URL, so a reload comes back to the same
   // place and a link points at it. It also matters for correctness rather
   // than convenience: a run being watched is tracked by `?application=`, and
   // landing back on the first tab after a refresh would hide it entirely --
   // which is exactly what a merchant would read as "my application vanished".
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const section = params.get("section");
-    if (isSectionId(section)) {
-      setActiveState(section);
-    } else if (params.get("application")) {
-      setActiveState("impact");
-    }
-  }, []);
 
   const setActive = useCallback((next: SectionId) => {
     setActiveState(next);

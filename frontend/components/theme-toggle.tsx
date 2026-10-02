@@ -2,9 +2,9 @@
 
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useHydrated } from "@/hooks/use-media-query";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,8 +21,7 @@ export function ThemeToggle() {
   // The server cannot know the user's theme, so rendering the resolved icon
   // during SSR would produce markup that disagrees with the client and trigger
   // a hydration error. Render a stable placeholder until mounted.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useHydrated();
 
   if (!mounted) {
     return (

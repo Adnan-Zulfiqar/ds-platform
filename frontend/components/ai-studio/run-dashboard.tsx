@@ -1,5 +1,6 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -26,8 +27,30 @@ import {
 } from "@/lib/ai-studio/bulk";
 import { requestIdOf, studioErrorMessage } from "@/lib/ai-studio/errors";
 import { useAuth } from "@/providers/auth-provider";
-import { useCancelPipelineRun, usePipelineRun, usePipelineRunItems } from "@/services/products";
-import type { PipelineBulkRunItem } from "@/types/api";
+import { draftKeys } from "@/services/drafts";
+import {
+  productKeys,
+  useCancelPipelineRun,
+  usePipelineRun,
+  usePipelineRunItems,
+} from "@/services/products";
+import type { Page, PipelineBulkRunItem, Product } from "@/types/api";
+
+/**
+ * Names for run items, from the Drafts and Products pages already in the
+ * query cache (the merchant selected from them). An item whose page is not
+ * cached shows its id — the run itself never carries titles.
+ */
+function useCachedProductTitles(): ReadonlyMap<string, string> {
+  const queryClient = useQueryClient();
+  const titles = new Map<string, string>();
+  for (const key of [draftKeys.lists(), productKeys.lists()]) {
+    for (const [, page] of queryClient.getQueriesData<Page<Product>>({ queryKey: key })) {
+      for (const product of page?.items ?? []) titles.set(product.id, product.title);
+    }
+  }
+  return titles;
+}
 
 const ITEMS_PAGE_SIZE = 20;
 
@@ -39,7 +62,8 @@ const ITEMS_PAGE_SIZE = 20;
  * client never marks leftover items itself — after a cancel, rows still
  * `pending` stay `pending`, and the run `status` is the authority.
  */
-export function RunDashboard({ runId, titles }: { runId: string; titles: ReadonlyMap<string, string> }) {
+export function RunDashboard({ runId }: { runId: string }) {
+  const titles = useCachedProductTitles();
   const { identity } = useAuth();
   const tenantId = identity?.tenant.id ?? null;
   const run = usePipelineRun(runId);

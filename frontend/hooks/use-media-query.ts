@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
  * Track a CSS media query from React.
@@ -16,20 +16,35 @@ import { useEffect, useState } from "react";
  * will flash the wrong layout for one frame.
  */
 export function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false);
+  // A media query is an external store: subscribe to its change event and
+  // read it on demand. The server snapshot (`false`) is what the first
+  // client render also uses, so hydration agrees; React then re-reads the
+  // real value without an effect setting state.
+  return useSyncExternalStore(
+    (onChange) => {
+      const mediaQueryList = window.matchMedia(query);
+      mediaQueryList.addEventListener("change", onChange);
+      return () => mediaQueryList.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
 
-  useEffect(() => {
-    const mediaQueryList = window.matchMedia(query);
+const noSubscription = () => () => {};
 
-    // Set immediately: the initial `false` is a placeholder, not a measurement.
-    setMatches(mediaQueryList.matches);
-
-    const onChange = (event: MediaQueryListEvent) => setMatches(event.matches);
-    mediaQueryList.addEventListener("change", onChange);
-    return () => mediaQueryList.removeEventListener("change", onChange);
-  }, [query]);
-
-  return matches;
+/**
+ * `false` during server rendering and hydration, `true` afterwards — for UI
+ * that cannot be known on the server (the resolved theme). Replaces the
+ * `useEffect(() => setMounted(true), [])` pattern without setting state in an
+ * effect.
+ */
+export function useHydrated(): boolean {
+  return useSyncExternalStore(
+    noSubscription,
+    () => true,
+    () => false,
+  );
 }
 
 /** Tailwind's `md` breakpoint. Matches the sidebar's own visibility rule. */

@@ -448,9 +448,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- first-load hydration only
   }, [data]);
 
-  useEffect(() => {
+  // Follow ?tab= when it changes (a readiness link, Back/forward), adjusting
+  // state during render rather than in an effect.
+  const [followedTabParam, setFollowedTabParam] = useState(tabParam);
+  if (followedTabParam !== tabParam) {
+    setFollowedTabParam(tabParam);
     if (isEditorTab(tabParam)) setTab(tabParam);
-  }, [tabParam]);
+  }
 
   useEffect(() => {
     if (!dirty) return;

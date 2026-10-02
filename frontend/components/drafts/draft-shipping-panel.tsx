@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 
 import {
@@ -79,7 +79,11 @@ export function DraftShippingPanel({
   const [saved, setSaved] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  useEffect(() => {
+  // A new product row from the server (save, refresh) re-seeds the fields.
+  // Adjusted during render, not in an effect, so no frame shows stale values.
+  const [seededFrom, setSeededFrom] = useState(product);
+  if (seededFrom !== product) {
+    setSeededFrom(product);
     setRequiresShipping(product.requiresShipping ?? true);
     setWeight(product.packageWeightKg ?? "");
     setLength(product.packageLengthCm?.toString() ?? "");
@@ -89,7 +93,7 @@ export function DraftShippingPanel({
     setOrigin(product.countryOfOrigin ?? "");
     setCustoms(product.customsDescription ?? "");
     setHandling(product.handlingTimeDays?.toString() ?? "");
-  }, [product]);
+  }
 
   async function saveMerchantShipping() {
     setError(null);

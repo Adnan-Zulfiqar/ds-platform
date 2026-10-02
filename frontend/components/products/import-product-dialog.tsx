@@ -187,8 +187,9 @@ function feedbackFromError(
 export function ImportProductDialog() {
   const [open, setOpen] = useState(false);
   const [externalId, setExternalId] = useState("");
-  const [shipToCountry, setShipToCountry] = useState("");
-  const [storeId, setStoreId] = useState("");
+  // What the merchant chose; empty means "use the default" (derived below).
+  const [chosenShipTo, setShipToCountry] = useState("");
+  const [chosenStoreId, setStoreId] = useState("");
   const [countryQuery, setCountryQuery] = useState("");
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
   const [successDraftId, setSuccessDraftId] = useState<string | null>(null);
@@ -220,6 +221,8 @@ export function ImportProductDialog() {
   });
   const duplicateMatch = duplicateCheck.data?.exists ? duplicateCheck.data.product : null;
 
+  const storeId = chosenStoreId || (connectedStores.length === 1 ? connectedStores[0]!.id : "");
+
   const recommendedCountry = useMemo(() => {
     const selected = connectedStores.find((s) => s.id === storeId);
     return (
@@ -229,19 +232,10 @@ export function ImportProductDialog() {
     );
   }, [connectedStores, storeId]);
 
-  useEffect(() => {
-    if (!open) return;
-    if (!shipToCountry) {
-      setShipToCountry(recommendedCountry ?? "");
-    }
-  }, [open, recommendedCountry, shipToCountry]);
-
-  useEffect(() => {
-    if (!open) return;
-    if (!storeId && connectedStores.length === 1) {
-      setStoreId(connectedStores[0]!.id);
-    }
-  }, [open, connectedStores, storeId]);
+  // Defaults are derived, not written into state by an effect: one
+  // connected store is the destination, and its country is the ship-to,
+  // until the merchant picks something else.
+  const shipToCountry = chosenShipTo || (recommendedCountry ?? "");
 
   const filteredCountries = filterCountries(countryQuery);
 
