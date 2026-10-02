@@ -414,6 +414,17 @@ class Product(TenantScopedBase):
     def is_in_stock(self) -> bool:
         return self.stock_quantity > 0
 
+    @property
+    def live_images(self) -> list[ProductImage]:
+        """Images not removed by the merchant.
+
+        ``images`` also holds soft-deleted rows (removal is reversible), so
+        every read the merchant sees must use this. The Shopify payload,
+        publish readiness and the SEO score already filtered; the two detail
+        reads did not, and a removed image stayed in the editor.
+        """
+        return [image for image in self.images if image.deleted_at is None]
+
 
 class ProductVariant(TenantScopedBase):
     """A purchasable variation — a size, a colour, a combination.
