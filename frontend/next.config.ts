@@ -15,12 +15,6 @@ const nextConfig: NextConfig = {
   // Do not advertise the framework and version to every client.
   poweredByHeader: false,
 
-  eslint: {
-    // Linting runs as its own CI job. Running it again inside `next build`
-    // doubles the work and conflates two different failures in one log.
-    ignoreDuringBuilds: true,
-  },
-
   typescript: {
     // Never true. A type error must fail the build — suppressing it here is how
     // a broken deploy reaches production looking green.
