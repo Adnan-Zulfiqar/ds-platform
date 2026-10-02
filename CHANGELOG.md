@@ -12,9 +12,9 @@ production release.
 
 ### Fixed
 
-- **Claude return review remediation, Stages 5–9 (on
-  `fix/stage5-9-review-remediation`; unmerged, awaiting independent
-  review).** Published AI text is no longer silently replaced by an
+- **Claude return review remediation, Stages 5–9 (merged into `develop`
+  2026-10-01 via PR #26, merge `2b71f65`; author-verified, Cursor review
+  pending).** Published AI text is no longer silently replaced by an
   ordinary publish: `store_listings.content_source` / `content_version_id`
   (migration `0035`) and an explicit, confirmed `replaceAiContent` (E-1).
   Editor actions no longer cause self-made 409s (I-1, G-2); history offers
@@ -29,6 +29,16 @@ production release.
   [REVIEW_REMEDIATION_STAGE_5_9.md](docs/REVIEW_REMEDIATION_STAGE_5_9.md).
 
 ### Added
+
+- **Phase 9 Stage 10 — AI Product Studio (PR #36).** `/ai-studio/products/[id]`
+  reviews one product: preview, compare with the current draft, approve the
+  exact candidate with its token, publish with the post-approval token; the
+  Live on Shopify line reads the listing, never approval state. `/ai-studio`
+  selects up to 50 drafts and published products for one bulk preview run,
+  polls it to a terminal status and links each finished candidate. The
+  one-click "Optimize with AI" controls are retired for Studio links; the
+  backend route stays. No backend change, no migration. Report:
+  [PHASE_9_STAGE_10_COMPLETION.md](docs/PHASE_9_STAGE_10_COMPLETION.md).
 
 - **Phase 9 Stage 9 — Celery bulk pipeline preview (merged into `develop`
   2026-09-21 via PR #24, merge `72e7692`; post-merge CI 35656740281
