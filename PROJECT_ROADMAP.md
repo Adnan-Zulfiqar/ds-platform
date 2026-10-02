@@ -289,7 +289,7 @@ in mind. Nothing here is committed to a phase number.
 |---|---|
 | Additional store channels | WooCommerce / Etsy / TikTok. Shopify shipped in Phase 8; **eBay is connected** as of EBAY-C1 but publishes nothing yet — see [docs/ebay/MASTER_EBAY_ROADMAP.md](docs/ebay/MASTER_EBAY_ROADMAP.md) |
 | Shopify fulfilment push | Tracking / fulfil to Shopify Admin API |
-| AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation on `fix/stage5-9-review-remediation` (unmerged). Stage 10 plan only; Stage 11 not started. `StubProvider` only — no live model-quality verification. Production undeployed |
+| AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation merged (PR #26). Stage 10 merged (PR #36). Stage 11 report written; tag deferred to Cursor acceptance. `StubProvider` only — no live model-quality verification. Production undeployed |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
 | Subscription billing | Plan limits attach to `tenants` |
