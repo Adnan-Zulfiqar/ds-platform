@@ -103,3 +103,29 @@ key. The key must never be copied into a deployment.
 
 Recorded in `BLOCKERS.md` (B-001). The integration branch built while
 diagnosing it was deleted locally and never pushed.
+
+## D-006 — Draft Editor Stage 8 "bulk tools" has no authoritative definition (2026-10-02)
+
+**Finding.** The source gives one line: "Bulk tools + live E2E verification
+— Pending" (`DRAFT_PRODUCT_EDITOR_PLAN.md`). The only design text is a UX
+baseline proposal (`docs/ux/ux-l2d-01-baseline.md` §183): a selection bar
+"only for actions the API supports today per item (Optimize ×n via repeated
+`POST /optimize`, Refresh ×n). Bulk publish is **not** offered."
+
+**What already covers it.** "Optimize ×n" is delivered properly by AI
+Studio's bulk run (Stage 10: durable, reviewed, never auto-activating), not
+by looping the legacy endpoint that this programme retired. Bulk pricing on
+drafts exists through Global Rules apply.
+
+**What is not done.** A bulk supplier refresh ("Refresh ×n"). It would be
+N sequential AliExpress calls with no durable progress, it cannot be
+verified without a live AliExpress connection, and no requirement says it
+is in the release. Recorded as an open scope question (`BLOCKERS.md`
+B-006) rather than built speculatively or declared out of scope.
+
+## D-007 — Read-after-write ordering is a framework setting, not a handler concern (2026-10-02)
+
+`DbSession` uses `Depends(get_db_session, scope="function")` (PR #35,
+DP-CR-018). Recorded here because it is a cross-cutting rule: any future
+yield dependency that owns a transaction must use function scope, or the
+client can receive a 2xx before the commit.
