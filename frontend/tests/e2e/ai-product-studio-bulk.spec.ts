@@ -27,16 +27,21 @@ const DRAFTS = Array.from({ length: 30 }, (_, n) => listProduct(id(n), `Draft pr
 const PUBLISHED = Array.from({ length: 30 }, (_, n) => listProduct(id(100 + n), `Published product ${n}`));
 
 /** Lists that honour `page`/`size` the way the backend does. */
-function lists(): Handler[] {
+function lists(delayMs = 0): Handler[] {
   const slice = (rows: typeof DRAFTS, search: URLSearchParams) => {
     const page = Number(search.get("page") ?? 1);
     const size = Number(search.get("size") ?? 25);
     return { ...pageOf(rows.slice((page - 1) * size, page * size), page, size, rows.length) };
   };
   return [
-    (r) => (r.method === "GET" && r.path.endsWith("/api/v1/drafts") ? { status: 200, body: slice(DRAFTS, r.search) } : undefined),
     (r) =>
-      r.method === "GET" && r.path.endsWith("/api/v1/products") ? { status: 200, body: slice(PUBLISHED, r.search) } : undefined,
+      r.method === "GET" && r.path.endsWith("/api/v1/drafts")
+        ? { status: 200, body: slice(DRAFTS, r.search), delayMs }
+        : undefined,
+    (r) =>
+      r.method === "GET" && r.path.endsWith("/api/v1/products")
+        ? { status: 200, body: slice(PUBLISHED, r.search), delayMs }
+        : undefined,
   ];
 }
 
@@ -78,6 +83,25 @@ test.describe("Selection", () => {
     }
   });
 
+  test("Select page waits for the page it would select", async ({ page }) => {
+    // While a page loads, the previous page stays on screen as placeholder
+    // data; Select page must not act on it.
+    await mockStudio(page, { handlers: lists(800) });
+    await page.goto("/ai-studio");
+    const selectPage = page.getByRole("button", { name: "Select page" });
+    await expect(selectPage).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: "Draft product 0", exact: true })).toBeVisible();
+    await selectPage.click();
+    await expect(page.getByTestId("ai-studio-selection-count")).toHaveText("20 / 50 selected");
+
+    await page.getByRole("button", { name: "Next" }).click();
+    // The previous page is still on screen as placeholder data.
+    await expect(selectPage).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: "Draft product 20", exact: true })).toBeVisible();
+    await selectPage.click();
+    await expect(page.getByTestId("ai-studio-selection-count")).toHaveText("30 / 50 selected");
+  });
+
   test("the 51st product cannot be selected", async ({ page }) => {
     await mockStudio(page, { handlers: lists() });
     await page.goto("/ai-studio");
@@ -85,6 +109,8 @@ test.describe("Selection", () => {
     await page.getByRole("button", { name: "Next" }).click();
     await page.getByRole("button", { name: "Select page" }).click();
     await page.getByTestId("ai-studio-view-published").click();
+    // Act on the page the merchant can see: wait for the Published rows.
+    await expect(page.getByRole("checkbox", { name: "Published product 0", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Select page" }).click();
     await expect(page.getByTestId("ai-studio-selection-count")).toHaveText("50 / 50 selected");
     await expect(page.getByTestId("ai-studio-cap-note")).toHaveText("You can optimize up to 50 products at a time.");

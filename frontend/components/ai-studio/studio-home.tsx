@@ -63,6 +63,11 @@ export function StudioHome() {
     setStoredRun(tenantId ? readActiveRun(tenantId) : null);
   }, [tenantId, runId]);
   const atCap = selected.size >= MAX_BULK_SELECTION;
+  // "Select page" acts on the rows of the page being shown. While a view or
+  // page loads, the list is empty or still shows the previous page
+  // (placeholder data), so selecting then would silently add nothing or the
+  // wrong page.
+  const pageReady = list.data !== undefined && !list.isPlaceholderData;
 
   function toggle(id: string) {
     setSelected((current) => {
@@ -160,7 +165,7 @@ export function StudioHome() {
           {selected.size} / {MAX_BULK_SELECTION} selected
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={selectPage} disabled={atCap}>
+          <Button type="button" size="sm" variant="outline" onClick={selectPage} disabled={atCap || !pageReady}>
             Select page
           </Button>
           <Button
