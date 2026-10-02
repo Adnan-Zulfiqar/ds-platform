@@ -27,4 +27,4 @@ No evidence of distribution: no registry host in any digest, CI builds with `pus
 
 `docs/operations/LOCAL_CANDIDATE_STACK.md`: project `dp-candidate`, http://localhost:18080, own volumes and broker, beat off, the existing local key reused by path. Browser-verified flows are listed there.
 
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

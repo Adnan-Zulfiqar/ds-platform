@@ -7,4 +7,4 @@
 - **Recovery:** revert the merge.
 - **Cursor must inspect:** the API client interceptors against the axios 1.20 changelog.
 - **Author verification:** PASS (CI).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

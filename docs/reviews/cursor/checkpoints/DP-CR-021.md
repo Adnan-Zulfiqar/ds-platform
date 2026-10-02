@@ -9,4 +9,4 @@
 - **Results:** backend 3462 passed (full), ruff/format/mypy clean; editor specs 103 passed, retries 0.
 - **Not changed:** `unsupported_channel`, `store_required` are unreachable from the editor (fixed channel; store chosen first). Client hints remain (labelled suggestions), not merged into one model.
 - **Author verification:** PASS (local); PR CI pending.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

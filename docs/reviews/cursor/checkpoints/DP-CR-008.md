@@ -8,4 +8,4 @@
 - **Commands:** BuildKit probe (`COPY . /ctx`, then `find /ctx -name '.env*'`) before and after.
 - **Limitations:** images already built locally keep `/app/.env` until rebuilt; CI images never contained it.
 - **Author verification:** PASS (local); PR CI pending.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

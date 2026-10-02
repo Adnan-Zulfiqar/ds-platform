@@ -3,13 +3,17 @@
 Stage 11 of [PHASE_9_PLAN.md](PHASE_9_PLAN.md): "Docs, gates, tag —
 Completion report".
 
-Status: **IMPLEMENTED / AUTHOR-VERIFIED / CURSOR REVIEW PENDING. Not tagged.
-Production undeployed — `main` unchanged.**
+Status: **IMPLEMENTED / AUTHOR-VERIFIED / IMPLEMENTATION ACCEPTED WITH
+NON-BLOCKING NOTES by Cursor on `e63508e` (2026-10-02) / RELEASE NOT READY.
+Not tagged. Production undeployed — `main` unchanged.**
+Report: [`reviews/cursor/INDEPENDENT_REVIEW_e63508e.md`](reviews/cursor/INDEPENDENT_REVIEW_e63508e.md).
 
 The tag `phase-9-complete` is deliberately not created yet: the owner moved
 the independent review to the end of implementation, and a tag is a
-permanent claim of acceptance (`docs/completion/DECISIONS.md` D-008). It is
-created on the candidate SHA below once Cursor accepts.
+permanent claim of acceptance (`docs/completion/DECISIONS.md` D-008).
+Cursor accepted the implementation but judged the release NOT READY (live
+providers B-002…B-004, open flakes, owner images B-007), so the tag stays
+uncreated until the owner accepts the release.
 
 ## Stages
 

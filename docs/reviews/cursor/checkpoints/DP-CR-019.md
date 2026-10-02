@@ -9,4 +9,4 @@
 - **Tests:** two new proxy contract tests in `csp.spec.ts` (protected pages no-store; client `x-nonce` replaced). One assertion I first wrote ("public pages are not no-store") was wrong — Next marks every dynamic page no-store — and was removed before merge.
 - **Evidence:** local full Playwright, retries 0: 769 passed, 8 skipped, 0 failed; PR CI 36993008546 10/10 at `e1667df` (pytest 3475; Playwright 769, 0 flaky).
 - **Author verification:** PASS.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

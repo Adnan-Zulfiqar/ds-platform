@@ -10,6 +10,16 @@ production release.
 
 ## [Unreleased]
 
+### Reviewed
+
+- **Cursor independent review of `develop` @ `e63508e` (2026-10-02).**
+  Implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY (live
+  AI, Shopify and AliExpress unverified; two flakes cause-unproven; owner
+  images still contain `/app/.env`). Report kept verbatim in
+  `docs/reviews/cursor/`. `phase-9-complete` not tagged; Draft Editor
+  Stage 8 not complete. Follow-up drill on `e63508e`: 42/42 digests
+  identical, encrypted credential intact (DP-CR-025).
+
 ### Fixed
 
 - **A write's 2xx no longer arrives before its commit (PR #35).** On

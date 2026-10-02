@@ -140,3 +140,12 @@ pytest 3475 passed; Playwright 767 passed, 8 skipped, 0 failed, 0 flaky.**
 | Local candidate stack | `dp-candidate`, http://localhost:18080; images from `git archive 9a62b9e`, no `.env` in any image; browser walk-through passed (`docs/operations/LOCAL_CANDIDATE_STACK.md`) |
 | Docker secret images | assessed; task-owned `dp-remed-*` removed; clean `dp-e2e-clean` harness image (DP-CR-024) |
 | Docker Desktop outage | after the 05:14Z system sign-out/shutdown; fixed by renaming two stale-socket directories; owner stack and volumes intact (B-008). The owner's Open-Higgsfield dev server on :3001 was also down after that sign-out and was left as found |
+
+## Independent review — 2026-10-02
+
+| Step | Result |
+|---|---|
+| Cursor review of `develop` @ `e63508e` | Implementation **ACCEPTED WITH NON-BLOCKING NOTES**; release **NOT READY** (`docs/reviews/cursor/INDEPENDENT_REVIEW_e63508e.md`) |
+| Backup/restore drill on `e63508e` (author, after the verdict) | 42/42 digests identical; credential MATCH, ciphertext at rest; negatives refused (DP-CR-025) |
+| Eight Playwright skips | Titles recovered from push CI 37003066025; all are worker-absent or live-AliExpress guards (DP-CR-025) |
+| Tag / flakes / Stage 8 | Untagged; flakes open; Stage 8 not complete — as Cursor directs |
