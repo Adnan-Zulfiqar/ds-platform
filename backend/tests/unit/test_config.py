@@ -162,6 +162,56 @@ class TestEnvFileLoading:
 
         assert config.app_key == "from-the-environment"
 
+    def test_a_blank_line_in_the_later_file_does_not_erase_the_earlier_value(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression: `backend/.env` carried the template's `KEY=` lines
+        and, as the later file, wiped the provider keys set in the root `.env`
+        for every run from source."""
+        from pathlib import Path
+
+        root = Path(str(tmp_path)) / "root.env"
+        backend = Path(str(tmp_path)) / "backend.env"
+        root.write_text("ALIEXPRESS_APP_KEY=from-the-root\n", encoding="utf-8")
+        backend.write_text("ALIEXPRESS_APP_KEY=\nALIEXPRESS_APP_SECRET=  \n", encoding="utf-8")
+        monkeypatch.delenv("ALIEXPRESS_APP_KEY", raising=False)
+        monkeypatch.delenv("ALIEXPRESS_APP_SECRET", raising=False)
+
+        config = AliExpressSettings(_env_file=(str(root), str(backend)))  # type: ignore[call-arg]
+
+        assert config.app_key == "from-the-root"
+        assert config.app_secret is None
+
+    def test_a_non_blank_later_file_still_wins(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pathlib import Path
+
+        root = Path(str(tmp_path)) / "root.env"
+        backend = Path(str(tmp_path)) / "backend.env"
+        root.write_text("ALIEXPRESS_APP_KEY=from-the-root\n", encoding="utf-8")
+        backend.write_text("ALIEXPRESS_APP_KEY=from-the-backend\n", encoding="utf-8")
+        monkeypatch.delenv("ALIEXPRESS_APP_KEY", raising=False)
+
+        config = AliExpressSettings(_env_file=(str(root), str(backend)))  # type: ignore[call-arg]
+
+        assert config.app_key == "from-the-backend"
+
+    def test_an_empty_environment_variable_still_overrides_a_file(
+        self, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only file lines are filtered. The deployed-environment guards rely
+        on an explicitly empty variable reaching validation."""
+        from pathlib import Path
+
+        env_path = Path(str(tmp_path)) / ".env"
+        env_path.write_text("ALIEXPRESS_APP_KEY=from-the-file\n", encoding="utf-8")
+        monkeypatch.setenv("ALIEXPRESS_APP_KEY", "")
+
+        config = AliExpressSettings(_env_file=str(env_path))  # type: ignore[call-arg]
+
+        assert config.app_key == ""
+
 
 class TestDeployedEnvironmentGuards:
     def test_placeholder_secret_key_is_rejected_when_deployed(

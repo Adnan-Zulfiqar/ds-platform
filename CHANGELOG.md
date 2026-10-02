@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A blank `KEY=` line in `backend/.env` no longer erases the root
+  `.env` value.** A run from source loaded `backend/.env` last, so the
+  template's empty AliExpress/Shopify/eBay key lines silently left the app
+  with no provider credentials; the Compose stack, which reads only the root
+  file, was unaffected. Blank lines in env files now count as unset. An
+  empty environment variable still overrides both files.
+
 ### Reviewed
 
 - **Cursor independent review of `develop` @ `e63508e` (2026-10-02).**
