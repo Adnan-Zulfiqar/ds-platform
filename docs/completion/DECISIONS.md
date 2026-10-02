@@ -129,3 +129,13 @@ B-006) rather than built speculatively or declared out of scope.
 DP-CR-018). Recorded here because it is a cross-cutting rule: any future
 yield dependency that owns a transaction must use function scope, or the
 client can receive a 2xx before the commit.
+
+## D-008 — `phase-9-complete` waits for Cursor's acceptance (2026-10-02)
+
+Stage 11 is "Docs, gates, tag". The report and the gates are done in this
+programme; the tag is not created yet. A tag is a permanent, public claim
+that the phase passed, and `PHASE_9_PLAN.md` §7 ties it to "every stage in
+§3 is done and its verification executed". With the independent review
+deferred to the end (D-001), tagging now would claim an acceptance that has
+not happened, and a tag should not be moved afterwards. The candidate SHA is
+recorded in the final report; the tag is created on it once Cursor accepts.

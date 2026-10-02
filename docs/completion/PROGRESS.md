@@ -95,3 +95,26 @@ the commit-ordering symptoms (FK error right after register; signed-in page
 missing; a rule created through the API not yet listed). #35 merged after
 its own CI showed 0 flaky; whether the flakes are gone is judged on the
 next runs, not on one.
+
+## AUT-09 evidence — backup/restore drill on disposable databases (2026-10-02)
+
+Procedure: `docs/operations/BACKUP_RUNBOOK.md` §7, at `develop` `7fe0a89`
+(git archive of the commit; Postgres 17 container `dp-drill-pg`; tools run
+as a non-root user; a throwaway backup key generated inside the container,
+never printed, discarded with it).
+
+| Step | Result |
+|---|---|
+| Migrate source to head | `0036` |
+| Seed through the real API + DB seed helper | 2 tenants, 10 products (5 drafts each, 1 published), a pricing rule each; 42 tables, 12 non-empty |
+| Encrypted backup (`create_database_backup.py`) | rc 0 |
+| Verify (`verify_database_backup.py --all`) | rc 0 |
+| Restore into a new empty database (`--apply`) | rc 0; Alembic `0036`; 42 tables |
+| Compare per-table count + md5 of ordered rows | **identical, 42 / 42** |
+| `tenant_id` nullable anywhere after restore | 0 columns |
+| Corrupted copy / wrong key | verify rc 5 / rc 5 (refused) |
+| Wrong source identity / non-empty target | restore rc 2 / rc 2 (refused) |
+
+Not covered by this drill: encrypted credential columns (no provider
+connection existed in the seed), a production backup, off-site copy, timed
+restore — all remain the external items in the runbook §8.
