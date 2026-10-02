@@ -392,6 +392,66 @@ test.describe("UX-L2B-R5 header publish truthfulness", () => {
     });
   }
 
+  test("a disconnected store's action leads to Integrations, not back to this tab", async ({ page }) => {
+    // DE-6b: section "publishing" mapped this action to the Publishing tab
+    // the merchant was already on; the link to Integrations was unreachable.
+    await openMockedEditor(page);
+    await page.route("**/api/v1/integrations/shopify/publish-readiness", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          mockPublishReadiness({
+            canPublish: false,
+            blockers: [
+              {
+                code: "store_disconnected",
+                message: "This Shopify store is not connected. Reconnect it in Settings before publishing.",
+                field: "storeId",
+                section: "publishing",
+                action: "Open Integrations",
+              },
+            ],
+          }),
+        ),
+      }),
+    );
+    await openReview(page);
+    await selectDemoStore(page);
+    await expect(page.getByTestId("publish-action-integrations")).toHaveAttribute(
+      "href",
+      "/settings/integrations",
+    );
+  });
+
+  test("a stale-draft blocker's Reload draft opens the conflict review", async ({ page }) => {
+    await openMockedEditor(page);
+    await page.route("**/api/v1/integrations/shopify/publish-readiness", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          mockPublishReadiness({
+            canPublish: false,
+            blockers: [
+              {
+                code: "draft_version_stale",
+                message: "This draft changed since you opened it.",
+                field: null,
+                section: "publishing",
+                action: "Reload draft",
+              },
+            ],
+          }),
+        ),
+      }),
+    );
+    await openReview(page);
+    await selectDemoStore(page);
+    await page.getByTestId("publish-action-reload").click();
+    await expect(page.getByTestId("draft-conflict-banner")).toBeVisible();
+  });
+
   test("server blockers keep advisory checklist wording precise", async ({ page }) => {
     await openMockedEditor(page, {
       product: buildSyntheticProduct({
@@ -427,8 +487,12 @@ test.describe("UX-L2B-R5 header publish truthfulness", () => {
     await openReview(page);
     await selectDemoStore(page);
     await expect(page.getByTestId("publish-blockers")).toBeVisible({ timeout: 10_000 });
+    // DE-6b: the sidebar now carries the server blocker, not "no suggestions".
+    await expect(
+      page.getByTestId("publish-checklist-aside").getByTestId("publish-checklist-server-blockers"),
+    ).toBeVisible();
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /No title, description or image suggestions/,
+      /block publishing to this store/,
     );
     await expect(page.getByTestId("publish-checklist-aside")).not.toContainText(
       /No content gaps flagged here/i,
