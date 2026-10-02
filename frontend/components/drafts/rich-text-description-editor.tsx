@@ -8,6 +8,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useHydrated } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 
 /**
@@ -382,9 +383,8 @@ export function RichTextDescriptionEditor({
   disabled = false,
   maxLength,
 }: RichTextDescriptionEditorProps) {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useHydrated();
   const [linkEditorOpen, setLinkEditorOpen] = useState(false);
-  useEffect(() => setMounted(true), []);
 
   // What this component last emitted. Used to distinguish "the parent sent
   // us a genuinely new document" from "the parent is echoing our own last
@@ -399,7 +399,8 @@ export function RichTextDescriptionEditor({
   // records an edit nobody made, marks the form dirty, and autosaves. Every
   // subsequent content change is applied by the effect below instead, which
   // does it with `emitUpdate: false`.
-  const initialContent = useRef(value);
+  // (State, not a ref: it is read during render, and the setter is never used.)
+  const [initialContent] = useState(value);
 
   // Whether the merchant has actually done something to the document since
   // the last time content was loaded into it.
@@ -425,7 +426,7 @@ export function RichTextDescriptionEditor({
 
   const editor = useEditor({
     extensions: EXTENSIONS,
-    content: initialContent.current,
+    content: initialContent,
     editable: !disabled,
     // Required for SSR: without it, TipTap renders on the server and the
     // markup disagrees with the client's first pass (`next.config.ts` uses

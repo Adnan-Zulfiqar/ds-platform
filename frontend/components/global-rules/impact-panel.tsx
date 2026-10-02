@@ -2,6 +2,7 @@
 
 import { PackageSearch } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import {
   ApplyConfirmDialog,
@@ -68,7 +69,11 @@ export function ImpactPanel({
   });
   const [confirming, setConfirming] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [applicationId, setApplicationId] = useState<string | null>(null);
+  // Resume whatever run the URL names, so a refresh does not lose it.
+  const searchParams = useSearchParams();
+  const [applicationId, setApplicationId] = useState<string | null>(() =>
+    searchParams.get("application"),
+  );
 
   // One key per confirmation, generated when the dialog opens. A double-click,
   // a retry after a timeout, or a refresh mid-flight all carry the same key
@@ -83,12 +88,6 @@ export function ImpactPanel({
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Resume whatever run the URL names, so a refresh does not lose it.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const existing = params.get("application");
-    if (existing) setApplicationId(existing);
-  }, []);
 
   const setApplicationInUrl = useCallback((id: string | null) => {
     const url = new URL(window.location.href);

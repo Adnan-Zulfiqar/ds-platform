@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 
 import { useRouter } from "next/navigation";
 
@@ -68,7 +68,9 @@ export default function RegisterPage() {
     },
   });
 
-  const password = form.watch("password");
+  // useWatch, not form.watch: watch() returns a new value without React
+  // knowing, which the React Compiler cannot memoise safely.
+  const password = useWatch({ control: form.control, name: "password" });
   const strength = estimatePasswordStrength(password);
 
   async function onSubmit(values: RegisterFormValues) {

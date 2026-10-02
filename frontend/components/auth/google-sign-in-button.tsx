@@ -100,13 +100,14 @@ export function GoogleSignInButton({
   text = "continue_with",
 }: GoogleSignInButtonProps) {
   const container = useRef<HTMLDivElement>(null);
+  const clientId = env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+  // Not configured: offer nothing rather than a button that cannot work.
+  // Known at render time, so it is the initial state, not an effect.
   const [status, setStatus] = useState<"idle" | "loading" | "working" | "unavailable">(
-    "loading",
+    clientId ? "loading" : "unavailable",
   );
   const [error, setError] = useState<string | null>(null);
   const headingId = useId();
-
-  const clientId = env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 
   const blocked = intent === "signup" && !legalAccepted;
 
@@ -122,16 +123,20 @@ export function GoogleSignInButton({
    * the current value.
    */
   const legalAcceptedRef = useRef(legalAccepted);
-  legalAcceptedRef.current = legalAccepted;
 
   // Same reason, for the callbacks. Both arrive as inline arrows from the page,
   // so they are a new identity on every render. Held in the effect's dependency
   // list they made it re-run on any parent state change — which fetched a fresh
   // nonce and appended a *second* Google button to the container each time.
   const onSuccessRef = useRef(onSuccess);
-  onSuccessRef.current = onSuccess;
   const onConflictRef = useRef(onConflict);
-  onConflictRef.current = onConflict;
+  // Refs are updated after render, not during it. Google invokes the
+  // callback later and asynchronously, so it always sees the committed values.
+  useEffect(() => {
+    legalAcceptedRef.current = legalAccepted;
+    onSuccessRef.current = onSuccess;
+    onConflictRef.current = onConflict;
+  });
 
   const handleCredential = useCallback(
     async (credential: string, nonce: string) => {
@@ -187,11 +192,7 @@ export function GoogleSignInButton({
   );
 
   useEffect(() => {
-    if (!clientId) {
-      // Not configured: offer nothing rather than a button that cannot work.
-      setStatus("unavailable");
-      return;
-    }
+    if (!clientId) return;
 
     let cancelled = false;
 

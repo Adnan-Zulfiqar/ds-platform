@@ -61,7 +61,12 @@ export function TargetCombobox({
   const [chosenLabel, setChosenLabel] = useState<string | null>(label ?? null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => setChosenLabel(label ?? null), [label]);
+  // Follow a new label from the parent, adjusted during render.
+  const [followedLabel, setFollowedLabel] = useState(label);
+  if (followedLabel !== label) {
+    setFollowedLabel(label);
+    setChosenLabel(label ?? null);
+  }
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query), DEBOUNCE_MS);

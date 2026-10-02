@@ -264,7 +264,7 @@ id. Components never call `fetch` directly.
 **Design tokens as CSS variables.** Components reference semantic roles
 (`bg-background`), never literal colours, so theming is one class on `<html>`.
 
-**Access control is client-side, in `AuthGuard`.** `middleware.ts` cannot see
+**Access control is client-side, in `AuthGuard`.** `proxy.ts` (formerly `middleware.ts`; renamed for Next.js 16) cannot see
 the httpOnly, path-scoped session cookie, so gating there would cause redirect
 loops. The `(protected)` route group is a naming convention providing no
 enforcement; the guard enforces, and the API is the actual security boundary —

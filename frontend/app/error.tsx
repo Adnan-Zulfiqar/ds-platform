@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { AlertCircle } from "lucide-react";
 import { useEffect } from "react";
 
@@ -63,8 +64,10 @@ export default function Error({
 
         <CardFooter className="gap-2">
           <Button onClick={reset}>Try again</Button>
-          <Button variant="outline" onClick={() => window.location.assign("/")}>
-            Go home
+          {/* Leaving the failed segment through the router unmounts it, which
+              clears this error boundary; no full page load is needed. */}
+          <Button variant="outline" asChild>
+            <Link href="/">Go home</Link>
           </Button>
         </CardFooter>
       </Card>

@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircle, Check, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { SaveStateView } from "@/lib/editor-lifecycle";
@@ -27,10 +27,10 @@ interface SaveStateIndicatorProps {
  * so assertions see only what a sighted merchant sees.
  */
 export function SaveStateIndicator({ save, onRetry, className }: SaveStateIndicatorProps) {
+  // The last non-"saving" label, kept across a saving phase. Adjusted during
+  // render (no effect), so the live region never lags a render behind.
   const [announced, setAnnounced] = useState(save.label);
-  useEffect(() => {
-    if (save.kind !== "saving") setAnnounced(save.label);
-  }, [save.kind, save.label]);
+  if (save.kind !== "saving" && announced !== save.label) setAnnounced(save.label);
 
   const Icon =
     save.kind === "saving"

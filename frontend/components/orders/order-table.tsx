@@ -92,14 +92,14 @@ export function OrderTable() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
   const [windowDays, setWindowDays] = useState("");
+  // The window start is fixed when the merchant picks the filter (an event),
+  // not recomputed from the clock on every render.
+  const [dateFrom, setDateFrom] = useState<string | undefined>(undefined);
   const [sort, setSort] = useState("external_created_at:desc");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
   const [sortBy, sortDir] = sort.split(":") as [string, "asc" | "desc"];
-  const dateFrom = windowDays
-    ? new Date(Date.now() - Number(windowDays) * 86_400_000).toISOString()
-    : undefined;
 
   const { data, isPending, isError, error, refetch } = useOrders({
     page,
@@ -147,7 +147,14 @@ export function OrderTable() {
       <FilterSelect
         label="Filter by date"
         value={windowDays}
-        onChange={(value) => applyFilter(() => setWindowDays(value))}
+        onChange={(value) =>
+          applyFilter(() => {
+            setWindowDays(value);
+            setDateFrom(
+              value ? new Date(Date.now() - Number(value) * 86_400_000).toISOString() : undefined,
+            );
+          })
+        }
         options={WINDOW_OPTIONS}
       />
       <FilterSelect

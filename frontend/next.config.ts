@@ -28,7 +28,7 @@ const nextConfig: NextConfig = {
     // The Content-Security-Policy is deliberately **not** here. It carries a
     // per-request nonce now, and a value in this file is fixed at build time —
     // one nonce baked into every response is not a nonce, it is a password an
-    // attacker reads out of any page. It is built in `middleware.ts` instead;
+    // attacker reads out of any page. It is built in `proxy.ts` instead;
     // see `lib/csp.ts` for the directives and the reasoning behind each origin.
     return [
       {

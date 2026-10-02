@@ -3,7 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { buildContentSecurityPolicy, createNonce } from "@/lib/csp";
 
 /**
- * Edge middleware — the first routing gate.
+ * Proxy — the first routing gate (Next.js 16 renamed the `middleware` file
+ * convention to `proxy`; it now runs on the Node.js runtime, where the Web
+ * Crypto RNG used for the CSP nonce is also available).
  *
  * **This is a user-experience gate, not a security boundary.** The security
  * boundary is the API: every `/api/v1` endpoint verifies a signed access token
@@ -17,7 +19,7 @@ import { buildContentSecurityPolicy, createNonce } from "@/lib/csp";
  * Nginx — the cookie is not sent to page requests because of the path scope.
  * In local development they are on different ports, so it is not sent at all.
  *
- * Middleware therefore cannot reliably see whether a visitor has a session, and
+ * The proxy therefore cannot reliably see whether a visitor has a session, and
  * pretending otherwise would produce redirect loops. It handles only the cheap,
  * always-correct cases; the authoritative client-side check lives in
  * `app/(protected)/layout.tsx`, which knows the real session state.
@@ -75,7 +77,7 @@ function withCsp(request: NextRequest): NextResponse {
   return response;
 }
 
-export function middleware(request: NextRequest): NextResponse {
+export function proxy(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
   const response = withCsp(request);
 
@@ -101,7 +103,7 @@ export const config = {
   /**
    * Match every path except static assets and image optimisation.
    *
-   * Running middleware on static files would add latency to every asset request
+   * Running the proxy on static files would add latency to every asset request
    * for no benefit.
    */
   matcher: [
