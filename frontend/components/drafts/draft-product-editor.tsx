@@ -910,10 +910,33 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           );
           return;
         }
+        // Not every 409 is an edit conflict. This one means the approved AI
+        // text the store shows can no longer be read; the only way forward
+        // is the explicit "Use my draft text instead" choice (E-1). Opening
+        // the conflict review here would blame an edit that never happened.
+        const reason = err.details?.find((detail) => detail.type === "reason")?.message;
+        if (reason === "published_ai_content_unavailable") {
+          setPublishError(
+            "The approved AI text live on Shopify can no longer be read. To publish, choose “Use my draft text instead…”.",
+          );
+          void queryClient.invalidateQueries({ queryKey: draftKeys.listings(productId) });
+          return;
+        }
         setPublishError(
           "This draft changed somewhere else. Review the latest version before publishing.",
         );
         await enterConflict(savedUpdatedAt);
+        return;
+      }
+      if (err instanceof ApiError && err.status === null) {
+        // No reply is not a failure: the publish may have reached Shopify
+        // (the server holds the product lock while it calls Shopify). Re-read
+        // what the store shows instead of claiming it did not happen.
+        setPublishError(
+          "We didn’t get a reply. The publish may still have completed — the listing status below is being re-checked.",
+        );
+        void queryClient.invalidateQueries({ queryKey: draftKeys.listings(productId) });
+        void refetch();
         return;
       }
       if (err instanceof ApiError) {
