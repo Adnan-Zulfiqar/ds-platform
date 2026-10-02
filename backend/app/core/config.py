@@ -28,7 +28,13 @@ from pydantic import (
     computed_field,
     field_validator,
 )
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 # app/core/config.py → app/core → app → backend → repository root
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +48,33 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 #: back to defaults and the application starts looking healthy while pointed at
 #: the wrong configuration.
 _ENV_FILES = (_REPO_ROOT / ".env", _BACKEND_ROOT / ".env")
+
+
+class _NonEmptyDotEnvSource(DotEnvSettingsSource):
+    """Env-file source in which an empty line (``KEY=``) means "not set here".
+
+    The later file in ``_ENV_FILES`` wins, and pydantic-settings merges the
+    files *before* any empty-value handling — so the blank template line for
+    ``SHOPIFY_API_KEY`` in ``backend/.env`` erased the real key in the root
+    ``.env``, and a source run silently had no provider credentials while the
+    Compose stack (which reads only the root file) had them. Filtering each
+    file before the merge lets a blank template line fall through to the file
+    beneath it instead.
+
+    Only files are affected. An empty *environment variable* still overrides
+    everything, deliberately: it is an explicit operator action, and the
+    deployed-environment guards (empty ``SECURITY_ENCRYPTION_KEYS``, empty
+    ``SECURITY_OTP_HMAC_KEY``) must keep seeing it. The cost: a file can no
+    longer blank a field whose default is non-empty; do that with an
+    environment variable.
+    """
+
+    def _read_env_file(self, file_path: Path) -> dict[str, str | None]:
+        return {
+            key: value
+            for key, value in super()._read_env_file(file_path).items()
+            if value is not None and value.strip()
+        }
 
 
 class _EnvFileSettings(BaseSettings):
@@ -70,6 +103,30 @@ class _EnvFileSettings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # Same order as the default; only the env-file source is replaced. The
+        # file list is taken from the source pydantic built, so a per-call
+        # `_env_file=` override keeps working.
+        assert isinstance(dotenv_settings, DotEnvSettingsSource)
+        return (
+            init_settings,
+            env_settings,
+            _NonEmptyDotEnvSource(
+                settings_cls,
+                env_file=dotenv_settings.env_file,
+                env_file_encoding=dotenv_settings.env_file_encoding,
+            ),
+            file_secret_settings,
+        )
 
 
 def _is_internal_address(host: str) -> bool:

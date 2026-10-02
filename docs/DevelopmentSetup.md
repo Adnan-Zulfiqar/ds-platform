@@ -86,6 +86,12 @@ pip install -e ".[dev]"
 cp ../.env.example .env
 ```
 
+A run from source reads the root `.env` first and `backend/.env` second; a
+value set in `backend/.env` wins. A blank line (`KEY=`) in either file counts
+as "not set here", so the template's empty provider-key lines no longer erase
+keys you filled in the root `.env`. To blank a value on purpose, set it as an
+empty environment variable instead — that still overrides both files.
+
 ```bash
 alembic upgrade head
 ```
