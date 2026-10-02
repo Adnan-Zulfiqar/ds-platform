@@ -2,46 +2,29 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-02.
-
-## Repository
+**Updated:** 2026-10-02 — implementation handed off for Cursor review.
 
 | Item | Value |
 |---|---|
 | Worktree | `C:\Projects\ds-platform\.claude\worktrees\app-progress-status-79361b` |
-| `develop` | `7fe0a89` (after #33, #34, #25, #35, #32) |
+| Candidate | `develop` @ `25134a5` (merge of PR #40) |
 | `main` | `3ce66d4` — untouched |
-| Untracked files to preserve | `C:\Projects\ds-platform\AGENTS.md` (main checkout); root `.env` (now holds the local-only key, D-004) and `backend/.env` — git-ignored |
+| Untracked files to preserve | `C:\Projects\ds-platform\AGENTS.md`; root `.env` (local-only key, D-004); `backend/.env` |
 
-## Open PRs owned by this programme
+## State
 
-| PR | Branch | What | State |
-|---|---|---|---|
-| #36 | `feat/phase-9-stage-10-ai-studio` | Stage 10 AI Product Studio + docs | CI pending on the docs head; first run failed on a Stage 7 guard test, fixed |
-| #37 | `fix/editor-publish-conflict-reasons` | DE-7 publish outcomes | CI pending |
-| #38 | `fix/editor-full-readiness` | DE-6b readiness + removed images | CI pending |
-| (this) | `docs/completion-progress-2` | Tracking docs update | to open |
+All in-scope implementation is merged into `develop`. Open items are owner
+inputs or external access (`FINAL_REPORT.md` section 4), the deferred phase
+tag (D-008), and follow-ups D-009 (lint) and the `proxy.ts` rename.
 
-#36, #37 and #38 all touch `draft-product-editor.tsx` and editor specs;
-merge #36 first, then update the other two from `develop` and re-run CI.
+## Next safe action
 
-## Next safe actions
-
-1. Merge #36, #37, #38 as their CI goes green (exact heads).
-2. Stage 11: full gates on the integrated `develop`, `PHASE_9_COMPLETION.md`,
-   roadmap/changelog, then tag `phase-9-complete` only on a verified SHA.
-3. AUT-07/08/09 checks that need no external account (tenant isolation
-   sweep, migrations on a fresh DB, backup/restore drill on disposable data).
-4. Owner inputs: B-003/B-004 (test store, AliExpress), B-006 (bulk tools scope).
+Hand `docs/reviews/cursor/CURSOR_REVIEW_INDEX.md` and the candidate SHA to
+Cursor. On acceptance: tag `phase-9-complete` on the accepted SHA. On owner
+input for B-006: implement the named bulk actions.
 
 ## Owned resources
 
-Scratchpad scripts `backend_gate.sh` (containers `dp-gate-pg`,
-`dp-gate-redis`, network `dp-gate-net`) and `e2e_run.sh` (containers
-`dp-e2e-pg`, `dp-e2e-redis`, `dp-e2e-runner`). Both remove their containers
-on exit. Never stop processes by name or port; the owner's Open-Higgsfield
-dev server (:3001) is unrelated.
-
-## Cursor checkpoints
-
-DP-CR-001…014, 017, 018, 021, 022 written; all `PENDING`.
+None running. Scratchpad harness scripts remove their containers on exit
+(`dp-gate-*`, `dp-e2e-*`, `dp-drill-*`). The owner's Open-Higgsfield dev
+server (:3001) is unrelated and was not touched after its restore.

@@ -557,3 +557,12 @@ Plan: [PHASE_9_STAGE_10_PLAN.md](PHASE_9_STAGE_10_PLAN.md) (PR #25, merged
 Implementation PR [#36](https://github.com/Adnan-Zulfiqar/ds-platform/pull/36).
 No backend change, no migration (head `0036`). `StubProvider` only.
 Cursor review pending. Stage 11 not started.
+
+2026-10-02: Stage 10 merged (PR #36, `fbadddb`; PR CI 36949638454 10/10,
+pytest 3475, Playwright 767 passed / 0 flaky).
+
+### Stage 11 — Docs, gates, tag: REPORT WRITTEN / TAG DEFERRED
+
+Report: [PHASE_9_COMPLETION.md](PHASE_9_COMPLETION.md). The tag
+`phase-9-complete` is created on the verified candidate once Cursor accepts
+the phase (`docs/completion/DECISIONS.md` D-008).

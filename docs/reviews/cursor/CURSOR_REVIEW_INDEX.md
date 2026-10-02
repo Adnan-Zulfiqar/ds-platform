@@ -8,7 +8,8 @@ directory records an independent verdict; every checkpoint says
 | Item | Value |
 |---|---|
 | Review baseline (`develop` before this programme) | `72e76921fc80b203133423ad3bd92bd380c7e02b` |
-| Candidate | not pinned yet — set at AUT-10 |
+| Candidate | `develop` @ `25134a5` (merge of PR #40, the last code change); docs-only commits may follow it |
+| Final author report | `docs/completion/FINAL_REPORT.md` |
 | Authoritative ledgers | `docs/REVIEW_REMEDIATION_STAGE_5_9.md` (Stage 5–9 findings); `docs/completion/*` (this programme) |
 
 ## Suggested review order (completion roadmap §16.3)
@@ -36,11 +37,13 @@ directory records an independent verdict; every checkpoint says
 | [DP-CR-007](checkpoints/DP-CR-007.md) | Local-only encryption key (no repository change) | Done locally; IR pending |
 | [DP-CR-008](checkpoints/DP-CR-008.md) | Nested `.env` kept out of Docker contexts (PR #32) | Integrated; IR pending |
 | [DP-CR-009](checkpoints/DP-CR-009.md) | Stage 10 plan reconciled (PR #25) | Integrated; IR pending |
-| [DP-CR-010…014](checkpoints/DP-CR-010.md) | Stage 10 AI Product Studio (PR #36) | PR open; IR pending |
+| [DP-CR-010…014](checkpoints/DP-CR-010.md) | Stage 10 AI Product Studio (PR #36) | Integrated; IR pending |
+| PR #40 | Next.js 16.3.8 — bundled PostCSS advisories; D-009 lint rules | Integrated; IR pending |
+| `docs/PHASE_9_COMPLETION.md` | Stage 11 report; tag deferred (D-008) | IR pending |
 | [DP-CR-017](checkpoints/DP-CR-017.md) | pyjwt / urllib3 advisories (PR #34) | Integrated; IR pending |
 | [DP-CR-018](checkpoints/DP-CR-018.md) | Commit before the response is sent (PR #35) | Integrated; IR pending |
-| [DP-CR-021](checkpoints/DP-CR-021.md) | Draft Editor full readiness + removed images (PR #38) | PR open; IR pending |
-| [DP-CR-022](checkpoints/DP-CR-022.md) | Draft Editor publish outcomes (PR #37) | PR open; IR pending |
+| [DP-CR-021](checkpoints/DP-CR-021.md) | Draft Editor full readiness + removed images (PR #38) | Integrated; IR pending |
+| [DP-CR-022](checkpoints/DP-CR-022.md) | Draft Editor publish outcomes (PR #37) | Integrated; IR pending |
 | DP-CR-015 | Remaining Playwright flakes | Reserved |
 | DP-CR-016 | Next.js bundled postcss / postponed fixes | Reserved |
 | DP-CR-020…023 | Stage 11; Draft Editor 6–8 | Reserved |
