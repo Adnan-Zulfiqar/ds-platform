@@ -146,6 +146,6 @@ pytest 3475 passed; Playwright 767 passed, 8 skipped, 0 failed, 0 flaky.**
 | Step | Result |
 |---|---|
 | Cursor review of `develop` @ `e63508e` | Implementation **ACCEPTED WITH NON-BLOCKING NOTES**; release **NOT READY** (`docs/reviews/cursor/INDEPENDENT_REVIEW_e63508e.md`) |
-| Backup/restore drill on `e63508e` (author, after the verdict) | 42/42 digests identical; credential MATCH, ciphertext at rest; negatives refused (DP-CR-025) |
-| Eight Playwright skips | Titles recovered from push CI 37003066025; all are worker-absent or live-AliExpress guards (DP-CR-025) |
+| Backup/restore drill on `e63508e` (author, after the verdict) | 42/42 digests identical; credential MATCH, ciphertext at rest; negatives refused |
+| Eight Playwright skips | Titles recovered from push CI 37003066025; all are worker-absent or live-AliExpress guards |
 | Tag / flakes / Stage 8 | Untagged; flakes open; Stage 8 not complete — as Cursor directs |

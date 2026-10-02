@@ -82,7 +82,7 @@ it from `develop` is the owner's step (B-007).
 
 Alembic head `0036`; every gate migrates a fresh database. Disposable drill
 repeated on the reviewed revision `e63508e` after Cursor's verdict
-(DP-CR-025): per-table digests identical 42/42, synthetic encrypted
+(`PROGRESS.md`, "Independent review"): per-table digests identical 42/42, synthetic encrypted
 credential decrypted to a matching hash after restore, corrupted /
 wrong-key / wrong-identity / non-empty-target inputs refused. Author
 evidence; not re-run by the reviewer.
@@ -90,4 +90,4 @@ evidence; not re-run by the reviewer.
 ## 8. For Cursor
 
 Verdict recorded in [`docs/reviews/cursor/CURSOR_REVIEW_INDEX.md`](../reviews/cursor/CURSOR_REVIEW_INDEX.md);
-author follow-ups (drill on `e63508e`, the eight skip titles) in DP-CR-025.
+author follow-ups (drill on `e63508e`, the eight skip titles) in `PROGRESS.md`.

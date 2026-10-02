@@ -18,7 +18,7 @@ production release.
   images still contain `/app/.env`). Report kept verbatim in
   `docs/reviews/cursor/`. `phase-9-complete` not tagged; Draft Editor
   Stage 8 not complete. Follow-up drill on `e63508e`: 42/42 digests
-  identical, encrypted credential intact (DP-CR-025).
+  identical, encrypted credential intact.
 
 ### Fixed
 

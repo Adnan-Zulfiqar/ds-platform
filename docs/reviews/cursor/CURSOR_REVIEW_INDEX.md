@@ -24,7 +24,7 @@ The report ends with a **Claude return review checkpoint**: every commit from
 the Stage 5 takeover onward needs a fresh Claude end-to-end review. That
 review has not been performed; it is recorded as open, not as done.
 
-Author follow-ups after the verdict: [`checkpoints/DP-CR-025.md`](checkpoints/DP-CR-025.md).
+Author follow-ups after the verdict: `docs/completion/PROGRESS.md`, section "Independent review".
 
 | Item | Value |
 |---|---|
@@ -70,4 +70,3 @@ Author follow-ups after the verdict: [`checkpoints/DP-CR-025.md`](checkpoints/DP
 | [DP-CR-019](checkpoints/DP-CR-019.md) | Next 16 lint fixed; middleware → proxy (PR #42) | Integrated; IR: accepted with notes |
 | [DP-CR-023](checkpoints/DP-CR-023.md) | Draft Editor bulk tools traced (B-006 → future) | IR: classification consistent; Stage 8 not complete (IR-06) |
 | [DP-CR-024](checkpoints/DP-CR-024.md) | Docker secret images; clean replacements; local candidate stack | IR: code fix accepted; owner images open (IR-04, B-007) |
-| [DP-CR-025](checkpoints/DP-CR-025.md) | Follow-ups to the independent review (drill on `e63508e`, skip titles) | Author evidence; not independently reviewed |
