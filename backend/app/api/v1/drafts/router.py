@@ -51,7 +51,7 @@ def _to_detail(product: Product) -> ProductDetailRead:
     return ProductDetailRead(
         **base.model_dump(),
         variants=[ProductVariantRead.model_validate(v) for v in product.variants],
-        images=[ProductImageRead.model_validate(i) for i in product.images],
+        images=[ProductImageRead.model_validate(i) for i in product.live_images],
         description=product.description,
         supplier_description=product.supplier_description,
         supplier_title=product.supplier_title,

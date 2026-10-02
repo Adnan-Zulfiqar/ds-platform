@@ -16,13 +16,19 @@ import {
 } from "@/components/ui/sheet";
 import { useIsLgUp } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
-import type { SeoScore, StoreListing } from "@/types/api";
+import { editorTabForSection } from "@/lib/editor-section-labels";
+import type { SeoScore, ShopifyPublishReadiness, StoreListing } from "@/types/api";
 import type { Store } from "@/services/stores";
 import { deriveStoreStatusLabel } from "@/components/drafts/editor-header/store-status-label";
 
 interface PublishChecklistProps {
   readiness: ReadinessSummary;
   seoScore?: SeoScore | null;
+  /** Server publish readiness for the chosen store (DE-6b). The server is
+   * the authority on what blocks publishing; the client items below are
+   * suggestions only. */
+  serverReadiness?: ShopifyPublishReadiness | null;
+  storeChosen?: boolean;
   listing: StoreListing | null;
   shopifyStores: Store[];
   storesPending: boolean;
@@ -34,10 +40,10 @@ interface PublishChecklistProps {
 }
 
 /**
- * Checklist chrome over client-side readiness hints.
- *
- * Does not claim Required/Recommended — the API does not classify findings.
- * Publishing still runs its own channel checks. The mobile sheet uses the
+ * "Before you publish": the server’s publish blockers for the chosen store
+ * (authoritative), then client-side suggestions. Client hints never claim
+ * to block — only the server does — and the server list is not re-derived
+ * here (DE-6b). Publishing still runs the channel checks again. The mobile sheet uses the
  * shared Radix Sheet primitive so Escape, focus trap, and focus return work.
  * Crossing Tailwind `lg` closes the sheet (not merely CSS-hides it) so the
  * portalled overlay cannot leave the desktop page inert.
@@ -45,6 +51,8 @@ interface PublishChecklistProps {
 export function PublishChecklist({
   readiness,
   seoScore,
+  serverReadiness = null,
+  storeChosen = false,
   listing,
   shopifyStores,
   storesPending,
@@ -57,6 +65,7 @@ export function PublishChecklist({
   const isLgUp = useIsLgUp();
   const items = readiness.items;
   const hasItems = items.length > 0;
+  const serverBlockers = serverReadiness?.blockers ?? [];
   const storeGuidance = deriveStoreStatusLabel({
     storesPending,
     storesError,
@@ -73,10 +82,38 @@ export function PublishChecklist({
 
   const body = (
     <div className="space-y-4" data-testid="publish-checklist">
+      {serverBlockers.length > 0 ? (
+        <section data-testid="publish-checklist-server-blockers">
+          <h4 className="text-xs font-medium uppercase tracking-wide text-destructive">
+            Blocks publishing
+          </h4>
+          <ul className="mt-2 space-y-2">
+            {serverBlockers.map((item) => {
+              const tab = editorTabForSection(item.section);
+              return (
+                <li key={`${item.code}-${item.field ?? ""}`} data-code={item.code}>
+                  <button
+                    type="button"
+                    className="w-full rounded-[10px] border border-destructive/40 bg-destructive/5 px-3 py-2 text-left text-sm hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => onOpenTab(tab ?? "publishing")}
+                  >
+                    <span className="font-medium text-foreground">{item.message}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      {!storeChosen ? (
+        <p className="text-sm text-muted-foreground" data-testid="publish-checklist-no-store">
+          Choose a store in Review &amp; publish to run Shopify’s own checks.
+        </p>
+      ) : null}
       {hasItems ? (
         <section>
           <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Items to review
+            Suggestions
           </h4>
           <ul className="mt-2 space-y-2">
             {items.map((item) => (
@@ -112,9 +149,12 @@ export function PublishChecklist({
     </div>
   );
 
-  const summary = hasItems
-    ? `Review ${items.length} item${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
-    : "No title, description or image suggestions. Channel checks still run when you publish.";
+  const summary =
+    serverBlockers.length > 0
+      ? `${serverBlockers.length} issue${serverBlockers.length === 1 ? "" : "s"} block publishing to this store.`
+      : hasItems
+        ? `Review ${items.length} suggestion${items.length === 1 ? "" : "s"} before you publish. Channel checks still run when you publish.`
+        : "No suggestions from DropPilot’s checks. Channel checks still run when you publish.";
 
   if (variant === "sheet") {
     return (

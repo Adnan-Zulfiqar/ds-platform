@@ -962,7 +962,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     productId,
     storeId: publishStoreId || null,
     draftUpdatedAt: dirty ? null : savedUpdatedAt,
-    enabled: tab === "publishing" && Boolean(publishStoreId) && !dirty,
+    // Every tab, once a store is chosen: the "Before you publish" sidebar
+    // shows these server blockers too, not only Review & publish (DE-6b).
+    enabled: Boolean(publishStoreId) && !dirty,
   });
 
   if (isPending) {
@@ -1667,6 +1669,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               liveAiContent={liveAiContent}
               onReplaceAiContent={() => void handlePublish({ replaceAiContent: true })}
               onOpenSection={(next) => selectTab(next)}
+              onReloadDraft={() => void enterConflict(savedUpdatedAt)}
               onContinueEditing={() => selectTab("overview")}
             />
           ) : null}
@@ -1696,6 +1699,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <PublishChecklist
           readiness={readiness}
           seoScore={seoScoreQuery.data}
+          serverReadiness={publishStoreId && !dirty ? (publishReadinessQuery.data ?? null) : null}
+          storeChosen={Boolean(publishStoreId)}
           listing={syncedListing}
           shopifyStores={shopifyStores}
           storesPending={storesQuery.isPending}
@@ -1708,6 +1713,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         <PublishChecklist
           readiness={readiness}
           seoScore={seoScoreQuery.data}
+          serverReadiness={publishStoreId && !dirty ? (publishReadinessQuery.data ?? null) : null}
+          storeChosen={Boolean(publishStoreId)}
           listing={syncedListing}
           shopifyStores={shopifyStores}
           storesPending={storesQuery.isPending}

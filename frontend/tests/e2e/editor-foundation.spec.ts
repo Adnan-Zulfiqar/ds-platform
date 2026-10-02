@@ -73,7 +73,7 @@ test.describe("UX-L2A editor foundation — desktop", () => {
       "Before you publish",
     );
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /No title, description or image suggestions|Review \d+ item/,
+      /No suggestions from DropPilot’s checks|Review \d+ suggestion/,
     );
     await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
@@ -340,11 +340,9 @@ test.describe("UX-L2A editor foundation — desktop", () => {
     await expect(page.getByTestId("product-editor-store")).toContainText(
       "Choose a store in Review & publish",
     );
+    await expect(page.getByTestId("publish-checklist-aside")).toContainText("Suggestions");
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      "Items to review",
-    );
-    await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /Review \d+ item/,
+      /Review \d+ suggestion/,
     );
     await expect(page.getByText("Required", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);
