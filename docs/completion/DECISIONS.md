@@ -139,3 +139,13 @@ that the phase passed, and `PHASE_9_PLAN.md` §7 ties it to "every stage in
 deferred to the end (D-001), tagging now would claim an acceptance that has
 not happened, and a tag should not be moved afterwards. The candidate SHA is
 recorded in the final report; the tag is created on it once Cursor accepts.
+
+## D-009 — New Next 16 lint rules as warnings in the upgrade PR (2026-10-02)
+
+eslint-config-next 16 added `react-hooks/refs`, `react-hooks/set-state-in-effect`
+and `react-hooks/purity`; they flag 23 existing call sites in 13 files. The
+Next 16 upgrade (PR #40) is a security change (bundled PostCSS advisories),
+so these three rules are warnings there and the 23 fixes are a separate,
+behaviour-preserving task. Alternative rejected: fixing all 23 inside the
+security PR, which would mix behaviour changes across reviewed components
+into a dependency upgrade. No rule that existed before is relaxed.

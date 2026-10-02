@@ -12,6 +12,23 @@ production release.
 
 ### Fixed
 
+- **A write's 2xx no longer arrives before its commit (PR #35).** On
+  FastAPI 0.141 the request-scoped session committed after the response was
+  sent; a client acting on a 201 could hit rows not yet committed (the
+  `global-rules-impact` flakes) and a failed commit was reported as success.
+  `DbSession` now uses function scope.
+- **A removed draft image stays removed (PR #38).** The draft and product
+  detail reads returned soft-deleted images; both now use
+  `Product.live_images`.
+- **Editor readiness and publish outcomes (PRs #37, #38).** The "Before you
+  publish" sidebar shows the server's publish blockers; "Open Integrations"
+  and "Reload draft" lead where they say; a 409 for unreadable live AI text
+  and a publish with no reply are no longer reported as an edit conflict or
+  a failure.
+- **Dependencies and build context.** pyjwt 2.15.1 and urllib3 2.8.0 for 16
+  advisories (PR #34); Next.js 15.5.27 / React 19.0.8 (PR #28), axios 1.20.0
+  (PR #29), tiptap 3.31.4 and patched dev transitives (PR #30); nested
+  `.env` files kept out of Docker build contexts (PR #32).
 - **Claude return review remediation, Stages 5–9 (merged into `develop`
   2026-10-01 via PR #26, merge `2b71f65`; author-verified, Cursor review
   pending).** Published AI text is no longer silently replaced by an
