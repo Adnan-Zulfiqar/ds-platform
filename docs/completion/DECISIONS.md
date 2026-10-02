@@ -149,3 +149,27 @@ so these three rules are warnings there and the 23 fixes are a separate,
 behaviour-preserving task. Alternative rejected: fixing all 23 inside the
 security PR, which would mix behaviour changes across reviewed components
 into a dependency upgrade. No rule that existed before is relaxed.
+
+## D-010 — B-006 resolved from the sources: "Refresh ×n" is future scope (2026-10-02)
+
+Supersedes the open question in D-006. The release requirement is the
+one-line "bulk tools" in Draft Editor Stage 8 / Workspace V2 Stage 8; it is
+met by AI Studio bulk runs and Global Rules bulk pricing. "Refresh ×n" and
+"Publish Selected" appear only as a UX proposal and a terminology label,
+and the same UX programme recorded bulk selection as not built. They are
+future scope, not an owner-decision blocker. Live E2E (the other half of
+Stage 8) stays an external blocker. Trace: DP-CR-023.
+
+## D-011 — Local candidate stack beside the owner's stack (2026-10-02)
+
+The candidate runs as Compose project `dp-candidate` from a `git archive`,
+on ports 18080/18000, with its own volumes and broker, no beat, and the
+owner's root `.env` passed by absolute path. Alternative rejected: rebuilding
+the owner's `droppilot` stack, which would replace images the owner's
+running stack uses and requires their main checkout (on an older branch) to
+change. Runbook: `docs/operations/LOCAL_CANDIDATE_STACK.md`.
+
+## D-009 — closed (2026-10-02)
+
+All 25 Next 16 lint findings fixed in PR #42; the three react-hooks rules are
+back at their defaults.

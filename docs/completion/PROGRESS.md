@@ -127,3 +127,16 @@ Further merges (each at its CI-verified head): #37 (`374bdd1`), #38
 
 **Candidate `develop` @ `25134a5`, post-merge CI run 36954786975: 10/10;
 pytest 3475 passed; Playwright 767 passed, 8 skipped, 0 failed, 0 flaky.**
+
+## Second candidate — 2026-10-02
+
+| Step | Result |
+|---|---|
+| PR #42 (lint 25 → 0, rules restored; `proxy.ts`) | head `e1667df`, PR CI 36993008546 10/10 (pytest 3475; Playwright 769, 0 flaky); merged `9a62b9e` |
+| **Candidate `develop` @ `9a62b9e818350fa8dafc16276a3ea0200411971b`** | **post-merge CI 36995948409: 10/10; pytest 3475 passed; Playwright 769 passed, 8 skipped, 0 failed, 0 flaky** |
+| Local full Playwright before merge (retries 0) | 769 passed, 8 skipped, 0 failed |
+| Flake repeats (retries 0, ×5) | real-conflict 70/70; Studio bulk 35/35 — evidence only (DP-CR-015) |
+| Backup/restore drill + synthetic encrypted credential | at `48008107…` (backend tree identical to the candidate): 42/42 digests identical; credential MATCH after restore, ciphertext at rest; different key refused (DP-CR-007) |
+| Local candidate stack | `dp-candidate`, http://localhost:18080; images from `git archive 9a62b9e`, no `.env` in any image; browser walk-through passed (`docs/operations/LOCAL_CANDIDATE_STACK.md`) |
+| Docker secret images | assessed; task-owned `dp-remed-*` removed; clean `dp-e2e-clean` harness image (DP-CR-024) |
+| Docker Desktop outage | after the 05:14Z system sign-out/shutdown; fixed by renaming two stale-socket directories; owner stack and volumes intact (B-008). The owner's Open-Higgsfield dev server on :3001 was also down after that sign-out and was left as found |
