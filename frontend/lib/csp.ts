@@ -14,7 +14,7 @@
  * **Why the nonce is generated per response and never reused.** A fixed nonce
  * is worse than none: it is published in the HTML of every page, so an attacker
  * reads it once and attaches it to their own injected script forever. It is
- * minted in `middleware.ts` from the Web Crypto RNG on each request, appears
+ * minted in `proxy.ts` from the Web Crypto RNG on each request, appears
  * only in the response header and the script tags of that one response, and is
  * never written to a URL, a log, a cookie or browser storage.
  *

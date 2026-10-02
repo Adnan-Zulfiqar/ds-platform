@@ -273,3 +273,25 @@ test.describe("The policy the browser actually enforces", () => {
     }
   });
 });
+
+/**
+ * The routing gate in `proxy.ts` (Next.js 16's name for middleware). These
+ * pin its two non-CSP contracts across the rename and the move to the
+ * Node.js runtime.
+ */
+test.describe("Proxy routing gate", () => {
+  test("protected pages are never cacheable", async ({ request }) => {
+    // (Public pages are no-store too: the per-request nonce makes every page
+    // dynamic, and Next.js marks dynamic responses no-store itself.)
+    const protectedPage = await request.get("/dashboard", { maxRedirects: 0 });
+    expect(protectedPage.headers()["cache-control"]).toContain("no-store");
+  });
+
+  test("a client-supplied nonce header is replaced, not trusted", async ({ request }) => {
+    const chosen = "QUFBQUFBQUFBQUFBQUFBQQ==";
+    const response = await request.get("/login", { headers: { "x-nonce": chosen } });
+    const header = response.headers()["content-security-policy"] ?? "";
+    expect(header).toMatch(/'nonce-[A-Za-z0-9+/=]{16,}'/);
+    expect(header).not.toContain(chosen);
+  });
+});

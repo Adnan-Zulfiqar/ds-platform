@@ -246,7 +246,7 @@ The security boundary is the API. Every endpoint verifies a signed token
 server-side, so bypassing the client guard reveals an empty shell that cannot
 load data.
 
-`middleware.ts` deliberately does *not* gate on the session cookie: the cookie
+`proxy.ts` (formerly `middleware.ts`) deliberately does *not* gate on the session cookie: the cookie
 is path-scoped to the API and, in local development, served from a different
 origin, so middleware cannot reliably see it. Gating there would produce
 redirect loops. `components/auth-guard.tsx` performs the real client-side check,
