@@ -50,7 +50,7 @@ created on the candidate SHA below once Cursor accepts.
 - A bulk run started in another browser cannot be reopened after a 409
   (no run list endpoint).
 - Dependency status: `docs/completion/SECURITY_STATUS.md`. The bundled
-  PostCSS advisory is fixed only by the Next 16 upgrade (PR #40); two
+  PostCSS advisories were fixed by the Next 16 upgrade (PR #40, merged); two
   postponed upstream Next.js fixes have no public detail.
 
 ## Review
