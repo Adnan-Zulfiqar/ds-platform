@@ -2,101 +2,87 @@
 
 **Verdict: IMPLEMENTATION COMPLETE — EXTERNAL VERIFICATION BLOCKED — CURSOR REVIEW PENDING**
 
-Qualified by one open scope question (B-006, Draft Editor "bulk tools")
-that only the owner can answer; see section 4.
+All repository-owned implementation in the agreed release scope is merged
+and author-verified. What remains needs accounts or access this work does
+not have (section 4). Nothing here is an independent acceptance: Cursor has
+not reviewed any of it. Nothing was deployed; `main` is unchanged at
+`3ce66d4`.
 
-Nothing here is an independent acceptance. Cursor has not reviewed any of
-this work. Nothing was deployed; `main` is unchanged at `3ce66d4`.
+## 1. What a merchant can now do (verified on a local non-production build)
 
-## 1. What a merchant can now do (local / non-production)
+- **AI Studio** — on one product: generate an AI proposal, compare it with
+  the current draft (score against the original, image and readiness
+  evidence), approve that exact proposal, publish it; every step confirmed.
+  In bulk: up to 50 drafts and published products per run, durable progress,
+  each finished proposal linked for review.
+- **Draft editor** — the "Before you publish" sidebar shows the server's
+  real publish blockers; their actions lead where they say; a removed image
+  stays removed; a publish with no reply is reported as unknown, not failed.
+- **Reliability** — an API success means the write is committed.
 
-- **AI Studio** (`/ai-studio/products/[id]`): generate an AI proposal, see it
-  next to the current draft with score, image and readiness evidence,
-  approve that exact proposal, and publish it — each step confirmed, never
-  automatic. `/ai-studio` runs a bulk preview over up to 50 products and
-  links each finished proposal for review.
-- **Draft editor**: the "Before you publish" sidebar shows the server's
-  actual publish blockers; their actions go where they say; an image the
-  merchant removes stays removed; a publish with no reply is reported as
-  unknown, not as a failure.
-- **Reliability**: an API success now means the write is committed; a
-  client acting on it immediately no longer sees missing rows.
+Browser-verified on the candidate stack (`docs/operations/LOCAL_CANDIDATE_STACK.md`):
+registration, Studio home, StubProvider preview, approval with the draft
+unchanged, Publish disabled for synthetic text, editor sidebar.
 
 ## 2. Candidate
 
 | | |
 |---|---|
 | Baseline `develop` | `72e76921fc80b203133423ad3bd92bd380c7e02b` |
-| **Candidate (last code change)** | `develop` @ `25134a5` (merge of PR #40) — post-merge CI run 36954786975: 10/10, pytest 3475, Playwright 767 passed / 8 skipped / 0 flaky |
-| Documentation after the candidate | this report's PR (docs only) |
+| **Candidate (last code change)** | `develop` @ `9a62b9e818350fa8dafc16276a3ea0200411971b` (merge of PR #42) |
+| Candidate post-merge CI | run 36995948409: 10/10; pytest 3475; Playwright 769 passed / 8 skipped / 0 flaky |
+| Local build of the candidate | http://localhost:18080 (Compose project `dp-candidate`) |
 
-Integrated PRs, each merged at the head its CI verified: #27, #26, #28, #29,
-#30, #31, #33, #34, #25, #35, #32, #37, #38, #36, #39, #40.
+Integrated PRs, each merged at its CI-verified head: #27, #26, #28, #29,
+#30, #31, #33, #34, #25, #35, #32, #37, #38, #36, #39, #40, #41, #42.
 
-## 3. Findings fixed in this programme (beyond the Stage 5–9 ledger)
+## 3. Verification kinds — kept separate
 
-| ID | Defect | PR |
-|---|---|---|
-| N-5 root cause | 2xx sent before commit (FastAPI request-scoped teardown) | #35 |
-| SEC-001 | `backend/.env` copied into Docker images | #32 |
-| SEC-002 | pyjwt / urllib3 advisories (16) | #34 |
-| N-3 residual | bundled PostCSS 8.4.31 in Next 15.5 | #40 |
-| DE-6b | sidebar ignored server blockers; dead readiness actions; removed images returned by detail reads | #38 |
-| DE-7 | unreadable-AI 409 and lost publish replies misreported | #37 |
-| #28 lock | lost `libc` metadata | #28 |
+| Kind | What it covers |
+|---|---|
+| **Automated, fixtures/mocks** | Backend suite (pytest 3475) with real Postgres/Redis; Playwright (769) with route mocks and a live StubProvider case on a DB-seeded draft |
+| **Local runtime** | Candidate images built from `git archive`, run beside the owner's stack; browser walk-through; backup → restore drill with a synthetic encrypted credential (MATCH after restore) |
+| **Sandbox provider** | none available |
+| **Actual provider** | none — no AI provider key, no Shopify test store / Partner OAuth, no AliExpress OAuth connection |
 
-## 4. What is not done, and why
+## 4. Not done, and why
 
 | Item | Status | Needed from |
 |---|---|---|
-| Live AI output quality | BLOCKED — no provider key; `StubProvider` only | Owner: a provider key, if wanted |
-| Live Shopify OAuth / publish to a test store (M17) | BLOCKED | Owner: Partner app access and a designated test store |
-| Live AliExpress → Shopify E2E (DE-8b) | BLOCKED | Owner: AliExpress OAuth + test store |
-| Draft Editor "bulk tools" (DE-8a) | **Scope question.** Optimize ×n is AI Studio bulk; bulk pricing is Global Rules; "Refresh ×n" is a UX-baseline idea with no requirement (D-006) | Owner: name the required bulk actions, or confirm none beyond these |
-| `phase-9-complete` tag | Deferred until Cursor accepts (D-008) | Cursor review |
-| `draft-editor-real-conflict:211` flake | Probable cause fixed by #35; not proven | Further CI history |
-| 23 new React Compiler lint warnings | Tracked follow-up (D-009) | Separate task |
-| `middleware.ts` → `proxy.ts` (Next 16 deprecation) | Works; rename is a runtime change of its own | Separate task |
-| Two postponed Next.js upstream fixes | Unpublished upstream | Watch the Next.js security blog |
-| Production backup, off-site copy, key custody | Runbook §8 items | Owner / operator |
+| Live AI output quality | BLOCKED (B-002) | An AI provider key, if wanted |
+| Live Shopify OAuth / publish (M17) | BLOCKED (B-003) | Shopify Partner app access and a designated **test** store |
+| Live AliExpress → Shopify E2E (DE-8b) | BLOCKED (B-004) | AliExpress OAuth on a test account, plus the test store |
+| `phase-9-complete` tag | Deferred to Cursor acceptance (D-008) | Cursor |
+| Two Playwright flakes | OPEN — evidence only (DP-CR-015) | Further CI history |
+| Postponed Next.js upstream fixes | Unpublished upstream (B-005) | Watch the Next.js security blog |
+| Owner's old images contain `/app/.env` | Owner rebuild (B-007) | Owner; rotate only if an image was ever shared |
+| Production backup, off-site copy, key custody | Runbook §8 | Owner / operator |
 
-## 5. Provider verification levels (local stack)
+Resolved since the previous report: Draft Editor bulk tools (B-006 → future
+scope for "Refresh ×n", D-010), the 25 Next 16 lint findings and the
+`proxy.ts` migration (PR #42), the bundled PostCSS advisories (PR #40).
 
-Shopify, AliExpress, eBay: **CONFIG_LOADED** only (app keys set, local
-encryption key set and round-trip verified). AUTHORISED, READ_VERIFIED and
-MUTATION_VERIFIED: not reached — no connection exists; needs a human OAuth
-consent on designated test accounts.
+## 5. Provider verification levels
 
-## 6. Start and smoke-check locally
+Shopify, AliExpress, eBay: **CONFIG_LOADED** only (app keys present, local
+encryption key set and round-trip verified). AUTHORISED / READ_VERIFIED /
+MUTATION_VERIFIED: not reached — they need a human OAuth consent on
+designated test accounts. No secret is requested in chat.
 
-```bash
-docker compose up -d
-```
+## 6. Running it locally
 
-from a checkout of the candidate, with images rebuilt
-(`docker compose build`), then open http://localhost/ and sign in. The
-backend reads the repository-root `.env`; the owner's local one now holds a
-local-only encryption key (D-004) — never copy it to a deployment.
-
-Expected smoke result: `/ai-studio` lists drafts; a draft's AI Studio page
-generates a "Test AI preview" (StubProvider) that can be approved but not
-published.
-
-**Not verified on the owner's running Compose stack:** its images predate
-this work, and the main checkout is not on `develop`, so rebuilding it was
-left to the owner. The same flows were verified in the disposable CI-like
-stack (Playwright `product-optimization.spec.ts` live StubProvider case,
-and PR CI on every merged head).
+See `docs/operations/LOCAL_CANDIDATE_STACK.md`. The owner's own
+`droppilot` stack (http://localhost) still runs its older images; rebuilding
+it from `develop` is the owner's step (B-007).
 
 ## 7. Migrations and recovery
 
-Alembic head `0036`. Fresh-database upgrade runs in every gate. An encrypted
-backup → restore drill on disposable databases at `7fe0a89` produced
-identical per-table digests (42/42) and refused corrupted, wrong-key and
-wrong-identity inputs (`PROGRESS.md`).
+Alembic head `0036`; every gate migrates a fresh database. Disposable drill
+at `48008107…` (backend identical to the candidate): per-table digests
+identical 42/42, synthetic encrypted credential decrypted to a matching
+hash after restore, corrupted / wrong-key / wrong-identity inputs refused.
 
 ## 8. For Cursor
 
-Start at [`docs/reviews/cursor/CURSOR_REVIEW_INDEX.md`](../reviews/cursor/CURSOR_REVIEW_INDEX.md).
-Review target: the candidate above. Every checkpoint says
-"Independent review: PENDING — NOT YET PERFORMED".
+Start at [`docs/reviews/cursor/CURSOR_REVIEW_INDEX.md`](../reviews/cursor/CURSOR_REVIEW_INDEX.md);
+review target: the candidate above.

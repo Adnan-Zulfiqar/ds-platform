@@ -102,6 +102,13 @@ LAUNCH_SURFACES: tuple[LaunchSurface, ...] = (
         prose=True,
     ),
     LaunchSurface(
+        path="docs/operations/LOCAL_CANDIDATE_STACK.md",
+        environment="documented local candidate stack (Compose override)",
+        role="its override replaces the compose command to drop --reload, so it "
+        "is a launch path of its own",
+        prose=True,
+    ),
+    LaunchSurface(
         path="docs/PRODUCTION_SECURITY.md",
         environment="documented canonical production command",
         role="the command an operator copies when standing the service up, and "

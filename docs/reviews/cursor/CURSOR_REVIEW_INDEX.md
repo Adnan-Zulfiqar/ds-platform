@@ -8,7 +8,7 @@ directory records an independent verdict; every checkpoint says
 | Item | Value |
 |---|---|
 | Review baseline (`develop` before this programme) | `72e76921fc80b203133423ad3bd92bd380c7e02b` |
-| Candidate | `develop` @ `25134a5` (merge of PR #40, the last code change); docs-only commits may follow it |
+| Candidate | `develop` @ `9a62b9e818350fa8dafc16276a3ea0200411971b` (merge of PR #42, the last code change); docs-only commits may follow it |
 | Final author report | `docs/completion/FINAL_REPORT.md` |
 | Authoritative ledgers | `docs/REVIEW_REMEDIATION_STAGE_5_9.md` (Stage 5–9 findings); `docs/completion/*` (this programme) |
 
@@ -44,6 +44,7 @@ directory records an independent verdict; every checkpoint says
 | [DP-CR-018](checkpoints/DP-CR-018.md) | Commit before the response is sent (PR #35) | Integrated; IR pending |
 | [DP-CR-021](checkpoints/DP-CR-021.md) | Draft Editor full readiness + removed images (PR #38) | Integrated; IR pending |
 | [DP-CR-022](checkpoints/DP-CR-022.md) | Draft Editor publish outcomes (PR #37) | Integrated; IR pending |
-| DP-CR-015 | Remaining Playwright flakes | Reserved |
-| DP-CR-016 | Next.js bundled postcss / postponed fixes | Reserved |
-| DP-CR-020…023 | Stage 11; Draft Editor 6–8 | Reserved |
+| [DP-CR-015](checkpoints/DP-CR-015.md) | Remaining flakes — evidence, still open | IR pending |
+| [DP-CR-019](checkpoints/DP-CR-019.md) | Next 16 lint fixed; middleware → proxy (PR #42) | Integrated; IR pending |
+| [DP-CR-023](checkpoints/DP-CR-023.md) | Draft Editor bulk tools traced (B-006 → future) | IR pending |
+| [DP-CR-024](checkpoints/DP-CR-024.md) | Docker secret images; clean replacements; local candidate stack | IR pending |

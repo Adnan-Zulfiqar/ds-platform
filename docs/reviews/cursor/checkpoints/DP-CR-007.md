@@ -8,3 +8,16 @@
 - **Cursor must inspect:** that no key value appears in any commit, log or document.
 - **Author verification:** PASS (local).
 - **Independent review:** PENDING — NOT YET PERFORMED
+
+## Update 2026-10-02 — encrypted credential through backup and restore
+
+The disposable drill (`BACKUP_RUNBOOK.md` §7) now includes a synthetic
+credential written with the application's own `encrypt()` under a throwaway
+drill key (never printed). After an encrypted backup and a restore into a
+new database at `develop` `48008107ba4f3a09363498ac89e3b91e82dc9c07`:
+`decrypt()` returned plaintext whose SHA-256 matched (MATCH), the stored
+value was still ciphertext at rest, and decryption with a different key
+failed (rc 1). Backend, Docker and Compose files are identical between that
+commit and the candidate `9a62b9e` (`git diff --stat` empty), so the result
+applies to the candidate's backend. Not exercised: the owner's own local key
+(by design — the drill never reads it).
