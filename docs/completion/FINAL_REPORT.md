@@ -27,7 +27,7 @@ this work. Nothing was deployed; `main` is unchanged at `3ce66d4`.
 | | |
 |---|---|
 | Baseline `develop` | `72e76921fc80b203133423ad3bd92bd380c7e02b` |
-| **Candidate (last code change)** | `develop` @ `25134a5` (merge of PR #40) — post-merge CI: see `PROGRESS.md` |
+| **Candidate (last code change)** | `develop` @ `25134a5` (merge of PR #40) — post-merge CI run 36954786975: 10/10, pytest 3475, Playwright 767 passed / 8 skipped / 0 flaky |
 | Documentation after the candidate | this report's PR (docs only) |
 
 Integrated PRs, each merged at the head its CI verified: #27, #26, #28, #29,

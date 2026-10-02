@@ -118,3 +118,12 @@ never printed, discarded with it).
 Not covered by this drill: encrypted credential columns (no provider
 connection existed in the seed), a production backup, off-site copy, timed
 restore — all remain the external items in the runbook §8.
+
+## Candidate — 2026-10-02
+
+Further merges (each at its CI-verified head): #37 (`374bdd1`), #38
+(`1d6e34d`), #39 (`25f0429`), #36 Stage 10 (`fbadddb`), #40 Next 16
+(`25134a5`).
+
+**Candidate `develop` @ `25134a5`, post-merge CI run 36954786975: 10/10;
+pytest 3475 passed; Playwright 767 passed, 8 skipped, 0 failed, 0 flaky.**
