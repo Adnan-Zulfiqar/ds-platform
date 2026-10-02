@@ -78,9 +78,32 @@ def test_no_stage_7_celery_task() -> None:
         assert "generate_candidate" not in text or "product_pipeline" not in text
 
 
-def test_frontend_has_no_pipeline_preview_type() -> None:
+def _ts_interface_fields(text: str, name: str) -> set[str]:
+    start = text.index(f"export interface {name} {{")
+    body = text[start : text.index("\n}", start)]
+    return {
+        line.strip().split(":")[0].rstrip("?")
+        for line in body.splitlines()[1:]
+        if ":" in line and not line.strip().startswith(("/", "*"))
+    }
+
+
+def test_frontend_preview_type_mirrors_the_wire_contract() -> None:
+    """Stage 7 forbade a frontend preview type; Stage 10 is the stage that
+    adds it (PHASE_9_STAGE_10_PLAN.md section 28). The hand-written type must
+    carry every field the API returns, so a backend addition cannot silently
+    go unrendered (technical debt M4: no generated types)."""
+    from app.schemas.product import PipelinePreviewResponse
+
     text = (REPO_ROOT / "frontend" / "types" / "api.ts").read_text(encoding="utf-8")
-    assert "PipelinePreview" not in text
+    wire = {field.alias or name for name, field in PipelinePreviewResponse.model_fields.items()}
+    assert wire <= _ts_interface_fields(text, "PipelinePreview")
+
+
+def test_frontend_never_sees_internal_pipeline_metadata_keys() -> None:
+    # The candidate's stored metadata keys are server-internal; the client
+    # classifies through `isPipelineCandidate` and the preview endpoint.
+    text = (REPO_ROOT / "frontend" / "types" / "api.ts").read_text(encoding="utf-8")
     assert "pipelineCandidateVersion" not in text
 
 
