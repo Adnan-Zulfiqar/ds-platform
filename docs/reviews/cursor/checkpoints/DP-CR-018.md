@@ -17,4 +17,4 @@
 - **Recovery:** revert the one-line dependency change.
 - **Cursor must inspect:** that no endpoint relied on work after the response (no `BackgroundTasks` use found); streaming responses (none use `DbSession` today).
 - **Author verification:** PASS (local gate; PR CI pending).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

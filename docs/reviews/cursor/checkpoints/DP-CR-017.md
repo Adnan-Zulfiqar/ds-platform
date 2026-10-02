@@ -10,4 +10,4 @@
 - **Recovery:** revert; the previous lock restores 2.13.0/2.7.0.
 - **Cursor must inspect:** pyjwt 2.14/2.15 changelogs for behaviour changes on `decode` with `require`, `leeway`, `audience`, `issuer`.
 - **Author verification:** PASS (local).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

@@ -10,4 +10,4 @@
 - **Recovery:** revert the merge commit.
 - **Cursor must inspect:** every job that installs Python uses the lock.
 - **Author verification:** PASS.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

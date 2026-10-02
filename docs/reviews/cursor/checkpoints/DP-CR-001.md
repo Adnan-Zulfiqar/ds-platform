@@ -14,4 +14,4 @@
 - **Recovery:** revert the merge commit; both migrations downgrade.
 - **Cursor must inspect:** E-1 content resolution across editor, API, retry and Celery paths; 0035/0036 on a populated schema; bulk lease/cancel races.
 - **Author verification:** PASS (CI on the exact head).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

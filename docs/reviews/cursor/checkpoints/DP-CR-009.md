@@ -6,4 +6,4 @@
 - **How verified:** an independent read-only exploration of routers/schemas/services produced the contract map; spot-checked by the author against `backend/app/schemas/product.py` (image checks non-null, `sourceUpdatedAt` non-null, breakdown shapes) and `product_pipeline.py` (reason semantics).
 - **Cursor must inspect:** §0a against the code; whether any §0a correction should instead have been a backend change.
 - **Author verification:** PASS (docs). PR CI pending.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

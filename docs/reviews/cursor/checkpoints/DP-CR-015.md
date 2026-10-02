@@ -18,4 +18,4 @@ Both items stay **OPEN**. Green runs are recorded as evidence only.
 
 A deterministic reproduction of the original failure, or a sustained run of CI history; neither exists yet.
 
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

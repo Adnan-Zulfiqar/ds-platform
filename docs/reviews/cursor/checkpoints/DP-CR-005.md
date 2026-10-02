@@ -5,4 +5,4 @@
 - **Results:** PR CI 36886931099 attempt 2: 10/10, Playwright 722 passed / 9 skipped / 0 flaky. Attempt 1: the Playwright job hit its 35-minute timeout inside `npx playwright install --with-deps chromium`; no test ran.
 - **Cursor must inspect:** description-editor hydration and paste sanitisation after the prosemirror bump.
 - **Author verification:** PASS (CI).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))

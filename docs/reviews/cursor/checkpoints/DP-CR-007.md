@@ -7,7 +7,7 @@
 - **Recovery:** while no ciphertext exists, removing the line restores the previous state. Once a provider connects, the key must be kept.
 - **Cursor must inspect:** that no key value appears in any commit, log or document.
 - **Author verification:** PASS (local).
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))
 
 ## Update 2026-10-02 — encrypted credential through backup and restore
 

@@ -1,12 +1,14 @@
 # Autonomous completion — final author report
 
-**Verdict: IMPLEMENTATION COMPLETE — EXTERNAL VERIFICATION BLOCKED — CURSOR REVIEW PENDING**
+**Verdict: IMPLEMENTATION ACCEPTED WITH NON-BLOCKING NOTES (Cursor) — RELEASE NOT READY**
 
-All repository-owned implementation in the agreed release scope is merged
-and author-verified. What remains needs accounts or access this work does
-not have (section 4). Nothing here is an independent acceptance: Cursor has
-not reviewed any of it. Nothing was deployed; `main` is unchanged at
-`3ce66d4`.
+Cursor independently reviewed `develop` @ `e63508e` on 2026-10-02
+([report](../reviews/cursor/INDEPENDENT_REVIEW_e63508e.md)): implementation
+**ACCEPTED WITH NON-BLOCKING NOTES**; release readiness **NOT READY**. What
+remains needs accounts or access this work does not have (section 4), plus
+the owner's image rebuild. `phase-9-complete` stays untagged. Draft Editor
+Stage 8 is **not** complete: its bulk half is met (D-010), its live E2E half
+(DE-8b) is blocked. Nothing was deployed; `main` is unchanged at `3ce66d4`.
 
 ## 1. What a merchant can now do (verified on a local non-production build)
 
@@ -52,11 +54,12 @@ Integrated PRs, each merged at its CI-verified head: #27, #26, #28, #29,
 | Live AI output quality | BLOCKED (B-002) | An AI provider key, if wanted |
 | Live Shopify OAuth / publish (M17) | BLOCKED (B-003) | Shopify Partner app access and a designated **test** store |
 | Live AliExpress → Shopify E2E (DE-8b) | BLOCKED (B-004) | AliExpress OAuth on a test account, plus the test store |
-| `phase-9-complete` tag | Deferred to Cursor acceptance (D-008) | Cursor |
-| Two Playwright flakes | OPEN — evidence only (DP-CR-015) | Further CI history |
+| `phase-9-complete` tag | Untagged — Cursor's verdict is release NOT READY (D-008) | Owner, after the release blockers clear |
+| Two Playwright flakes | OPEN — cause unproven; Cursor: do not close on green repeats (DP-CR-015) | A demonstrated cause |
 | Postponed Next.js upstream fixes | Unpublished upstream (B-005) | Watch the Next.js security blog |
 | Owner's old images contain `/app/.env` | Owner rebuild (B-007) | Owner; rotate only if an image was ever shared |
 | Production backup, off-site copy, key custody | Runbook §8 | Owner / operator |
+| Claude return review of all commits since the Stage 5 takeover | OPEN (Cursor's closing checkpoint) | Claude |
 
 Resolved since the previous report: Draft Editor bulk tools (B-006 → future
 scope for "Refresh ×n", D-010), the 25 Next 16 lint findings and the
@@ -78,11 +81,13 @@ it from `develop` is the owner's step (B-007).
 ## 7. Migrations and recovery
 
 Alembic head `0036`; every gate migrates a fresh database. Disposable drill
-at `48008107…` (backend identical to the candidate): per-table digests
-identical 42/42, synthetic encrypted credential decrypted to a matching
-hash after restore, corrupted / wrong-key / wrong-identity inputs refused.
+repeated on the reviewed revision `e63508e` after Cursor's verdict
+(`PROGRESS.md`, "Independent review"): per-table digests identical 42/42, synthetic encrypted
+credential decrypted to a matching hash after restore, corrupted /
+wrong-key / wrong-identity / non-empty-target inputs refused. Author
+evidence; not re-run by the reviewer.
 
 ## 8. For Cursor
 
-Start at [`docs/reviews/cursor/CURSOR_REVIEW_INDEX.md`](../reviews/cursor/CURSOR_REVIEW_INDEX.md);
-review target: the candidate above.
+Verdict recorded in [`docs/reviews/cursor/CURSOR_REVIEW_INDEX.md`](../reviews/cursor/CURSOR_REVIEW_INDEX.md);
+author follow-ups (drill on `e63508e`, the eight skip titles) in `PROGRESS.md`.

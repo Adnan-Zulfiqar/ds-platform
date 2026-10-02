@@ -9,9 +9,9 @@ proceed.
 | B-001 | RESOLVED 2026-10-01 | Merging PRs into `develop` | — |
 | B-002 | OPEN | Live AI output quality (no provider key; `StubProvider` only) | Deterministic tests against `StubProvider` |
 | B-003 | OPEN | Live Shopify Partner OAuth (M17), live publish to a designated test store | Mocked transport, fixtures |
-| B-004 | OPEN | Live AliExpress → Shopify E2E (Draft Editor Stage 8) | Seed harness, captured fixtures |
+| B-004 | OPEN | Live AliExpress → Shopify E2E (Draft Editor Stage 8, DE-8b). Stage 8 stays incomplete until it clears (Cursor IR-06) | Seed harness, captured fixtures |
 | B-005 | PARTLY RESOLVED | Bundled `postcss` fixed by Next 16 (PR #40). Still open upstream: two Next.js fixes postponed in the 2026-09-30 release, no public detail | Tracked in `SECURITY_STATUS.md` |
-| B-006 | RESOLVED 2026-10-02 (D-010) | "Refresh ×n" / "Publish Selected" are unrequested proposals → future scope; Stage 8 bulk tools met by AI Studio bulk + Global Rules | — |
+| B-006 | RESOLVED 2026-10-02 (D-010) | "Refresh ×n" / "Publish Selected" are unrequested proposals → future scope; Stage 8's bulk half met by AI Studio bulk + Global Rules (Stage 8 itself still blocked by B-004) | — |
 | B-007 | OPEN (owner) | The owner's `droppilot-*` images (2026-09-22) contain `/app/.env`; no evidence they were pushed | Rebuild from `develop`; rotate `backend/.env` values only if an image was ever shared (DP-CR-024) |
 | B-008 | RESOLVED 2026-10-02 | Docker Desktop would not start after the 05:14Z system sign-out/shutdown: stale Unix-socket files in `%LOCALAPPDATA%\Docker\run` and `%LOCALAPPDATA%\docker-secrets-engine` | Both directories renamed to `*.stale-<timestamp>` (nothing deleted); Docker started; the owner's stack came back with its volumes. "Reset to factory defaults" was never used. One errored instance this task had started was stopped by process name before the second attempt |
 

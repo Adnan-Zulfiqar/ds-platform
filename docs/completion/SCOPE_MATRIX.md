@@ -118,10 +118,10 @@ Source for all rows: `PROJECT_ROADMAP.md` "Later phases" — "Not scheduled
 | ST10-A…L | IMPLEMENTED | PASS (PR CI 36949638454; browser on the local candidate) | MERGED (#36, `fbadddb`) | Live provider / Shopify: BLOCKED (B-002, B-003) | PENDING (DP-CR-010…014) |
 | ST11 | Report written; gates on the candidate; tag deferred (D-008) | PASS (candidate CI) | MERGED (#41) | — | PENDING |
 | DE-6b, DE-7 | IMPLEMENTED | PASS | MERGED (#38, #37) | Real-Shopify retry: BLOCKED (B-003) | PENDING |
-| DE-8a | **MET** by AI Studio bulk + Global Rules; "Refresh ×n", "Publish Selected", scheduling → FUTURE (D-010) | — | — | — | PENDING (DP-CR-023) |
+| DE-8a | Bulk half of Stage 8 met by AI Studio bulk + Global Rules; "Refresh ×n", "Publish Selected", scheduling → FUTURE (D-010). **Stage 8 as a whole is NOT complete** while DE-8b is blocked | — | — | — | Classification consistent with sources; Stage 8 not complete (IR-06) |
 | DE-8b | NOT STARTED | — | — | BLOCKED (B-003, B-004) | — |
 | REM-N3-p | FIXED (Next 16.3.8) | PASS | MERGED (#40) | — | PENDING |
 | D-009 lint / proxy migration | FIXED | PASS (769 passed, retries 0) | MERGED (#42, `9a62b9e`) | — | PENDING (DP-CR-019) |
 | REM-N5-a | Root cause fixed (#35) | PASS | MERGED | — | PENDING (DP-CR-018) |
-| REM-N5-b + Studio selection flake | OPEN — evidence only (DP-CR-015) | 70/70 and 35/35, retries 0 | — | — | PENDING |
+| REM-N5-b + Studio selection flake | OPEN — evidence only (DP-CR-015) | 70/70 and 35/35, retries 0 | — | — | Keep open; green repeats are not a cause (IR-05) |
 | SEC-001 existing images | Assessed; task-owned removed; clean replacements | PASS | n/a | Owner rebuild (B-007) | PENDING (DP-CR-024) |

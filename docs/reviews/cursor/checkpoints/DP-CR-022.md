@@ -7,4 +7,4 @@
 - **Tests:** two Playwright cases fail on develop's editor and pass here; `review-remediation` + `publish-integrity` 28 passed, retries 0.
 - **Not addressed:** the response's `updated` flag is always true (no created/updated distinction); the double-click test clicks a disabled button with `force: true`, so it does not isolate the ref guard; real-Shopify retry behaviour is external (B-003).
 - **Author verification:** PASS (local); PR CI pending.
-- **Independent review:** PENDING — NOT YET PERFORMED
+- **Independent review:** Cursor, 2026-10-02, on `e63508e` — implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY ([report](../INDEPENDENT_REVIEW_e63508e.md))
