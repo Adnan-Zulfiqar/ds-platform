@@ -7,10 +7,13 @@
 .gitignore
 
 # Environment files. Critical: a .env copied into an image leaks every secret
-# it contains to anyone who can pull that image.
-.env
-.env.*
-!.env.example
+# it contains to anyone who can pull that image. A bare `.env` pattern matches
+# only the context root, so backend/.env and frontend/.env.local were still
+# copied into images built from a developer checkout; `**/` covers every
+# directory.
+**/.env
+**/.env.*
+!**/.env.example
 
 # Python
 **/__pycache__

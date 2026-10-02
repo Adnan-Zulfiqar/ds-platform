@@ -83,8 +83,12 @@ test.describe("UX-L2B-R3 visual and a11y evidence", () => {
     await selectDemoStore(page);
     await expect(page.getByTestId("publish-blockers")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("publish-checklist-aside")).toBeVisible();
+    // DE-6b: the sidebar now carries the server blocker, not "no suggestions".
+    await expect(
+      page.getByTestId("publish-checklist-aside").getByTestId("publish-checklist-server-blockers"),
+    ).toBeVisible();
     await expect(page.getByTestId("publish-checklist-aside")).toContainText(
-      /No title, description or image suggestions/i,
+      /block publishing to this store/,
     );
     await expect(page.getByTestId("publish-checklist-aside")).not.toContainText(
       /No content gaps flagged here/i,

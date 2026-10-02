@@ -144,6 +144,53 @@ test.describe("E-1 — approved AI text live on the store", () => {
     expect(bodies[0]).not.toHaveProperty("replaceAiContent");
   });
 
+  test("unreadable live AI text is explained, not treated as an edit conflict", async ({ page }) => {
+    // DE-7: before this, every 409 opened the conflict review and blamed an
+    // edit that never happened.
+    await mockVersions(page);
+    await openMockedEditor(page, {
+      listings: [aiListing()],
+      publishResponder: () => ({
+        status: 409,
+        body: {
+          code: "conflict",
+          message: "server text",
+          details: [{ field: null, type: "reason", message: "published_ai_content_unavailable" }],
+          requestId: "req-409",
+        },
+      }),
+    });
+    await openReview(page);
+    await expect(page.getByTestId("publish-to-store")).toBeEnabled({ timeout: 15_000 });
+    await page.getByTestId("publish-to-store").click();
+
+    await expect(page.getByTestId("publish-error")).toContainText(
+      "The approved AI text live on Shopify can no longer be read",
+    );
+    await expect(page.getByTestId("publish-error")).not.toContainText("changed somewhere else");
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+  });
+
+  test("a publish with no reply is reported as unknown and the listing is re-read", async ({ page }) => {
+    let listingReads = 0;
+    await mockVersions(page);
+    await openMockedEditor(page, { listings: [aiListing()] });
+    await page.route("**/api/v1/integrations/shopify/publish", (route) => route.abort("connectionreset"));
+    await page.route(`**/api/v1/drafts/${DEMO_PRODUCT_ID}/listings`, (route) => {
+      listingReads += 1;
+      return route.fallback();
+    });
+    await openReview(page);
+    await expect(page.getByTestId("publish-to-store")).toBeEnabled({ timeout: 15_000 });
+    const readsBefore = listingReads;
+    await page.getByTestId("publish-to-store").click();
+
+    await expect(page.getByTestId("publish-error")).toContainText("The publish may still have completed");
+    await expect(page.getByTestId("publish-error")).not.toContainText("failed");
+    await expect.poll(() => listingReads).toBeGreaterThan(readsBefore);
+    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
+  });
+
   test("replacing the AI text needs an explicit confirmation", async ({ page }) => {
     const bodies: Record<string, unknown>[] = [];
     await mockVersions(page);

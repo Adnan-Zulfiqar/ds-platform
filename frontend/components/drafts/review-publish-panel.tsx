@@ -68,6 +68,9 @@ type ReviewPublishPanelProps = {
   liveAiContent: { versionNumber: number | null } | null;
   onReplaceAiContent: () => void;
   onOpenSection: (tab: EditorTab) => void;
+  /** Opens the editor’s conflict review for a stale draft, which compares
+   * both versions and never discards edits without a confirmation. */
+  onReloadDraft: () => void;
   onContinueEditing: () => void;
 };
 
@@ -75,10 +78,12 @@ function CheckItemList({
   items,
   tone,
   onOpenSection,
+  onReloadDraft,
 }: {
   items: ShopifyPublishCheckItem[];
   tone: "blocker" | "advice";
   onOpenSection: (tab: EditorTab) => void;
+  onReloadDraft: () => void;
 }) {
   return (
     <ul className="space-y-3" data-testid={`publish-${tone}-list`}>
@@ -100,7 +105,32 @@ function CheckItemList({
               In {sectionLabel}
             </p>
           ) : null}
-          {item.action && sectionTab ? (
+          {/* The action string decides where it leads, before the section: a
+              disconnected store is in the "publishing" section, so mapping by
+              section sent "Open Integrations" back to the tab the merchant was
+              already on, and "Reload draft" did not reload anything (DE-6b). */}
+          {item.action === "Open Integrations" ? (
+            <Button
+              type="button"
+              variant="link"
+              className="mt-1 h-11 min-h-11 px-0 text-sm"
+              asChild
+            >
+              <a href="/settings/integrations" data-testid="publish-action-integrations">
+                {item.action}
+              </a>
+            </Button>
+          ) : item.action === "Reload draft" ? (
+            <Button
+              type="button"
+              variant="link"
+              className="mt-1 h-11 min-h-11 px-0 text-sm"
+              onClick={onReloadDraft}
+              data-testid="publish-action-reload"
+            >
+              {item.action}
+            </Button>
+          ) : item.action && sectionTab ? (
             <Button
               type="button"
               variant="link"
@@ -108,15 +138,6 @@ function CheckItemList({
               onClick={() => onOpenSection(sectionTab)}
             >
               {item.action}
-            </Button>
-          ) : item.action === "Open Integrations" ? (
-            <Button
-              type="button"
-              variant="link"
-              className="mt-1 h-11 min-h-11 px-0 text-sm"
-              asChild
-            >
-              <a href="/settings/integrations">{item.action}</a>
             </Button>
           ) : null}
         </li>
@@ -148,6 +169,7 @@ export function ReviewPublishPanel({
   liveAiContent,
   onReplaceAiContent,
   onOpenSection,
+  onReloadDraft,
   onContinueEditing,
 }: ReviewPublishPanelProps) {
   const summaryRef = useRef<HTMLDivElement | null>(null);
@@ -408,6 +430,7 @@ export function ReviewPublishPanel({
             items={blockers}
             tone="blocker"
             onOpenSection={onOpenSection}
+            onReloadDraft={onReloadDraft}
           />
         </div>
       ) : null}
@@ -423,6 +446,7 @@ export function ReviewPublishPanel({
             items={recommendations}
             tone="advice"
             onOpenSection={onOpenSection}
+            onReloadDraft={onReloadDraft}
           />
         </div>
       ) : null}

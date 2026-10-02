@@ -2,6 +2,7 @@
 """Recompile the dependency lockfiles. The only sanctioned way to change them.
 
     python scripts/update_dependency_lock.py
+    python scripts/update_dependency_lock.py --upgrade-package urllib3
 
 Run this after editing `dependencies`, `optional-dependencies` or
 `requires-python` in `pyproject.toml`, and commit the result alongside that
@@ -13,12 +14,17 @@ do quietly (pip refuses a hash that does not match), but the digest stamp makes
 it impossible to do *at all* without the checker noticing, which is the point: a
 lockfile edited by a human is a resolution nobody verified.
 
+`--upgrade-package NAME` (repeatable) is passed to uv. Without it, uv keeps
+every version already in the lock that still satisfies `pyproject.toml`, so a
+security fix in a *transitive* package has no other sanctioned route in.
+
 Requires `uv`, which is a development tool only — it never runs inside an image.
 Install it however you like; `pip install uv` is enough.
 """
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import subprocess
 import sys
@@ -89,12 +95,20 @@ def stamp(output: Path, digest: str) -> None:
     output.write_text(header + body, encoding="utf-8")
 
 
-def main() -> int:
+def _upgrade_arguments(argv: list[str]) -> list[str]:
+    parser = argparse.ArgumentParser(description="Recompile the dependency lockfiles.")
+    parser.add_argument("--upgrade-package", action="append", default=[], metavar="NAME")
+    names: list[str] = parser.parse_args(argv).upgrade_package
+    return [argument for name in names for argument in ("--upgrade-package", name)]
+
+
+def main(argv: list[str] | None = None) -> int:
+    upgrades = _upgrade_arguments(sys.argv[1:] if argv is None else argv)
     REQUIREMENTS.mkdir(exist_ok=True)
     digest = declaration_digest()
 
-    compile_lock(REQUIREMENTS / "runtime.txt")
-    compile_lock(REQUIREMENTS / "dev.txt", "--extra", "dev")
+    compile_lock(REQUIREMENTS / "runtime.txt", *upgrades)
+    compile_lock(REQUIREMENTS / "dev.txt", "--extra", "dev", *upgrades)
 
     for name in ("runtime.txt", "dev.txt"):
         stamp(REQUIREMENTS / name, digest)
