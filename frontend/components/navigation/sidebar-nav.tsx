@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { NavItem } from "@/components/navigation/nav-item";
 import { NAV_FOOTER_ITEMS, NAV_SECTIONS, isNavItemActive } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/providers/auth-provider";
 import { useProductWorkspaceCounts } from "@/services/products";
 
 interface SidebarNavProps {
@@ -25,15 +26,22 @@ interface SidebarNavProps {
  * every section fits above the fold at 1440×900 with the pinned footer below;
  * shorter viewports scroll inside `NavScrollRegion`, which shows a fade where
  * items continue.
+ *
+ * Section gap 12px since Phase 9 Stage 10: the AI Studio item made the list
+ * 15px taller than the 1440×900 rail (measured 745 vs 730); 16px → 12px over
+ * five gaps returns 20px and keeps the 36px item height.
  */
 export function SidebarNav({ collapsed, onNavigate, className }: SidebarNavProps) {
   const pathname = usePathname();
   const { data: counts } = useProductWorkspaceCounts();
+  const { hasRole } = useAuth();
+  const visible = (item: (typeof NAV_SECTIONS)[number]["items"][number]) =>
+    !item.roles || item.roles.some((role) => hasRole(role));
 
   return (
     <nav
       aria-label="Main navigation"
-      className={cn("flex flex-col gap-4 px-2 py-3", className)}
+      className={cn("flex flex-col gap-3 px-2 py-3", className)}
     >
       {NAV_SECTIONS.map((section) => (
         <div key={section.id} className="space-y-0.5">
@@ -43,7 +51,7 @@ export function SidebarNav({ collapsed, onNavigate, className }: SidebarNavProps
             </h2>
           )}
 
-          {section.items.map((item) => (
+          {section.items.filter(visible).map((item) => (
             <NavItem
               key={item.href}
               item={item}

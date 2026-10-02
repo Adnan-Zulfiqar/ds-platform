@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import type { ProductDetail, ProductVersion, StoreListing } from "@/types/api";
+import type { ProductVersion, StoreListing } from "@/types/api";
 
 import {
   buildSyntheticProduct,
@@ -238,58 +238,22 @@ test.describe("E-1 — approved AI text live on the store", () => {
 test.describe("I-1 — editor actions never cause a surprise conflict", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test("a clean editor adopts the token Optimize returns", async ({ page }) => {
-    const product = buildSyntheticProduct();
-    const afterOptimize = new Date(Date.parse(product.updatedAt) + 5_000).toISOString();
-    const patchTokens: string[] = [];
-    await openMockedEditor(page, { product });
-    await page.route(`**/api/v1/products/${DEMO_PRODUCT_ID}/optimize`, (route) =>
-      route.fulfill({
-        status: 201,
-        contentType: "application/json",
-        body: JSON.stringify({
-          product: { ...product, updatedAt: afterOptimize } satisfies ProductDetail,
-          version: version({ versionNumber: 2, source: "ai_generated", active: true }),
-        }),
-      }),
-    );
-    await page.route(`**/api/v1/drafts/${DEMO_PRODUCT_ID}`, async (route) => {
-      if (route.request().method() === "PATCH") {
-        const body = route.request().postDataJSON() as { expectedUpdatedAt?: string };
-        patchTokens.push(body.expectedUpdatedAt ?? "");
-      }
-      return route.fallback();
-    });
-
-    await openMoreMenu(page);
-    const optimized = page.waitForResponse((response) => response.url().endsWith("/optimize"));
-    await page.getByRole("menuitem", { name: /Improve with AI tools/i }).click();
-    await optimized;
-    await expect(page.getByTestId("product-actions-menu").first()).toBeEnabled();
-    await expect(page.getByTestId("editor-product-action-notice")).toHaveCount(0);
-
-    await page.getByLabel("Title").fill("Merchant edit after optimizing");
-    await expect.poll(() => patchTokens.length, { timeout: 15_000 }).toBeGreaterThan(0);
-    expect(patchTokens[0]).toBe(afterOptimize);
-    await expect(page.getByTestId("draft-conflict-banner")).toHaveCount(0);
-  });
-
-  test("a dirty editor refuses Optimize and sends nothing", async ({ page }) => {
+  test("the More menu links to AI Studio and writes nothing from the editor", async ({ page }) => {
+    // Phase 9 Stage 10 replaced "Improve with AI tools" — which generated and
+    // activated AI text from inside the editor — with a link. The editor
+    // therefore has no Optimize write left to guard; Activate (below) keeps
+    // the I-1 protections.
     let optimizeCalls = 0;
-    // Hold the save so the editor stays dirty while we act.
-    await openMockedEditor(page, { patchDelayMs: 10_000 });
+    await openMockedEditor(page);
     await page.route(`**/api/v1/products/${DEMO_PRODUCT_ID}/optimize`, (route) => {
       optimizeCalls += 1;
       return route.fulfill({ status: 500, body: "{}" });
     });
 
-    await page.getByLabel("Title").fill("Unsaved merchant edit");
     await openMoreMenu(page);
-    await page.getByRole("menuitem", { name: /Improve with AI tools/i }).click();
-
-    await expect(page.getByTestId("editor-product-action-notice")).toContainText(
-      "Save your changes first",
-    );
+    const item = page.getByRole("menuitem", { name: /Open AI Studio/i });
+    await expect(item).toHaveAttribute("href", `/ai-studio/products/${DEMO_PRODUCT_ID}`);
+    await expect(page.getByRole("menuitem", { name: /Improve with AI tools/i })).toHaveCount(0);
     expect(optimizeCalls).toBe(0);
   });
 

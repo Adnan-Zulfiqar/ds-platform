@@ -59,7 +59,7 @@ import {
   invalidatePublishReadiness,
   usePublishReadiness,
 } from "@/services/publish-readiness";
-import { useOptimizeProduct, useProductVersions } from "@/services/products";
+import { useProductVersions } from "@/services/products";
 import { useStores } from "@/services/stores";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -138,7 +138,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const seoScoreQuery = useDraftSeoScore(productId);
   const updateDraft = useUpdateDraft(productId);
   const refreshDraft = useRefreshDraft(productId);
-  const optimizeProduct = useOptimizeProduct(productId);
   // Only to name the AI version live on a store; not fetched otherwise.
   const versionsQuery = useProductVersions(productId, {
     enabled: Boolean(
@@ -198,7 +197,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const [publishSaveFailure, setPublishSaveFailure] =
     useState<PublishSaveFailureReason | null>(null);
   const publishInFlightRef = useRef(false);
-  // Review finding I-1: why Optimize / Activate refused to run, or that the
+  // Review finding I-1: why Activate refused to run, or that the
   // product changed under in-progress edits.
   const [productActionNotice, setProductActionNotice] = useState<string | null>(null);
   const activationEpochRef = useRef(0);
@@ -237,7 +236,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     "none" | "detected" | "reload-confirm" | "reviewing"
   >("none");
   const isConflicted = conflictPhase !== "none";
-  // Optimize and Activate write the Product row. Starting one over unsaved
+  // Activate writes the Product row. Starting it over unsaved
   // edits would turn the merchant's own next save into a conflict (I-1).
   const productActionBlockedReason = isConflicted
     ? "Resolve the editing conflict first."
@@ -396,7 +395,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
    * The *only* safe transitions, all of them explicit:
    *   1. the first successful load of a draft (nothing to lose yet);
    *   2. a confirmed "Reload latest version" (merchant chose to discard);
-   *   3. an editor-initiated product-row action (Optimize, Activate a
+   *   3. an editor-initiated product-row action (Activate a
    *      version) succeeded, it could only start on a clean editor, and no
    *      edit has happened since it started — see `adoptAfterProductAction`
    *      (review finding I-1). Nothing unsaved exists to lose, and the
@@ -416,11 +415,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     hydratedFromRef.current = detail.id;
   }
 
-  /** Review finding I-1. Optimize and Activate write the Product row and
-   * move its `updatedAt`. Without this, the editor kept the old token and
+  /** Review finding I-1. Activate writes the Product row and moves its
+   * `updatedAt` (legacy Optimize did too; Phase 9 Stage 10 replaced it with
+   * an AI Studio link, which writes nothing from here). Without this, the editor kept the old token and
    * its next save hit a 409 the merchant did not cause.
    *
-   * Both actions refuse to start while the editor is dirty or conflicted
+   * Activate refuses to start while the editor is dirty or conflicted
    * (`productActionBlockedReason`). On success, if no edit happened since
    * the action started, the returned product becomes the baseline
    * (transition 3 above). If the merchant typed while it ran, nothing is
@@ -433,19 +433,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     }
     setProductActionNotice(
       "This product was updated while you were editing. Your next save will ask you to review both versions.",
-    );
-  }
-
-  function runOptimize() {
-    if (productActionBlockedReason) {
-      setProductActionNotice(productActionBlockedReason);
-      return;
-    }
-    setProductActionNotice(null);
-    const editEpochAtStart = dirtyEpochRef.current;
-    optimizeProduct.mutate(
-      {},
-      { onSuccess: (result) => adoptAfterProductAction(result.product, editEpochAtStart) },
     );
   }
 
@@ -1116,7 +1103,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         storesError={storesQuery.isError}
         seoScore={seoScoreQuery.data}
         refreshing={refreshDraft.isPending}
-        optimizing={optimizeProduct.isPending}
         inspectorOpen={inspectorOpen}
         onToggleInspector={() => setInspectorOpen((open) => !open)}
         onPreview={() => setPreviewOpen(true)}
@@ -1125,7 +1111,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         onResolveConflict={focusConflictBanner}
         onRetryListings={() => void listingsQuery.refetch()}
         onRefresh={() => void refreshDraft.mutateAsync()}
-        onOptimize={runOptimize}
+        aiStudioHref={`/ai-studio/products/${productId}`}
         onViewHistory={() => setHistoryOpen(true)}
       />
 
@@ -1155,16 +1141,6 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       {productActionNotice ? (
         <Alert data-testid="editor-product-action-notice">
           <AlertDescription>{productActionNotice}</AlertDescription>
-        </Alert>
-      ) : null}
-
-      {optimizeProduct.isError ? (
-        <Alert variant="destructive">
-          <AlertDescription>
-            {optimizeProduct.error instanceof Error
-              ? optimizeProduct.error.message
-              : "Optimization failed."}
-          </AlertDescription>
         </Alert>
       ) : null}
 

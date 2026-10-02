@@ -543,3 +543,17 @@ All commits from the Stage 5 takeover onward received the fresh Claude
 end-to-end review. Findings and their status:
 [REVIEW_REMEDIATION_STAGE_5_9.md](REVIEW_REMEDIATION_STAGE_5_9.md). The
 remediation itself needs an independent review before it merges.
+
+2026-10-02: the remediation merged into `develop` (PR #26, `2b71f65`) after
+CI on its head; under the owner's 2026-10-01 decision the independent
+(Cursor) review of it moves to the end of implementation
+(`docs/completion/DECISIONS.md` D-001).
+
+### Stage 10 — AI Product Studio: IMPLEMENTED / AUTHOR-VERIFIED
+
+Plan: [PHASE_9_STAGE_10_PLAN.md](PHASE_9_STAGE_10_PLAN.md) (PR #25, merged
+`81f952f`; section 0a reconciles it with the merged backend). Report:
+[PHASE_9_STAGE_10_COMPLETION.md](PHASE_9_STAGE_10_COMPLETION.md).
+Implementation PR [#36](https://github.com/Adnan-Zulfiqar/ds-platform/pull/36).
+No backend change, no migration (head `0036`). `StubProvider` only.
+Cursor review pending. Stage 11 not started.

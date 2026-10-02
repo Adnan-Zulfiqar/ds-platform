@@ -176,7 +176,11 @@ test.describe("Drafts — search, sort, pagination, URL", () => {
     // #8 is the supplier-unavailable one.
     await expect(rows.nth(7).getByTestId("draft-status")).toHaveText("Unavailable");
     await expect(rows.first().getByRole("link", { name: /^Edit Wireless Desk Lamp/ })).toBeVisible();
-    await expect(rows.first().getByRole("button", { name: "Optimize with AI" })).toBeVisible();
+    // Phase 9 Stage 10: the row links to AI Studio instead of optimizing in place.
+    await expect(rows.first().getByRole("link", { name: "AI Studio" })).toHaveAttribute(
+      "href",
+      new RegExp("^/ai-studio/products/"),
+    );
     await expect(rows.first().getByRole("button", { name: "History" })).toBeVisible();
     await expect(rows.first().getByRole("button", { name: /More actions for/ })).toBeVisible();
 

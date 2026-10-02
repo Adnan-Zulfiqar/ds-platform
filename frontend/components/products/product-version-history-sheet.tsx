@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { History, Loader2 } from "lucide-react";
 
@@ -89,8 +90,14 @@ function VersionRow({
       {version.title ? <p className="line-clamp-2 text-sm">{version.title}</p> : null}
       {pipelineCandidate && !version.active ? (
         <p className="text-xs text-muted-foreground" data-testid="version-pipeline-candidate-note">
-          AI candidate awaiting review. It is approved in the AI review flow, not activated
-          from here.
+          AI candidate awaiting review. It is approved in AI Studio, not activated from here.{" "}
+          <Link
+            className="underline"
+            href={`/ai-studio/products/${productId}?candidate=${version.id}`}
+            data-testid="version-review-in-studio"
+          >
+            Review in AI Studio
+          </Link>
         </p>
       ) : null}
       {!version.active && !pipelineCandidate && activationBlockedReason ? (
@@ -146,7 +153,7 @@ function VersionHistoryList({
   if (data.items.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Not optimized yet. Use &ldquo;Optimize with AI&rdquo; to create the first version.
+        No AI versions yet. Use AI Studio to generate and review the first one.
       </p>
     );
   }

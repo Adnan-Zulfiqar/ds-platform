@@ -13,14 +13,14 @@ interface ProductEditorActionsProps {
   action: NextAction;
   adminUrl?: string | null;
   refreshing: boolean;
-  optimizing: boolean;
   hasExternalUrl: boolean;
   onPreview: () => void;
   onSave: () => void;
   onPublish: () => void;
   onResolveConflict: () => void;
   onRefresh: () => void;
-  onOptimize: () => void;
+  /** Review route for this product in AI Studio (replaces the legacy Optimize). */
+  aiStudioHref: string;
   onOpenAliExpress: () => void;
   onViewHistory: () => void;
   className?: string;
@@ -33,14 +33,13 @@ export function ProductEditorActions({
   action,
   adminUrl,
   refreshing,
-  optimizing,
   hasExternalUrl,
   onPreview,
   onSave,
   onPublish,
   onResolveConflict,
   onRefresh,
-  onOptimize,
+  aiStudioHref,
   onOpenAliExpress,
   onViewHistory,
   className,
@@ -88,10 +87,9 @@ export function ProductEditorActions({
 
       <ProductActionsMenu
         refreshing={refreshing}
-        optimizing={optimizing}
         hasExternalUrl={hasExternalUrl}
         onRefresh={onRefresh}
-        onOptimize={onOptimize}
+        aiStudioHref={aiStudioHref}
         onOpenAliExpress={onOpenAliExpress}
         onViewHistory={onViewHistory}
       />

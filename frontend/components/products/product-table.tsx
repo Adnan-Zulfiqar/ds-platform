@@ -43,7 +43,7 @@ import { useProducts } from "@/services/products";
 import type { Product, ProductAIStatus, ProductStatus } from "@/types/api";
 
 import { ImportProductDialog } from "./import-product-dialog";
-import { OptimizeProductButton } from "./optimize-product-button";
+import { AiStudioLink } from "./ai-studio-link";
 import { ProductVersionHistorySheet } from "./product-version-history-sheet";
 
 /**
@@ -284,7 +284,7 @@ export function ProductTable({ variant = "products" }: ProductTableProps) {
             {copy.action}
           </Link>
         </Button>
-        <OptimizeProductButton productId={product.id} compact />
+        <AiStudioLink productId={product.id} compact />
         <ProductVersionHistorySheet productId={product.id} productTitle={product.title} compact />
         {variant === "drafts" && (
           <DropdownMenu>

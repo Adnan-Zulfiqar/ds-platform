@@ -47,7 +47,7 @@ test.describe("Draft editor header — desktop", () => {
       page.getByRole("menuitem", { name: /Refresh supplier information/i }),
     ).toBeVisible();
     await expect(
-      page.getByRole("menuitem", { name: /Improve with AI tools/i }),
+      page.getByRole("menuitem", { name: /Open AI Studio/i }),
     ).toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Version history/i })).toBeVisible();
     await expect(page.getByRole("menuitem", { name: /Delete Draft/i })).toHaveCount(0);

@@ -1,6 +1,9 @@
 "use client";
 
 import { MoreHorizontal } from "lucide-react";
+import Link from "next/link";
+
+import { useCanUseStudio } from "@/components/ai-studio/studio-access";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,10 +16,12 @@ import {
 
 interface ProductActionsMenuProps {
   refreshing: boolean;
-  optimizing: boolean;
   hasExternalUrl: boolean;
   onRefresh: () => void;
-  onOptimize: () => void;
+  /** AI Studio review route. Phase 9 Stage 10 replaced "Improve with AI
+   * tools", which generated and activated AI text in one click, with this
+   * link: nothing changes in the Studio without a confirmation. */
+  aiStudioHref: string;
   onOpenAliExpress: () => void;
   onViewHistory: () => void;
 }
@@ -29,13 +34,13 @@ interface ProductActionsMenuProps {
  */
 export function ProductActionsMenu({
   refreshing,
-  optimizing,
   hasExternalUrl,
   onRefresh,
-  onOptimize,
+  aiStudioHref,
   onOpenAliExpress,
   onViewHistory,
 }: ProductActionsMenuProps) {
+  const { allowed: canUseStudio } = useCanUseStudio();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -56,12 +61,11 @@ export function ProductActionsMenu({
         >
           {refreshing ? "Refreshing…" : "Refresh supplier information"}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={optimizing}
-          onSelect={() => onOptimize()}
-        >
-          {optimizing ? "Optimizing…" : "Improve with AI tools"}
-        </DropdownMenuItem>
+        {canUseStudio ? (
+          <DropdownMenuItem asChild>
+            <Link href={aiStudioHref}>Open AI Studio</Link>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           disabled={!hasExternalUrl}
           onSelect={() => onOpenAliExpress()}
