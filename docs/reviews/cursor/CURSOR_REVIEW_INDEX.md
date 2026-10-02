@@ -34,9 +34,13 @@ directory records an independent verdict; every checkpoint says
 | [DP-CR-005](checkpoints/DP-CR-005.md) | tiptap 3.31.4, js-yaml, brace-expansion (PR #30) | Integrated; IR pending |
 | [DP-CR-006](checkpoints/DP-CR-006.md) | Global-rules dialog waits for the list (PR #31) | Integrated; IR pending |
 | [DP-CR-007](checkpoints/DP-CR-007.md) | Local-only encryption key (no repository change) | Done locally; IR pending |
-| [DP-CR-008](checkpoints/DP-CR-008.md) | Nested `.env` kept out of Docker contexts (PR #32) | PR open; IR pending |
-| DP-CR-009…014 | Stage 10 plan reconciliation and implementation | Reserved |
+| [DP-CR-008](checkpoints/DP-CR-008.md) | Nested `.env` kept out of Docker contexts (PR #32) | Integrated; IR pending |
+| [DP-CR-009](checkpoints/DP-CR-009.md) | Stage 10 plan reconciled (PR #25) | Integrated; IR pending |
+| [DP-CR-010…014](checkpoints/DP-CR-010.md) | Stage 10 AI Product Studio (PR #36) | PR open; IR pending |
+| [DP-CR-017](checkpoints/DP-CR-017.md) | pyjwt / urllib3 advisories (PR #34) | Integrated; IR pending |
+| [DP-CR-018](checkpoints/DP-CR-018.md) | Commit before the response is sent (PR #35) | Integrated; IR pending |
+| [DP-CR-021](checkpoints/DP-CR-021.md) | Draft Editor full readiness + removed images (PR #38) | PR open; IR pending |
+| [DP-CR-022](checkpoints/DP-CR-022.md) | Draft Editor publish outcomes (PR #37) | PR open; IR pending |
 | DP-CR-015 | Remaining Playwright flakes | Reserved |
 | DP-CR-016 | Next.js bundled postcss / postponed fixes | Reserved |
-| DP-CR-017 | pyjwt / urllib3 advisories | Branch pushed when gated |
 | DP-CR-020…023 | Stage 11; Draft Editor 6–8 | Reserved |

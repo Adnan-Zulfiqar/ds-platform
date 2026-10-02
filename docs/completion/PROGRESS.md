@@ -64,3 +64,34 @@ store/account (B-003).
 
 1. AUT-04: reconcile PR #25 with the merged contracts; update it on develop.
 2. AUT-05: Stage 10 implementation, ST10-A first.
+
+## Update 2026-10-02
+
+Merged into `develop` (each at the CI-verified head, `--match-head-commit`):
+
+| PR | What | Head | PR CI | Merge |
+|---|---|---|---|---|
+| #33 | Completion tracking docs | `48d512d` | 10/10 | `b5ec686` |
+| #34 | pyjwt 2.15.1, urllib3 2.8.0 (SEC-002) | `7fe78a9` | 10/10; pytest 3460; Playwright 734, 0 flaky | `28a2c59` |
+| #25 | Stage 10 plan, reconciled (§0a) | `fdbda28` | 10/10; Playwright 725, **10 retry-passes** on unchanged code (global-rules, global-rules-impact, shopify-webhook-recovery) | `81f952f` |
+| #35 | Commit before the response is sent (N-5 root cause) | `4d6c254` | 10/10; pytest 3462; Playwright 734, 0 flaky | `c88a04b` |
+| #32 | Nested `.env` out of Docker contexts (SEC-001) | `767de14` | 10/10; pytest 3470; Playwright 734, 0 flaky | `7fe0a89` |
+
+Post-merge develop CI for the integrated #27–#31 tree (`df0e41f`, run
+36937771078): 10/10, pytest 3460, Playwright 734 passed / 9 skipped / 0 flaky.
+
+Open PRs: #36 (Stage 10), #37 (DE-7), #38 (DE-6b) — author-verified locally,
+CI pending at the time of writing.
+
+**Harness.** Backend gates now run from `git archive <ref>` as a non-root
+user with a git repository and disposable Postgres 17 / Redis 7; the eight
+"environment-only" failures from earlier passes are gone (3460–3462 passed,
+0 failed). Lesson recorded: a frontend-only change still needs the backend
+unit suite — `test_stage_7_contract.py` reads `frontend/types/api.ts`, and
+#36's first CI run failed on it.
+
+**Flake evidence.** The 10 retry-passes on #25's docs-only run were mostly
+the commit-ordering symptoms (FK error right after register; signed-in page
+missing; a rule created through the API not yet listed). #35 merged after
+its own CI showed 0 flaky; whether the flakes are gone is judged on the
+next runs, not on one.

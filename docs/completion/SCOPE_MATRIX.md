@@ -9,6 +9,25 @@ Abbreviations: IMPL = implementation, AV = author verification,
 INT = integration, IR = independent review (Cursor; `PENDING` everywhere
 until Cursor actually reviews).
 
+## Status update 2026-10-02 (supersedes the status columns below)
+
+| Requirement IDs | Implementation | Author verification | Integration | External | Independent review |
+|---|---|---|---|---|---|
+| ST10-PLAN | IMPLEMENTED (plan §0a) | PASS (CI 10/10 on `fdbda28`) | MERGED_TO_DEVELOP (#25, `81f952f`) | NOT_REQUIRED | PENDING |
+| ST10-A…L | IMPLEMENTED (PR #36) | PASS locally (Playwright 23 + 153, retries 0; Vitest; unit 2221); PR CI pending | NOT_MERGED | Live provider quality: BLOCKED (B-002); live Shopify publish: BLOCKED (B-003) | PENDING (DP-CR-010…014) |
+| DE-6a | Covered by ST10 | as ST10 | as ST10 | — | PENDING |
+| DE-6b | IMPLEMENTED (PR #38), incl. removed-image backend defect | PASS locally (backend 3462; editor specs 103) | NOT_MERGED | — | PENDING (DP-CR-021) |
+| DE-7 | IMPLEMENTED (PR #37) | PASS locally (28) | NOT_MERGED | Real-Shopify retry: BLOCKED (B-003) | PENDING (DP-CR-022) |
+| DE-8a | PARTIAL — Optimize ×n via ST10 bulk; bulk pricing via Global Rules; "Refresh ×n" not built | — | — | — | Scope question B-006 / D-006 |
+| DE-8b | NOT_STARTED | — | — | BLOCKED (B-003, B-004) | — |
+| ST11-1…4 | NOT_STARTED (follows ST10 merge) | — | — | — | — |
+| REM-N5-a | Root cause found and fixed: response sent before commit (PR #35) | PASS (unit tests fail-before/pass-after; PR CI 0 flaky) | MERGED (#35, `c88a04b`) | — | PENDING (DP-CR-018) |
+| REM-N5-b | Probable cause (same race via refresh-token row) — inferred, not reproduced | — | via #35 | — | OPEN until CI history confirms |
+| REM-N3-p, REM-N3-u | OPEN (Next 16 / upstream) | — | — | — | — |
+| REM-L1 | Local key created (D-004) | PASS | n/a | Providers not authorised (B-003) | PENDING (DP-CR-007) |
+| SEC-001 | IMPLEMENTED | PASS (CI 10/10) | MERGED (#32, `7fe0a89`) | — | PENDING (DP-CR-008) |
+| SEC-002 | IMPLEMENTED | PASS (CI 10/10) | MERGED (#34, `28a2c59`) | — | PENDING (DP-CR-017) |
+
 ## 1. Phase 9 Stage 10 — AI Product Studio
 
 Source: `docs/PHASE_9_STAGE_10_PLAN.md` (PR #25, head `1dfa568`, amended

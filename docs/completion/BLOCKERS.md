@@ -11,6 +11,7 @@ proceed.
 | B-003 | OPEN | Live Shopify Partner OAuth (M17), live publish to a designated test store | Mocked transport, fixtures |
 | B-004 | OPEN | Live AliExpress → Shopify E2E (Draft Editor Stage 8) | Seed harness, captured fixtures |
 | B-005 | OPEN (upstream) | Two Next.js fixes postponed in the 2026-09-30 release; bundled `postcss` needs Next 16 | Tracked in `SECURITY_STATUS.md` |
+| B-006 | OPEN (owner scope decision) | Draft Editor Stage 8 "bulk tools": no authoritative definition beyond what AI Studio bulk and Global Rules apply already deliver (D-006) | Owner names the required bulk actions, or confirms the existing two suffice |
 
 ---
 
