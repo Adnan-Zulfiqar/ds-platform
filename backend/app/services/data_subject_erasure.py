@@ -59,8 +59,8 @@ from app.models.ebay import EbayConnection
 from app.models.email_verification import EmailVerificationToken
 from app.models.identity import UserIdentity
 from app.models.integration import AliExpressConnection
-from app.models.invitation import UserInvitation
 from app.models.inventory import InventorySyncRun
+from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationEmailPreference
 from app.models.order import OrderSyncRun
 from app.models.pipeline_bulk import PipelineBulkRun, PipelineBulkRunCancelRequest
