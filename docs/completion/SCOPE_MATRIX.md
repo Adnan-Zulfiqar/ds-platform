@@ -123,5 +123,5 @@ Source for all rows: `PROJECT_ROADMAP.md` "Later phases" — "Not scheduled
 | REM-N3-p | FIXED (Next 16.3.8) | PASS | MERGED (#40) | — | PENDING |
 | D-009 lint / proxy migration | FIXED | PASS (769 passed, retries 0) | MERGED (#42, `9a62b9e`) | — | PENDING (DP-CR-019) |
 | REM-N5-a | Root cause fixed (#35) | PASS | MERGED | — | PENDING (DP-CR-018) |
-| REM-N5-b + Studio selection flake | OPEN — evidence only (DP-CR-015) | 70/70 and 35/35, retries 0 | — | — | Keep open; green repeats are not a cause (IR-05) |
+| REM-N5-b (flake A) + Studio selection flake (B) | A: mechanism reproduced deterministically 2026-10-03, closed by author pending independent confirmation; B: OPEN — cause unproven (DP-CR-015) | 70/70 and 35/35, retries 0 | — | — | Keep open; green repeats are not a cause (IR-05) |
 | SEC-001 existing images | Assessed; task-owned removed; clean replacements | PASS | n/a | Owner rebuild (B-007) | PENDING (DP-CR-024) |

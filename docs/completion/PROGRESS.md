@@ -149,3 +149,37 @@ pytest 3475 passed; Playwright 767 passed, 8 skipped, 0 failed, 0 flaky.**
 | Backup/restore drill on `e63508e` (author, after the verdict) | 42/42 digests identical; credential MATCH, ciphertext at rest; negatives refused |
 | Eight Playwright skips | Titles recovered from push CI 37003066025; all are worker-absent or live-AliExpress guards |
 | Tag / flakes / Stage 8 | Untagged; flakes open; Stage 8 not complete — as Cursor directs |
+
+## Remaining roadmap, Track A — 2026-10-03
+
+Owner standing order: execute `docs/CLAUDE_REMAINING_ROADMAP.md` Tracks A→D.
+Pinned baseline `develop` @ `7af51f9` (merge of PR #45).
+
+| Item | Result | Kind |
+|---|---|---|
+| A1 — clean owner images (B-007) | `droppilot-backend/worker/beat/frontend` rebuilt from `git archive 7af51f9`; `/app/.env` absent in all four (boolean check, nothing printed). Running containers not recreated — owner step | Local runtime |
+| A2 — flakes (DP-CR-015) | A: pre-#35 ordering + 0.4 s commit delay → 3/3 runs fail with the original symptom; #35 ordering + same delay → symptom 0/14. Closed by author, independent confirmation pending. New lead O-1 recorded. B: OPEN, cause unproven | Local runtime, disposable |
+| A3 — live AI (B-002) | OPEN — owner checklist in `BLOCKERS.md`. Provider code is Track B | — |
+| A4 — Shopify test store (B-003) | OPEN — owner checklist | — |
+| A5 — AliExpress → Shopify (B-004) | OPEN — owner checklist. Draft Editor Stage 8 stays incomplete | — |
+| A6 — `phase-9-complete` | Not created: A3–A5 evidence is missing and no "tag phase-9 now" was given | — |
+| A7 — production deploy | Not in autonomous scope | — |
+| Found: root `.env` lost `SECURITY_ENCRYPTION_KEYS` (B-009) | No ciphertext in `droppilot` (0 rows in every encrypted column); owner decides the key | Local check, counts only |
+
+## Remaining roadmap, Track C audit — 2026-10-03
+
+| ID | Finding |
+|---|---|
+| C1 — DE-6b / DE-7 | Merged (#38, #37) and covered by Cursor's acceptance of `e63508e` (IR-02/IR-06 context). Re-read against `docs/DRAFT_PRODUCT_EDITOR_PLAN.md`: nothing in those stages is unimplemented. No rewrite |
+| C2 — DE-8a bulk tools | Resolved as D-010: AI Studio bulk + Global Rules bulk pricing; "Refresh ×n", "Publish Selected", scheduling are future. Nothing implied by the plans is missing |
+| C3 — DE-8b live E2E | Blocked on A4/A5 (B-003, B-004) |
+
+## Remaining roadmap, Tracks B and D — 2026-10-03
+
+| Item | Result |
+|---|---|
+| Track A docs | PR #47, CI 10/10 on `f92346f`, merged `8ee9eba` |
+| Track B — `OpenAIProvider` | PR #46: local gate pytest 3497 passed, CI 10/10 on `12c7650`, merged `9ffa700`. Mocked transport only; no real OpenAI call (B-002 open) |
+| Track D — EBAY-C2 listing setup | PR #48: local gate pytest 3498 passed, alembic `0037`; Playwright 44/44 (panel, channels, eBay specs). Mocked eBay transport only |
+| Track D — EBAY-C3…C6 | Not started. `docs/ebay/EBAY_C3_PROPOSAL.md` lists the architecture decisions (multi-channel readiness, eBay store model, item specifics) that CLAUDE.md §12.1 requires the owner to approve first; C4–C6 build on C3 |
+

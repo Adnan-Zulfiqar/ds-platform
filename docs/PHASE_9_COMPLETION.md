@@ -46,9 +46,12 @@ uncreated until the owner accepts the release.
 
 ## Known limitations
 
-- No live model: every generation is `StubProvider` output, which the
-  platform refuses to publish. Quality scores of stub text describe the
-  supplier original, not an AI improvement.
+- No live model in this phase's evidence: every recorded generation is
+  `StubProvider` output, which the platform refuses to publish. Quality
+  scores of stub text describe the supplier original, not an AI improvement.
+  An `OpenAIProvider` has since been added (Track B, after Stage 11); it is
+  unit-tested against a mocked transport only, and no real OpenAI call has
+  been made (B-002).
 - No live Shopify publish or Partner OAuth in this phase's evidence
   (debt M17; `docs/completion/BLOCKERS.md` B-003).
 - A bulk run started in another browser cannot be reopened after a 409

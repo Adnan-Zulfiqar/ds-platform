@@ -7,13 +7,15 @@ proceed.
 | ID | Status | Blocks | Unblocked alternative |
 |---|---|---|---|
 | B-001 | RESOLVED 2026-10-01 | Merging PRs into `develop` | — |
-| B-002 | OPEN | Live AI output quality (no provider key; `StubProvider` only) | Deterministic tests against `StubProvider` |
-| B-003 | OPEN | Live Shopify Partner OAuth (M17), live publish to a designated test store | Mocked transport, fixtures |
-| B-004 | OPEN | Live AliExpress → Shopify E2E (Draft Editor Stage 8, DE-8b). Stage 8 stays incomplete until it clears (Cursor IR-06) | Seed harness, captured fixtures |
+| B-002 | OPEN — owner checklist below | Live AI output quality. `OpenAIProvider` is in PR #46 (Track B) and has never made a real call | Deterministic tests; mocked-transport tests of the OpenAI provider |
+| B-003 | OPEN — owner checklist below | Live Shopify Partner OAuth (M17), live publish to a designated test store | Mocked transport, fixtures |
+| B-004 | OPEN — owner checklist below | Live AliExpress → Shopify E2E (Draft Editor Stage 8, DE-8b). Stage 8 stays incomplete until it clears (Cursor IR-06) | Seed harness, captured fixtures |
 | B-005 | PARTLY RESOLVED | Bundled `postcss` fixed by Next 16 (PR #40). Still open upstream: two Next.js fixes postponed in the 2026-09-30 release, no public detail | Tracked in `SECURITY_STATUS.md` |
 | B-006 | RESOLVED 2026-10-02 (D-010) | "Refresh ×n" / "Publish Selected" are unrequested proposals → future scope; Stage 8's bulk half met by AI Studio bulk + Global Rules (Stage 8 itself still blocked by B-004) | — |
-| B-007 | OPEN (owner) | The owner's `droppilot-*` images (2026-09-22) contain `/app/.env`; no evidence they were pushed | Rebuild from `develop`; rotate `backend/.env` values only if an image was ever shared (DP-CR-024) |
+| B-007 | AGENT PART DONE 2026-10-03; owner recreate open | New `droppilot-*` images built from `develop` `7af51f9` contain no `.env`; the running containers still use the old images until recreated | Owner checklist below; rotate `backend/.env` values only if an old image was ever shared |
 | B-008 | RESOLVED 2026-10-02 | Docker Desktop would not start after the 05:14Z system sign-out/shutdown: stale Unix-socket files in `%LOCALAPPDATA%\Docker\run` and `%LOCALAPPDATA%\docker-secrets-engine` | Both directories renamed to `*.stale-<timestamp>` (nothing deleted); Docker started; the owner's stack came back with its volumes. "Reset to factory defaults" was never used. One errored instance this task had started was stopped by process name before the second attempt |
+| B-009 | OPEN (owner) — found 2026-10-03 | The root `.env` was rewritten on 2026-10-03 and no longer contains `SECURITY_ENCRYPTION_KEYS` (the key D-004 added). Running containers still hold it in their environment; a recreate drops it, and with no key the app cannot store any OAuth token. No ciphertext exists in the `droppilot` database (all encrypted columns counted: 0 rows), so nothing is lost yet | Owner checklist below. The agent did not rewrite the key: the owner was offered the choice and has not answered |
+| B-010 | POLICY 2026-10-03 | The owner's Track A–D order asks to retry a classifier-denied action "via an allowed equivalent". The agent does not do that: the owner's earlier standing instruction (2026-10-01) and the agent's own rules both forbid bypassing a denial through another command or tool | Any denial is recorded here with its exact text and the smallest owner action; work continues elsewhere. No denial occurred in the Track A–D session up to this entry |
 
 ---
 
@@ -55,3 +57,73 @@ checks pass on the current heads. #27 and #26 were then merged with
 for this repository in the session's permission rules, or merge the PR in
 the GitHub UI. A generic allow rule is not guaranteed to change the
 classifier's decision.
+
+---
+
+## Owner checklists (Track A, 2026-10-03)
+
+Each item stays OPEN until the owner performs it; nothing here is claimed as
+done. No secret is requested in chat — every value goes into the root `.env`
+by the owner's own hand.
+
+### B-009 — encryption key (do first; every OAuth item below needs it)
+
+1. Put one `SECURITY_ENCRYPTION_KEYS=` line back in the root `.env`: either
+   the previous value from a backup of the file, or a newly generated Fernet
+   key (safe today — no encrypted rows exist).
+2. Keep that value from then on. Once any provider connects, changing it
+   makes the stored tokens unreadable.
+
+### B-007 — run the clean images
+
+New images (built 2026-10-03 from `develop` `7af51f9`, `/app/.env` absent in
+all four): `droppilot-backend` `sha256:2e93c793fdaa…`, `droppilot-worker`
+`sha256:b2a46461c3c1…`, `droppilot-beat` `sha256:7cf3f9ec3d79…`,
+`droppilot-frontend` `sha256:b060ad62958a…`. The running containers still use
+`cd632a1ca317` / `90d48f6c5ea1` / `4371e3d5443f` / `c3a28316bdd7`.
+
+1. Finish B-009 first.
+2. From the checkout whose `docker-compose.yml` you normally use:
+   `docker compose -p droppilot up -d --no-build backend worker beat frontend`
+   (recreates on the new images; volumes are untouched).
+3. Apply migrations if the backend reports an older head:
+   `docker compose -p droppilot exec backend alembic upgrade head`.
+4. Only if an old image was ever pushed or shared: rotate the values that
+   were in `backend/.env` at that time.
+
+### B-002 — one real AI generation (A3)
+
+1. In the root `.env`: `AI_PROVIDER=openai`, `AI_OPENAI_API_KEY=<your key>`,
+   `AI_OPENAI_MODEL=<a chat model your account can use>`.
+2. Recreate backend and worker (as in B-007 step 2).
+3. In the app: AI Studio → pick one draft → Generate preview.
+4. Expected: the preview has no `[STUB-AI]` marker, and Publish is no longer
+   refused as synthetic. Tell the agent the product id; it will record the
+   evidence (provider, model, token counts — never the key).
+
+### B-003 — Shopify test store (A4)
+
+1. In the Shopify Partner dashboard, the app's allowed redirect URL must be
+   exactly `SHOPIFY_CALLBACK_URL` from the root `.env`.
+2. Use a development/test store only.
+3. In the app: Settings → Integrations → Connect Shopify → enter the
+   `*.myshopify.com` domain → approve on Shopify.
+4. Expected: the card shows Connected and a store appears under Stores.
+   Then publish one draft. Tell the agent; it records the evidence.
+
+### B-004 — AliExpress → edit → Shopify (A5)
+
+1. AliExpress Open Platform: the app's callback must be exactly
+   `ALIEXPRESS_CALLBACK_URL`; use a test account.
+2. Settings → Integrations → Connect AliExpress → approve.
+3. Import one product, edit it in the draft editor, publish to the B-003 test
+   store.
+4. Expected: the product is live on the test store with the edited content.
+   Only after this may Draft Editor Stage 8 be marked complete.
+
+### eBay (Track D items needing consent)
+
+1. If the keys in `.env` are **sandbox** keys, add `EBAY_ENVIRONMENT=sandbox`
+   (the default is `production`).
+2. Settings → Integrations → Connect eBay → approve on eBay.
+3. Open eBay → Listing setup (EBAY-C2) and save defaults. Tell the agent.

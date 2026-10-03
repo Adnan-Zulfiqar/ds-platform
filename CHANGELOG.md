@@ -10,9 +10,17 @@ production release.
 
 ## [Unreleased]
 
-### Added — EBAY-C2
+### Added
 
-- **eBay listing setup.** The eBay card gains a "Listing setup" panel: the
+- **OpenAI provider (`AI_PROVIDER=openai`).** The first real `AIProvider`:
+  Chat Completions over the existing `httpx` dependency, transient-only
+  retries with full-jitter backoff, `is_synthetic=False` results. Needs
+  `AI_OPENAI_API_KEY` and `AI_OPENAI_MODEL`; a missing one is a named
+  configuration error, never a stub fallback. Temperature is not sent
+  (reasoning models reject it). An auth failure never echoes OpenAI's error
+  text, which quotes part of the key. **Verified with a mocked transport
+  only — no real OpenAI call has been made (B-002 stays open).**
+- **eBay listing setup (EBAY-C2).** The eBay card gains a "Listing setup" panel: the
   seller's shipping, payment and return policies and Inventory API locations,
   read live per marketplace, and the defaults DropPilot will list with.
   Admins can save defaults (each id re-checked against eBay) and create a
