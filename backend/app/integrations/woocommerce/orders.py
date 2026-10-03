@@ -11,6 +11,15 @@ integers per site. Two WooCommerce stores in one workspace would collide on
 ``<store id>:<order id>``. That fits the column's 128 characters.
 
 Line items find their DropPilot product through the W2 SKU (``dp-<id>``).
+
+**Marking shipped (W5).** WooCommerce core has no tracking field; the
+tracking plugins each store it differently. So DropPilot sets the order to
+``completed`` and adds an order note with the carrier, the number and the
+link. The note is shown to the customer when ``notify_customer`` is set.
+The status change comes first: it is idempotent, so a retry after the note
+failed sends one note, not two. WooCommerce sends its own "order completed"
+email on that status change, whatever DropPilot asks; that is the store's
+setting, not ours.
 Buyer data is what fulfilment needs (recipient, address, phone), as for the
 other channels; nothing else from the order is stored.
 """
@@ -28,10 +37,18 @@ from typing import Any, Final
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.integrations.woocommerce.connection import WooCommerceConnectionService
-from app.models.order import FulfillmentStatus, Order, OrderItem, OrderSource, PaymentStatus
+from app.models.order import (
+    FulfillmentStatus,
+    Order,
+    OrderItem,
+    OrderSource,
+    PaymentStatus,
+    Shipment,
+    ShipmentStatus,
+)
 from app.models.store import Store, StorePlatform
 from app.repositories.order import OrderRepository
 from app.repositories.product import ProductRepository
@@ -238,14 +255,67 @@ class WooCommerceOrderService:
         product = await self.products.get_by_id(uuid.UUID(match.group(1)))
         return product.id if product is not None else None
 
-    async def _load(self, order_id: uuid.UUID) -> Order:
-        result = await self.session.execute(
+    async def _load(self, order_id: uuid.UUID, *, lock: bool = False) -> Order:
+        query = (
             self.orders._base_query()
             .where(Order.id == order_id)
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items), selectinload(Order.shipments))
             .execution_options(populate_existing=True)
         )
-        return result.scalar_one()
+        if lock:
+            # Two "mark shipped" requests for one order: the second waits,
+            # then sees the first one's shipment and sends nothing.
+            query = query.with_for_update(of=Order)
+        order = (await self.session.execute(query)).scalar_one_or_none()
+        if order is None:
+            raise NotFoundError("Order not found.")
+        return order
+
+    async def mark_shipped(
+        self,
+        order_id: uuid.UUID,
+        *,
+        company: str,
+        tracking_number: str,
+        tracking_url: str | None,
+        notify_customer: bool,
+    ) -> Shipment:
+        order = await self._load(order_id, lock=True)
+        if order.source is not OrderSource.WOOCOMMERCE:
+            raise ValidationError("Only WooCommerce orders can be marked shipped on WooCommerce.")
+        if order.fulfillment_status in (FulfillmentStatus.CANCELLED, FulfillmentStatus.REFUNDED):
+            raise ValidationError("This order was cancelled or refunded in WooCommerce.")
+        for shipment in order.shipments:
+            if shipment.tracking_number == tracking_number:
+                return shipment  # already told the store; never twice
+        store = await self.stores.get_by_id(order.store_id) if order.store_id else None
+        if store is None:
+            raise ValidationError("This order's WooCommerce store is no longer connected.")
+        client = self.connections.client_for(store)
+        remote_id = order.external_id.split(":", 1)[-1]
+
+        await client.put(f"/orders/{remote_id}", {"status": "completed"})
+        note = f"Shipped with {company}, tracking number {tracking_number}."
+        if tracking_url:
+            note += f" Track it: {tracking_url}"
+        await client.post(
+            f"/orders/{remote_id}/notes", {"note": note, "customer_note": notify_customer}
+        )
+
+        shipment = Shipment(
+            tenant_id=order.tenant_id,
+            order_id=order.id,
+            tracking_number=tracking_number,
+            carrier=company,
+            status=ShipmentStatus.IN_TRANSIT,
+            shipped_at=datetime.now(UTC),
+        )
+        self.session.add(shipment)
+        order.fulfillment_status = FulfillmentStatus.SHIPPED
+        order.external_status = "completed"
+        await self.session.flush()
+        logger.info("woocommerce_order_shipped", order_id=str(order.id))
+        return shipment
 
 
 __all__ = ["OrderImportOutcome", "WooCommerceOrderService", "external_order_id"]

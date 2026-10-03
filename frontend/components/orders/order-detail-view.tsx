@@ -7,7 +7,11 @@ import {
   FulfillmentStatusBadge,
   PaymentStatusBadge,
 } from "@/components/orders/order-status-badge";
-import { EbayShipOrderForm, ShopifyShipOrderForm } from "@/components/orders/ebay-orders";
+import {
+  EbayShipOrderForm,
+  ShopifyShipOrderForm,
+  WooCommerceShipOrderForm,
+} from "@/components/orders/ebay-orders";
 import { OrderTimeline } from "@/components/orders/order-timeline";
 import { ShipmentCard } from "@/components/orders/shipment-card";
 import { Button } from "@/components/ui/button";
@@ -226,6 +230,7 @@ export function OrderDetailView({ orderId }: { orderId: string }) {
           <h2 className="text-lg font-semibold">Shipments</h2>
           <EbayShipOrderForm order={order} />
           <ShopifyShipOrderForm order={order} />
+          <WooCommerceShipOrderForm order={order} />
           {order.shipments.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No shipments yet. Tracking appears here once the supplier ships.

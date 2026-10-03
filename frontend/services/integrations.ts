@@ -490,6 +490,18 @@ export async function shipShopifyOrder(
   return data;
 }
 
+/** Track E7 W5: complete a WooCommerce order with a tracking note. */
+export async function shipWooCommerceOrder(
+  orderId: string,
+  payload: { company: string; trackingNumber: string; trackingUrl?: string; notifyCustomer: boolean },
+): Promise<{ id: string }> {
+  const { data } = await apiClient.post<{ id: string }>(
+    `/integrations/woocommerce/orders/${orderId}/shipments`,
+    payload,
+  );
+  return data;
+}
+
 /** Track E7 W4a: pull a WooCommerce store's recent orders into Orders. */
 export function useImportWooCommerceOrders() {
   const queryClient = useQueryClient();
