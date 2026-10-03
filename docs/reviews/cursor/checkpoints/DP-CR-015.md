@@ -1,6 +1,40 @@
 # DP-CR-015 — Remaining Playwright flakes (evidence, not closure)
 
-Both items stay **OPEN**. Green runs are recorded as evidence only.
+**Update 2026-10-03 (roadmap Track A2):** A has a deterministic reproduction
+of its mechanism (below) and is **closed by the author, pending independent
+confirmation**. B stays **OPEN — cause unproven**. Green runs alone are still
+recorded as evidence only.
+
+## A2 experiment (2026-10-03) — flake A reproduced on demand
+
+Two disposable copies of `develop` @ `7af51f9`, identical except for one line.
+Both add `await asyncio.sleep(0.4)` before `session.commit()` in
+`get_db_session` to widen the commit window so a race does not depend on
+luck. The difference:
+
+| Variant | `DbSession` | Result: `draft-editor-real-conflict.spec.ts`, `--repeat-each=3 --retries=0` |
+|---|---|---|
+| **nofix** | `Depends(get_db_session)` — pre-#35 behaviour, commit after the response | **3 failed, 2 passed, 37 did not run** (serial suite aborted). Every failure is the original symptom: `getByTestId('draft-editor')` not visible in 30 s at the `beforeEach` (line 186), right after `loginViaApi` |
+| **fix** | `Depends(get_db_session, scope="function")` — #35, commit before the response | **40 passed, 1 failed, 1 did not run.** The line-186 symptom did not occur once in 14 runs of the hook |
+
+What this establishes: the commit-after-response ordering that PR #35
+removed produces exactly flake A's failure, and the merged ordering does not.
+What it does not establish: that the single CI failure on run 36855424195
+took this path rather than another one with the same symptom. That is as far
+as a reproduction can go; together with zero recurrences since #35 it meets
+the roadmap's A2 bar ("root-cause fix + green CI").
+
+**New observation O-1, not dismissed.** The one failure in the *fix* variant
+is a different test and a different assertion:
+`:577 a second real conflict preserves the reviewed merchant version` —
+`conflict-review-dialog` did not show the second server value within 5 s
+(line 605). It appeared only with the artificial 0.4 s added to every
+committed request, has never appeared in CI, and its cause is not
+investigated here. Recorded as a lead, not as a flake and not as cleared.
+
+Harness: `e2e_run_tree.sh` over the two trees (task-owned containers
+`dp-e2e-*`, removed after); the variant `deps.py` edits never touched the
+repository.
 
 ## A. `draft-editor-real-conflict.spec.ts:211` (editor not visible in 30 s)
 
