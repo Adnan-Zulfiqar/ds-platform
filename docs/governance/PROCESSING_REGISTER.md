@@ -120,7 +120,13 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
     `AliExpressService.disconnect` → `connections.hard_delete`;
     `ShopifyService.release_shop` → `session.delete(connection)` plus
     best-effort remote revocation.
-  * **Workspace closure** — deletes all three, eBay included.
+  * **Workspace closure** — deletes all three, eBay included, and since
+    Track E7 also clears credentials stored on `stores.encrypted_credentials`
+    (WooCommerce keys and the generic store endpoint), which it previously
+    left in place.
+  * **WooCommerce (Track E7)** — the merchant pastes REST API keys; they are
+    verified against the store, encrypted, and kept on the store row.
+    Disconnect clears them; revoking the key itself is done in WordPress.
   * **Platform-user erasure does _not_ delete these.** The connection belongs to
     the workspace, not to whoever clicked Connect; only the `user_id` reference
     is cleared.

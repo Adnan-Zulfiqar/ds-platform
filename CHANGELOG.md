@@ -10,6 +10,26 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W1: connect WooCommerce stores
+
+- **Settings → Integrations → WooCommerce.** Paste the site address and REST
+  API keys. The keys are checked against the store before saving, which also
+  records the store's verified currency. They are encrypted on the store row
+  and never returned. Disconnect forgets them. Publishing, stock and orders
+  follow in W2–W5.
+- Calls to a merchant-supplied address go through the same SSRF contract as
+  image fetches. The contract is now a shared `pin_https_target`: https
+  only, globally routable addresses only, redirects refused.
+
+### Fixed
+
+- Workspace closure now clears credentials stored on store rows. Before
+  Track E7 it deleted the three connection tables but left
+  `stores.encrypted_credentials` in place.
+- Publish readiness checks Shopify as a named case. A future channel added
+  without rules of its own is refused, instead of being checked against
+  Shopify's rules.
+
 ### Added — Track E4 team invitations
 
 - Owners and admins invite colleagues as admin, member or viewer from
