@@ -47,8 +47,9 @@ class UserSummary(CamelCaseModel):
 class UserCreate(CamelCaseModel):
     """Payload for creating a user.
 
-    Consumed by the team-invitation flow, which is a later phase — registration
-    has its own schema in ``app.schemas.auth`` because it creates a tenant too.
+    Not used by the team-invitation flow (Track E4), which creates users from
+    an accepted ``InvitationAcceptRequest``; registration has its own schema in
+    ``app.schemas.auth`` because it creates a tenant too.
 
     ``tenant_id`` is deliberately absent: it is taken from the authenticated
     context, never from the request body. Accepting it here would let a caller

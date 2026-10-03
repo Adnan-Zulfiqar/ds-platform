@@ -290,6 +290,9 @@ throws authenticated users out on every page refresh.
    if the password is genuinely reused the first-created account wins and the
    other is unreachable from the login form. The fix is tenant-qualified sign-in
    (subdomain, or a tenant picker after the password is verified).
+   Until then, team invitations (Track E4) refuse acceptance for an address
+   that already has an account, so the platform does not create the
+   ambiguity itself. See `docs/track-e/E4_TEAM_INVITATIONS.md`.
 
 5. **No breached-password check.** A corpus check catches far more real
    compromise than any composition rule. A k-anonymity range query against Have

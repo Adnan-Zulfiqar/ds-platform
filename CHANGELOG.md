@@ -10,6 +10,16 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E4 team invitations
+
+- Owners and admins invite colleagues as admin, member or viewer from
+  **Settings → Team**. A one-time link valid for 7 days lets the recipient set
+  a password, accept the terms and join, signed in. Re-inviting rotates the
+  link, and revoking kills it. Migration `0044` adds `user_invitations`
+  (additive). An address that already has a DropPilot account cannot accept
+  until login is tenant-qualified (decision D-013). Verified with the
+  recording email provider only.
+
 ### Added — Track E3 notifications by email
 
 - Notifications (except `info`) are emailed from an outbox by a 2-minute
