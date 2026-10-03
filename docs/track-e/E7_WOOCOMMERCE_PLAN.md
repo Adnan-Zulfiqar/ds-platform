@@ -54,7 +54,7 @@ same way:
 
 | Stage | Scope | Migration |
 |---|---|---|
-| **W0** | Make the platform branches explicit; refuse unknown platforms. Pure refactor, existing tests prove no change | none |
+| **W0** | Folded into W1 after reading the code: only `publish_readiness.evaluate()` has an implicit Shopify `else`; the other three are explicit `is SHOPIFY` checks that fall back to non-store paths, which is already safe. W1 makes that `else` an explicit Shopify case and raises for anything else | none |
 | **W1** | Connect and disconnect. A store URL plus consumer key/secret pasted by the merchant, or the `/wc-auth` approval flow. The URL is validated: https only, no private/loopback addresses (SSRF guard) and a `system_status` check. Keys are encrypted. `woocommerce_connections` (one per store, tenant-scoped). Settings card. Joins erasure and workspace closure | new table |
 | **W2** | Publish a draft as a simple or variable product (`/wp-json/wc/v3/products`). Adopt-by-SKU so a retry never duplicates. Readiness rules for WooCommerce (price, currency = store currency from `/settings/general`, images by URL) | none |
 | **W3** | Price and stock push: generalise the eBay after-commit hook into a per-channel dispatcher rather than adding a third copy. Plus the sweep (the B-011 pattern needs an ids-only sweep class, which needs **owner approval** like B-011) | none |
