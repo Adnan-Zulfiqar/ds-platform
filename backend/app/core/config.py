@@ -1018,7 +1018,9 @@ class ShopifySettings(_EnvFileSettings):
     )
     scopes: str = Field(
         default=(
-            "read_products,write_products,read_inventory,write_inventory,read_orders,read_locations"
+            "read_products,write_products,read_inventory,write_inventory,read_orders,"
+            "read_locations,read_merchant_managed_fulfillment_orders,"
+            "write_merchant_managed_fulfillment_orders"
         ),
         description="OAuth scopes requested at install time.",
     )

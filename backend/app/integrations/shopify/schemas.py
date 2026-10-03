@@ -182,6 +182,24 @@ class ShopifyPublishResponse(CamelCaseModel):
         )
 
 
+class ShopifyFulfilmentCreate(CamelCaseModel):
+    """Track E1: carrier and tracking for a Shopify order."""
+
+    #: The carrier name Shopify shows the customer, e.g. "USPS", "DHL Express".
+    company: str = Field(min_length=2, max_length=64)
+    tracking_number: str = Field(min_length=4, max_length=64, pattern=r"^[A-Za-z0-9\-]+$")
+    tracking_url: str | None = Field(default=None, max_length=1024, pattern=r"^https://")
+    notify_customer: bool = True
+
+
+class ShopifyFulfilmentRead(CamelCaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    carrier: str | None = None
+    tracking_number: str | None = None
+    shipped_at: datetime | None = None
+
+
 class StoreListingRead(CamelCaseModel):
     id: uuid.UUID
     store_id: uuid.UUID
