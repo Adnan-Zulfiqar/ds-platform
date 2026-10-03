@@ -53,6 +53,7 @@ from app.integrations.ebay.listing_setup import (
     EbayListingSetupService,
     ListingDefaultsChoice,
 )
+from app.integrations.ebay.orders import EbayOrderService
 from app.integrations.ebay.price_quantity import EbayPriceQuantitySync
 from app.integrations.ebay.product_details import EbayProductDetails, EbayProductDetailsService
 from app.integrations.ebay.publish import EbayPublishService
@@ -67,9 +68,12 @@ from app.integrations.ebay.schemas import (
     EbayListingSetupResponse,
     EbayLocationCreate,
     EbayLocationRead,
+    EbayOrderImportResponse,
     EbayPolicyRead,
     EbayProductDetailsRead,
     EbayProductDetailsUpdate,
+    EbayShipmentCreate,
+    EbayShipmentRead,
     EbayStatusResponse,
 )
 from app.integrations.ebay.seller_setup import (
@@ -1059,6 +1063,57 @@ async def sync_ebay_price_quantity(
             message=f"Sent to {outcome.synced} of {outcome.listings} eBay listing(s). {reasons}"
         )
     return MessageResponse(message=f"Price and stock sent to {outcome.synced} eBay listing(s).")
+
+
+# ---------------------------------------------------------------------------
+# EBAY-C5: orders in, shipments out.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/ebay/orders/import",
+    response_model=EbayOrderImportResponse,
+    summary="Import eBay orders changed in the last days",
+)
+async def import_ebay_orders(
+    session: DbSession,
+    _principal: RequireAdmin,
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
+) -> EbayOrderImportResponse:
+    """Re-importing is an update, never a duplicate (one row per eBay order)."""
+    outcome = await EbayOrderService(session).import_recent(days=days)
+    return EbayOrderImportResponse(
+        fetched=outcome.fetched, created=outcome.created, updated=outcome.updated
+    )
+
+
+@router.post(
+    "/ebay/orders/{order_id}/shipments",
+    response_model=EbayShipmentRead,
+    status_code=201,
+    summary="Tell eBay an order has shipped, with tracking",
+)
+async def ship_ebay_order(
+    order_id: UUID,
+    body: EbayShipmentCreate,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> EbayShipmentRead:
+    """Repeating the same tracking number returns the existing shipment and
+    sends nothing to eBay."""
+    shipment = await EbayOrderService(session).mark_shipped(
+        order_id,
+        carrier_code=body.carrier_code,
+        tracking_number=body.tracking_number,
+        shipped_at=body.shipped_at,
+    )
+    return EbayShipmentRead(
+        id=shipment.id,
+        order_id=shipment.order_id,
+        carrier=shipment.carrier,
+        tracking_number=shipment.tracking_number,
+        shipped_at=shipment.shipped_at,
+    )
 
 
 @router.post(
