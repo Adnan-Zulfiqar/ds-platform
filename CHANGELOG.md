@@ -10,6 +10,23 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W4b: live WooCommerce orders
+
+- Connecting a WooCommerce store also registers `order.created` and
+  `order.updated` webhooks when `WOOCOMMERCE_WEBHOOK_CALLBACK_BASE` is
+  https. Each delivery is verified by the store's own HMAC secret, then the
+  order is re-fetched from the store and upserted (D-014). Reconnect and
+  disconnect remove old webhooks. A store that refuses webhooks still
+  connects, and says why.
+
+### Added — Track E7 W5: mark WooCommerce orders shipped
+
+- A WooCommerce order's page offers "Mark shipped on WooCommerce". It sets
+  the order to `completed` and adds an order note with the carrier, the
+  tracking number and the link (shown to the customer if chosen), then
+  records the shipment. Repeating a tracking number sends nothing. The form
+  is shared with the Shopify one.
+
 ### Added — Track E7 W4a: import WooCommerce orders
 
 - "Import recent orders" on each connected WooCommerce store imports the

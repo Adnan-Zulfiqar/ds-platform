@@ -112,6 +112,9 @@ class WooCommerceClient:
     async def put(self, path: str, body: dict[str, Any]) -> Any:
         return await self._request("PUT", path, body=body)
 
+    async def delete(self, path: str, params: dict[str, str] | None = None) -> Any:
+        return await self._request("DELETE", path, params=params)
+
     async def _request(
         self,
         method: str,

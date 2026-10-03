@@ -117,6 +117,7 @@ from app.integrations.shopify.webhook_reconciliation import ReconcileReport
 from app.integrations.woocommerce.connection import WooCommerceConnectionService
 from app.integrations.woocommerce.orders import WooCommerceOrderService
 from app.integrations.woocommerce.publish import WooCommercePublishService
+from app.integrations.woocommerce.webhook import receive_woocommerce_webhook
 from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
@@ -1541,3 +1542,46 @@ async def import_woocommerce_orders(
     return EbayOrderImportResponse(
         fetched=outcome.fetched, created=outcome.created, updated=outcome.updated
     )
+
+
+@router.post(
+    "/woocommerce/orders/{order_id}/shipments",
+    response_model=ShopifyFulfilmentRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Mark a WooCommerce order shipped, with tracking",
+)
+async def ship_woocommerce_order(
+    order_id: UUID,
+    body: ShopifyFulfilmentCreate,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyFulfilmentRead:
+    """Track E7 W5. Same request and response as the Shopify fulfilment (E1).
+    Repeating a tracking number returns the existing shipment and sends
+    nothing."""
+    shipment = await WooCommerceOrderService(session).mark_shipped(
+        order_id,
+        company=body.company,
+        tracking_number=body.tracking_number,
+        tracking_url=body.tracking_url,
+        notify_customer=body.notify_customer,
+    )
+    return ShopifyFulfilmentRead(
+        id=shipment.id,
+        order_id=shipment.order_id,
+        carrier=shipment.carrier,
+        tracking_number=shipment.tracking_number,
+        shipped_at=shipment.shipped_at,
+    )
+
+
+@router.post(
+    "/woocommerce/webhooks/{tenant_id}/{store_id}",
+    response_model=MessageResponse,
+    summary="Receive a WooCommerce order webhook",
+)
+async def woocommerce_webhook(tenant_id: UUID, store_id: UUID, request: Request) -> MessageResponse:
+    """Track E7 W4b. Unauthenticated by nature; every delivery is verified by
+    the store's own HMAC secret before anything is read (see ``webhook.py``)."""
+    await receive_woocommerce_webhook(request, tenant_id=tenant_id, store_id=store_id)
+    return MessageResponse(message="ok")

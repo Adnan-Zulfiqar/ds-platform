@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -24,6 +25,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.encryption import (
     EncryptionNotConfiguredError,
     decrypt,
@@ -32,7 +34,11 @@ from app.core.encryption import (
 )
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logging import get_logger
-from app.integrations.woocommerce.client import WooCommerceClient, normalise_site_url
+from app.integrations.woocommerce.client import (
+    WooCommerceClient,
+    WooCommerceError,
+    normalise_site_url,
+)
 from app.models.store import Store, StorePlatform, StoreStatus
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
@@ -42,6 +48,9 @@ logger = get_logger(__name__)
 _KEY: Final = re.compile(r"^ck_[A-Za-z0-9]{20,64}$")
 _SECRET: Final = re.compile(r"^cs_[A-Za-z0-9]{20,64}$")
 _CURRENCY: Final = re.compile(r"^[A-Z]{3}$")
+#: Track E7 W4b. Order changes the store pushes to DropPilot.
+WEBHOOK_TOPICS: Final = ("order.created", "order.updated")
+WEBHOOK_IDS_SETTING: Final = "woocommerceWebhookIds"
 
 
 def _external_id(site_url: str) -> str:
@@ -140,8 +149,83 @@ class WooCommerceConnectionService(BaseService):
             store = await self.stores.create(
                 slug=slug, platform=StorePlatform.WOOCOMMERCE, health_score=100, **values
             )
+        if existing is not None:
+            await self._remove_webhooks(store, client)
+        await self._register_webhooks(store, client, key=key, secret=secret)
         logger.info("woocommerce_connected", store_id=str(store.id))
         return store
+
+    async def _register_webhooks(
+        self, store: Store, client: WooCommerceClient, *, key: str, secret: str
+    ) -> None:
+        """Track E7 W4b: ask the store to POST order changes to DropPilot.
+
+        Best effort, and only when a public https base is configured. A store
+        that refuses (an older WooCommerce, a key without webhook permission)
+        still connects; orders then arrive through "Import recent orders",
+        and the store row says why.
+
+        The delivery URL names the tenant and the store; the per-store secret
+        signs every delivery. See ``webhook.py`` for why naming the tenant is
+        safe (decision D-013).
+        """
+        if not settings.woocommerce.registers_webhooks:
+            return
+        webhook_secret = secrets.token_urlsafe(32)
+        base = settings.woocommerce.webhook_callback_base.rstrip("/")
+        delivery_url = f"{base}/{store.tenant_id}/{store.id}"
+        ids: list[int] = []
+        try:
+            for topic in WEBHOOK_TOPICS:
+                created = await client.post(
+                    "/webhooks",
+                    {
+                        "name": f"DropPilot {topic}",
+                        "topic": topic,
+                        "delivery_url": delivery_url,
+                        "secret": webhook_secret,
+                        "status": "active",
+                    },
+                )
+                if isinstance(created, dict) and isinstance(created.get("id"), int):
+                    ids.append(created["id"])
+        except WooCommerceError as exc:
+            logger.warning("woocommerce_webhook_registration_failed", store_id=str(store.id))
+            await self.stores.update(
+                store,
+                last_error=(
+                    "Live order updates could not be set up on this store "
+                    f"({exc.code}). Use Import recent orders instead."
+                ),
+            )
+            return
+        await self.stores.update(
+            store,
+            settings={**(store.settings or {}), WEBHOOK_IDS_SETTING: ids},
+            encrypted_credentials=encrypt(
+                json.dumps(
+                    {
+                        "consumer_key": key,
+                        "consumer_secret": secret,
+                        "webhook_secret": webhook_secret,
+                    }
+                )
+            ),
+        )
+
+    async def _remove_webhooks(self, store: Store, client: WooCommerceClient) -> None:
+        """Best effort: delete the webhooks a previous connection registered,
+        so a reconnect or disconnect leaves no stale deliveries behind."""
+        ids = (store.settings or {}).get(WEBHOOK_IDS_SETTING) or []
+        for webhook_id in ids:
+            try:
+                await client.delete(f"/webhooks/{int(webhook_id)}", {"force": "true"})
+            except (WooCommerceError, ValueError):
+                logger.warning("woocommerce_webhook_removal_failed", store_id=str(store.id))
+        if ids:
+            settings_copy = dict(store.settings or {})
+            settings_copy.pop(WEBHOOK_IDS_SETTING, None)
+            await self.stores.update(store, settings=settings_copy)
 
     async def _free_slug(self, base: str) -> str:
         candidate, n = base, 1
@@ -180,9 +264,20 @@ class WooCommerceConnectionService(BaseService):
         reconnect picks up where it left off. Revoking the key itself is done
         in WordPress; DropPilot has no right to do it."""
         store = await self._woo_store(store_id)
+        if is_usable(store):
+            await self._remove_webhooks(store, self.client_for(store))
         await self.stores.update(store, status=StoreStatus.DISCONNECTED, encrypted_credentials=None)
         logger.info("woocommerce_disconnected", store_id=str(store.id))
         return store
 
 
-__all__ = ["WooCommerceConnectionService", "is_usable"]
+def webhook_secret_for(store: Store) -> str | None:
+    """The per-store secret deliveries are signed with, if webhooks exist."""
+    if not store.encrypted_credentials:
+        return None
+    raw = json.loads(decrypt(store.encrypted_credentials))
+    value = raw.get("webhook_secret") if isinstance(raw, dict) else None
+    return str(value) if value else None
+
+
+__all__ = ["WooCommerceConnectionService", "is_usable", "webhook_secret_for"]

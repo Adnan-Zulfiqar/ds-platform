@@ -10,7 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/providers/auth-provider";
-import { importEbayOrders, shipEbayOrder, shipShopifyOrder, useEbayStatus } from "@/services/integrations";
+import {
+  importEbayOrders,
+  shipEbayOrder,
+  shipShopifyOrder,
+  shipWooCommerceOrder,
+  useEbayStatus,
+} from "@/services/integrations";
 import { orderKeys } from "@/services/orders";
 import type { OrderDetail } from "@/types/api";
 
@@ -166,7 +172,34 @@ const SHOPIFY_CARRIERS = ["USPS", "UPS", "FedEx", "DHL Express", "Royal Mail", "
  * the order — the supplier's tracking arrives on the supplier order, which
  * nothing ties to the customer's Shopify order.
  */
-export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
+const TRACKING_CHANNELS = {
+  shopify: {
+    name: "Shopify",
+    send: shipShopifyOrder,
+  shipWooCommerceOrder,
+    refused: "Shopify did not accept the fulfilment.",
+    sent: "Shopify has the tracking number.",
+    notifyLabel: "Email the customer the tracking details",
+  },
+  woocommerce: {
+    name: "WooCommerce",
+    send: shipWooCommerceOrder,
+    refused: "WooCommerce did not accept the update.",
+    sent: "The WooCommerce order is completed with the tracking note.",
+    notifyLabel: "Show the tracking note to the customer",
+  },
+} as const;
+
+/** Track E1 (Shopify) and Track E7 W5 (WooCommerce): the same form, one
+ * place. The DOM ids and test ids keep the channel as their prefix. */
+function TrackingShipOrderForm({
+  order,
+  channel,
+}: {
+  order: OrderDetail;
+  channel: keyof typeof TRACKING_CHANNELS;
+}) {
+  const config = TRACKING_CHANNELS[channel];
   const { hasRole } = useAuth();
   const queryClient = useQueryClient();
   const [company, setCompany] = useState("USPS");
@@ -175,7 +208,7 @@ export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
   const [notify, setNotify] = useState(true);
   const ship = useMutation({
     mutationFn: () =>
-      shipShopifyOrder(order.id, {
+      config.send(order.id, {
         company: company.trim(),
         trackingNumber: tracking.trim(),
         trackingUrl: trackingUrl.trim() || undefined,
@@ -187,39 +220,39 @@ export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
     },
   });
 
-  if (order.source !== "shopify" || !(hasRole("owner") || hasRole("admin"))) return null;
+  if (order.source !== channel || !(hasRole("owner") || hasRole("admin"))) return null;
   if (order.fulfillmentStatus === "cancelled") {
-    return <p className="text-sm text-muted-foreground">This order was cancelled on Shopify.</p>;
+    return <p className="text-sm text-muted-foreground">This order was cancelled on {config.name}.</p>;
   }
   const urlOk = trackingUrl.trim() === "" || trackingUrl.trim().startsWith("https://");
   const valid = company.trim().length >= 2 && /^[A-Za-z0-9-]{4,64}$/.test(tracking.trim()) && urlOk;
 
   return (
-    <div className="space-y-3 rounded-md border p-3" data-testid="shopify-ship-form">
-      <h3 className="text-sm font-semibold">Mark shipped on Shopify</h3>
+    <div className="space-y-3 rounded-md border p-3" data-testid={`${channel}-ship-form`}>
+      <h3 className="text-sm font-semibold">Mark shipped on {config.name}</h3>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1">
-          <Label htmlFor="shopify-carrier">Carrier</Label>
+          <Label htmlFor={`${channel}-carrier`}>Carrier</Label>
           <Input
-            id="shopify-carrier"
-            list="shopify-carrier-names"
+            id={`${channel}-carrier`}
+            list={`${channel}-carrier-names`}
             value={company}
             onChange={(event) => setCompany(event.target.value)}
           />
-          <datalist id="shopify-carrier-names">
+          <datalist id={`${channel}-carrier-names`}>
             {SHOPIFY_CARRIERS.map((name) => (
               <option key={name} value={name} />
             ))}
           </datalist>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="shopify-tracking">Tracking number</Label>
-          <Input id="shopify-tracking" value={tracking} onChange={(event) => setTracking(event.target.value)} />
+          <Label htmlFor={`${channel}-tracking`}>Tracking number</Label>
+          <Input id={`${channel}-tracking`} value={tracking} onChange={(event) => setTracking(event.target.value)} />
         </div>
         <div className="space-y-1 sm:col-span-2">
-          <Label htmlFor="shopify-tracking-url">Tracking link (optional, https)</Label>
+          <Label htmlFor={`${channel}-tracking-url`}>Tracking link (optional, https)</Label>
           <Input
-            id="shopify-tracking-url"
+            id={`${channel}-tracking-url`}
             value={trackingUrl}
             onChange={(event) => setTrackingUrl(event.target.value)}
           />
@@ -227,17 +260,17 @@ export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={notify} onChange={(event) => setNotify(event.target.checked)} />
-        Email the customer the tracking details
+        {config.notifyLabel}
       </label>
       {ship.isError ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{message(ship.error, "Shopify did not accept the fulfilment.")}</AlertDescription>
+          <AlertDescription>{message(ship.error, config.refused)}</AlertDescription>
         </Alert>
       ) : null}
       {ship.isSuccess ? (
-        <p className="text-sm text-muted-foreground" role="status" data-testid="shopify-ship-result">
-          Shopify has the tracking number.
+        <p className="text-sm text-muted-foreground" role="status" data-testid={`${channel}-ship-result`}>
+          {config.sent}
         </p>
       ) : null}
       <Button className="min-h-11 sm:min-h-9" onClick={() => ship.mutate()} disabled={!valid || ship.isPending}>
@@ -246,8 +279,16 @@ export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
         ) : (
           <Truck className="mr-2 h-4 w-4" aria-hidden="true" />
         )}
-        Send to Shopify
+        Send to {config.name}
       </Button>
     </div>
   );
+}
+
+export function ShopifyShipOrderForm({ order }: { order: OrderDetail }) {
+  return <TrackingShipOrderForm order={order} channel="shopify" />;
+}
+
+export function WooCommerceShipOrderForm({ order }: { order: OrderDetail }) {
+  return <TrackingShipOrderForm order={order} channel="woocommerce" />;
 }

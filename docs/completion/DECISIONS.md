@@ -199,3 +199,17 @@ Trade-off: an address that already has an account anywhere cannot accept,
 because login cannot yet choose between two accounts that share a password.
 Fixing that means tenant-qualified login, a separate decision. Details:
 `docs/track-e/E4_TEAM_INVITATIONS.md`.
+
+## D-014 — WooCommerce webhooks: tenant in the URL, payload as a doorbell (Track E7 W4b)
+
+Deliveries go to `…/woocommerce/webhooks/<tenant>/<store>`. As in D-013,
+the tenant only narrows a tenant-scoped store lookup. A delivery is accepted
+only if `X-WC-Webhook-Signature` is the HMAC of the body under that store's
+own secret, so a forged tenant gets the same 401 as a bad signature. There is
+no unscoped request-path query.
+
+The payload is not trusted: the order is re-fetched from the store and that
+response is upserted. Replays and out-of-order deliveries cannot write older
+state over newer, so there is no replay cache to fail open or closed. The
+cost is one extra API call per delivery. Webhooks are registered only when
+`WOOCOMMERCE_WEBHOOK_CALLBACK_BASE` is https.

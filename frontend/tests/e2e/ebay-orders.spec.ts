@@ -168,4 +168,46 @@ test.describe("Shopify fulfilment (Track E1)", () => {
       { company: "DHL Express", trackingNumber: "JD014600006281230000", notifyCustomer: false },
     ]);
   });
+
+  test("marking a WooCommerce order shipped sends carrier, tracking, link and the note choice", async ({
+    page,
+  }) => {
+    await mockOrders(page);
+    const shipped: unknown[] = [];
+    await page.route(`**/api/v1/orders/${ORDER_ID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(ebayOrderDetail({ source: "woocommerce", externalId: "s:7" })),
+      }),
+    );
+    await page.route(`**/api/v1/integrations/woocommerce/orders/${ORDER_ID}/shipments`, (route) => {
+      shipped.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "s-3", orderId: ORDER_ID }),
+      });
+    });
+    await page.goto(`/orders/${ORDER_ID}`);
+    const form = page.getByTestId("woocommerce-ship-form");
+    await expect(form).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("shopify-ship-form")).toHaveCount(0);
+    await expect(page.getByTestId("ebay-ship-form")).toHaveCount(0);
+
+    await form.getByLabel("Carrier").fill("Royal Mail");
+    await form.getByLabel("Tracking number").fill("RM123456789GB");
+    await form.getByLabel("Tracking link (optional, https)").fill("https://track.example/RM1");
+    await form.getByRole("button", { name: "Send to WooCommerce" }).click();
+
+    await expect(form.getByTestId("woocommerce-ship-result")).toBeVisible();
+    expect(shipped).toEqual([
+      {
+        company: "Royal Mail",
+        trackingNumber: "RM123456789GB",
+        trackingUrl: "https://track.example/RM1",
+        notifyCustomer: true,
+      },
+    ]);
+  });
 });
