@@ -390,3 +390,11 @@ export function useSaveEbayProductDetails(productId: string) {
     },
   });
 }
+
+/** EBAY-C4: send a product's current price and stock to its eBay listings now. */
+export async function sendEbayPriceQuantity(productId: string): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(
+    `/integrations/ebay/products/${productId}/sync-price-quantity`,
+  );
+  return data;
+}

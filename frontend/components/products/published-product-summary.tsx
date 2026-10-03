@@ -17,6 +17,7 @@ import { ApiError } from "@/lib/api-client";
 import { EXTERNAL_LINK_REL, isTrustedShopifyHttpsUrl } from "@/lib/external-link";
 import { deriveListingLifecycle, draftNewerThanSync } from "@/lib/listing-lifecycle";
 import { formatDateTime, formatMoney } from "@/lib/utils";
+import { EbayListingsPanel } from "@/components/products/ebay-listings-panel";
 import { useDraftListings } from "@/services/drafts";
 import { useProduct } from "@/services/products";
 
@@ -236,6 +237,8 @@ export function PublishedProductSummary({ productId }: PublishedProductSummaryPr
           )}
         </div>
       </section>
+
+      <EbayListingsPanel productId={productId} listings={listingsQuery.data ?? []} />
 
       <div className="flex flex-wrap gap-2">
         {lifecycle.kind === "visible-on-shop" && storefrontUrl ? (

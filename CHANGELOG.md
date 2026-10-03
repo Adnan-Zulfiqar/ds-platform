@@ -12,6 +12,12 @@ production release.
 
 ### Added
 
+- **eBay price and stock stay current (EBAY-C4).** After a product edit, a
+  supplier refresh or an inventory sync commits, the product's price and
+  quantity are sent to its eBay listings (`bulkUpdatePriceQuantity`, absolute
+  values); the published product page can send them on demand. Refusals are
+  recorded on the listing; eBay outages retry. **Verified against a mocked
+  eBay transport only.**
 - **Publish a draft to eBay (EBAY-C3).** Review & publish gains "eBay
   details" (eBay's category suggestions and the item specifics the category
   requires) and lists eBay marketplace stores beside Shopify ones. Publish

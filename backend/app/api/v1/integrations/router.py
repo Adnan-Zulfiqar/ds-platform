@@ -53,6 +53,7 @@ from app.integrations.ebay.listing_setup import (
     EbayListingSetupService,
     ListingDefaultsChoice,
 )
+from app.integrations.ebay.price_quantity import EbayPriceQuantitySync
 from app.integrations.ebay.product_details import EbayProductDetails, EbayProductDetailsService
 from app.integrations.ebay.publish import EbayPublishService
 from app.integrations.ebay.schemas import (
@@ -106,6 +107,7 @@ from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
+from app.repositories.product import ProductRepository
 from app.schemas.common import MessageResponse
 from app.services.publish_readiness import (
     CHANNEL_EBAY,
@@ -1034,6 +1036,29 @@ async def publish_to_ebay(
         storefront_url=result.storefront_url,
         updated=not result.created,
     )
+
+
+@router.post(
+    "/ebay/products/{product_id}/sync-price-quantity",
+    response_model=MessageResponse,
+    summary="Send a product's current price and stock to eBay now",
+)
+async def sync_ebay_price_quantity(
+    product_id: UUID, session: DbSession, _principal: RequireAdmin
+) -> MessageResponse:
+    """EBAY-C4. The same push the background task makes, run now. Refusals
+    are recorded on the listing and reported here; eBay being unreachable is
+    an error the merchant can retry."""
+    await ProductRepository(session).get_by_id_or_raise(product_id)
+    outcome = await EbayPriceQuantitySync(session).push(product_id)
+    if outcome.listings == 0:
+        return MessageResponse(message="This product has no eBay listing.")
+    if outcome.failed:
+        reasons = " ".join(dict.fromkeys(outcome.reasons.values()))
+        return MessageResponse(
+            message=f"Sent to {outcome.synced} of {outcome.listings} eBay listing(s). {reasons}"
+        )
+    return MessageResponse(message=f"Price and stock sent to {outcome.synced} eBay listing(s).")
 
 
 @router.post(
