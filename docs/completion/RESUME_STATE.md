@@ -2,7 +2,7 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-03 — remaining roadmap Tracks A–D in progress (owner standing order).
+**Updated:** 2026-10-03 (later) — Track E in progress (owner standing order, D-012 order).
 
 | Item | Value |
 |---|---|
@@ -30,6 +30,19 @@ Single continuation point after an interruption. Overwritten, not appended.
 | B | `OpenAIProvider` merged (#46, `9ffa700`); mocked-transport tests only, live call is owner item B-002 |
 | C | Audit only; nothing left that is not blocked on A4/A5 |
 | D | C2–C6 merged (#48–#52); review fixes in the follow-up PR. Live eBay steps are owner actions (`docs/ebay/EBAY_C6_OPERATIONS.md`) |
+
+## Track E (2026-10-03, D-012 order)
+
+| Item | State |
+|---|---|
+| B-011 scheduled eBay jobs | Merged (#54) |
+| E1 Shopify fulfilment push | Merged (#55). Stores connected earlier must reconnect for the new scopes (owner) |
+| E2 sale fees (M24C) | Merged (#56). M27 freight quote blocked on a live AliExpress response |
+| E3 notification email | Merged (#57). Real-inbox delivery not verified (owner: Resend + `EMAIL_APP_BASE_URL`) |
+| E4 team invitations | Merged (#59) |
+| E5 platform admin | **Blocked, B-013**: proposal in this docs PR |
+| E6 billing | **Blocked, B-014**: proposal in this docs PR |
+| E7 WooCommerce | W1 connect: PR #60. W2 publish: branch `feat/woocommerce-publish`, stacked on #60. W3–W5 next (W3 sweep needs a B-011-style approval). Etsy/TikTok: B-015 |
 
 ## Next safe action
 
