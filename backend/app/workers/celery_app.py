@@ -96,6 +96,12 @@ celery_app.conf.update(
     # tenants' supplier quota, and the windows overlap the interval so a missed
     # beat leaves overlap rather than a gap.
     beat_schedule={
+        # Track E3: notification email outbox. Two minutes keeps a failure
+        # alert timely; an idle sweep is one indexed query per workspace.
+        "notifications-send-emails": {
+            "task": "notifications.send_emails",
+            "schedule": 60 * 2,
+        },
         "orders-sync-all": {
             "task": "orders.sync_all",
             "schedule": 60 * 60,  # hourly; the sync window is 2 days

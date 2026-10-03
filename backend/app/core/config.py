@@ -1250,6 +1250,9 @@ class EmailSettings(_EnvFileSettings):
     #: Consecutive failures before the breaker opens.
     breaker_failure_threshold: int = Field(default=5, ge=1)
     breaker_cooldown_seconds: int = Field(default=300, ge=1)
+    #: Track E3: the web app's public origin, for links in notification
+    #: emails. Never derived from a request header.
+    app_base_url: str = "http://localhost:3000"
 
     @property
     def sends_real_email(self) -> bool:
