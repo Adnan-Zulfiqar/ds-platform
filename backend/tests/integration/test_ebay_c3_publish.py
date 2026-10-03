@@ -57,7 +57,9 @@ class PublishFakeEbay(SellerFakeEbay, TaxonomyFakeEbay):
 
     async def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        body = json.loads(request.content) if request.content else None
+        # Only the listing calls carry JSON; the token request is a form.
+        listing_call = path.startswith("/sell/inventory/v1/")
+        body = json.loads(request.content) if listing_call and request.content else None
         if path.startswith("/sell/inventory/v1/inventory_item/"):
             self.listing_calls.append(("put_item", path.rsplit("/", 1)[1], body))
             assert request.headers["Content-Language"] == "en-US"
