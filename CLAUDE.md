@@ -129,7 +129,9 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     `EbayComplianceLedgerRepository`;
   - single-question lookups that return ids only, never a renderable row:
     `RuleApplicationTenantLookup`, `PipelineBulkRunTenantLookup`,
-    `PipelineBulkRunSweep`.
+    `PipelineBulkRunSweep`, `EbayConnectedTenantsSweep` (approved by the
+    owner 2026-10-03, B-011: tenant ids of connected eBay workspaces for the
+    scheduled eBay jobs).
 
   **Do not add to this list without explicit approval**, and never on a
   request path.

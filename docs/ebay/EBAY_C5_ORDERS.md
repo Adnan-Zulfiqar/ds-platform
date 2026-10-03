@@ -50,10 +50,9 @@ them.
 
 ## Not in this milestone
 
-- **Scheduled import.** A periodic import across workspaces needs a new
-  unscoped repository, which CLAUDE.md §4 reserves for explicit approval.
-  Import is on demand until that approval exists (recorded in
-  `docs/completion/BLOCKERS.md`).
+- ~~Scheduled import~~ — added after owner approval (B-011, D-012):
+  `ebay.import_orders_all` runs hourly and imports the last two days per
+  connected workspace; on-demand import stays.
 - **Seller-initiated cancellation** (eBay Post-Order API) and returns.
 - Supplier ordering for eBay orders uses the existing order flows; nothing
   eBay-specific was added there.
