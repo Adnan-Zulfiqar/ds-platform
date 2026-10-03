@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
+import { orderKeys } from "@/services/orders";
 import { type Store, storeKeys } from "@/services/stores";
 import type {
   AliExpressAuthorization,
@@ -487,4 +488,20 @@ export async function shipShopifyOrder(
     payload,
   );
   return data;
+}
+
+/** Track E7 W4a: pull a WooCommerce store's recent orders into Orders. */
+export function useImportWooCommerceOrders() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (storeId: string) => {
+      const { data } = await apiClient.post<{ fetched: number; created: number; updated: number }>(
+        `/integrations/woocommerce/stores/${storeId}/orders/import`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: orderKeys.all });
+    },
+  });
 }

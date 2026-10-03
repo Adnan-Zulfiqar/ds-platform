@@ -13,6 +13,7 @@ import { useAuth } from "@/providers/auth-provider";
 import {
   useConnectWooCommerce,
   useDisconnectWooCommerce,
+  useImportWooCommerceOrders,
   useWooCommerceStores,
 } from "@/services/integrations";
 
@@ -22,8 +23,9 @@ import {
  * the store before saving them and never sends them back; this form clears
  * them from state as soon as the request finishes.
  *
- * Connecting only links the store for now. Publishing, stock and orders
- * arrive in later stages, and the card says so rather than implying more.
+ * Publishing happens from Review & publish (W2), and price and stock follow
+ * automatically (W3). Orders are pulled on demand here (W4a); live order
+ * webhooks are a later stage.
  */
 export function WooCommerceCard() {
   const { hasRole } = useAuth();
@@ -31,6 +33,8 @@ export function WooCommerceCard() {
   const stores = useWooCommerceStores();
   const connect = useConnectWooCommerce();
   const disconnect = useDisconnectWooCommerce();
+  const importOrders = useImportWooCommerceOrders();
+  const [imported, setImported] = useState<{ storeId: string; text: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", siteUrl: "", consumerKey: "", consumerSecret: "" });
 
@@ -58,7 +62,7 @@ export function WooCommerceCard() {
     <ChannelCard
       id="woocommerce"
       name="WooCommerce"
-      description="Link a WooCommerce store with REST API keys. Publishing, stock and orders for WooCommerce are coming next."
+      description="Link a WooCommerce store with REST API keys. Publish from Review & publish; price and stock then follow your edits."
       state={state}
       readOnly={!canManage}
       readOnlyHint="Only owners and admins can connect stores."
@@ -74,7 +78,32 @@ export function WooCommerceCard() {
                   <p className="truncate text-muted-foreground">
                     {store.storefrontUrl} · {store.currency} · {store.status}
                   </p>
+                  {imported?.storeId === store.id && (
+                    <p className="text-muted-foreground" role="status">
+                      {imported.text}
+                    </p>
+                  )}
                 </div>
+                {canManage && store.status === "connected" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={importOrders.isPending}
+                    onClick={() =>
+                      importOrders.mutate(store.id, {
+                        onSuccess: (r) =>
+                          setImported({
+                            storeId: store.id,
+                            text: `Imported ${r.fetched} orders (${r.created} new, ${r.updated} updated).`,
+                          }),
+                        onError: () =>
+                          setImported({ storeId: store.id, text: "Could not import orders." }),
+                      })
+                    }
+                  >
+                    Import recent orders
+                  </Button>
+                )}
                 {canManage && store.status === "connected" && (
                   <Button
                     size="sm"

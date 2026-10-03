@@ -149,8 +149,9 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 
 * **Data** — `buyer_name`, `recipient_name`, `recipient_phone`, city, province,
   postal code, country code, line items, amounts, shipments.
-* **Source** — the merchant's connected sales channel. **The buyer never
-  interacts with DropPilot AI.**
+* **Source** — the merchant's connected sales channel (Shopify, eBay, and
+  since Track E7 W4 WooCommerce, whose import also stores the shipping
+  address lines). **The buyer never interacts with DropPilot AI.**
 * **Purpose** — let the merchant see and fulfil their own orders.
 * **Role** — **processor**, on the merchant's instructions.
 * **Proposed basis** — the merchant's basis, not ours. DESIRLY LIMITED needs an

@@ -65,6 +65,8 @@ class OrderSource(StrEnum):
     SHOPIFY = "shopify"
     #: EBAY-C5. Orders sold on an eBay marketplace.
     EBAY = "ebay"
+    #: Track E7 W4. Orders from a connected WooCommerce store.
+    WOOCOMMERCE = "woocommerce"
 
 
 class FulfillmentStatus(StrEnum):

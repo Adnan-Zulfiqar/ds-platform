@@ -115,6 +115,7 @@ from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.integrations.shopify.webhook_reconciliation import ReconcileReport
 from app.integrations.woocommerce.connection import WooCommerceConnectionService
+from app.integrations.woocommerce.orders import WooCommerceOrderService
 from app.integrations.woocommerce.publish import WooCommercePublishService
 from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
@@ -1520,4 +1521,23 @@ async def publish_to_woocommerce(
         external_product_id=result.external_id,
         storefront_url=result.storefront_url,
         updated=not result.created,
+    )
+
+
+@router.post(
+    "/woocommerce/stores/{store_id}/orders/import",
+    response_model=EbayOrderImportResponse,
+    summary="Import a WooCommerce store's orders changed in the last days",
+)
+async def import_woocommerce_orders(
+    store_id: UUID,
+    session: DbSession,
+    _principal: RequireAdmin,
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
+) -> EbayOrderImportResponse:
+    """Track E7 W4a. Re-importing is an update, never a duplicate. The
+    response shape is the one the eBay import uses (fetched/created/updated)."""
+    outcome = await WooCommerceOrderService(session).import_recent(store_id, days=days)
+    return EbayOrderImportResponse(
+        fetched=outcome.fetched, created=outcome.created, updated=outcome.updated
     )
