@@ -211,3 +211,36 @@ export async function completePasswordReset(payload: {
   );
   return data;
 }
+
+/** Track E4: what a team invitation link is for, before accepting it. */
+export interface InvitationPreview {
+  email: string;
+  role: string;
+  workspaceName: string;
+  expiresAt: string;
+}
+
+export async function previewInvitation(token: string): Promise<InvitationPreview> {
+  const { data } = await apiClient.post<InvitationPreview>("/auth/invitations/preview", {
+    token,
+  });
+  return data;
+}
+
+export interface AcceptInvitationPayload {
+  token: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+  acceptedLegal: boolean;
+}
+
+export async function acceptInvitation(payload: AcceptInvitationPayload): Promise<AuthResponse> {
+  const { acceptedLegal, ...rest } = payload;
+  const { data } = await apiClient.post<AuthResponse>("/auth/invitations/accept", {
+    ...rest,
+    ...legalAcceptance(acceptedLegal),
+  });
+  setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+  return data;
+}

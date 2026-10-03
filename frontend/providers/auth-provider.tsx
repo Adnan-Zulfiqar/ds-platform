@@ -41,6 +41,7 @@ interface AuthContextValue {
   identity: AuthenticatedIdentity | null;
   login: (payload: LoginPayload) => Promise<void>;
   register: (payload: RegisterPayload) => Promise<void>;
+  acceptInvitation: (payload: authApi.AcceptInvitationPayload) => Promise<void>;
   logout: () => Promise<void>;
   refreshIdentity: () => Promise<void>;
   hasRole: (role: RoleName) => boolean;
@@ -128,6 +129,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [router, queryClient],
   );
 
+  // Track E4: joining a workspace signs the new member in, like registering.
+  const acceptInvitation = useCallback(
+    async (payload: authApi.AcceptInvitationPayload) => {
+      const response = await authApi.acceptInvitation(payload);
+      queryClient.clear();
+      setIdentity(response.identity);
+      setStatus("authenticated");
+      router.replace("/dashboard");
+    },
+    [router, queryClient],
+  );
+
   const logout = useCallback(async () => {
     try {
       await authApi.logout();
@@ -160,8 +173,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, identity, login, register, logout, refreshIdentity, hasRole }),
-    [status, identity, login, register, logout, refreshIdentity, hasRole],
+    () => ({
+      status,
+      identity,
+      login,
+      register,
+      acceptInvitation,
+      logout,
+      refreshIdentity,
+      hasRole,
+    }),
+    [status, identity, login, register, acceptInvitation, logout, refreshIdentity, hasRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

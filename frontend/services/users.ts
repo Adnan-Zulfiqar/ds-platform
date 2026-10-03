@@ -1,4 +1,9 @@
-import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
 import type { ListQuery, Page, User } from "@/types/api";
@@ -51,5 +56,52 @@ export function useUser(id: string | undefined): UseQueryResult<User> {
     // Do not fire a request for an undefined id — which happens on first render
     // of a detail page while the route parameter is still resolving.
     enabled: Boolean(id),
+  });
+}
+
+/** Track E4: open team invitations. The link secret is never returned. */
+export interface Invitation {
+  id: string;
+  email: string;
+  role: "admin" | "member" | "viewer";
+  expiresAt: string;
+  createdAt: string;
+}
+
+const invitationKeys = [...userKeys.all, "invitations"] as const;
+
+export function useInvitations(enabled: boolean): UseQueryResult<Invitation[]> {
+  return useQuery({
+    queryKey: invitationKeys,
+    queryFn: async () => {
+      const { data } = await apiClient.get<Invitation[]>("/users/invitations");
+      return data;
+    },
+    enabled,
+  });
+}
+
+export function useInviteMember() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: { email: string; role: Invitation["role"] }) => {
+      const { data } = await apiClient.post<Invitation>("/users/invitations", payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: invitationKeys });
+    },
+  });
+}
+
+export function useRevokeInvitation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/users/invitations/${id}`);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: invitationKeys });
+    },
   });
 }
