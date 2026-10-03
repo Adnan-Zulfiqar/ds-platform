@@ -210,9 +210,9 @@ test.describe("Home — empty workspace", () => {
     await expect(page.getByRole("heading", { level: 2, name: "Set up your workspace" })).toBeVisible();
     const steps = setup.getByRole("listitem");
     await expect(steps).toHaveCount(3);
-    await expect(steps.nth(0)).toContainText("Connect your Shopify store");
-    await expect(steps.nth(1)).toContainText("Connect AliExpress");
-    await expect(steps.nth(2)).toContainText("Import your first product");
+    await expect(steps.nth(0)).toContainText("Import your first product");
+    await expect(steps.nth(1)).toContainText("Connect your store");
+    await expect(steps.nth(2)).toContainText("Connect AliExpress (orders & tracking)");
     await expect(setup.getByRole("link", { name: "Connect Shopify" })).toHaveAttribute(
       "href",
       "/settings/integrations",
@@ -223,7 +223,7 @@ test.describe("Home — empty workspace", () => {
     await expect(page.locator("#main-content").getByText(/^0$/)).toHaveCount(0);
     await expectNoMoneyOnHome(page);
 
-    // The third step is the real import dialog.
+    // The first step is the real import dialog.
     await setup.getByRole("button", { name: "Import as Draft" }).click();
     await expect(page.getByRole("dialog", { name: "Import as Draft from AliExpress" })).toBeVisible();
     await page.keyboard.press("Escape");
@@ -240,7 +240,7 @@ test.describe("Home — empty workspace", () => {
     // One connected channel means the workspace is no longer "empty": the
     // grid renders and the next step moves on to the next missing piece.
     await expect(page.getByTestId("empty-workspace")).toHaveCount(0);
-    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "connect-aliexpress");
+    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "import-first-product");
   });
 
   test("works at phone width and in dark mode", async ({ browser }) => {
@@ -276,19 +276,20 @@ test.describe("Home — next step rules", () => {
     await expect(page.getByTestId("attention-clear")).toBeVisible();
   });
 
-  test("2. Shopify connected, AliExpress not → connect AliExpress", async ({ page }) => {
+  test("2. drafts exist, Shopify not connected → connect store to publish", async ({ page }) => {
     const s = populatedScenario();
+    s.shopify = NO_SHOPIFY;
     s.aliexpress = NO_ALIEXPRESS;
     await mockHomeApi(page, s);
     await page.goto("/dashboard");
-    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "connect-aliexpress");
+    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "connect-shopify");
   });
 
-  test("3. both connected, no drafts → import the first product", async ({ page }) => {
+  test("3. no drafts → import the first product (AliExpress OAuth not required)", async ({ page }) => {
     const s = populatedScenario();
     s.counts = { drafts: 0, products: 0 };
     s.drafts = [];
-    s.aliexpress = CONNECTED_ALIEXPRESS;
+    s.aliexpress = NO_ALIEXPRESS;
     await mockHomeApi(page, s);
     await page.goto("/dashboard");
     const next = page.getByTestId("next-step");

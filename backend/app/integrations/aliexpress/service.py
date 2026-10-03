@@ -44,6 +44,7 @@ from app.integrations.aliexpress.auth import (
 from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import (
     AliExpressAuthError,
+    AliExpressCatalogNotConfiguredError,
     AliExpressError,
     AliExpressNotConnectedError,
     AliExpressOAuthStateError,
@@ -166,7 +167,12 @@ class AliExpressService(BaseService):
         )
 
     async def authenticated_client(self) -> AliExpressClient:
-        """Client for the current tenant with a usable access token."""
+        """Client for the current tenant with a usable seller access token.
+
+        Required for orders, tracking, and any call that acts as the merchant's
+        AliExpress dropshipper account. Product import uses
+        :meth:`client_for_catalog` instead.
+        """
         connection = await self.require_connection()
         connection = await self.refresh_if_needed(connection)
         if not connection.encrypted_access_token:
@@ -175,6 +181,43 @@ class AliExpressService(BaseService):
             connection,
             access_token=decrypt(connection.encrypted_access_token),
         )
+
+    def catalog_client(self) -> AliExpressClient:
+        """Client signed with platform app credentials and the catalog token.
+
+        Used for link → draft import so merchants are not forced through OAuth
+        before they can edit a product. AliExpress still requires an access
+        token on ``ds.product.get``; that token is the platform dropshipper
+        grant in ``ALIEXPRESS_CATALOG_ACCESS_TOKEN``.
+        """
+        raw = settings.aliexpress.catalog_access_token
+        token = raw.get_secret_value().strip() if raw is not None else ""
+        if not token:
+            raise AliExpressCatalogNotConfiguredError()
+        app_key, app_secret = self.platform_credentials()
+        # Rate-limit and log under the calling tenant so one workspace cannot
+        # silently consume another tenant's outbound budget.
+        return AliExpressClient(
+            app_key=app_key,
+            app_secret=app_secret,
+            tenant_id=str(require_tenant_id()),
+            access_token=token,
+        )
+
+    async def client_for_catalog(self) -> AliExpressClient:
+        """Resolve a client for product fetch / feed / catalogue sync.
+
+        Preference: platform catalog token (no merchant OAuth). Fallback: the
+        merchant's connected seller token, so existing workspaces keep working
+        until the operator configures ``ALIEXPRESS_CATALOG_ACCESS_TOKEN``.
+        """
+        raw = settings.aliexpress.catalog_access_token
+        if raw is not None and raw.get_secret_value().strip():
+            return self.catalog_client()
+        try:
+            return await self.authenticated_client()
+        except (AliExpressNotConnectedError, ValidationError) as exc:
+            raise AliExpressCatalogNotConfiguredError() from exc
 
     async def complete_connection(self, *, code: str, state_token: str) -> AliExpressConnection:
         """Exchange the authorization code for tokens and mark the connection live.

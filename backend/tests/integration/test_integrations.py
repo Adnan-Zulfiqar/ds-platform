@@ -315,7 +315,10 @@ class TestCallback:
         )
 
         assert response.status_code == 303
-        assert "aliexpress=failed" in response.headers["location"]
+        # "expired", not "failed": an unknown state is also what a callback
+        # routed to a different DropPilot server looks like, and the page
+        # says so (WHITETO_LOCAL_CLOUDFLARE.md, 2026-10-03).
+        assert "aliexpress=expired" in response.headers["location"]
         assert (await client.get(STATUS_URL, headers=headers)).json()["connected"] is False
 
     async def test_a_state_cannot_be_replayed(
@@ -342,7 +345,7 @@ class TestCallback:
         )
 
         assert "aliexpress=connected" in first.headers["location"]
-        assert "aliexpress=failed" in second.headers["location"]
+        assert "aliexpress=expired" in second.headers["location"]
 
     async def test_a_denied_consent_redirects_without_connecting(self, client: AsyncClient) -> None:
         body = await register(client)

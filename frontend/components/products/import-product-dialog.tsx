@@ -117,11 +117,19 @@ function feedbackFromError(
           action:
             "Open the listing on AliExpress, reconnect AliExpress if needed, or import another product.",
         };
+      case "aliexpress_catalog_not_configured":
+        return {
+          ...base,
+          title: "Product import is not configured",
+          action:
+            "Ask your operator to set the platform AliExpress catalog token. Connecting your own AliExpress account is only needed for orders and tracking.",
+        };
       case "aliexpress_not_connected":
         return {
           ...base,
           title: "AliExpress not connected",
-          action: "Connect AliExpress under Integrations, then retry.",
+          action:
+            "Orders and tracking need AliExpress under Integrations. Product import uses the platform catalog and should not require this.",
         };
       case "aliexpress_token_expired":
       case "aliexpress_auth_failed":

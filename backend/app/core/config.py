@@ -697,6 +697,19 @@ class AliExpressSettings(_EnvFileSettings):
         description="Platform AliExpress app secret. Never logged or returned.",
     )
 
+    # Platform dropshipper token used for catalogue fetch (link → draft) when
+    # the merchant has not connected their own AliExpress account. AliExpress
+    # marks ``ds.product.get`` as authorisation-required, so *some* access
+    # token is mandatory — but it can be DropPilot's platform account, not
+    # each merchant's. Merchant OAuth stays required for orders and tracking.
+    catalog_access_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Platform AliExpress access token for product import without a "
+            "per-tenant seller connection. Never logged or returned."
+        ),
+    )
+
     # Which AliExpress application status this deployment targets. An app in
     # `test` status can only be authorised by allow-listed accounts, so a
     # failure that looks like bad credentials is often just this.

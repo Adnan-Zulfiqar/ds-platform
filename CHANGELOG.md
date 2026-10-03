@@ -141,6 +141,16 @@ every finding below was confirmed against the code before it was fixed.
   eBay-details forms keep their "Saved" state; Review & publish copy follows
   the chosen store's own listing; labels no longer point at non-inputs.
 
+### Changed
+
+- **AliExpress paste-to-import no longer requires merchant OAuth.** Product
+  fetch uses `ALIEXPRESS_CATALOG_ACCESS_TOKEN` (platform dropshipper grant)
+  via `AliExpressService.client_for_catalog()`. Merchant AliExpress connect
+  stays for orders and tracking. Publish still requires a sales-channel
+  store. Home setup copy and next-step rules match that split. AliExpress
+  still requires *an* access token on `ds.product.get` — the platform token
+  satisfies that without each merchant connecting.
+
 ### Added
 
 - **eBay operations (EBAY-C6).** eBay 429s become `ebay_rate_limited`;

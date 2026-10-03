@@ -327,23 +327,16 @@ export function deriveNextStep(input: {
   const aliexpress = input.channels.find((c) => c.id === "aliexpress");
   if (!shopify || !aliexpress || !input.counts) return null;
 
-  if (!shopify.usable) {
-    return {
-      rule: "connect-shopify",
-      title: shopify.state === "needs-attention" ? "Repair your Shopify connection" : "Connect your Shopify store",
-      detail: "Products can only be published to a connected store.",
-      href: "/settings/integrations",
-      action: shopify.state === "needs-attention" ? "Open Integrations" : "Connect Shopify",
-    };
-  }
-  if (!aliexpress.usable) {
+  // A broken AliExpress grant still matters for orders/tracking — surface it
+  // before "continue editing". A workspace that never connected AE is fine
+  // for paste-to-import; do not block the catalogue path on OAuth.
+  if (aliexpress.state === "needs-attention") {
     return {
       rule: "connect-aliexpress",
-      title:
-        aliexpress.state === "needs-attention" ? "Reconnect AliExpress" : "Connect AliExpress",
-      detail: "Supplier products are imported through your AliExpress account.",
+      title: "Reconnect AliExpress",
+      detail: "Orders and tracking need a live AliExpress connection.",
       href: "/settings/integrations",
-      action: aliexpress.state === "needs-attention" ? "Open Integrations" : "Connect AliExpress",
+      action: "Open Integrations",
     };
   }
   if (input.counts.drafts === 0) {
@@ -353,6 +346,15 @@ export function deriveNextStep(input: {
       detail: "Paste an AliExpress product ID or URL to create a draft you can review and publish.",
       href: "/drafts",
       action: "Go to Drafts",
+    };
+  }
+  if (!shopify.usable) {
+    return {
+      rule: "connect-shopify",
+      title: shopify.state === "needs-attention" ? "Repair your Shopify connection" : "Connect your Shopify store",
+      detail: "Connect a store before you publish. Import and editing do not need it.",
+      href: "/settings/integrations",
+      action: shopify.state === "needs-attention" ? "Open Integrations" : "Connect Shopify",
     };
   }
   const latest = input.recentDrafts?.[0];
