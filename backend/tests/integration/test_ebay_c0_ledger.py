@@ -348,6 +348,8 @@ class TestEbayUserDataIsDeclaredAndErasable:
             "app.models.ebay.EbayConnection": "ebay_connection",
             # EBAY-C2: the chosen policy ids and location key.
             "app.models.ebay.EbayListingDefaults": "ebay_listing_defaults",
+            # EBAY-C3: eBay rows of store_listings.
+            "app.models.shopify.StoreListing (rows on eBay stores)": "ebay_store_listings",
         }
         for declaration in declarations:
             assert declaration.holds.strip(), "a declaration says nothing about what it holds"

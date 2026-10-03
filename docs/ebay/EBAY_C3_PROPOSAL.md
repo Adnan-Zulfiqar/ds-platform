@@ -1,6 +1,7 @@
 # EBAY-C3 — Draft → eBay listing: architecture proposal
 
-Status: **PROPOSAL — awaiting owner approval. Nothing here is implemented.**
+Status: **APPROVED by the owner on 2026-10-03 (D-C3-1 … D-C3-4 as written)
+and implemented — see [`EBAY_C3_PUBLISH.md`](EBAY_C3_PUBLISH.md).**
 Written under CLAUDE.md §12 rule 1 ("never rewrite existing architecture
 without approval — propose, explain, wait") and the owner's hard stop 6.
 EBAY-C4 (inventory/price sync), C5 (orders) and C6 (hardening) all build on

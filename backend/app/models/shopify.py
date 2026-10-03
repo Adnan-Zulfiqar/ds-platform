@@ -172,6 +172,13 @@ class StoreListing(TenantScopedBase):
     inventory_item_map: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     #: Shopify product handle returned by Admin API (not guessed client-side).
+    #: EBAY-C3: eBay keeps an inventory item (by SKU) and an offer apart from
+    #: the live listing; ``external_product_id`` holds the listing id. Both
+    #: null on Shopify rows. eBay rows are seller-account data and are erased
+    #: under eBay's deletion contract (``EbayStoreListingsOwner``).
+    external_offer_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_sku: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     external_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: ``gid://shopify/Product/{id}`` derived from the REST numeric id.
     external_graphql_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

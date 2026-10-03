@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.store import Store, StoreStatus
+from app.models.store import Store, StorePlatform, StoreStatus
 from app.repositories.base import TenantScopedRepository
 
 
@@ -41,6 +41,11 @@ class StoreRepository(TenantScopedRepository[Store]):
             query = query.where(where_clause)
         result = await self.session.execute(query.group_by(Store.status))
         return {str(status.value): count for status, count in result.all()}
+
+    async def list_by_platform(self, platform: StorePlatform) -> list[Store]:
+        query = self._base_query().where(Store.platform == platform)
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
 
     async def list_connected(self) -> list[Store]:
         query = self._base_query().where(Store.status == StoreStatus.CONNECTED)

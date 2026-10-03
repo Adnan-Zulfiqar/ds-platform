@@ -21,12 +21,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.integrations.ebay.exceptions import (
+    EbayListingRejectedError,
     EbaySellerApiUnavailableError,
     EbayTokenRevokedError,
 )
@@ -46,9 +48,48 @@ EBAY_SUPPORTED_MARKETPLACES: tuple[str, ...] = (
     "EBAY_ES",
 )
 
+
+@dataclass(frozen=True, slots=True)
+class EbayMarketplace:
+    """What EBAY-C3 needs to list on one marketplace.
+
+    ``currency`` is fixed per marketplace (D-C3-4): an eBay site prices in
+    one currency, unlike a Shopify shop whose currency can change.
+    """
+
+    id: str
+    name: str
+    country: str
+    currency: str
+    content_language: str
+    site_host: str
+
+
+EBAY_MARKETPLACES: dict[str, EbayMarketplace] = {
+    m.id: m
+    for m in (
+        EbayMarketplace("EBAY_US", "United States", "US", "USD", "en-US", "www.ebay.com"),
+        EbayMarketplace("EBAY_GB", "United Kingdom", "GB", "GBP", "en-GB", "www.ebay.co.uk"),
+        EbayMarketplace("EBAY_DE", "Germany", "DE", "EUR", "de-DE", "www.ebay.de"),
+        EbayMarketplace("EBAY_AU", "Australia", "AU", "AUD", "en-AU", "www.ebay.com.au"),
+        EbayMarketplace("EBAY_CA", "Canada", "CA", "CAD", "en-CA", "www.ebay.ca"),
+        EbayMarketplace("EBAY_FR", "France", "FR", "EUR", "fr-FR", "www.ebay.fr"),
+        EbayMarketplace("EBAY_IT", "Italy", "IT", "EUR", "it-IT", "www.ebay.it"),
+        EbayMarketplace("EBAY_ES", "Spain", "ES", "EUR", "es-ES", "www.ebay.es"),
+    )
+}
+assert tuple(EBAY_MARKETPLACES) == EBAY_SUPPORTED_MARKETPLACES
+
 _BUSINESS_POLICIES_PROGRAM = "SELLING_POLICY_MANAGEMENT"
 #: eBay's page-size ceiling for getInventoryLocations.
 _LOCATION_PAGE_LIMIT = 100
+
+
+@dataclass(frozen=True, slots=True)
+class EbayOffer:
+    offer_id: str
+    published: bool
+    listing_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +266,119 @@ class EbaySellerClient:
         if response.status_code not in (httpx.codes.NO_CONTENT, httpx.codes.OK):
             self._raise_for(response, call="create_inventory_location")
 
+    # --- EBAY-C3: inventory item, offer, publish ---------------------------
+
+    async def put_inventory_item(
+        self, sku: str, payload: Mapping[str, Any], *, content_language: str
+    ) -> None:
+        """createOrReplaceInventoryItem — idempotent by SKU."""
+        response = await self._request(
+            "PUT",
+            f"/sell/inventory/v1/inventory_item/{quote(sku, safe='')}",
+            call="put_inventory_item",
+            json=payload,
+            content_language=content_language,
+        )
+        if response.status_code not in (httpx.codes.NO_CONTENT, httpx.codes.OK):
+            self._raise_for_listing(response, call="put_inventory_item")
+
+    async def find_offer(self, sku: str, marketplace_id: str) -> EbayOffer | None:
+        """The offer already made for this SKU on this marketplace, if any —
+        what lets a retried publish adopt instead of duplicating."""
+        response = await self._request(
+            "GET",
+            "/sell/inventory/v1/offer",
+            call="get_offers",
+            params={"sku": sku, "marketplace_id": marketplace_id},
+        )
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return None
+        if response.status_code != httpx.codes.OK:
+            self._raise_for_listing(response, call="get_offers")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise EbaySellerApiUnavailableError("eBay returned a non-JSON response.") from exc
+        offers = body.get("offers") if isinstance(body, Mapping) else None
+        for offer in offers if isinstance(offers, list) else []:
+            if isinstance(offer, Mapping) and _text(offer, "offerId"):
+                listing = offer.get("listing")
+                listing_id = _text(listing, "listingId") if isinstance(listing, Mapping) else None
+                return EbayOffer(
+                    offer_id=str(_text(offer, "offerId")),
+                    published=_text(offer, "status") == "PUBLISHED",
+                    listing_id=listing_id,
+                )
+        return None
+
+    async def create_offer(self, payload: Mapping[str, Any], *, content_language: str) -> str:
+        response = await self._request(
+            "POST",
+            "/sell/inventory/v1/offer",
+            call="create_offer",
+            json=payload,
+            content_language=content_language,
+        )
+        if response.status_code not in (httpx.codes.CREATED, httpx.codes.OK):
+            self._raise_for_listing(response, call="create_offer")
+        offer_id = _text(response.json(), "offerId")
+        if offer_id is None:
+            raise EbaySellerApiUnavailableError("eBay created an offer without an id.")
+        return offer_id
+
+    async def update_offer(
+        self, offer_id: str, payload: Mapping[str, Any], *, content_language: str
+    ) -> None:
+        """updateOffer. On a published offer eBay updates the live listing."""
+        response = await self._request(
+            "PUT",
+            f"/sell/inventory/v1/offer/{quote(offer_id, safe='')}",
+            call="update_offer",
+            json=payload,
+            content_language=content_language,
+        )
+        if response.status_code not in (httpx.codes.NO_CONTENT, httpx.codes.OK):
+            self._raise_for_listing(response, call="update_offer")
+
+    async def publish_offer(self, offer_id: str) -> str:
+        response = await self._request(
+            "POST",
+            f"/sell/inventory/v1/offer/{quote(offer_id, safe='')}/publish",
+            call="publish_offer",
+        )
+        if response.status_code != httpx.codes.OK:
+            self._raise_for_listing(response, call="publish_offer")
+        listing_id = _text(response.json(), "listingId")
+        if listing_id is None:
+            raise EbaySellerApiUnavailableError("eBay published without returning a listing id.")
+        return listing_id
+
+    @classmethod
+    def _raise_for_listing(cls, response: httpx.Response, *, call: str) -> None:
+        """A 4xx on a listing call is eBay refusing *this listing* — the
+        merchant needs eBay's reason (a missing item specific, a policy that
+        does not fit the category), so its messages are kept. Only
+        ``errors[].message`` is read; nothing else from the body."""
+        if response.status_code in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+            cls._raise_for(response, call=call)
+        if response.is_client_error:
+            messages: list[str] = []
+            try:
+                body = response.json()
+                errors = body.get("errors") if isinstance(body, Mapping) else None
+                for error in errors if isinstance(errors, list) else []:
+                    if isinstance(error, Mapping) and (message := _text(error, "message")):
+                        messages.append(message[:300])
+            except ValueError:
+                messages = []
+            logger.warning("ebay_listing_rejected", call=call, status_code=response.status_code)
+            raise EbayListingRejectedError(
+                "eBay refused the listing: " + " ".join(messages[:3])
+                if messages
+                else "eBay refused the listing."
+            )
+        cls._raise_for(response, call=call)
+
     async def _get(self, path: str, *, call: str, params: Mapping[str, str] | None = None) -> Any:
         response = await self._request("GET", path, call=call, params=params)
         if response.status_code != httpx.codes.OK:
@@ -242,12 +396,14 @@ class EbaySellerClient:
         call: str,
         params: Mapping[str, str] | None = None,
         json: Mapping[str, Any] | None = None,
+        content_language: str = "en-US",
     ) -> httpx.Response:
         headers = dict(self._headers)
         if json is not None:
             headers["Content-Type"] = "application/json"
-            # Required by createInventoryLocation; harmless elsewhere.
-            headers["Content-Language"] = "en-US"
+            # Required by the Inventory API writes; it names the language of
+            # the listing text, so it follows the marketplace.
+            headers["Content-Language"] = content_language
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 return await client.request(
@@ -270,9 +426,12 @@ class EbaySellerClient:
 
 
 __all__ = [
+    "EBAY_MARKETPLACES",
     "EBAY_SUPPORTED_MARKETPLACES",
     "EbayBusinessPolicies",
     "EbayInventoryLocation",
+    "EbayMarketplace",
+    "EbayOffer",
     "EbayPolicy",
     "EbaySellerClient",
     "NewInventoryLocation",

@@ -15,6 +15,9 @@ import type {
   EbayListingSetup,
   EbayLocation,
   EbayLocationPayload,
+  EbayCategorySuggestion,
+  EbayProductDetails,
+  EbayProductDetailsPayload,
   EbayStatus,
   ShopifyAuthorization,
   ShopifyConnectPayload,
@@ -42,6 +45,8 @@ export const integrationKeys = {
   ebayStatus: () => [...integrationKeys.ebay(), "status"] as const,
   ebayListingSetup: (marketplaceId: string) =>
     [...integrationKeys.ebay(), "listing-setup", marketplaceId] as const,
+  ebayProductDetails: (productId: string, marketplaceId: string) =>
+    [...integrationKeys.ebay(), "product-details", productId, marketplaceId] as const,
 };
 
 async function fetchAliExpressStatus(): Promise<AliExpressStatus> {
@@ -326,6 +331,62 @@ export function useCreateEbayLocation() {
       void queryClient.invalidateQueries({
         queryKey: [...integrationKeys.ebay(), "listing-setup"],
       });
+    },
+  });
+}
+
+/**
+ * EBAY-C3: a product's eBay category and item specifics. Each read asks eBay
+ * for the category's current aspects, so it is fetched only while the eBay
+ * details section is on screen.
+ */
+export function useEbayProductDetails(
+  productId: string,
+  marketplaceId: string,
+  enabled: boolean,
+): UseQueryResult<EbayProductDetails> {
+  return useQuery({
+    queryKey: integrationKeys.ebayProductDetails(productId, marketplaceId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<EbayProductDetails>(
+        `/integrations/ebay/products/${productId}/details`,
+        { params: { marketplaceId } },
+      );
+      return data;
+    },
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export async function fetchEbayCategorySuggestions(
+  productId: string,
+  marketplaceId: string,
+  query?: string,
+): Promise<EbayCategorySuggestion[]> {
+  const { data } = await apiClient.get<EbayCategorySuggestion[]>(
+    `/integrations/ebay/products/${productId}/category-suggestions`,
+    { params: { marketplaceId, ...(query ? { q: query } : {}) } },
+  );
+  return data;
+}
+
+export function useSaveEbayProductDetails(productId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: EbayProductDetailsPayload): Promise<EbayProductDetails> => {
+      const { data } = await apiClient.put<EbayProductDetails>(
+        `/integrations/ebay/products/${productId}/details`,
+        payload,
+      );
+      return data;
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(
+        integrationKeys.ebayProductDetails(productId, saved.marketplaceId),
+        saved,
+      );
     },
   });
 }

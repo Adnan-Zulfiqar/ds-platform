@@ -715,12 +715,54 @@ class ProductVersion(TenantScopedBase):
     )
 
 
+class ProductMarketplaceAttributes(TenantScopedBase):
+    """A product's category and item specifics on one marketplace (EBAY-C3).
+
+    eBay refuses an offer without a leaf category, and most categories require
+    named aspects (Brand, Type, …) that the supplier import does not provide in
+    structured form. These are *product* facts chosen by the merchant — not
+    seller-account data — so they are tenant-scoped like the product and are
+    not part of eBay's account-deletion contract.
+
+    ``aspects`` maps an aspect name to its values, exactly as eBay's
+    ``inventory_item.product.aspects`` expects (``{"Brand": ["Acme"]}``).
+    Written on save and checked against the category's required aspects at
+    publish readiness, not trusted to stay complete if eBay changes the
+    category's requirements later.
+    """
+
+    __tablename__ = "product_marketplace_attributes"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "product_id",
+            "marketplace_id",
+            name="uq_product_marketplace_attributes_tenant_product_marketplace",
+        ),
+    )
+
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    category_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    category_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    aspects: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+
+
 __all__ = [
     "ImportStatus",
     "Product",
     "ProductAIStatus",
     "ProductImage",
     "ProductImport",
+    "ProductMarketplaceAttributes",
     "ProductSource",
     "ProductStatus",
     "ProductVariant",

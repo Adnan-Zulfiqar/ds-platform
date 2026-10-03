@@ -119,7 +119,7 @@ async def test_store_required_blocks_without_store() -> None:
 async def test_unsupported_channel_is_refused() -> None:
     product = _Product()
     result = await _service(product=product).evaluate(
-        channel="ebay",
+        channel="etsy",
         product_id=product.id,
         store_id=uuid.uuid4(),
     )

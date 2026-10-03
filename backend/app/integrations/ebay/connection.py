@@ -59,7 +59,10 @@ from app.integrations.ebay.tokens import (
     refresh_access_token,
 )
 from app.models.ebay import EbayConnection, EbayConnectionStatus
+from app.models.store import StorePlatform, StoreStatus
 from app.repositories.ebay import EbayConnectionRepository
+from app.repositories.shopify import StoreListingRepository
+from app.repositories.store import StoreRepository
 
 logger = get_logger(__name__)
 
@@ -419,8 +422,20 @@ class EbayConnectionService:
         if connection is None:
             return False
 
+        # EBAY-C3: the marketplace stores stay (marked disconnected, so the
+        # editor stops offering them); their listing rows go, because they
+        # hold the seller's eBay ids and mean nothing without the grant.
+        # Listings already live on eBay are not touched.
+        stores = await StoreRepository(self.session).list_by_platform(StorePlatform.EBAY)
+        for store in stores:
+            if store.status is not StoreStatus.DISCONNECTED:
+                await StoreRepository(self.session).update(store, status=StoreStatus.DISCONNECTED)
+        erased = await StoreListingRepository(self.session).erase_for_stores(
+            [store.id for store in stores]
+        )
+
         await self.connections.hard_delete(connection)
-        logger.info("ebay_disconnected", connection_id=str(connection.id))
+        logger.info("ebay_disconnected", connection_id=str(connection.id), listings_erased=erased)
         return True
 
 

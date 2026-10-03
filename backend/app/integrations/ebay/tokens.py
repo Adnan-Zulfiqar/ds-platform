@@ -21,6 +21,7 @@ rather than a mangled one.
 from __future__ import annotations
 
 import base64
+import time
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -169,8 +170,63 @@ async def refresh_access_token(*, refresh_token: str, scope: str) -> EbayTokenSe
     )
 
 
+#: The public scope; the Taxonomy API asks for nothing more.
+_APPLICATION_SCOPE: Final = "https://api.ebay.com/oauth/api_scope"
+#: Renew this long before eBay's stated expiry, matching the user-token margin.
+_APPLICATION_TOKEN_MARGIN_SECONDS: Final = 300
+
+
+@dataclass(slots=True)
+class _CachedApplicationToken:
+    token: str
+    environment: str
+    expires_at: float
+
+
+_application_token: _CachedApplicationToken | None = None
+
+
+async def application_access_token() -> str:
+    """An *application* token (client-credentials grant), for EBAY-C3's
+    Taxonomy calls, which eBay serves to applications rather than sellers.
+
+    Held in process memory only, never in Redis or the database: it is a
+    platform credential, it lives two hours, and minting another is one
+    request. A process restart simply asks again. Keyed by environment so a
+    sandbox token is never sent to production after a configuration change.
+    """
+    global _application_token
+    environment = settings.ebay.environment.value
+    cached = _application_token
+    if (
+        cached is not None
+        and cached.environment == environment
+        and time.monotonic() < cached.expires_at
+    ):
+        return cached.token
+    # No lock: two concurrent first calls mint two tokens and the later one
+    # is kept, which costs one extra request and is otherwise harmless. A
+    # module-level asyncio.Lock would bind to one event loop.
+    tokens = await _post({"grant_type": "client_credentials", "scope": _APPLICATION_SCOPE})
+    lifetime = max(tokens.expires_in - _APPLICATION_TOKEN_MARGIN_SECONDS, 60)
+    _application_token = _CachedApplicationToken(
+        token=tokens.access_token,
+        environment=environment,
+        expires_at=time.monotonic() + lifetime,
+    )
+    return tokens.access_token
+
+
+def forget_application_token() -> None:
+    """Drop the cached application token — after eBay rejected it, and in tests."""
+    global _application_token
+    _application_token = None
+
+
 __all__ = [
     "EbayTokenSet",
+    "application_access_token",
     "exchange_authorization_code",
+    "forget_application_token",
     "refresh_access_token",
 ]

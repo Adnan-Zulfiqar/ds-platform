@@ -45,6 +45,8 @@ type ReviewPublishPanelProps = {
   stores: StoreOption[];
   storeId: string;
   onStoreChange: (storeId: string) => void;
+  /** The chosen store's channel, for copy (EBAY-C3). Defaults to Shopify. */
+  channelName?: string;
   dirty: boolean;
   readiness: ShopifyPublishReadiness | undefined;
   readinessStatus: "idle" | "pending" | "error" | "success";
@@ -151,6 +153,7 @@ export function ReviewPublishPanel({
   productId,
   stores,
   storeId,
+  channelName = "Shopify",
   onStoreChange,
   dirty,
   readiness,
@@ -228,7 +231,7 @@ export function ReviewPublishPanel({
     statusMessage =
       "We’ll save your latest changes, then check again when you publish.";
   } else if (shopify.kind === "changes-not-sent") {
-    statusMessage = "Validation passed — your latest changes are ready to send to Shopify.";
+    statusMessage = `Validation passed — your latest changes are ready to send to ${channelName}.`;
   } else if (onShopify) {
     statusMessage = "Validation passed — publishing again sends the current DropPilot version.";
   } else {
@@ -239,8 +242,8 @@ export function ReviewPublishPanel({
     <section className="space-y-4" data-testid="publishing-panel">
       <h2 className="text-lg font-semibold">Review and publish</h2>
       <p className="text-sm text-muted-foreground">
-        Send this draft to a connected Shopify store. Importing from the
-        supplier is separate from publishing to your shop.
+        Send this draft to a connected Shopify store or eBay marketplace.
+        Importing from the supplier is separate from publishing.
       </p>
 
       {onShopify ? (
@@ -254,7 +257,7 @@ export function ReviewPublishPanel({
       ) : null}
 
       <div className="space-y-2">
-        <Label htmlFor="publish-store">Shopify store</Label>
+        <Label htmlFor="publish-store">Store</Label>
         <select
           id="publish-store"
           className="flex h-11 min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -482,7 +485,7 @@ export function ReviewPublishPanel({
             : liveAiContent && hasStore
               ? "Update Shopify (keep AI text)"
               : onShopify
-                ? "Update Shopify"
+                ? `Update ${channelName}`
                 : "Publish to Store"}
         </Button>
         {!canPublish ? (

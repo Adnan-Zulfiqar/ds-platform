@@ -17,10 +17,11 @@ contents of ``_OWNERS``, not this code path.
 
 ## The guard that makes that safe
 
-``_OWNERS`` is empty, and it is the single place a future eBay data owner is
-registered. EBAY-C1 cannot ship eBay OAuth or eBay data persistence without
-adding an entry here, because ``test_every_ebay_data_owner_is_registered``
-fails when a model gains eBay-identifying columns that no owner covers. That is
+``_OWNERS`` is the single place an eBay data owner is registered (empty
+through C0; C1, C2 and C3 each added one with their storage). No milestone can
+ship eBay data persistence without adding an entry here, because the guard
+tests fail when declared storage has no owner or a model gains
+eBay-identifying columns that no declaration covers. That is
 the release guard the roadmap refers to: it is not a note asking a future author
 to remember, it is a test that fails.
 
@@ -66,6 +67,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.ebay import EbayConnection, EbayListingDefaults
+from app.models.shopify import StoreListing
+from app.models.store import Store, StorePlatform
 
 logger = get_logger(__name__)
 
@@ -194,6 +197,39 @@ class EbayConnectionOwner:
         return erased
 
 
+class EbayStoreListingsOwner:
+    """Erases the seller's eBay listing rows (EBAY-C3).
+
+    ``store_listings`` rows on an eBay store hold the seller's listing, offer
+    and SKU ids. They belong to the workspace the seller is connected to, so
+    the match goes through the connection's immutable ``ebay_user_id`` to its
+    tenant, then to that tenant's eBay stores. Runs first: once the
+    connection row is gone the tenant can no longer be found from the
+    subject. Physical delete; idempotent; crosses tenants for the reason
+    ``EbayConnectionOwner`` gives.
+    """
+
+    name = "ebay_store_listings"
+
+    async def erase(self, session: AsyncSession, subject: DeletionSubject) -> int:
+        if not subject.user_id:
+            logger.info("ebay_store_listings_erase_skipped_no_immutable_id")
+            return 0
+
+        tenants = select(EbayConnection.tenant_id).where(
+            EbayConnection.ebay_user_id == subject.user_id
+        )
+        stores = select(Store.id).where(
+            Store.platform == StorePlatform.EBAY, Store.tenant_id.in_(tenants)
+        )
+        result = await session.execute(
+            delete(StoreListing).where(StoreListing.store_id.in_(stores))
+        )
+        erased = int(cast("CursorResult[Any]", result).rowcount or 0)
+        logger.info("ebay_store_listings_erased", rows=erased)
+        return erased
+
+
 class EbayListingDefaultsOwner:
     """Erases the seller's chosen policy ids and location key (EBAY-C2).
 
@@ -237,6 +273,12 @@ EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
             "type, plus encrypted access and refresh tokens for the seller."
         ),
     ),
+    # EBAY-C3, migration 0039: eBay rows of a shared table.
+    EbayStorageDeclaration(
+        storage="app.models.shopify.StoreListing (rows on eBay stores)",
+        owner_name="ebay_store_listings",
+        holds="The seller's eBay listing ids, offer ids and inventory SKUs.",
+    ),
     # EBAY-C2, migration 0037.
     EbayStorageDeclaration(
         storage="app.models.ebay.EbayListingDefaults",
@@ -251,6 +293,7 @@ EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
 #: One owner per declaration. Defaults first: they hang off the connection
 #: row, and erasing them before it keeps both counts accurate.
 _OWNERS: Final[tuple[EbayDataOwner, ...]] = (
+    EbayStoreListingsOwner(),
     EbayListingDefaultsOwner(),
     EbayConnectionOwner(),
 )
