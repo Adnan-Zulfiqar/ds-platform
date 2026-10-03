@@ -96,6 +96,16 @@ celery_app.conf.update(
     # tenants' supplier quota, and the windows overlap the interval so a missed
     # beat leaves overlap rather than a gap.
     beat_schedule={
+        # B-011 (owner-approved 2026-10-03): eBay order import and a price /
+        # stock backstop. Both fan out one task per connected workspace.
+        "ebay-import-orders": {
+            "task": "ebay.import_orders_all",
+            "schedule": 60 * 60,
+        },
+        "ebay-sweep-price-quantity": {
+            "task": "ebay.sweep_price_quantity_all",
+            "schedule": 60 * 60 * 6,
+        },
         "orders-sync-all": {
             "task": "orders.sync_all",
             "schedule": 60 * 60,  # hourly; the sync window is 2 days

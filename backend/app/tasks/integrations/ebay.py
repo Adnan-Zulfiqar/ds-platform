@@ -12,7 +12,11 @@ from sqlalchemy import event
 from app.core.context import clear_context, require_tenant_id, set_tenant_id
 from app.core.logging import get_logger
 from app.database.session import transaction
+from app.integrations.ebay.orders import EbayOrderService
 from app.integrations.ebay.price_quantity import EbayPriceQuantitySync
+from app.models.store import StorePlatform
+from app.repositories.ebay import EbayConnectedTenantsSweep
+from app.repositories.shopify import StoreListingRepository
 from app.workers.base import BaseTask
 from app.workers.celery_app import celery_app
 
@@ -42,6 +46,66 @@ def push_price_quantity(self: Any, tenant_id: str, product_id: str, **_: Any) ->
         return asyncio.run(_run())
     finally:
         clear_context()
+
+
+async def _connected_tenants() -> list[uuid.UUID]:
+    async with transaction() as session:
+        return await EbayConnectedTenantsSweep(session).connected_tenant_ids()
+
+
+@celery_app.task(base=BaseTask, bind=True, name="ebay.import_orders_all")
+def import_orders_all(self: Any, **_: Any) -> dict[str, Any]:
+    """Hourly: queue an order import per connected workspace (B-011)."""
+    tenants = asyncio.run(_connected_tenants())
+    for tenant_id in tenants:
+        import_orders_one.delay(str(tenant_id))
+    return {"queued": len(tenants)}
+
+
+@celery_app.task(base=BaseTask, bind=True, name="ebay.import_orders_one")
+def import_orders_one(self: Any, tenant_id: str, **_: Any) -> dict[str, Any]:
+    """One workspace's eBay orders changed in the last two days. Idempotent:
+    re-importing updates the same rows. Two days overlap the hourly schedule
+    generously, so a missed run loses nothing."""
+    set_tenant_id(uuid.UUID(tenant_id))
+    try:
+
+        async def _run() -> dict[str, Any]:
+            async with transaction() as session:
+                outcome = await EbayOrderService(session).import_recent(days=2)
+                return {"fetched": outcome.fetched, "created": outcome.created}
+
+        return asyncio.run(_run())
+    finally:
+        clear_context()
+
+
+@celery_app.task(base=BaseTask, bind=True, name="ebay.sweep_price_quantity_all")
+def sweep_price_quantity_all(self: Any, **_: Any) -> dict[str, Any]:
+    """Every six hours: re-send price and stock for every eBay listing, as a
+    backstop for any change whose event push was lost (B-011)."""
+    tenants = asyncio.run(_connected_tenants())
+    for tenant_id in tenants:
+        sweep_price_quantity_one.delay(str(tenant_id))
+    return {"queued": len(tenants)}
+
+
+@celery_app.task(base=BaseTask, bind=True, name="ebay.sweep_price_quantity_one")
+def sweep_price_quantity_one(self: Any, tenant_id: str, **_: Any) -> dict[str, Any]:
+    tenant = uuid.UUID(tenant_id)
+    set_tenant_id(tenant)
+    try:
+
+        async def _ids() -> list[uuid.UUID]:
+            async with transaction() as session:
+                return await StoreListingRepository(session).product_ids_on_platform(
+                    StorePlatform.EBAY
+                )
+
+        ids = asyncio.run(_ids())
+    finally:
+        clear_context()
+    return {"queued": enqueue_price_quantity(tenant, ids)}
 
 
 def enqueue_price_quantity(tenant_id: uuid.UUID, product_ids: Iterable[uuid.UUID]) -> int:
@@ -85,4 +149,12 @@ def push_price_quantity_after_commit(session: Any, product_ids: Iterable[uuid.UU
     event.listen(session.sync_session, "after_commit", on_commit, once=True)
 
 
-__all__ = ["enqueue_price_quantity", "push_price_quantity", "push_price_quantity_after_commit"]
+__all__ = [
+    "enqueue_price_quantity",
+    "import_orders_all",
+    "import_orders_one",
+    "push_price_quantity",
+    "push_price_quantity_after_commit",
+    "sweep_price_quantity_all",
+    "sweep_price_quantity_one",
+]

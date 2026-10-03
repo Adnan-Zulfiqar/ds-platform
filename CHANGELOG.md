@@ -19,6 +19,12 @@ production release.
   connected earlier must reconnect**. Verified with a faked Shopify client
   only.
 
+### Added — scheduled eBay jobs (B-011, owner-approved)
+
+- Hourly eBay order import (last two days) and a six-hourly price/stock
+  backstop, each fanning out one task per connected workspace through the
+  new ids-only `EbayConnectedTenantsSweep` (CLAUDE.md §4 list updated).
+
 ### Fixed — review of EBAY-C2 to C6 and the OpenAI provider
 
 Three independent code reviews of the new eBay and AI code (2026-10-03);

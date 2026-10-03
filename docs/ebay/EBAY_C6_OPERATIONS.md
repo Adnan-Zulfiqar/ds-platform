@@ -29,10 +29,9 @@ actions and are open.** Nothing here has run against real eBay.
    publish one single-variant draft (C3), change its price (C4), import and
    ship one order (C5). Record each with the health view's output — no token,
    no eBay user id.
-5. **Approval needed for scheduled jobs.** A periodic eBay order import and a
-   periodic price/stock sweep need one new unscoped maintenance repository
-   (CLAUDE.md §4 requires explicit approval). Until approved, both run on
-   events and on demand.
+5. **Scheduled jobs (approved, B-011).** Celery beat must run:
+   `ebay.import_orders_all` hourly and `ebay.sweep_price_quantity_all`
+   every six hours. Watch for their per-tenant tasks failing repeatedly.
 
 ## Signals to watch (structured log events)
 
