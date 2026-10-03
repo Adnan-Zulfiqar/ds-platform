@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.integrations.ebay.exceptions import (
     EbayListingRejectedError,
+    EbayRateLimitedError,
     EbaySellerApiUnavailableError,
     EbayTokenRevokedError,
 )
@@ -368,7 +369,11 @@ class EbaySellerClient:
         merchant needs eBay's reason (a missing item specific, a policy that
         does not fit the category), so its messages are kept. Only
         ``errors[].message`` is read; nothing else from the body."""
-        if response.status_code in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+        if response.status_code in (
+            httpx.codes.UNAUTHORIZED,
+            httpx.codes.FORBIDDEN,
+            httpx.codes.TOO_MANY_REQUESTS,
+        ):
             cls._raise_for(response, call=call)
         if response.is_client_error:
             messages: list[str] = []
@@ -474,6 +479,9 @@ class EbaySellerClient:
                 "ebay_seller_api_unauthorized", call=call, status_code=response.status_code
             )
             raise EbayTokenRevokedError()
+        if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            logger.warning("ebay_seller_api_rate_limited", call=call)
+            raise EbayRateLimitedError()
         logger.warning("ebay_seller_api_failed", call=call, status_code=response.status_code)
         raise EbaySellerApiUnavailableError()
 

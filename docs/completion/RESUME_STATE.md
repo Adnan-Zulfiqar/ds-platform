@@ -29,7 +29,7 @@ Single continuation point after an interruption. Overwritten, not appended.
 | A | Agent items done (A1 images, A2 flake A reproduced). A3–A5 OPEN with owner checklists in `BLOCKERS.md`; B-009 (encryption key missing from root `.env`) found |
 | B | `OpenAIProvider` merged (#46, `9ffa700`); mocked-transport tests only, live call is owner item B-002 |
 | C | Audit only; nothing left that is not blocked on A4/A5 |
-| D | EBAY-C2 in PR #48. C3–C6 wait on owner approval of `docs/ebay/EBAY_C3_PROPOSAL.md` |
+| D | C2 merged (#48). C3 PR #49; C4, C5, C6 stacked on it (`feat/ebay-c4-price-quantity`, `feat/ebay-c5-orders`, `feat/ebay-c6-hardening`), merged in order once each CI is green |
 
 ## Next safe action
 

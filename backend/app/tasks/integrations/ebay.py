@@ -55,7 +55,7 @@ def enqueue_price_quantity(tenant_id: uuid.UUID, product_ids: Iterable[uuid.UUID
         try:
             push_price_quantity.delay(str(tenant_id), str(product_id))
             queued += 1
-        except Exception as exc:
+        except Exception as exc:  # broker down: the edit is saved; see docstring
             logger.warning(
                 "ebay_price_quantity_enqueue_failed",
                 product_id=str(product_id),

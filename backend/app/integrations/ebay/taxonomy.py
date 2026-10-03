@@ -19,7 +19,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.integrations.ebay.exceptions import EbaySellerApiUnavailableError
+from app.integrations.ebay.exceptions import EbayRateLimitedError, EbaySellerApiUnavailableError
 from app.integrations.ebay.tokens import application_access_token, forget_application_token
 
 logger = get_logger(__name__)
@@ -139,6 +139,9 @@ async def _get(path: str, *, params: Mapping[str, str], call: str) -> Any:
         forget_application_token()
         logger.warning("ebay_taxonomy_unauthorized", call=call, status_code=response.status_code)
         raise EbaySellerApiUnavailableError()
+    if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+        logger.warning("ebay_taxonomy_rate_limited", call=call)
+        raise EbayRateLimitedError()
     if response.status_code != httpx.codes.OK:
         logger.warning("ebay_taxonomy_failed", call=call, status_code=response.status_code)
         raise EbaySellerApiUnavailableError()

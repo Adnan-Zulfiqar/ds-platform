@@ -397,6 +397,50 @@ def _check_ebay_endpoint(settings: Any) -> Finding:
     )
 
 
+def _check_ebay_seller_channel(settings: Any) -> Finding:
+    """EBAY-C6: the seller channel (C1 to C5) is either off or fully configured.
+
+    Off (no client id) is SKIPPED, not a defect. Half-configured is MISSING:
+    connect would fail at eBay with nothing diagnosable. eBay also refuses a
+    production keyset's calls until account-deletion compliance validates, so
+    the verification token and endpoint are part of "configured" here.
+    """
+    ebay = settings.ebay
+    if not ebay.client_id.strip():
+        return Finding(
+            "EBAY_SELLER_CHANNEL",
+            Status.SKIPPED,
+            "is off: no eBay application credentials are configured.",
+            classification=Classification.REQUIRED_AT_ACTIVATION,
+        )
+    missing = [
+        name
+        for name, present in (
+            ("EBAY_CLIENT_SECRET", bool(_secret(ebay.client_secret))),
+            ("EBAY_REDIRECT_URI_NAME", bool(ebay.redirect_uri_name.strip())),
+            (
+                "EBAY_MARKETPLACE_DELETION_VERIFICATION_TOKEN",
+                bool(_secret(ebay.marketplace_deletion_verification_token)),
+            ),
+            ("EBAY_MARKETPLACE_DELETION_ENDPOINT", bool(ebay.marketplace_deletion_endpoint)),
+        )
+        if not present
+    ]
+    if missing:
+        return Finding(
+            "EBAY_SELLER_CHANNEL",
+            Status.MISSING,
+            f"is partly configured; still needed: {', '.join(missing)}.",
+            classification=Classification.REQUIRED_AT_ACTIVATION,
+        )
+    return Finding(
+        "EBAY_SELLER_CHANNEL",
+        Status.PASS,
+        f"is configured for the eBay {ebay.environment.value} environment.",
+        classification=Classification.REQUIRED_AT_ACTIVATION,
+    )
+
+
 def _check_frontend_api_url(settings: Any) -> Finding:
     """The origin the browser bundle was built against.
 
@@ -811,6 +855,15 @@ RULES: tuple[Rule, ...] = (
         "legal",
         "true only after solicitor approval",
         _check_terms,
+        enforced_at_startup=False,
+    ),
+    Rule(
+        "EBAY_SELLER_CHANNEL",
+        Classification.REQUIRED_AT_ACTIVATION,
+        False,
+        "operator",
+        "off, or every eBay application setting present",
+        _check_ebay_seller_channel,
         enforced_at_startup=False,
     ),
     Rule(

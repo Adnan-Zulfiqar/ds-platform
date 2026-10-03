@@ -223,6 +223,19 @@ class EbayListingRejectedError(ValidationError):
     message = "eBay refused the listing."
 
 
+class EbayRateLimitedError(EbayError):
+    """eBay's call limit for this application or seller is spent (HTTP 429).
+
+    EBAY-C6. Distinct from an outage because the remedy differs: waiting for
+    the window to reset, or — persistently — eBay's Application Growth Check
+    for higher limits. Background tasks retry it with backoff like any
+    failure; an interactive caller is told plainly.
+    """
+
+    code = "ebay_rate_limited"
+    message = "eBay's call limit has been reached. Try again in a few minutes."
+
+
 __all__ = [
     "SERVICE_NAME",
     "EbayChallengeError",
@@ -237,6 +250,7 @@ __all__ = [
     "EbayOAuthStateError",
     "EbayPayloadTooLargeError",
     "EbayPolicyNotFoundError",
+    "EbayRateLimitedError",
     "EbaySellerAlreadyLinkedError",
     "EbaySellerApiUnavailableError",
     "EbaySignatureError",
