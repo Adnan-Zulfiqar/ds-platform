@@ -400,6 +400,7 @@ class TestSecretsStayOutOfEveryArtefact:
         "SHOPIFY_API_KEY",
         "SHOPIFY_API_SECRET",
         "ALIEXPRESS_APP_SECRET",
+        "ALIEXPRESS_CATALOG_ACCESS_TOKEN",
     }
 
     def test_the_environment_template_contains_no_real_value(self) -> None:
