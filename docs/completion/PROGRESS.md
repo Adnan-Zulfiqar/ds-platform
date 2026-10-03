@@ -183,3 +183,15 @@ Pinned baseline `develop` @ `7af51f9` (merge of PR #45).
 | Track D — EBAY-C2 listing setup | PR #48: local gate pytest 3498 passed, alembic `0037`; Playwright 44/44 (panel, channels, eBay specs). Mocked eBay transport only |
 | Track D — EBAY-C3…C6 | Not started. `docs/ebay/EBAY_C3_PROPOSAL.md` lists the architecture decisions (multi-channel readiness, eBay store model, item specifics) that CLAUDE.md §12.1 requires the owner to approve first; C4–C6 build on C3 |
 
+## Track D, EBAY-C3 to C6 — 2026-10-03
+
+Owner approved `EBAY_C3_PROPOSAL.md` (D-C3-1 to D-C3-4) and ordered C3 → C6.
+
+| Milestone | PR / commit | Local verification | Kind |
+|---|---|---|---|
+| C3 publish | PR #49 | Full gate on first head: 10 failed + 1 error, 3533 passed — test-harness faults (form body parsed as JSON; missing per-test Redis fixture; stale unit test), fixed; affected files 47 passed. Playwright 70/70 | Mocked eBay transport |
+| C4 price/stock | stacked on C3 | Integration tests (mocked); a catalogue Playwright failure (duplicate listings request from the new panel) found and fixed | Mocked eBay transport |
+| C5 orders | stacked on C4 | Integration tests (mocked); Playwright eBay orders spec | Mocked eBay transport |
+| C6 operations | stacked on C5 | Unit + integration (health view) | Mocked eBay transport |
+
+No real eBay call has been made by any of these. Owner steps: `docs/ebay/EBAY_C6_OPERATIONS.md`.
