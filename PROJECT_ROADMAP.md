@@ -291,7 +291,7 @@ in mind. Nothing here is committed to a phase number.
 | Shopify fulfilment push | ✅ Track E1 on `develop`: merchant marks a Shopify order shipped with tracking (`fulfillmentCreate`); new fulfilment scopes need a reconnect; faked-client tests only — [E1 doc](docs/track-e/E1_SHOPIFY_FULFILMENT.md) |
 | AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation merged (PR #26). Stage 10 merged (PR #36). Stage 11 report written; implementation accepted with notes by Cursor, release NOT READY; untagged. `StubProvider` only — no live model-quality verification. Production undeployed |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
-| Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
+| Real FX for pricing | M24A (FX), M24B (currency derivation) and M24C (landed cost; sale fees as % of price — Track E2) done. Remaining: AliExpress freight quote (M27), blocked on a real API response — [E2 doc](docs/track-e/E2_FX_FEES.md) |
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
 | Admin panel | Platform operations across tenants |

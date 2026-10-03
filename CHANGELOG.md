@@ -10,6 +10,13 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E2 sale fees (M24C)
+
+- Pricing rules take a **sale fee as a % of the selling price** (marketplace
+  and payment fees). Prices are grossed up so markup, target margin and
+  profit floors hold after the fee; reported profit and margin are net.
+  Migration `0042` (nullable: existing rules price exactly as before).
+
 ### Added — Track E1 Shopify fulfilment push
 
 - Mark a Shopify order shipped from its order page: carrier, tracking
