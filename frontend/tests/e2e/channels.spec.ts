@@ -404,7 +404,7 @@ test.describe("Channels — canonical surface and Stores", () => {
     // Planned channels are named, not offered.
     const planned = page.getByTestId("planned-channels");
     await expect(planned).toContainText("Coming soon");
-    await expect(planned).toContainText("WooCommerce");
+    await expect(planned).toContainText("Etsy");
     await expect(planned.getByRole("button")).toHaveCount(0);
     await expect(planned.getByRole("link")).toHaveCount(0);
     await shot(page, "1440-light-overview-mixed");

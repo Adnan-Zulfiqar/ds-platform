@@ -143,7 +143,7 @@ const EBAY_CALLBACK: Record<
  * invites a click, and nothing here can be clicked. Recorded so the intent is
  * visible without pretending anything is connectable.
  */
-const PLANNED_PROVIDERS = ["WooCommerce", "Etsy", "TikTok Shop"] as const;
+const PLANNED_PROVIDERS = ["Etsy", "TikTok Shop"] as const;
 
 function CallbackBanner() {
   const searchParams = useSearchParams();

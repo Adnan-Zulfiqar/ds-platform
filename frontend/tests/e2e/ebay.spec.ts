@@ -87,7 +87,7 @@ test.describe("eBay integration card", () => {
     await expect(card.getByRole("heading", { name: "eBay" })).toBeVisible();
     // The placeholder grid still exists for the channels that really are
     // planned; eBay must no longer be one of them.
-    await expect(channels(page).getByText("WooCommerce")).toBeVisible();
+    await expect(page.getByTestId("planned-channels").getByText("Etsy")).toBeVisible();
     await expect(card.getByText("Coming soon")).toHaveCount(0);
   });
 
