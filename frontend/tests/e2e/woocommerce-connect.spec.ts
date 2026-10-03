@@ -78,3 +78,18 @@ test("a member sees the WooCommerce card read-only", async ({ page }) => {
   await expect(card.getByTestId("channel-woocommerce-read-only")).toBeVisible();
   await expect(card.getByRole("button", { name: /Connect|Disconnect/ })).toHaveCount(0);
 });
+
+test("an owner imports a store's recent orders from the card", async ({ page }) => {
+  await mockChannelsApi(page, channelsWorld());
+  const posted: string[] = [];
+  await page.route("**/api/v1/integrations/woocommerce/stores", (route) => json(route, [STORE]));
+  await page.route("**/api/v1/integrations/woocommerce/stores/*/orders/import", (route) => {
+    posted.push(new URL(route.request().url()).pathname);
+    return json(route, { fetched: 3, created: 2, updated: 1 });
+  });
+  await page.goto("/settings/integrations");
+  const card = page.getByTestId("channel-woocommerce");
+  await card.getByRole("button", { name: "Import recent orders" }).click();
+  await expect(card.getByRole("status")).toHaveText("Imported 3 orders (2 new, 1 updated).");
+  expect(posted).toEqual([`/api/v1/integrations/woocommerce/stores/${STORE.id}/orders/import`]);
+});
