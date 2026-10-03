@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy import event
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer, endpoint_rate_limit
+from app.core.context import require_tenant_id
 from app.integrations.aliexpress.catalog import normalise_product_id
 from app.integrations.shopify.schemas import (
     ShopifyPublishCheckItem,
@@ -75,10 +76,25 @@ from app.services.product_pipeline import (
 )
 from app.services.publish_readiness import PublishReadinessResult
 from app.tasks.ai import publish_pipeline_bulk_run
+from app.tasks.integrations.ebay import enqueue_price_quantity
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 _pipeline_bulk_start_limit = endpoint_rate_limit("pipeline-bulk-start", limit=10, window_seconds=60)
+
+
+def _push_ebay_after_commit(session: DbSession, product_id: uuid.UUID) -> None:
+    """EBAY-C4: send the committed price and stock to any eBay listing.
+
+    After commit, not before: a task that ran first would read the old values.
+    The task itself is a no-op for a product with no eBay listing.
+    """
+    tenant_id = require_tenant_id()
+
+    def on_commit(_session: object) -> None:
+        enqueue_price_quantity(tenant_id, [product_id])
+
+    event.listen(session.sync_session, "after_commit", on_commit, once=True)
 
 
 def _publish_pipeline_bulk_after_commit(session: DbSession, run_id: uuid.UUID) -> None:
@@ -550,6 +566,7 @@ async def update_product(
     product = await ProductService(session).update_product(
         product_id, changes, expected_updated_at=expected_updated_at
     )
+    _push_ebay_after_commit(session, product.id)
     return _to_detail(product)
 
 
@@ -649,6 +666,7 @@ async def sync_product(
         requested_by_user_id=principal.user_id,
         ship_to_country=existing.import_ship_to_country or existing.ship_to_country,
     )
+    _push_ebay_after_commit(session, product.id)
     return _to_detail(product)
 
 

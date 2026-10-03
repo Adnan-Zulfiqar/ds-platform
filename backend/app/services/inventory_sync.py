@@ -38,6 +38,9 @@ class InventorySyncService(BaseService):
         self.products = ProductRepository(session)
         self.imports = ProductImportService(session)
         self.notifications = NotificationService(session)
+        #: Products whose stock moved in the last ``sync`` — EBAY-C4 pushes
+        #: these to eBay once the caller's transaction has committed.
+        self.changed_product_ids: list[uuid.UUID] = []
 
     async def sync(
         self,
@@ -95,6 +98,7 @@ class InventorySyncService(BaseService):
                         reason=InventoryChangeReason.SUPPLIER_SYNC,
                     )
                     changed += 1
+                    self.changed_product_ids.append(refreshed.id)
 
             run.products_seen = seen
             run.products_changed = changed

@@ -14,6 +14,7 @@ from app.database.session import transaction
 from app.models.integration import AliExpressConnection, IntegrationStatus
 from app.models.order import SyncTrigger
 from app.services.inventory_sync import InventorySyncService
+from app.tasks.integrations.ebay import enqueue_price_quantity
 from app.workers.base import BaseTask
 from app.workers.celery_app import celery_app
 
@@ -34,13 +35,17 @@ async def _sync_tenant(tenant_id: uuid.UUID) -> dict[str, Any]:
     set_tenant_id(tenant_id)
     try:
         async with transaction() as session:
-            run = await InventorySyncService(session).sync(trigger=SyncTrigger.SCHEDULED)
-            return {
+            service = InventorySyncService(session)
+            run = await service.sync(trigger=SyncTrigger.SCHEDULED)
+            summary = {
                 "tenant_id": str(tenant_id),
                 "seen": run.products_seen,
                 "changed": run.products_changed,
                 "status": run.status.value,
             }
+        # Committed: now the eBay pushes read the new stock (EBAY-C4).
+        enqueue_price_quantity(tenant_id, service.changed_product_ids)
+        return summary
     finally:
         clear_context()
 

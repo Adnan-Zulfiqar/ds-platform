@@ -80,6 +80,7 @@ celery_app.conf.update(
         "app.tasks.health",
         "app.tasks.integrations.aliexpress",
         "app.tasks.integrations.shopify",
+        "app.tasks.integrations.ebay",
         "app.tasks.products",
         "app.tasks.orders",
         "app.tasks.inventory",

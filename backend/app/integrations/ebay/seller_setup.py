@@ -18,7 +18,7 @@ backoff.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -83,6 +83,15 @@ assert tuple(EBAY_MARKETPLACES) == EBAY_SUPPORTED_MARKETPLACES
 _BUSINESS_POLICIES_PROGRAM = "SELLING_POLICY_MANAGEMENT"
 #: eBay's page-size ceiling for getInventoryLocations.
 _LOCATION_PAGE_LIMIT = 100
+
+
+@dataclass(frozen=True, slots=True)
+class EbayPriceQuantityResult:
+    """One line of a bulkUpdatePriceQuantity answer (EBAY-C4)."""
+
+    sku: str
+    ok: bool
+    messages: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +388,50 @@ class EbaySellerClient:
             )
         cls._raise_for(response, call=call)
 
+    # --- EBAY-C4: price and quantity ---------------------------------------
+
+    async def bulk_update_price_quantity(
+        self, requests: Sequence[Mapping[str, Any]]
+    ) -> tuple[EbayPriceQuantityResult, ...]:
+        """bulkUpdatePriceQuantity — absolute values, so safe to repeat.
+
+        eBay answers 200 (all applied) or 207 (some refused); either way each
+        line carries its own status, and a refused line is reported, not
+        raised, so one bad SKU does not hide the others.
+        """
+        response = await self._request(
+            "POST",
+            "/sell/inventory/v1/bulk_update_price_quantity",
+            call="bulk_update_price_quantity",
+            json={"requests": list(requests)},
+        )
+        if response.status_code not in (httpx.codes.OK, httpx.codes.MULTI_STATUS):
+            self._raise_for_listing(response, call="bulk_update_price_quantity")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise EbaySellerApiUnavailableError("eBay returned a non-JSON response.") from exc
+        lines = body.get("responses") if isinstance(body, Mapping) else None
+        results: list[EbayPriceQuantityResult] = []
+        for line in lines if isinstance(lines, list) else []:
+            if not isinstance(line, Mapping):
+                continue
+            errors = line.get("errors")
+            messages = tuple(
+                message[:300]
+                for error in (errors if isinstance(errors, list) else [])
+                if isinstance(error, Mapping) and (message := _text(error, "message"))
+            )
+            status = line.get("statusCode")
+            results.append(
+                EbayPriceQuantityResult(
+                    sku=_text(line, "sku") or "",
+                    ok=status == 200 and not messages,
+                    messages=messages,
+                )
+            )
+        return tuple(results)
+
     async def _get(self, path: str, *, call: str, params: Mapping[str, str] | None = None) -> Any:
         response = await self._request("GET", path, call=call, params=params)
         if response.status_code != httpx.codes.OK:
@@ -433,6 +486,7 @@ __all__ = [
     "EbayMarketplace",
     "EbayOffer",
     "EbayPolicy",
+    "EbayPriceQuantityResult",
     "EbaySellerClient",
     "NewInventoryLocation",
     "parse_locations",
