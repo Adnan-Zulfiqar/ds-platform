@@ -127,6 +127,12 @@ function sameEditableValues(a: EditableSnapshot, b: EditableSnapshot): boolean {
 /**
  * Premium draft product workspace — sticky header, inspector, autosave.
  */
+const CHANNEL_NAME: Record<PublishChannel, string> = {
+  shopify: "Shopify",
+  ebay: "eBay",
+  woocommerce: "WooCommerce",
+};
+
 export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -830,10 +836,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   /** `replaceAiContent` is set only from the confirmed "Use my draft text
    * instead" dialog (review finding E-1). Every other publish keeps approved
    * AI text that is live on the store; the server enforces that too. */
-  // EBAY-C3: readiness and publish go to the chosen store's channel.
+  // EBAY-C3 / Track E7: readiness and publish go to the chosen store's channel.
+  const publishPlatform = storesQuery.data?.items.find(
+    (store) => store.id === publishStoreId,
+  )?.platform;
   const publishChannel: PublishChannel =
-    storesQuery.data?.items.find((store) => store.id === publishStoreId)?.platform === "ebay"
-      ? "ebay"
+    publishPlatform === "ebay" || publishPlatform === "woocommerce"
+      ? publishPlatform
       : "shopify";
 
   async function handlePublish(options: { replaceAiContent?: boolean } = {}) {
@@ -842,7 +851,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setPublishResult(null);
     setPublishSaveFailure(null);
     if (!publishStoreId) {
-      setPublishError("Select a connected Shopify store.");
+      setPublishError("Select a connected store.");
       return;
     }
     if (publishInFlightRef.current || publishPending) {
@@ -1000,7 +1009,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     storesQuery.data?.items.filter(
       (store) =>
         store.platform === "shopify" ||
-        (store.platform === "ebay" && store.status === "connected"),
+        ((store.platform === "ebay" || store.platform === "woocommerce") &&
+          store.status === "connected"),
     ) ?? [];
   const syncedListing =
     listingsQuery.data?.find((row) => row.status === "synced") ??
@@ -1047,13 +1057,15 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   // Review & publish speaks about the chosen store only (EBAY-C3 review):
   // an eBay store must not inherit "Update Shopify" from a Shopify listing,
   // and Shopify copy must not come from an eBay listing.
-  const ebayStoreIds = new Set(
-    (storesQuery.data?.items ?? []).filter((s) => s.platform === "ebay").map((s) => s.id),
+  const otherChannelStoreIds = new Set(
+    (storesQuery.data?.items ?? [])
+      .filter((s) => s.platform === "ebay" || s.platform === "woocommerce")
+      .map((s) => s.id),
   );
   const panelListings =
-    publishChannel === "ebay"
+    publishChannel !== "shopify"
       ? listingsQuery.data?.filter((row) => row.storeId === publishStoreId)
-      : listingsQuery.data?.filter((row) => !ebayStoreIds.has(row.storeId));
+      : listingsQuery.data?.filter((row) => !otherChannelStoreIds.has(row.storeId));
   const panelShopifyState = deriveEditorLifecycle({
     productStatus: data.status,
     dirty,
@@ -1654,7 +1666,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 status: store.status,
               }))}
               storeId={publishStoreId}
-              channelName={publishChannel === "ebay" ? "eBay" : "Shopify"}
+              channelName={CHANNEL_NAME[publishChannel]}
               dirty={dirty}
               onStoreChange={(next) => {
                 setPublishStoreId(next);

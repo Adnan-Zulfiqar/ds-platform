@@ -19,7 +19,7 @@ export const publishReadinessKeys = {
 };
 
 /** Channels with a server publish check (EBAY-C3 added eBay). */
-export type PublishChannel = "shopify" | "ebay";
+export type PublishChannel = "shopify" | "ebay" | "woocommerce";
 
 export async function fetchPublishReadiness(params: {
   productId: string;

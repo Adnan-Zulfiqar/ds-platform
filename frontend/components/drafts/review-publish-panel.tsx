@@ -242,7 +242,7 @@ export function ReviewPublishPanel({
     <section className="space-y-4" data-testid="publishing-panel">
       <h2 className="text-lg font-semibold">Review and publish</h2>
       <p className="text-sm text-muted-foreground">
-        Send this draft to a connected Shopify store or eBay marketplace.
+        Send this draft to a connected Shopify store, eBay marketplace or WooCommerce store.
         Importing from the supplier is separate from publishing.
       </p>
 

@@ -115,6 +115,7 @@ from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.integrations.shopify.webhook_reconciliation import ReconcileReport
 from app.integrations.woocommerce.connection import WooCommerceConnectionService
+from app.integrations.woocommerce.publish import WooCommercePublishService
 from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
@@ -125,6 +126,7 @@ from app.schemas.store import StoreRead, WooCommerceConnectRequest
 from app.services.publish_readiness import (
     CHANNEL_EBAY,
     CHANNEL_SHOPIFY,
+    CHANNEL_WOOCOMMERCE,
     PublishReadinessResult,
     PublishReadinessService,
 )
@@ -1469,3 +1471,53 @@ async def disconnect_woocommerce(
 ) -> StoreRead:
     store = await WooCommerceConnectionService(session).disconnect(store_id)
     return StoreRead.model_validate(store)
+
+
+@router.post(
+    "/woocommerce/publish-readiness",
+    response_model=ShopifyPublishReadinessResponse,
+    summary="Evaluate WooCommerce publish blockers for a draft",
+)
+async def woocommerce_publish_readiness(
+    payload: ShopifyPublishReadinessRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyPublishReadinessResponse:
+    """The same rules ``POST /woocommerce/publish`` enforces, without publishing."""
+    result = await PublishReadinessService(session).evaluate(
+        channel=CHANNEL_WOOCOMMERCE,
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        expected_updated_at=payload.expected_updated_at,
+        enforce_version=False,
+    )
+    return _readiness_response(result)
+
+
+@router.post(
+    "/woocommerce/publish",
+    response_model=ShopifyPublishResponse,
+    summary="Publish a draft to a WooCommerce store",
+)
+async def publish_to_woocommerce(
+    payload: ShopifyPublishReadinessRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyPublishResponse:
+    """Admin only, matching Shopify and eBay publish. ``storeId`` is required."""
+    if payload.store_id is None:
+        from app.core.exceptions import ValidationError
+
+        raise ValidationError("storeId is required.")
+    result = await WooCommercePublishService(session).publish(
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        expected_updated_at=payload.expected_updated_at,
+    )
+    return ShopifyPublishResponse(
+        message=f"Published to WooCommerce product {result.external_id}.",
+        listing_id=result.listing.id,
+        external_product_id=result.external_id,
+        storefront_url=result.storefront_url,
+        updated=not result.created,
+    )

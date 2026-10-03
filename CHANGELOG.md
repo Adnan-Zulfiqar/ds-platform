@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W2: publish to WooCommerce
+
+- Review & publish now offers connected WooCommerce stores. A one-variant
+  draft becomes a simple product with the merchant's price, managed stock,
+  SKU `dp-<product id>`, and images on the first publish. A retry adopts the
+  existing product (by recorded id, then by SKU) instead of duplicating it.
+  The store's own refusal message reaches the merchant. Only stores
+  connected through the verified path can publish.
+
 ### Added — Track E7 W1: connect WooCommerce stores
 
 - **Settings → Integrations → WooCommerce.** Paste the site address and REST

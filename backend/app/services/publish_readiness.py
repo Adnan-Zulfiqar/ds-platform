@@ -31,6 +31,7 @@ from app.integrations.ebay.listing_content import (
 from app.integrations.ebay.product_details import EbayProductDetailsService
 from app.integrations.shopify.service import ShopifyService
 from app.integrations.shopify.sync import ShopifySyncService
+from app.integrations.woocommerce.connection import is_usable as woocommerce_usable
 from app.models.integration import IntegrationStatus
 from app.models.product import Product
 from app.models.store import Store, StorePlatform, StoreStatus
@@ -42,7 +43,12 @@ from app.services.import_destination import country_from_store_settings
 
 CHANNEL_SHOPIFY = "shopify"
 CHANNEL_EBAY = "ebay"
-_CHANNEL_PLATFORM = {CHANNEL_SHOPIFY: StorePlatform.SHOPIFY, CHANNEL_EBAY: StorePlatform.EBAY}
+CHANNEL_WOOCOMMERCE = "woocommerce"
+_CHANNEL_PLATFORM = {
+    CHANNEL_SHOPIFY: StorePlatform.SHOPIFY,
+    CHANNEL_EBAY: StorePlatform.EBAY,
+    CHANNEL_WOOCOMMERCE: StorePlatform.WOOCOMMERCE,
+}
 
 # Stable machine-readable codes. Clients branch on these; copy may change.
 CODE_STORE_REQUIRED = "store_required"
@@ -60,6 +66,7 @@ CODE_EBAY_CATEGORY_MISSING = "ebay_category_missing"
 CODE_EBAY_ASPECTS_MISSING = "ebay_aspects_missing"
 CODE_EBAY_REQUIREMENTS_UNAVAILABLE = "ebay_requirements_unavailable"
 CODE_EBAY_MULTIPLE_VARIANTS = "ebay_multiple_variants"
+CODE_WOOCOMMERCE_MULTIPLE_VARIANTS = "woocommerce_multiple_variants"
 CODE_EBAY_TITLE_TOO_LONG = "ebay_title_too_long"
 CODE_PRICE_MISSING = "price_missing"
 CODE_QUANTITY_MISSING = "quantity_missing"
@@ -210,6 +217,93 @@ class PublishReadinessService(BaseService):
                 action="Go to Pricing",
             )
         return None
+
+    def _woocommerce_blockers(self, *, product: Product, store: Store) -> list[PublishCheckItem]:
+        """What a WooCommerce publish needs (Track E7, W2).
+
+        Same content rules as eBay (one variant, the merchant's own selling
+        price in the store's verified currency, stock on hand), through the
+        same ``listing_content`` helpers the publish uses. Images are not
+        required: WooCommerce accepts a product without one.
+        """
+        if not woocommerce_usable(store):
+            return [
+                PublishCheckItem(
+                    code=CODE_STORE_DISCONNECTED,
+                    message=(
+                        "This WooCommerce store is not connected. Connect it in "
+                        "Integrations before publishing."
+                    ),
+                    field="storeId",
+                    section="publishing",
+                    action="Open Integrations",
+                )
+            ]
+        items: list[PublishCheckItem] = []
+        terms = offer_terms(product)
+        if terms.multiple_variants:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_WOOCOMMERCE_MULTIPLE_VARIANTS,
+                    message=(
+                        "WooCommerce publishing supports one variant for now. Disable the "
+                        "other variants, or publish this product to Shopify."
+                    ),
+                    field="variants",
+                    section="variants",
+                    action="Go to Options & variants",
+                )
+            )
+        else:
+            if terms.price is None or terms.price <= 0:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_PRICE_MISSING,
+                        message="Set a selling price on the Pricing tab for this store.",
+                        field="sellPrice",
+                        section="pricing",
+                        action="Go to Pricing",
+                    )
+                )
+            elif terms.currency != normalise_currency(store.currency):
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_SELLING_CURRENCY_MISMATCH,
+                        message=(
+                            f"The price is in {terms.currency or 'an unrecorded currency'}, "
+                            f"but this WooCommerce store sells in {store.currency}. "
+                            "Recalculate pricing for this store on the Pricing tab."
+                        ),
+                        field="sellPrice",
+                        section="pricing",
+                        action="Go to Pricing",
+                    )
+                )
+            if terms.quantity <= 0:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_QUANTITY_MISSING,
+                        message="Add at least one item in stock before publishing.",
+                        field="stockQuantity",
+                        section="inventory",
+                        action="Go to Stock",
+                    )
+                )
+        title, _ = listing_text(product)
+        if not title:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_TITLE_THIN,
+                    message="Give the product a title before publishing.",
+                    field="title",
+                    section="overview",
+                    action="Go to Overview",
+                )
+            )
+        destination = self._destination_blocker(product=product, store=store)
+        if destination is not None:
+            items.append(destination)
+        return items
 
     async def _ebay_blockers(self, *, product: Product, store: Store) -> list[PublishCheckItem]:
         """What eBay would refuse, checked before an offer is sent (EBAY-C3).
@@ -423,7 +517,9 @@ class PublishReadinessService(BaseService):
             blockers.append(
                 PublishCheckItem(
                     code=CODE_UNSUPPORTED_CHANNEL,
-                    message="Only Shopify and eBay publishing are supported right now.",
+                    message=(
+                        "Only Shopify, eBay and WooCommerce publishing are supported right now."
+                    ),
                     field="channel",
                     section="publishing",
                     action=None,
@@ -477,6 +573,8 @@ class PublishReadinessService(BaseService):
             )
         elif store.platform is StorePlatform.EBAY:
             blockers.extend(await self._ebay_blockers(product=product, store=store))
+        elif store.platform is StorePlatform.WOOCOMMERCE:
+            blockers.extend(self._woocommerce_blockers(product=product, store=store))
         elif store.platform is StorePlatform.SHOPIFY:
             connection = await self.shopify.connections.get_by_store(store_id)
             if connection is None or connection.status is not IntegrationStatus.CONNECTED:
@@ -562,6 +660,7 @@ class PublishReadinessService(BaseService):
 __all__ = [
     "CHANNEL_EBAY",
     "CHANNEL_SHOPIFY",
+    "CHANNEL_WOOCOMMERCE",
     "CODE_DESCRIPTION_EMPTY",
     "CODE_DESTINATION_MISMATCH",
     "CODE_DRAFT_VERSION_STALE",
