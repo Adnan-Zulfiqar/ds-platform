@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E1 Shopify fulfilment push
+
+- Mark a Shopify order shipped from its order page: carrier, tracking
+  number, optional link, notify choice, sent with `fulfillmentCreate` to the
+  order's open fulfillment orders; once per tracking number. New default
+  scopes `read_/write_merchant_managed_fulfillment_orders` — **stores
+  connected earlier must reconnect**. Verified with a faked Shopify client
+  only.
+
 ### Added — scheduled eBay jobs (B-011, owner-approved)
 
 - Hourly eBay order import (last two days) and a six-hourly price/stock
