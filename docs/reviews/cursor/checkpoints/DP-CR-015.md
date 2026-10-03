@@ -5,6 +5,26 @@ of its mechanism (below) and is **closed by the author, pending independent
 confirmation**. B stays **OPEN — cause unproven**. Green runs alone are still
 recorded as evidence only.
 
+## B experiment (2026-10-03) — flake B's mechanism reproduced on demand
+
+Two disposable copies of `develop` @ `02e12fc`. Both run
+`ai-product-studio-bulk.spec.ts` "the 51st product cannot be selected" with
+the list mock delayed 300 ms and without the test's wait for the Published
+rows (as the test was at the time of the CI flake). The difference: `nofix`
+reverts cbfa72b's `pageReady` guard on "Select page".
+
+| Variant | `--repeat-each=5 --retries=0` |
+|---|---|
+| nofix | **5/5 failed**: after switching to Published, "Select page" added nothing (`40 / 50 selected` instead of `50 / 50`) |
+| fix (develop) | **5/5 passed** |
+
+The mechanism is the CI flake's symptom class (Select page silently adding
+nothing). The count differs from the CI run's (30 vs 40 here), because the
+test then and now select a different number of rows before the switch; it
+does not prove the CI run took exactly this path. With A2's result, both
+flakes now have a reproduced mechanism and a fix in place. **Closed by the
+author, pending independent confirmation.**
+
 ## A2 experiment (2026-10-03) — flake A reproduced on demand
 
 Two disposable copies of `develop` @ `7af51f9`, identical except for one line.

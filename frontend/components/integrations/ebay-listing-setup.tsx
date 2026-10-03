@@ -199,9 +199,13 @@ function SetupForm({ setup, canManage }: { setup: EbayListingSetup; canManage: b
           onChange={(next) => choose("returnPolicyId", next)}
         />
         <div className="space-y-1">
-          <Label htmlFor="ebay-location">Ships from</Label>
           {enabledLocations.length === 0 ? (
-            <p id="ebay-location" className="text-sm text-muted-foreground" data-testid="ebay-no-locations">
+            <p className="text-sm font-medium">Ships from</p>
+          ) : (
+            <Label htmlFor="ebay-location">Ships from</Label>
+          )}
+          {enabledLocations.length === 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="ebay-no-locations">
               No warehouse on this eBay account yet{canManage ? " — add one below." : "."}
             </p>
           ) : (
@@ -278,9 +282,13 @@ function PolicySelect({
 }) {
   return (
     <div className="space-y-1">
-      <Label htmlFor={id}>{label}</Label>
       {policies.length === 0 ? (
-        <p id={id} className="text-sm text-muted-foreground">
+        <p className="text-sm font-medium">{label}</p>
+      ) : (
+        <Label htmlFor={id}>{label}</Label>
+      )}
+      {policies.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
           None on eBay for this marketplace — create one in Seller Hub.
         </p>
       ) : (

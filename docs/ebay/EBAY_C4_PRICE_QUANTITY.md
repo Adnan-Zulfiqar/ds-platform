@@ -12,6 +12,7 @@ through a publish (C3).
 |---|---|
 | Product edited (`PATCH /products/{id}`) | `after_commit` hook queues `ebay.push_price_quantity` |
 | Supplier refresh (`POST /products/{id}/sync`) | same hook |
+| Repricing (`POST /pricing/apply`, `POST /drafts/{id}/pricing/apply`) | same hook (added after review) |
 | Inventory sync (scheduled task or `POST /inventory/sync`) | products whose stock moved are queued after the sync commits |
 | Merchant, on the published product page | "Send price and stock to eBay now" — the same push, run in the request |
 

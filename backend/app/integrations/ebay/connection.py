@@ -60,7 +60,7 @@ from app.integrations.ebay.tokens import (
 )
 from app.models.ebay import EbayConnection, EbayConnectionStatus
 from app.models.store import StorePlatform, StoreStatus
-from app.repositories.ebay import EbayConnectionRepository
+from app.repositories.ebay import EbayConnectionRepository, EbayListingDefaultsRepository
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
 
@@ -267,8 +267,28 @@ class EbayConnectionService:
 
         existing = await self.connections.get_for_tenant()
         if existing is not None:
+            if existing.ebay_user_id and existing.ebay_user_id != identity.user_id:
+                # A different seller on the same row: the previous seller's
+                # policy ids, location keys and listing ids mean nothing for
+                # the new one, and leaving them would both publish with the
+                # wrong policies and hide them from the old seller's eBay
+                # deletion notice (which matches through this row's user id).
+                await self._erase_seller_artifacts(existing)
             return await self.connections.update(existing, **values)
         return await self.connections.create(**values)
+
+    async def _erase_seller_artifacts(self, connection: EbayConnection) -> int:
+        """Remove everything held for the connected seller except the row itself:
+        listing defaults (C2) and eBay listing rows (C3), and park the eBay
+        stores. Used by disconnect and by a reconnect as another seller."""
+        await EbayListingDefaultsRepository(self.session).delete_for_connection(connection.id)
+        stores = await StoreRepository(self.session).list_by_platform(StorePlatform.EBAY)
+        for store in stores:
+            if store.status is not StoreStatus.DISCONNECTED:
+                await StoreRepository(self.session).update(store, status=StoreStatus.DISCONNECTED)
+        return await StoreListingRepository(self.session).erase_for_stores(
+            [store.id for store in stores]
+        )
 
     # --- token authority ---------------------------------------------------
 
@@ -426,13 +446,7 @@ class EbayConnectionService:
         # editor stops offering them); their listing rows go, because they
         # hold the seller's eBay ids and mean nothing without the grant.
         # Listings already live on eBay are not touched.
-        stores = await StoreRepository(self.session).list_by_platform(StorePlatform.EBAY)
-        for store in stores:
-            if store.status is not StoreStatus.DISCONNECTED:
-                await StoreRepository(self.session).update(store, status=StoreStatus.DISCONNECTED)
-        erased = await StoreListingRepository(self.session).erase_for_stores(
-            [store.id for store in stores]
-        )
+        erased = await self._erase_seller_artifacts(connection)
 
         await self.connections.hard_delete(connection)
         logger.info("ebay_disconnected", connection_id=str(connection.id), listings_erased=erased)

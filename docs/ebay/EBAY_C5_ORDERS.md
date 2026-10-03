@@ -12,7 +12,8 @@ Status: **implemented; verified against a mocked eBay transport only.**
 - **Order → Mark shipped on eBay**: carrier and tracking number are sent for
   every line item (`createShippingFulfillment`), a shipment is recorded and
   the order becomes *shipped*. Sending the same tracking number again sends
-  nothing.
+  nothing; the order row is locked first, so two concurrent requests cannot
+  both send.
 - **Cancellation**: an order eBay reports cancelled is shown cancelled and can
   no longer be marked shipped.
 

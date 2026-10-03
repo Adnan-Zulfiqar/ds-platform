@@ -40,6 +40,7 @@ from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
 from app.services.seo_score import seo_score_dict
+from app.tasks.integrations.ebay import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
@@ -346,4 +347,6 @@ async def apply_draft_pricing(
     product_id: Annotated[uuid.UUID, Path()],
     payload: DraftPricingApplyRequest,
 ) -> DraftPricingWorkspaceRead:
-    return await PricingEngine(session).apply_draft_variant_pricing(product_id, payload)
+    workspace = await PricingEngine(session).apply_draft_variant_pricing(product_id, payload)
+    push_price_quantity_after_commit(session, [product_id])  # EBAY-C4
+    return workspace

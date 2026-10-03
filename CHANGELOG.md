@@ -10,6 +10,30 @@ production release.
 
 ## [Unreleased]
 
+### Fixed — review of EBAY-C2 to C6 and the OpenAI provider
+
+Three independent code reviews of the new eBay and AI code (2026-10-03);
+every finding below was confirmed against the code before it was fixed.
+
+- **Reconnecting as a different eBay seller** now erases the previous
+  seller's listing defaults and eBay listing rows (as disconnect does), and
+  readiness requires defaults from the current connection. Before, publishes
+  could carry the old seller's policy ids, and the old seller's eBay deletion
+  notice could no longer find their rows.
+- **One inventory item per marketplace.** The eBay SKU is now
+  `dp-<country>-<product id>`; one SKU on two marketplaces let a second
+  publish rewrite the first live listing and collapsed C4's per-listing push.
+- **The application token failing** (network, bad platform credentials, 429)
+  is a "try again" readiness blocker, not "reconnect eBay" or a 500.
+- **Repricing from the Pricing tab** (bulk and draft) now reaches eBay.
+- **"Mark shipped" locks the order row**, so two concurrent requests cannot
+  tell eBay twice.
+- **Migration `0041`**: partial index for the eBay buyer eraser, which runs on
+  every eBay account-deletion notice.
+- Call-limit parsing accepts eBay's capitalised API names; listing-setup and
+  eBay-details forms keep their "Saved" state; Review & publish copy follows
+  the chosen store's own listing; labels no longer point at non-inputs.
+
 ### Added
 
 - **eBay operations (EBAY-C6).** eBay 429s become `ebay_rate_limited`;

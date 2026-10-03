@@ -21,7 +21,7 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.ebay.connection import EbayConnectionService
-from app.integrations.ebay.exceptions import EbaySellerApiUnavailableError
+from app.integrations.ebay.exceptions import EbayRateLimitedError, EbaySellerApiUnavailableError
 from app.integrations.ebay.listing_content import (
     EBAY_TITLE_MAX,
     image_urls,
@@ -240,7 +240,11 @@ class PublishReadinessService(BaseService):
         defaults = await EbayListingDefaultsRepository(self.session).get_for_marketplace(
             marketplace_id
         )
-        if defaults is None or defaults.store_id != store.id:
+        if (
+            defaults is None
+            or defaults.store_id != store.id
+            or defaults.connection_id != connection.id
+        ):
             items.append(
                 PublishCheckItem(
                     code=CODE_EBAY_SETUP_MISSING,
@@ -338,7 +342,7 @@ class PublishReadinessService(BaseService):
             has_category, missing = await EbayProductDetailsService(
                 self.session
             ).missing_required_aspects(product.id, marketplace_id)
-        except EbaySellerApiUnavailableError:
+        except (EbaySellerApiUnavailableError, EbayRateLimitedError):
             items.append(
                 PublishCheckItem(
                     code=CODE_EBAY_REQUIREMENTS_UNAVAILABLE,

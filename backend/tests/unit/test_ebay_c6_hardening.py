@@ -96,3 +96,17 @@ def test_rate_limits_keep_only_the_sell_apis_we_call() -> None:
 def test_429_is_a_rate_limit_not_an_outage(status: int, error: type[Exception]) -> None:
     with pytest.raises(error):
         EbaySellerClient._raise_for(httpx.Response(status), call="test")
+
+
+def test_capitalised_api_names_are_recognised() -> None:
+    parsed = parse_rate_limits(
+        {
+            "rateLimits": [
+                {
+                    "apiName": "Inventory",
+                    "resources": [{"name": "r", "rates": [{"limit": 5, "remaining": 4}]}],
+                }
+            ]
+        }
+    )
+    assert [(c.api, c.remaining) for c in parsed] == [("inventory", 4)]

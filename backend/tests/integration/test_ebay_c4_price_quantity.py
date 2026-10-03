@@ -108,7 +108,7 @@ async def test_new_price_and_stock_are_sent_as_absolute_values(
     assert "sent to 1 eBay listing" in response.json()["message"]
     (sent,) = ebay.bulk_requests
     (line,) = sent["requests"]
-    assert line["sku"] == f"dp-{product_id}"
+    assert line["sku"] == f"dp-us-{product_id}"
     assert line["shipToLocationAvailability"] == {"quantity": 3}
     assert line["offers"] == [
         {

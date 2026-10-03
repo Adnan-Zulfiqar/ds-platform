@@ -104,7 +104,9 @@ export function EbayProductDetailsSection({
         </Alert>
       ) : (
         <DetailsForm
-          key={`${marketplaceId}:${details.data.categoryId ?? "none"}`}
+          // Per marketplace only: a save that sets the category must not
+          // remount the form, or its "Saved" confirmation is lost.
+          key={marketplaceId}
           productId={productId}
           details={details.data}
           canEdit={canEdit}
@@ -169,7 +171,11 @@ function DetailsForm({
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="ebay-category-query">Category</Label>
+        {canEdit ? (
+          <Label htmlFor="ebay-category-query">Category</Label>
+        ) : (
+          <p className="text-sm font-medium">Category</p>
+        )}
         <p className="text-sm" data-testid="ebay-current-category">
           {categoryLabel ?? <span className="text-muted-foreground">No category chosen yet.</span>}
         </p>

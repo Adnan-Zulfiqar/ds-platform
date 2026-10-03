@@ -19,6 +19,7 @@ from app.schemas.pricing import (
     PricingRuleUpdate,
 )
 from app.services.pricing_engine import PricingEngine
+from app.tasks.integrations.ebay import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
 
@@ -88,6 +89,8 @@ async def apply_prices(
     payload: PricingApplyRequest,
 ) -> list[PriceChangeRead]:
     changes = await PricingEngine(session).apply(payload, applied_by_user_id=principal.user_id)
+    # EBAY-C4: a new price must reach the product's eBay listings.
+    push_price_quantity_after_commit(session, [c.product_id for c in changes])
     return [PriceChangeRead.model_validate(c) for c in changes]
 
 

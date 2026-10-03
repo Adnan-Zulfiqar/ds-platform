@@ -25,7 +25,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -226,6 +226,17 @@ class EbayListingDefaultsRepository(TenantScopedRepository[EbayListingDefaults])
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, EbayListingDefaults)
+
+    async def delete_for_connection(self, connection_id: uuid.UUID) -> int:
+        """Physically delete this tenant's defaults for one connection (eBay
+        data; no soft delete, see the model). Tenant predicate included."""
+        result = await self.session.execute(
+            delete(EbayListingDefaults).where(
+                EbayListingDefaults.tenant_id == await self._current_tenant_id(),
+                EbayListingDefaults.connection_id == connection_id,
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def get_for_marketplace(self, marketplace_id: str) -> EbayListingDefaults | None:
         result = await self.session.execute(
