@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W5: mark WooCommerce orders shipped
+
+- A WooCommerce order's page offers "Mark shipped on WooCommerce". It sets
+  the order to `completed` and adds an order note with the carrier, the
+  tracking number and the link (shown to the customer if chosen), then
+  records the shipment. Repeating a tracking number sends nothing. The form
+  is shared with the Shopify one.
+
 ### Added — Track E7 W4a: import WooCommerce orders
 
 - "Import recent orders" on each connected WooCommerce store imports the
