@@ -292,9 +292,9 @@ in mind. Nothing here is committed to a phase number.
 | AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation merged (PR #26). Stage 10 merged (PR #36). Stage 11 report written; implementation accepted with notes by Cursor, release NOT READY; untagged. `StubProvider` only — no live model-quality verification. Production undeployed |
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | **M24A partial:** Open Exchange Rates + Shopify GraphQL currency authority. Remaining: M24B (AliExpress ship-to/GBP mapping), M24C (fees/tax/landed cost). Not production pricing-ready. |
-| Subscription billing | Plan limits attach to `tenants` |
+| Subscription billing | Track E6 — **blocked on owner decisions** (provider, plans, prices, limits; B-014). Proposal: [E6 doc](docs/track-e/E6_BILLING_PROPOSAL.md) |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
-| Admin panel | Platform operations across tenants |
+| Admin panel | Track E5 — **blocked on owner approval** of the identity model and a request-path unscoped class (B-013). Proposal: [E5 doc](docs/track-e/E5_PLATFORM_ADMIN_PROPOSAL.md) |
 | Email notifications | In-app centre exists; outbound email delivery does not |
 
 ---
