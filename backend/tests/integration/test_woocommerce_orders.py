@@ -4,6 +4,7 @@ the W2 fake, extended with an ``/orders`` listing."""
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -123,10 +124,10 @@ async def test_orders_are_imported_with_buyer_address_and_mapped_status(
         PaymentStatus.PAID,
     )
     assert (order.recipient_name, order.city, order.country_code) == ("Jane Buyer", "London", "GB")
-    assert str(order.total_amount) == "17.49" and order.currency == "GBP"
+    assert order.total_amount == Decimal("17.49") and order.currency == "GBP"
     item = await db_session.scalar(sa.select(OrderItem).where(OrderItem.order_id == order.id))
     assert item is not None and item.product_id == product_id
-    assert item.quantity == 2 and str(item.unit_price) == "6.25"
+    assert item.quantity == 2 and item.unit_price == Decimal("6.25")
 
     shipped = await db_session.scalar(sa.select(Order).where(Order.external_id == f"{store_id}:2"))
     assert shipped is not None and shipped.fulfillment_status is FulfillmentStatus.SHIPPED
