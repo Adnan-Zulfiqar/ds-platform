@@ -1,4 +1,12 @@
-import { ChevronRight, CreditCard, Plug, SlidersHorizontal, User, Users } from "lucide-react";
+import {
+  Bell,
+  ChevronRight,
+  CreditCard,
+  Plug,
+  SlidersHorizontal,
+  User,
+  Users,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType } from "react";
@@ -42,6 +50,13 @@ const SECTIONS: readonly SettingsSection[] = [
     label: "Global Rules",
     description: "Pricing and shipping rules applied across your catalogue.",
     icon: SlidersHorizontal,
+    available: true,
+  },
+  {
+    href: "/settings/notifications",
+    label: "Notifications",
+    description: "Choose which notifications you also get by email.",
+    icon: Bell,
     available: true,
   },
   {

@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E3 notifications by email
+
+- Notifications (except `info`) are emailed from an outbox by a 2-minute
+  beat task: user-targeted ones to that user, workspace ones to owners and
+  admins. Each user picks kinds under **Settings → Notifications**; the
+  default is failures only. Migration `0043` (additive). New setting
+  `EMAIL_APP_BASE_URL` for links. Verified with the recording provider only.
+
 ### Added — Track E2 sale fees (M24C)
 
 - Pricing rules take a **sale fee as a % of the selling price** (marketplace

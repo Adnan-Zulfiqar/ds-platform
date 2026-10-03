@@ -37,6 +37,9 @@ class NotificationService(BaseService):
             payload=payload or {},
             user_id=user_id,
             is_read=False,
+            # Track E3 outbox. INFO is in-app only; everything else is offered
+            # to email and the sweep decides by each recipient's preferences.
+            email_status=None if kind is NotificationKind.INFO else "pending",
         )
 
     async def list(

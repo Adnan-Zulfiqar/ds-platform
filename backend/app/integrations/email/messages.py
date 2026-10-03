@@ -13,7 +13,30 @@ from __future__ import annotations
 from app.core.config import settings
 from app.integrations.email.provider import EmailMessage, get_email_provider
 
-__all__ = ["send_password_reset_code"]
+__all__ = ["send_notification_email", "send_password_reset_code"]
+
+
+async def send_notification_email(*, email: str, title: str, body: str, href: str | None) -> None:
+    """Track E3: one notification to one recipient. Plain wording, the
+    notification's own title and text, and a link back into the app."""
+    from html import escape
+
+    link = (
+        f"{settings.email.app_base_url.rstrip('/')}{href}"
+        if href and href.startswith("/")
+        else None
+    )
+    text = f"{title}\n\n{body}\n" + (f"\nOpen in DropPilot: {link}\n" if link else "")
+    text += "\nYou can choose which notifications you get by email in Settings → Notifications.\n"
+    html = f"<p><strong>{escape(title)}</strong></p><p>{escape(body)}</p>"
+    if link:
+        html += f'<p><a href="{escape(link)}">Open in DropPilot</a></p>'
+    html += (
+        "<p>You can choose which notifications you get by email in Settings → Notifications.</p>"
+    )
+    await get_email_provider().send(
+        EmailMessage(to=email, subject=f"DropPilot: {title}"[:200], text=text, html=html)
+    )
 
 
 def _body(code: str) -> tuple[str, str]:

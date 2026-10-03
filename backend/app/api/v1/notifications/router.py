@@ -9,7 +9,13 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from app.api.deps import DbSession, RequireViewer
 from app.schemas.common import ListQueryParams, Page, list_query_params
-from app.schemas.notification import NotificationRead, NotificationUnreadCount
+from app.schemas.notification import (
+    NotificationEmailPreferencesRead,
+    NotificationEmailPreferencesUpdate,
+    NotificationRead,
+    NotificationUnreadCount,
+)
+from app.services.notification_email import EMAILABLE_KINDS, NotificationEmailService
 from app.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -30,6 +36,26 @@ async def list_notifications(
         size=params.size,
         total_items=total,
     )
+
+
+@router.get("/email-preferences", response_model=NotificationEmailPreferencesRead)
+async def get_email_preferences(
+    session: DbSession, principal: RequireViewer
+) -> NotificationEmailPreferencesRead:
+    """Track E3: the signed-in user's own email choices (failures by default)."""
+    kinds = await NotificationEmailService(session).preferences_for(principal.user_id)
+    return NotificationEmailPreferencesRead(kinds=kinds, available=list(EMAILABLE_KINDS))
+
+
+@router.put("/email-preferences", response_model=NotificationEmailPreferencesRead)
+async def set_email_preferences(
+    payload: NotificationEmailPreferencesUpdate, session: DbSession, principal: RequireViewer
+) -> NotificationEmailPreferencesRead:
+    """Each user sets only their own; any role may, because it is their inbox."""
+    kinds = await NotificationEmailService(session).set_preferences(
+        principal.user_id, payload.kinds
+    )
+    return NotificationEmailPreferencesRead(kinds=kinds, available=list(EMAILABLE_KINDS))
 
 
 @router.get("/unread-count", response_model=NotificationUnreadCount)

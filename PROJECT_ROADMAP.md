@@ -295,7 +295,7 @@ in mind. Nothing here is committed to a phase number.
 | Subscription billing | Plan limits attach to `tenants` |
 | Team management | Invitations; the `UserCreate` schema already exists for it |
 | Admin panel | Platform operations across tenants |
-| Email notifications | In-app centre exists; outbound email delivery does not |
+| Email notifications | Done (Track E3): outbox + per-user kinds; real-inbox delivery not yet verified — [E3 doc](docs/track-e/E3_EMAIL_NOTIFICATIONS.md) |
 
 ---
 
