@@ -10,6 +10,16 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W3: WooCommerce price and stock follow the draft
+
+- After a committed edit, pricing apply, or inventory or supplier sync, a
+  published WooCommerce product receives the absolute price and stock. A
+  refusal or wrong currency is recorded on the listing; an outage retries.
+  The after-commit hook moved from the eBay task module to
+  `tasks/integrations/channels.py` and now queues eBay and WooCommerce
+  together. There is no scheduled WooCommerce sweep yet (needs approval,
+  B-016).
+
 ### Added — Track E7 W2: publish to WooCommerce
 
 - Review & publish now offers connected WooCommerce stores. A one-variant

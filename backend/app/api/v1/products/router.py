@@ -75,7 +75,7 @@ from app.services.product_pipeline import (
 )
 from app.services.publish_readiness import PublishReadinessResult
 from app.tasks.ai import publish_pipeline_bulk_run
-from app.tasks.integrations.ebay import push_price_quantity_after_commit
+from app.tasks.integrations.channels import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/products", tags=["products"])
 
