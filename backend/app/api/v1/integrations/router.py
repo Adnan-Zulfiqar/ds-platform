@@ -29,6 +29,7 @@ from app.api.deps import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.request_body import read_bounded_body
+from app.integrations.aliexpress.exceptions import AliExpressOAuthStateError
 from app.integrations.aliexpress.schemas import (
     AliExpressAuthorizationResponse,
     AliExpressConnectionRead,
@@ -236,12 +237,22 @@ async def aliexpress_callback(
 
     try:
         connection = await service.complete_connection(code=code, state_token=state)
-    except Exception:
+    except AliExpressOAuthStateError:
+        # The state is unknown or expired *on this server*. Besides a stale
+        # tab, the common cause is the callback reaching a different DropPilot
+        # deployment than the one that issued the state (a public hostname
+        # routed elsewhere). Distinct reason, so the page can say so.
+        logger.warning("aliexpress_callback_failed", reason="state_unknown_or_expired")
+        return RedirectResponse(f"{return_url}?aliexpress=expired", status_code=303)
+    except Exception as exc:
         # Deliberately broad. Whatever went wrong, the user must land back in
         # the application rather than on an error page they cannot act on. The
-        # exception is logged with its traceback; the page shows a generic
-        # failure and the integrations page reports the stored `last_error`.
-        logger.exception("aliexpress_callback_failed")
+        # exception is logged with its traceback and its stable error code
+        # (never a token or an upstream body); the integrations page reports
+        # the stored `last_error`.
+        logger.exception(
+            "aliexpress_callback_failed", reason=getattr(exc, "code", type(exc).__name__)
+        )
         return RedirectResponse(f"{return_url}?aliexpress=failed", status_code=303)
 
     logger.info("aliexpress_callback_succeeded", tenant_id=str(connection.tenant_id))

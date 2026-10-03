@@ -111,15 +111,34 @@ class AliExpressTokenExpiredError(AliExpressAuthError):
 
 
 class AliExpressNotConnectedError(AliExpressError):
-    """No usable connection exists for this tenant.
+    """No usable merchant connection exists for this tenant.
 
-    A 409 rather than a 404: the tenant exists and the endpoint is correct, but
-    the operation cannot proceed in the current state.
+    Used for seller-account operations (orders, tracking). Product import uses
+    :class:`AliExpressCatalogNotConfiguredError` when the platform catalog
+    token is also missing.
     """
 
     code = "aliexpress_not_connected"
     message = "No AliExpress account is connected for this workspace."
     status_code = 409
+
+
+class AliExpressCatalogNotConfiguredError(AliExpressError):
+    """Product fetch cannot run: no platform catalog token and no merchant OAuth.
+
+    Import no longer requires every merchant to connect AliExpress. The Open
+    Platform still requires *an* access token for ``ds.product.get``; that
+    token is normally the platform catalog credential
+    (``ALIEXPRESS_CATALOG_ACCESS_TOKEN``).
+    """
+
+    code = "aliexpress_catalog_not_configured"
+    message = (
+        "Product import is not configured on this server. Set "
+        "ALIEXPRESS_CATALOG_ACCESS_TOKEN (platform dropshipper token), or "
+        "connect AliExpress only if you need orders and tracking."
+    )
+    status_code = 503
 
 
 class AliExpressResponseError(AliExpressError):
@@ -143,7 +162,7 @@ class AliExpressProductUnavailableError(AliExpressError):
     code = "aliexpress_product_unavailable"
     message = (
         "This AliExpress listing is unavailable, removed, restricted, or not "
-        "accessible through your connected AliExpress account."
+        "accessible through the catalogue credentials for this deployment."
     )
     status_code = 404
 
@@ -181,6 +200,7 @@ class AliExpressOAuthStateError(AliExpressError):
 __all__ = [
     "SERVICE_NAME",
     "AliExpressAuthError",
+    "AliExpressCatalogNotConfiguredError",
     "AliExpressError",
     "AliExpressNotConnectedError",
     "AliExpressOAuthStateError",

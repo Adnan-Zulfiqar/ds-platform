@@ -493,6 +493,28 @@ localised by design:
 
 ---
 
+## Catalogue import vs merchant OAuth
+
+AliExpress marks `aliexpress.ds.product.get` as **authorisation-required**: an
+access token must be present. That token does **not** have to be each
+merchant's seller grant.
+
+| Path | Credential | Used for |
+|---|---|---|
+| Platform catalog | `ALIEXPRESS_APP_KEY` / `SECRET` + `ALIEXPRESS_CATALOG_ACCESS_TOKEN` | Link → draft import, feed browse, catalogue sync |
+| Merchant OAuth | Per-tenant `aliexpress_connections` tokens | Order sync, tracking, any call that acts as the seller |
+
+`ProductImportService` calls `AliExpressService.client_for_catalog()`: platform
+catalog token first; merchant OAuth only as a fallback for workspaces that
+already connected. Publish still requires a **sales-channel** store (Shopify /
+eBay), not AliExpress.
+
+Operators obtain the catalog token by authorising DropPilot's AliExpress app
+once with a platform dropshipper account and storing the access token in the
+environment. Merchants are not asked to connect AliExpress before import.
+
+---
+
 ## Product import destinations (`ds.product.get`)
 
 Import uses `aliexpress.ds.product.get` with an explicit `ship_to_country`

@@ -34,8 +34,8 @@ const NOT_CONFIGURED = /not configured on this server/i;
 
 const DISCONNECT_CONSEQUENCES = [
   "The stored AliExpress authorization for this workspace is deleted.",
-  "Product imports and order placement through AliExpress stop until you reconnect.",
-  "Products already imported into DropPilot are kept.",
+  "Order placement and tracking sync through AliExpress stop until you reconnect.",
+  "Product import and drafts already in DropPilot are kept — import uses the platform catalog.",
 ];
 
 export function AliExpressCard() {

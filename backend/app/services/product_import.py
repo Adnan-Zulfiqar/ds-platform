@@ -58,7 +58,12 @@ _FEED_METHOD = "aliexpress.ds.recommend.feed.get"
 
 
 class ProductImportService(BaseService):
-    """Imports products from a connected supplier into a tenant's catalogue."""
+    """Imports products into a tenant's catalogue from the AliExpress catalog.
+
+    Merchant AliExpress OAuth is not required for import — see
+    ``AliExpressService.client_for_catalog``. Orders and tracking still need a
+    connected seller account.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -538,13 +543,13 @@ class ProductImportService(BaseService):
         )
 
     async def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Issue a supplier call using the tenant's stored credentials.
+        """Issue a catalogue call (platform token, else merchant OAuth).
 
-        Refreshes the token first when it is near expiry, so a long import is
-        not interrupted partway through by a lapse. That logic lives in
-        :class:`AliExpressService` and is reused rather than repeated.
+        Import and feed browse do not require the merchant to connect
+        AliExpress. Orders and tracking still use
+        :meth:`AliExpressService.authenticated_client`.
         """
-        client = await self.integration.authenticated_client()
+        client = await self.integration.client_for_catalog()
         return await client.call(method, params)
 
 

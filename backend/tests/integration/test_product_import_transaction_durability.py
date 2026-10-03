@@ -61,16 +61,16 @@ async def test_a_failed_import_survives_the_request_transaction_rolling_back() -
             tenant_id = uuid.UUID(body["identity"]["tenant"]["id"])
             headers = {"Authorization": f"Bearer {body['tokens']['accessToken']}"}
 
-            # No AliExpress connection exists for this brand-new tenant, so this
-            # is guaranteed to fail with `aliexpress_not_connected` (409) --
-            # exactly the ordinary, expected failure this test is about.
+            # No platform catalog token and no merchant OAuth — import fails
+            # with catalog-not-configured (503). That is the ordinary failure
+            # this durability test needs; the exact code is not the point.
             failed = await client.post(
                 IMPORT_URL,
                 json={"externalId": "3256806389000685", "shipToCountry": "US"},
                 headers=headers,
             )
-            assert failed.status_code == 409, failed.text
-            assert failed.json()["code"] == "aliexpress_not_connected"
+            assert failed.status_code == 503, failed.text
+            assert failed.json()["code"] == "aliexpress_catalog_not_configured"
 
             # The request that just 409'd rolled back its own transaction. If
             # the failure row lived only in that transaction, it is gone now --
@@ -85,7 +85,7 @@ async def test_a_failed_import_survives_the_request_transaction_rolling_back() -
                 "one row whose purpose is to survive its own failure"
             )
             assert items[0]["status"] == "failed"
-            assert items[0]["errorCode"] == "aliexpress_not_connected"
+            assert items[0]["errorCode"] == "aliexpress_catalog_not_configured"
 
         # Belt and braces: confirm durability against a *fresh* connection too,
         # independent of anything the app's own connection pool might be
@@ -106,7 +106,7 @@ async def test_a_failed_import_survives_the_request_transaction_rolling_back() -
 
         assert len(rows) == 1
         assert rows[0].status == "failed"
-        assert rows[0].error_code == "aliexpress_not_connected"
+        assert rows[0].error_code == "aliexpress_catalog_not_configured"
     finally:
         if tenant_id is not None:
             # This test commits for real (that is the point), so it cannot

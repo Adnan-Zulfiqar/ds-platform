@@ -10,6 +10,22 @@ production release.
 
 ## [Unreleased]
 
+### Changed — AliExpress import without merchant OAuth; clearer callback failures
+
+- **Paste-to-import no longer requires merchant OAuth.** Product fetch uses
+  `ALIEXPRESS_CATALOG_ACCESS_TOKEN` (the platform dropshipper grant) via
+  `AliExpressService.client_for_catalog()`, falling back to the merchant
+  connection. Merchant connect is for orders and tracking. With neither, the
+  import fails with `aliexpress_catalog_not_configured` (503), not
+  "connect AliExpress". Home, import dialog and Integrations copy follow.
+- **The OAuth callback says why it failed.** An unknown or expired state
+  now redirects with `?aliexpress=expired` ("Authorization not
+  recognised"). That is also what a callback routed to a different
+  DropPilot server looks like, which was the cause on the whiteto setup;
+  see `docs/operations/WHITETO_LOCAL_CLOUDFLARE.md`. Failures log a stable
+  reason code. A pending connection shows its `last_error` and explains a
+  callback that never arrived.
+
 ### Added — Track E7 W4b: live WooCommerce orders
 
 - Connecting a WooCommerce store also registers `order.created` and

@@ -13,6 +13,7 @@ live traffic.
 from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import (
     AliExpressAuthError,
+    AliExpressCatalogNotConfiguredError,
     AliExpressError,
     AliExpressNotConnectedError,
     AliExpressOAuthStateError,
@@ -26,6 +27,7 @@ from app.integrations.aliexpress.service import AliExpressService
 
 __all__ = [
     "AliExpressAuthError",
+    "AliExpressCatalogNotConfiguredError",
     "AliExpressClient",
     "AliExpressError",
     "AliExpressNotConnectedError",

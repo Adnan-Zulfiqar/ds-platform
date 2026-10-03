@@ -296,7 +296,10 @@ export function deriveAliExpressChannel(
   }
   if (!connection) {
     return {
-      ...state("not-connected", "Connect your AliExpress seller account to import supplier products."),
+      ...state(
+        "not-connected",
+        "Connect your AliExpress account for orders and tracking. Product import does not need it when the server has a catalog token.",
+      ),
       actions: ["connect"],
       message: null,
     };
@@ -305,10 +308,10 @@ export function deriveAliExpressChannel(
     return {
       ...state(
         "pending",
-        "Authorization on AliExpress was started but not completed. Continue to finish it, or disconnect to start over.",
+        "Authorization on AliExpress was started but not completed. Continue to finish it, or disconnect to start over. If you finished on AliExpress and still see this, AliExpress's return to DropPilot did not reach this server.",
       ),
       actions: ["continue", "disconnect"],
-      message: null,
+      message: connection.lastError,
     };
   }
   if (connection.status === "expired" || connection.isTokenExpired) {

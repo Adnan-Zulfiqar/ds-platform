@@ -264,7 +264,7 @@ test.describe("Channels — AliExpress", () => {
     await expect(card.getByText("Last sync")).toBeVisible();
     await card.getByRole("button", { name: "Disconnect" }).click();
     const dialog = page.getByTestId("disconnect-dialog-aliexpress");
-    await expect(dialog).toContainText(/Products already imported into DropPilot are kept/i);
+    await expect(dialog).toContainText(/drafts already in DropPilot are kept/i);
     await page.getByTestId("disconnect-confirm-aliexpress").click();
     await expect(card.getByTestId("channel-aliexpress-status")).toHaveText("Not connected", { timeout: 10_000 });
     expect(log.requests.filter((r) => r.method === "DELETE" && r.path === "/integrations/aliexpress/disconnect")).toHaveLength(1);

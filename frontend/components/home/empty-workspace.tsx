@@ -28,10 +28,18 @@ export function EmptyWorkspace({ channels }: EmptyWorkspaceProps) {
 
   const steps = [
     {
+      id: "import",
+      done: false,
+      title: "Import your first product",
+      detail:
+        "Paste an AliExpress product ID or URL. No AliExpress login needed — it lands in Drafts for you to edit.",
+      action: <ImportProductDialog />,
+    },
+    {
       id: "shopify",
       done: shopifyDone,
-      title: "Connect your Shopify store",
-      detail: "Where your products will be published.",
+      title: "Connect your store",
+      detail: "Required when you publish — Shopify (or another sales channel) is where listings go live.",
       action: (
         <Button variant={shopifyDone ? "outline" : "default"} size="sm" asChild>
           <Link href="/settings/integrations">{shopifyDone ? "Manage" : "Connect Shopify"}</Link>
@@ -41,20 +49,13 @@ export function EmptyWorkspace({ channels }: EmptyWorkspaceProps) {
     {
       id: "aliexpress",
       done: aliexpressDone,
-      title: "Connect AliExpress",
-      detail: "Where your supplier products come from.",
+      title: "Connect AliExpress (orders & tracking)",
+      detail: "Only when you place supplier orders or sync tracking — not required to import or edit.",
       action: (
         <Button variant={aliexpressDone ? "outline" : "default"} size="sm" asChild>
           <Link href="/settings/integrations">{aliexpressDone ? "Manage" : "Connect AliExpress"}</Link>
         </Button>
       ),
-    },
-    {
-      id: "import",
-      done: false,
-      title: "Import your first product",
-      detail: "Paste an AliExpress product ID or URL. It lands in Drafts for you to review before publishing.",
-      action: <ImportProductDialog />,
     },
   ];
 
@@ -68,7 +69,7 @@ export function EmptyWorkspace({ channels }: EmptyWorkspaceProps) {
         Set up your workspace
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Three steps take a supplier product to a published listing.
+        Import and edit first. Connect a store when you publish; connect AliExpress only for orders.
       </p>
       <ol className="mt-4 space-y-4">
         {steps.map((step, index) => {

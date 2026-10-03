@@ -39,6 +39,11 @@ const ALIEXPRESS_CALLBACK: Record<
     title: "Authorization expired",
     body: "That authorization request is no longer valid. Please start again.",
   },
+  expired: {
+    variant: "destructive",
+    title: "Authorization not recognised",
+    body: "DropPilot did not recognise this AliExpress authorization: it expired, or it was started on a different DropPilot server than the one AliExpress returned to. Disconnect AliExpress below and connect again; if it keeps happening, the public callback address is not reaching this server.",
+  },
 };
 
 const SHOPIFY_CALLBACK: Record<
