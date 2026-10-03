@@ -2,7 +2,7 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-02 — Cursor's independent verdict recorded.
+**Updated:** 2026-10-03 — remaining roadmap Tracks A–D in progress (owner standing order).
 
 | Item | Value |
 |---|---|
@@ -22,10 +22,17 @@ Single continuation point after an interruption. Overwritten, not appended.
   `%LOCALAPPDATA%\docker-secrets-engine.stale-*` (B-008) — safe to delete
   once Docker has run normally for a while.
 
+## Remaining roadmap (Tracks A–D), 2026-10-03
+
+| Track | State |
+|---|---|
+| A | Agent items done (A1 images, A2 flake A reproduced). A3–A5 OPEN with owner checklists in `BLOCKERS.md`; B-009 (encryption key missing from root `.env`) found |
+| B | `OpenAIProvider` — PR #46 (mocked-transport tests only) |
+| C | Audit only; nothing left that is not blocked on A4/A5 |
+| D | EBAY-C2 listing setup on `feat/ebay-c2-listing-setup`; C3–C6 follow |
+
 ## Next safe action
 
-No repository-owned implementation is left in scope. Do **not** tag
-`phase-9-complete`, close DP-CR-015, or mark Draft Editor Stage 8 complete.
-Remaining: owner rebuild of the `droppilot` stack from `develop` (B-007);
-external access for B-002, B-003, B-004; the Claude return review of all
-commits since the Stage 5 takeover (Cursor's closing checkpoint).
+Continue the open track PRs in order (A docs → #46 → C2 → C3…). Do **not**
+tag `phase-9-complete` or mark Draft Editor Stage 8 complete. Owner items:
+B-009 first, then B-007 recreate, then B-002/B-003/B-004 checklists.
