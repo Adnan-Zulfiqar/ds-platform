@@ -40,6 +40,7 @@ from app.models.inventory import (
     InventoryChangeReason,
     InventorySyncRun,
 )
+from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationEmailPreference, NotificationKind
 from app.models.order import (
     FulfillmentStatus,
@@ -180,5 +181,6 @@ __all__ = [
     "UUIDPrimaryKeyMixin",
     "User",
     "UserIdentity",
+    "UserInvitation",
     "UserRole",
 ]
