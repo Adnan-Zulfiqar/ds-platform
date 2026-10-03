@@ -18,7 +18,7 @@ from app.schemas.inventory import (
 )
 from app.services.inventory_sync import InventorySyncService
 from app.services.product_import import ProductImportService
-from app.tasks.integrations.ebay import push_price_quantity_after_commit
+from app.tasks.integrations.channels import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 

@@ -19,7 +19,7 @@ from app.schemas.pricing import (
     PricingRuleUpdate,
 )
 from app.services.pricing_engine import PricingEngine
-from app.tasks.integrations.ebay import push_price_quantity_after_commit
+from app.tasks.integrations.channels import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
 

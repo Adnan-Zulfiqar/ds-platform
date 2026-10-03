@@ -40,7 +40,7 @@ from app.services.product import ProductService
 from app.services.product_import import ProductImportService
 from app.services.product_optimization import ProductOptimizationService
 from app.services.seo_score import seo_score_dict
-from app.tasks.integrations.ebay import push_price_quantity_after_commit
+from app.tasks.integrations.channels import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 
