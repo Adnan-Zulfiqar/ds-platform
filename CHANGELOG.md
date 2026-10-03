@@ -10,6 +10,40 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E4 team invitations
+
+- Owners and admins invite colleagues as admin, member or viewer from
+  **Settings → Team**. A one-time link valid for 7 days lets the recipient set
+  a password, accept the terms and join, signed in. Re-inviting rotates the
+  link, and revoking kills it. Migration `0044` adds `user_invitations`
+  (additive). An address that already has a DropPilot account cannot accept
+  until login is tenant-qualified (decision D-013). Verified with the
+  recording email provider only.
+
+### Added — Track E3 notifications by email
+
+- Notifications (except `info`) are emailed from an outbox by a 2-minute
+  beat task: user-targeted ones to that user, workspace ones to owners and
+  admins. Each user picks kinds under **Settings → Notifications**; the
+  default is failures only. Migration `0043` (additive). New setting
+  `EMAIL_APP_BASE_URL` for links. Verified with the recording provider only.
+
+### Added — Track E2 sale fees (M24C)
+
+- Pricing rules take a **sale fee as a % of the selling price** (marketplace
+  and payment fees). Prices are grossed up so markup, target margin and
+  profit floors hold after the fee; reported profit and margin are net.
+  Migration `0042` (nullable: existing rules price exactly as before).
+
+### Added — Track E1 Shopify fulfilment push
+
+- Mark a Shopify order shipped from its order page: carrier, tracking
+  number, optional link, notify choice, sent with `fulfillmentCreate` to the
+  order's open fulfillment orders; once per tracking number. New default
+  scopes `read_/write_merchant_managed_fulfillment_orders` — **stores
+  connected earlier must reconnect**. Verified with a faked Shopify client
+  only.
+
 ### Added — scheduled eBay jobs (B-011, owner-approved)
 
 - Hourly eBay order import (last two days) and a six-hourly price/stock

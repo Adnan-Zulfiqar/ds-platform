@@ -37,6 +37,8 @@ const PUBLIC_ROUTES = [
   "/login",
   "/register",
   "/forgot-password",
+  // Track E4: a team invitation is accepted before the person has an account.
+  "/invite",
   "/unauthorized",
   // The privacy policy has to be readable by someone with no account — eBay
   // fetches it to validate the RuName, and a policy behind a login is not a

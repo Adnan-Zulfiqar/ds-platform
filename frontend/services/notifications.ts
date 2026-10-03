@@ -94,3 +94,36 @@ export function useMarkAllNotificationsRead() {
     },
   });
 }
+
+/** Track E3: which notification kinds the signed-in user gets by email. */
+export interface EmailPreferences {
+  kinds: NotificationKind[];
+  available: NotificationKind[];
+}
+
+const emailPreferencesKey = [...notificationKeys.all, "email-preferences"] as const;
+
+export function useEmailPreferences(): UseQueryResult<EmailPreferences> {
+  return useQuery({
+    queryKey: emailPreferencesKey,
+    queryFn: async () => {
+      const { data } = await apiClient.get<EmailPreferences>("/notifications/email-preferences");
+      return data;
+    },
+  });
+}
+
+export function useSaveEmailPreferences() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (kinds: NotificationKind[]) => {
+      const { data } = await apiClient.put<EmailPreferences>("/notifications/email-preferences", {
+        kinds,
+      });
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(emailPreferencesKey, data);
+    },
+  });
+}

@@ -50,6 +50,7 @@ def make_rule(**overrides: object) -> PricingRule:
         "max_price": None,
         "duty_percent": None,
         "fees_fixed": None,
+        "sale_fee_percent": None,
         "rounding": PriceRounding.NONE,
         "compare_at_percent": None,
         "shipping_cost_handling": ShippingCostHandling.INCLUDE_IN_PRICE,

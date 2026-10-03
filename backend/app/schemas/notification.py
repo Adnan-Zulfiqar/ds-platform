@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import Field
+
 from app.models.notification import NotificationKind
 from app.schemas.base import CamelCaseModel
 
@@ -25,3 +27,14 @@ class NotificationRead(CamelCaseModel):
 
 class NotificationUnreadCount(CamelCaseModel):
     unread: int
+
+
+class NotificationEmailPreferencesRead(CamelCaseModel):
+    """Track E3: the kinds this user gets by email, and every kind they could."""
+
+    kinds: list[str]
+    available: list[str]
+
+
+class NotificationEmailPreferencesUpdate(CamelCaseModel):
+    kinds: list[str] = Field(default_factory=list, max_length=32)

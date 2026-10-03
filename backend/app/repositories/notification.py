@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationEmailPreference
 from app.repositories.base import TenantScopedRepository
 
 
@@ -75,3 +75,39 @@ class NotificationRepository(TenantScopedRepository[Notification]):
         result = await self.session.execute(stmt)
         await self.session.flush()
         return int(getattr(result, "rowcount", 0) or 0)
+
+    async def pending_email(self, *, limit: int) -> list[Notification]:
+        """This tenant's notifications waiting to be emailed, oldest first.
+
+        ``SKIP LOCKED``: two sweeps running at once take different rows, so a
+        notification is never mailed twice by a race.
+        """
+        result = await self.session.execute(
+            self._base_query()
+            .where(Notification.email_status == "pending")
+            .order_by(Notification.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return list(result.scalars().all())
+
+
+class NotificationEmailPreferenceRepository(TenantScopedRepository[NotificationEmailPreference]):
+    """Per-user email opt-ins (Track E3)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, NotificationEmailPreference)
+
+    async def for_users(self, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[str]]:
+        if not user_ids:
+            return {}
+        result = await self.session.execute(
+            self._base_query().where(NotificationEmailPreference.user_id.in_(user_ids))
+        )
+        return {row.user_id: list(row.kinds or []) for row in result.scalars().all()}
+
+    async def get_for_user(self, user_id: uuid.UUID) -> NotificationEmailPreference | None:
+        result = await self.session.execute(
+            self._base_query().where(NotificationEmailPreference.user_id == user_id)
+        )
+        return result.scalar_one_or_none()

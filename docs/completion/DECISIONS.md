@@ -186,3 +186,16 @@ order: Shopify fulfilment push → FX M24B/M24C → outbound email → team
 invites → platform admin panel → subscription billing → WooCommerce / Etsy /
 TikTok. Each one: plan doc, implementation, gates, PR, CI, merge. Live
 provider testing stays with the owner.
+
+## D-013 — Team invitation links name their tenant (Track E4)
+
+Accepting an invitation has no session, so the link carries
+`<tenant id>.<secret>`. The invitation is looked up inside that tenant by the
+SHA-256 of a 256-bit secret. A forged tenant id finds nothing and is a 404.
+The rejected alternative was an unscoped lookup by token hash, which would
+put a cross-tenant query on a request path (CLAUDE.md §4).
+
+Trade-off: an address that already has an account anywhere cannot accept,
+because login cannot yet choose between two accounts that share a password.
+Fixing that means tenant-qualified login, a separate decision. Details:
+`docs/track-e/E4_TEAM_INVITATIONS.md`.

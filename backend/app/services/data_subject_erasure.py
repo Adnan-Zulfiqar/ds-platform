@@ -60,7 +60,8 @@ from app.models.email_verification import EmailVerificationToken
 from app.models.identity import UserIdentity
 from app.models.integration import AliExpressConnection
 from app.models.inventory import InventorySyncRun
-from app.models.notification import Notification
+from app.models.invitation import UserInvitation
+from app.models.notification import Notification, NotificationEmailPreference
 from app.models.order import OrderSyncRun
 from app.models.pipeline_bulk import PipelineBulkRun, PipelineBulkRunCancelRequest
 from app.models.pricing import GlobalRuleVersion, PriceChange
@@ -174,11 +175,36 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
     UserReference(
         "notifications", Notification, Notification.user_id, "delete", Notification.tenant_id
     ),
+    # Track E3: which kinds this person wanted by email. Personal, and
+    # meaningless without them.
+    UserReference(
+        "notification_email_preferences",
+        NotificationEmailPreference,
+        NotificationEmailPreference.user_id,
+        "delete",
+        NotificationEmailPreference.tenant_id,
+    ),
     # A federated identity exists only so one person can sign in. Leaving it
     # behind would keep a Google subject pointing at an erased account — and
     # would let that Google account sign back into it.
     UserReference("user_identities", UserIdentity, UserIdentity.user_id, "delete", None),
     # Workspace-owned rows that merely name who acted.
+    # Track E4: an invitation names who sent it and whom it became; the
+    # workspace keeps the record, the person's link to it is cleared.
+    UserReference(
+        "user_invitations",
+        UserInvitation,
+        UserInvitation.invited_by_user_id,
+        "clear",
+        UserInvitation.tenant_id,
+    ),
+    UserReference(
+        "user_invitations",
+        UserInvitation,
+        UserInvitation.accepted_user_id,
+        "clear",
+        UserInvitation.tenant_id,
+    ),
     # `ai_prompts` carries no tenant column — the user id is the only scope
     # available, and a user belongs to exactly one tenant, so it is sufficient.
     UserReference("ai_prompts", AIPrompt, AIPrompt.created_by_user_id, "clear", None),

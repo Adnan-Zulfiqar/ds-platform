@@ -62,6 +62,7 @@ _PRICING_SNAPSHOT_FIELDS = (
     "max_price",
     "duty_percent",
     "fees_fixed",
+    "sale_fee_percent",
     "rounding",
     "compare_at_percent",
     "shipping_cost_handling",

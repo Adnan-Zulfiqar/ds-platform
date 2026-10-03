@@ -89,6 +89,8 @@ class PricingRuleWrite(_ScopedRuleBase):
 
     duty_percent: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=4)
     fees_fixed: Decimal | None = _MONEY
+    #: Track E2: marketplace/payment fee as a share of the selling price.
+    sale_fee_percent: Decimal | None = Field(default=None, ge=0, lt=100, decimal_places=4)
 
     rounding: PriceRounding = PriceRounding.NONE
     compare_at_percent: Decimal | None = _PERCENT
@@ -246,6 +248,7 @@ class PricingRuleRead(CamelCaseModel):
     max_price: Decimal | None
     duty_percent: Decimal | None
     fees_fixed: Decimal | None
+    sale_fee_percent: Decimal | None
     rounding: PriceRounding
     compare_at_percent: Decimal | None
     shipping_cost_handling: ShippingCostHandling

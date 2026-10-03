@@ -1,4 +1,12 @@
-import { ChevronRight, CreditCard, Plug, SlidersHorizontal, User, Users } from "lucide-react";
+import {
+  Bell,
+  ChevronRight,
+  CreditCard,
+  Plug,
+  SlidersHorizontal,
+  User,
+  Users,
+} from "lucide-react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import type { ComponentType } from "react";
@@ -45,6 +53,13 @@ const SECTIONS: readonly SettingsSection[] = [
     available: true,
   },
   {
+    href: "/settings/notifications",
+    label: "Notifications",
+    description: "Choose which notifications you also get by email.",
+    icon: Bell,
+    available: true,
+  },
+  {
     href: "/settings/profile",
     label: "Profile",
     description: "Your name, email address, and password.",
@@ -54,9 +69,9 @@ const SECTIONS: readonly SettingsSection[] = [
   {
     href: "/settings/team",
     label: "Team",
-    description: "Invite colleagues and manage their roles.",
+    description: "Invite colleagues and see who has access.",
     icon: Users,
-    available: false,
+    available: true,
   },
   {
     href: "/settings/billing",

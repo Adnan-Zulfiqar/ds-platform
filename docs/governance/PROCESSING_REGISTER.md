@@ -259,6 +259,37 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Evidence** — `app/services/password_reset.py`,
   `app/integrations/email/`, `app/api/v1/auth/router.py`.
 
+### 10c. Notification email (Track E3)
+
+* **Data** — the recipient's address; the notification's title, text and an
+  in-app link; per-user choice of notification kinds
+  (`notification_email_preferences`); per-notification `email_status` and
+  `emailed_at`.
+* **Purpose** — tell the people who run a workspace that something needs
+  action (by default only failures), and anything else they opted into.
+* **Role** — controller. **Proposed basis** — performance of a contract.
+* **Recipients** — Resend, which delivers the message.
+* **Retention** — preferences live as long as the user; they are **deleted**
+  on platform-user erasure. Status columns live as long as the notification.
+* **Evidence** — `app/services/notification_email.py`,
+  `app/services/data_subject_erasure.py`.
+
+### 10d. Team invitations (Track E4)
+
+* **Data** — the invited address, the role offered, who invited them, and
+  timestamps. Only a SHA-256 of the link secret is stored.
+* **Purpose** — let a workspace admin add a colleague.
+* **Role** — controller for the invitation email, on the workspace's
+  instruction. **Proposed basis** — performance of a contract with the
+  workspace, plus a legitimate interest in the invitee receiving one message
+  they asked a colleague to send.
+* **Recipients** — Resend, which delivers the message.
+* **Retention** — invitations expire after 7 days but the row is kept as the
+  workspace's audit record. When a user is erased, the references to them
+  (`invited_by_user_id`, `accepted_user_id`) are **cleared**.
+* **Evidence** — `app/services/team_invitations.py`,
+  `app/services/data_subject_erasure.py`.
+
 ### 11. Support and privacy requests
 
 * **Data** — whatever the person includes in their email.

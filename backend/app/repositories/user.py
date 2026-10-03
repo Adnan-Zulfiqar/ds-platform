@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.role import Role, UserRole
 from app.models.user import User
 from app.repositories.base import BaseRepository, TenantScopedRepository
 
@@ -53,6 +54,22 @@ class UserRepository(TenantScopedRepository[User]):
 
     async def email_taken(self, email: str) -> bool:
         return await self.get_by_email(email) is not None
+
+    async def active_with_roles(self, role_names: tuple[str, ...]) -> list[User]:
+        """This tenant's active users holding any of ``role_names`` (Track E3:
+        who hears about workspace-wide notifications)."""
+        query = (
+            self._base_query()
+            .where(User.is_active.is_(True))
+            .where(
+                User.id.in_(
+                    select(UserRole.user_id)
+                    .join(Role, Role.id == UserRole.role_id)
+                    .where(Role.name.in_(role_names))
+                )
+            )
+        )
+        return list((await self.session.execute(query)).scalars().all())
 
 
 class AuthenticationUserRepository(BaseRepository[User]):

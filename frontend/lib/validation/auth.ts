@@ -68,6 +68,21 @@ export const registerSchema = z
 
 export type RegisterFormValues = z.infer<typeof registerSchema>;
 
+/** Track E4: accepting a team invitation. The address comes from the link. */
+export const acceptInvitationSchema = z
+  .object({
+    firstName: z.string().trim().max(128, "First name is too long").optional(),
+    lastName: z.string().trim().max(128, "Last name is too long").optional(),
+    password: passwordSchema,
+    confirmPassword: z.string().min(1, "Confirm your password"),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export type AcceptInvitationFormValues = z.infer<typeof acceptInvitationSchema>;
+
 export const forgotPasswordSchema = z.object({
   email: emailSchema,
 });

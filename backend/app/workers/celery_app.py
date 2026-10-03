@@ -96,6 +96,12 @@ celery_app.conf.update(
     # tenants' supplier quota, and the windows overlap the interval so a missed
     # beat leaves overlap rather than a gap.
     beat_schedule={
+        # Track E3: notification email outbox. Two minutes keeps a failure
+        # alert timely; an idle sweep is one indexed query per workspace.
+        "notifications-send-emails": {
+            "task": "notifications.send_emails",
+            "schedule": 60 * 2,
+        },
         # B-011 (owner-approved 2026-10-03): eBay order import and a price /
         # stock backstop. Both fan out one task per connected workspace.
         "ebay-import-orders": {

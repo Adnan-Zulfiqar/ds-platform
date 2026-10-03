@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 
 import { apiClient } from "@/lib/api-client";
@@ -210,4 +211,48 @@ export async function completePasswordReset(payload: {
     payload,
   );
   return data;
+}
+
+/** Track E4: what a team invitation link is for, before accepting it. */
+export interface InvitationPreview {
+  email: string;
+  role: string;
+  workspaceName: string;
+  expiresAt: string;
+}
+
+export async function previewInvitation(token: string): Promise<InvitationPreview> {
+  const { data } = await apiClient.post<InvitationPreview>("/auth/invitations/preview", {
+    token,
+  });
+  return data;
+}
+
+export interface AcceptInvitationPayload {
+  token: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+  acceptedLegal: boolean;
+}
+
+export async function acceptInvitation(payload: AcceptInvitationPayload): Promise<AuthResponse> {
+  const { acceptedLegal, ...rest } = payload;
+  const { data } = await apiClient.post<AuthResponse>("/auth/invitations/accept", {
+    ...rest,
+    ...legalAcceptance(acceptedLegal),
+  });
+  setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
+  return data;
+}
+
+/** The preview is keyed by the token; it is never retried, because a 404
+ * here is an answer ("this link is dead"), not a transient failure. */
+export function useInvitationPreview(token: string | null) {
+  return useQuery({
+    queryKey: [...authKeys.all, "invitation", token],
+    queryFn: () => previewInvitation(token as string),
+    enabled: Boolean(token),
+    retry: false,
+  });
 }
