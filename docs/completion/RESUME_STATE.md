@@ -42,7 +42,7 @@ Single continuation point after an interruption. Overwritten, not appended.
 | E4 team invitations | Merged (#59) |
 | E5 platform admin | **Blocked, B-013**: owner chooses option A/B/C (`docs/track-e/E5_PLATFORM_ADMIN_PROPOSAL.md`) |
 | E6 billing | **Blocked, B-014**: owner decisions and sandbox account (`docs/track-e/E6_BILLING_PROPOSAL.md`) |
-| E7 WooCommerce | W1 #60, W2 #61, W3 #62, W4a #63 merged. W5 #64 and W4b webhooks #65 merge in that order once CI is green. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
+| E7 WooCommerce | All merged: W1 #60, W2 #61, W3 #62, W4a #63, W5 #64, W4b webhooks #65. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
 
 Every remaining Track E item is an owner decision or an owner registration.
 Nothing in Track E was verified against a live provider. For each stage,

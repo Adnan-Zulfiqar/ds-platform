@@ -216,9 +216,7 @@ Owner order D-012: E1 → E7, gates → PR → CI → merge for each item.
   - E3 notification email (#57);
   - E4 team invitations (#59);
   - Track E proposals and blockers (#58);
-  - E7 WooCommerce W1–W4a (#60–#63).
-- **Open:** W5 ship (#64) and W4b webhooks (#65). Their local full gates
-  passed; they wait for CI only.
+  - E7 WooCommerce W1–W5 and W4b webhooks (#60–#65).
 - **Blocked on the owner:**
   - B-013 platform admin;
   - B-014 billing;
