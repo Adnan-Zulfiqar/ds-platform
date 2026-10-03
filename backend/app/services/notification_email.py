@@ -68,6 +68,7 @@ class NotificationEmailService:
     def __init__(self, session: AsyncSession) -> None:
         self.notifications = NotificationRepository(session)
         self.preferences = NotificationEmailPreferenceRepository(session)
+        self.session = session
         self.users = UserRepository(session)
 
     # --- preferences -------------------------------------------------------
@@ -120,6 +121,9 @@ class NotificationEmailService:
             notification.email_status = "sent"
             notification.emailed_at = datetime.now(UTC)
             sent += 1
+        # Sessions run with autoflush off: without this, a second sweep in the
+        # same session would select these rows as still pending and resend.
+        await self.session.flush()
         logger.info("notification_emails_delivered", sent=sent, skipped=skipped, failed=failed)
         return DeliveryOutcome(sent, skipped, failed)
 
