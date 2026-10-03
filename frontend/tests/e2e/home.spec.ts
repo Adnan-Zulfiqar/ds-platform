@@ -5,7 +5,6 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/provider-isolation";
 import { resolveSuiteShotRoot } from "./helpers/evidence-paths";
 import {
-  CONNECTED_ALIEXPRESS,
   CONNECTED_SHOPIFY,
   HOME_DRAFT_IDS,
   NO_ALIEXPRESS,

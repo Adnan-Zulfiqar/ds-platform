@@ -205,7 +205,7 @@ test.describe("Drafts page", () => {
     await expect(page.getByRole("link", { name: "View Draft" })).toBeVisible();
   });
 
-  test("surfaces the server's reason when no supplier is connected", async ({
+  test("surfaces the server's reason when import is not configured", async ({
     page,
   }) => {
     await registerAndSignIn(page);
@@ -227,8 +227,10 @@ test.describe("Drafts page", () => {
     });
     await page.getByTestId("import-as-draft-submit").click();
 
-    expect((await response).status()).toBe(409);
-    await expect(page.getByRole("alert")).toBeVisible();
+    // No platform catalog token and no merchant connection: the server says
+    // import is not configured (503), not "connect AliExpress".
+    expect((await response).status()).toBe(503);
+    await expect(page.getByRole("alert")).toContainText(/not configured/i);
   });
 
   test("the dialog can be dismissed", async ({ page }) => {
