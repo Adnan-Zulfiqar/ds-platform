@@ -484,14 +484,43 @@ class EbayShipmentRead(CamelCaseModel):
     shipped_at: datetime | None = None
 
 
+# ---------------------------------------------------------------------------
+# EBAY-C6: operator health view.
+# ---------------------------------------------------------------------------
+
+
+class EbayCallLimitRead(CamelCaseModel):
+    api: str
+    resource: str
+    limit: int
+    remaining: int
+    reset: str | None = None
+
+
+class EbayHealthResponse(CamelCaseModel):
+    """What an operator checks first when eBay misbehaves. No credential, no
+    eBay user id."""
+
+    configured: bool
+    environment: str
+    connected: bool
+    connection_status: str | None = None
+    access_token_expires_at: datetime | None = None
+    reconnect_reason: str | None = None
+    #: ``None`` when eBay's Analytics API could not be read; never a guess.
+    call_limits: list[EbayCallLimitRead] | None = None
+
+
 __all__ = [
     "IDENTITY_DIGEST_PREFIX",
     "MARKETPLACE_ACCOUNT_DELETION",
     "ChallengeResponse",
     "EbayAspectRead",
     "EbayAuthorizationResponse",
+    "EbayCallLimitRead",
     "EbayCategorySuggestionRead",
     "EbayConnectionRead",
+    "EbayHealthResponse",
     "EbayListingDefaultsRead",
     "EbayListingDefaultsUpdate",
     "EbayListingSetupResponse",

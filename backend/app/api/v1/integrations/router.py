@@ -36,6 +36,7 @@ from app.integrations.aliexpress.schemas import (
 )
 from app.integrations.aliexpress.service import AliExpressService
 from app.integrations.aliexpress.webhook import receive_webhook
+from app.integrations.ebay.analytics import call_limits
 from app.integrations.ebay.compliance import (
     MAX_NOTIFICATION_BODY_BYTES,
     EbayComplianceService,
@@ -61,8 +62,10 @@ from app.integrations.ebay.schemas import (
     ChallengeResponse,
     EbayAspectRead,
     EbayAuthorizationResponse,
+    EbayCallLimitRead,
     EbayCategorySuggestionRead,
     EbayConnectionRead,
+    EbayHealthResponse,
     EbayListingDefaultsRead,
     EbayListingDefaultsUpdate,
     EbayListingSetupResponse,
@@ -1113,6 +1116,40 @@ async def ship_ebay_order(
         carrier=shipment.carrier,
         tracking_number=shipment.tracking_number,
         shipped_at=shipment.shipped_at,
+    )
+
+
+@router.get(
+    "/ebay/health",
+    response_model=EbayHealthResponse,
+    summary="eBay channel health and remaining call limits (operator view)",
+)
+async def ebay_health(session: DbSession, _principal: RequireAdmin) -> EbayHealthResponse:
+    """EBAY-C6. Connection state for this workspace plus the application's
+    remaining eBay call quota. The quota read degrades to ``null``."""
+    connection = await EbayConnectionService(session).get_connection()
+    limits = await call_limits() if settings.ebay.is_oauth_configured else None
+    return EbayHealthResponse(
+        configured=settings.ebay.is_oauth_configured,
+        environment=settings.ebay.environment.value,
+        connected=connection is not None and connection.is_usable,
+        connection_status=connection.status.value if connection else None,
+        access_token_expires_at=connection.access_token_expires_at if connection else None,
+        reconnect_reason=connection.reconnect_reason if connection else None,
+        call_limits=(
+            [
+                EbayCallLimitRead(
+                    api=item.api,
+                    resource=item.resource,
+                    limit=item.limit,
+                    remaining=item.remaining,
+                    reset=item.reset,
+                )
+                for item in limits
+            ]
+            if limits is not None
+            else None
+        ),
     )
 
 

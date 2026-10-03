@@ -12,6 +12,10 @@ production release.
 
 ### Added
 
+- **eBay operations (EBAY-C6).** eBay 429s become `ebay_rate_limited`;
+  an admin health view shows connection state and the remaining Sell API
+  quota; the readiness CLI gains `EBAY_SELLER_CHANNEL`. Runbook and the
+  owner's go-live checklist in `docs/ebay/EBAY_C6_OPERATIONS.md`.
 - **eBay orders (EBAY-C5).** Import eBay orders into Orders (re-import
   updates), mark an order shipped on eBay with carrier and tracking (once per
   tracking number), and reflect eBay cancellations. Migration `0040`. eBay
