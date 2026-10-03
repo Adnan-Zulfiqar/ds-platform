@@ -9,6 +9,7 @@ import { AliExpressCard } from "@/components/integrations/aliexpress-card";
 import { ChannelOverview } from "@/components/integrations/channel-overview";
 import { EbayCard } from "@/components/integrations/ebay-card";
 import { ShopifyCard } from "@/components/integrations/shopify-card";
+import { WooCommerceCard } from "@/components/integrations/woocommerce-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
@@ -222,6 +223,10 @@ export default function IntegrationsPage() {
 
         <Suspense fallback={<Skeleton className="h-64 w-full rounded-lg" />}>
           <EbayCard />
+        </Suspense>
+
+        <Suspense fallback={<Skeleton className="h-64 w-full rounded-lg" />}>
+          <WooCommerceCard />
         </Suspense>
 
         <p

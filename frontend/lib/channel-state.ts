@@ -463,3 +463,24 @@ export function deriveStoreRecordState(store: Pick<Store, "status" | "lastError"
       );
   }
 }
+
+// ---------------------------------------------------------------------------
+// WooCommerce (Track E7): one card summarising every WooCommerce store.
+// ---------------------------------------------------------------------------
+
+export function deriveWooCommerceChannel(query: StatusQueryState<Store[]>): ChannelState {
+  if (query.isPending && query.data === undefined) {
+    return state("checking", "Loading WooCommerce stores.");
+  }
+  if (query.data === undefined) {
+    return state("unavailable", "We could not load WooCommerce stores. Try again.");
+  }
+  const connected = query.data.filter((s) => s.status === "connected").length;
+  if (connected > 0) {
+    return state(
+      "connected",
+      connected === 1 ? "One store is linked." : `${connected} stores are linked.`,
+    );
+  }
+  return state("not-connected", "No WooCommerce store is linked.");
+}

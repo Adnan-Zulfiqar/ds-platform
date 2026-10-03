@@ -179,6 +179,7 @@ export async function mockShellApi(page: Page): Promise<void> {
     if (path === "/integrations/shopify/status") return json(route, shopifyStatus);
     if (path === "/integrations/aliexpress/status") return json(route, aliExpressStatus);
     if (path === "/integrations/ebay/status") return json(route, ebayStatus);
+    if (path === "/integrations/woocommerce/stores") return json(route, []);
     if (path === "/stores") return json(route, paged([]));
     if (path === "/stores/statistics")
       return json(route, {
