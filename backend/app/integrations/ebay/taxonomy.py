@@ -19,7 +19,13 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.integrations.ebay.exceptions import EbayRateLimitedError, EbaySellerApiUnavailableError
+from app.integrations.ebay.exceptions import (
+    EbayNotConfiguredError,
+    EbayRateLimitedError,
+    EbaySellerApiUnavailableError,
+    EbayTokenExchangeError,
+    EbayTokenRevokedError,
+)
 from app.integrations.ebay.tokens import application_access_token, forget_application_token
 
 logger = get_logger(__name__)
@@ -121,7 +127,19 @@ async def _get(path: str, *, params: Mapping[str, str], call: str) -> Any:
         settings.ebay.request_timeout_seconds,
         connect=settings.ebay.connect_timeout_seconds,
     )
-    token = await application_access_token()
+    try:
+        token = await application_access_token()
+    except (
+        httpx.HTTPError,
+        EbayTokenExchangeError,
+        EbayTokenRevokedError,
+        EbayNotConfiguredError,
+    ) as exc:
+        # The *application's* credential failed, not a seller grant: telling
+        # the merchant to reconnect eBay could not help. Report it as eBay
+        # being unavailable, which readiness turns into "try again".
+        logger.warning("ebay_application_token_unavailable", call=call, error=type(exc).__name__)
+        raise EbaySellerApiUnavailableError() from exc
     url = f"{settings.ebay.notification_api_base}{path}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:

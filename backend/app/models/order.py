@@ -32,6 +32,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -235,6 +236,13 @@ class Order(TenantScopedBase):
         ),
         Index("ix_orders_tenant_fulfillment", "tenant_id", "fulfillment_status"),
         Index("ix_orders_tenant_external_created", "tenant_id", "external_created_at"),
+        # EBAY-C5 deletion contract: the buyer eraser matches here, across
+        # tenants, for every eBay account-deletion notice (migration 0041).
+        Index(
+            "ix_orders_ebay_buyer_username",
+            "marketplace_buyer_username",
+            postgresql_where=text("source = 'ebay' AND marketplace_buyer_username IS NOT NULL"),
+        ),
     )
 
     # --- Provenance ---------------------------------------------------------

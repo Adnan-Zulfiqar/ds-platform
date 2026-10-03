@@ -310,10 +310,14 @@ export function useSaveEbayListingDefaults() {
       );
       return data;
     },
-    onSuccess: (_saved, payload) => {
-      void queryClient.invalidateQueries({
-        queryKey: integrationKeys.ebayListingSetup(payload.marketplaceId),
-      });
+    onSuccess: (saved, payload) => {
+      // The saved choice becomes the cached default immediately, so the form
+      // never shows the pre-save values next to "Saved". The policy and
+      // location lists themselves did not change, so no eBay refetch.
+      queryClient.setQueryData<EbayListingSetup>(
+        integrationKeys.ebayListingSetup(payload.marketplaceId),
+        (current) => (current ? { ...current, defaults: saved } : current),
+      );
     },
   });
 }

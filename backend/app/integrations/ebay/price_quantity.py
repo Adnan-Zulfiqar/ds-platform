@@ -16,7 +16,9 @@ What is recorded, and when:
   normally so the record is committed;
 * eBay unreachable or 5xx → raised, so the Celery task retries with backoff
   and the listing is left as it was;
-* a revoked grant → every listing marked ERROR "reconnect", then raised.
+* a revoked grant → every listing marked ERROR "reconnect", and the call
+  returns normally so that record (and the connection's reconnect state)
+  is committed.
 """
 
 from __future__ import annotations

@@ -42,7 +42,9 @@ def parse_rate_limits(payload: Any) -> tuple[EbayCallLimit, ...]:
         return ()
     out: list[EbayCallLimit] = []
     for entry in payload.get("rateLimits") or []:
-        if not isinstance(entry, Mapping) or entry.get("apiName") not in _WATCHED:
+        # eBay's own examples capitalise API names; compare case-insensitively.
+        name = str(entry.get("apiName") or "").lower() if isinstance(entry, Mapping) else ""
+        if not isinstance(entry, Mapping) or name not in _WATCHED:
             continue
         for resource in entry.get("resources") or []:
             if not isinstance(resource, Mapping):
@@ -56,7 +58,7 @@ def parse_rate_limits(payload: Any) -> tuple[EbayCallLimit, ...]:
                 reset = rate.get("reset")
                 out.append(
                     EbayCallLimit(
-                        api=str(entry["apiName"]),
+                        api=name,
                         resource=str(resource.get("name") or ""),
                         limit=limit,
                         remaining=remaining,

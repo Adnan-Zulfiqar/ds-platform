@@ -104,7 +104,7 @@ class EbayPublishService:
 
         terms = offer_terms(product)
         title, description = listing_text(product)
-        sku = ebay_sku(product.id)
+        sku = ebay_sku(product.id, marketplace.country)
         existing = await self.listings.get_for_product(store_id=store.id, product_id=product.id)
 
         # A refusal or outage propagates as the error the merchant sees. No

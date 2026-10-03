@@ -1044,6 +1044,36 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     draftUpdatedAt: savedUpdatedAt,
     issueCount: readiness.items.length,
   });
+  // Review & publish speaks about the chosen store only (EBAY-C3 review):
+  // an eBay store must not inherit "Update Shopify" from a Shopify listing,
+  // and Shopify copy must not come from an eBay listing.
+  const ebayStoreIds = new Set(
+    (storesQuery.data?.items ?? []).filter((s) => s.platform === "ebay").map((s) => s.id),
+  );
+  const panelListings =
+    publishChannel === "ebay"
+      ? listingsQuery.data?.filter((row) => row.storeId === publishStoreId)
+      : listingsQuery.data?.filter((row) => !ebayStoreIds.has(row.storeId));
+  const panelShopifyState = deriveEditorLifecycle({
+    productStatus: data.status,
+    dirty,
+    saveState,
+    conflict: isConflicted,
+    publishPending,
+    publishFailed: Boolean(publishError),
+    publishResult,
+    publishResultAt,
+    listings: {
+      data: panelListings,
+      isPending: listingsQuery.isPending,
+      isFetching: listingsQuery.isFetching,
+      isError: listingsQuery.isError,
+      dataUpdatedAt: listingsQuery.dataUpdatedAt,
+    },
+    draftUpdatedAt: savedUpdatedAt,
+    issueCount: readiness.items.length,
+  }).shopify;
+
   const focusConflictBanner = () => {
     conflictBannerRef.current?.scrollIntoView({ block: "center" });
     conflictBannerRef.current?.focus();
@@ -1663,7 +1693,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               publishOk={publishOk}
               publishPending={publishPending}
               publishResult={publishResult}
-              shopify={lifecycle.shopify}
+              shopify={panelShopifyState}
               hasEditingConflict={isConflicted}
               onPublish={() => void handlePublish()}
               liveAiContent={liveAiContent}

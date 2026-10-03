@@ -116,7 +116,7 @@ async def imported(
     client: AsyncClient, db_session: AsyncSession, ebay: OrdersFakeEbay
 ) -> tuple[dict[str, str], uuid.UUID]:
     headers, product_id, _ = await prepared(client, db_session)
-    ebay.orders = [ebay_order("12-34567-89012", sku=f"dp-{product_id}")]
+    ebay.orders = [ebay_order("12-34567-89012", sku=f"dp-us-{product_id}")]
     response = await client.post(IMPORT_URL, headers=headers)
     assert response.status_code == 200, response.text
     assert response.json() == {"fetched": 1, "created": 1, "updated": 0}
@@ -161,7 +161,7 @@ async def test_reimport_updates_and_reflects_an_eBay_cancellation(
     client: AsyncClient, db_session: AsyncSession, ebay: OrdersFakeEbay
 ) -> None:
     headers, product_id = await imported(client, db_session, ebay)
-    ebay.orders = [ebay_order("12-34567-89012", sku=f"dp-{product_id}", cancelled=True)]
+    ebay.orders = [ebay_order("12-34567-89012", sku=f"dp-us-{product_id}", cancelled=True)]
 
     again = await client.post(IMPORT_URL, headers=headers)
 
@@ -198,7 +198,7 @@ async def test_a_cancelled_order_cannot_be_shipped(
     client: AsyncClient, db_session: AsyncSession, ebay: OrdersFakeEbay
 ) -> None:
     headers, product_id, _ = await prepared(client, db_session)
-    ebay.orders = [ebay_order("99-1", sku=f"dp-{product_id}", cancelled=True)]
+    ebay.orders = [ebay_order("99-1", sku=f"dp-us-{product_id}", cancelled=True)]
     assert (await client.post(IMPORT_URL, headers=headers)).status_code == 200
     order = await the_order(db_session)
 

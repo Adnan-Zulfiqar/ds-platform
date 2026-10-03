@@ -24,7 +24,7 @@ applied as written).
 | Step | Call | Notes |
 |---|---|---|
 | Category suggestions, aspects | Taxonomy API with an **application token** (client-credentials grant) | Token held in process memory only; no new seller scope (D-C3-3) |
-| Inventory item | `PUT /sell/inventory/v1/inventory_item/{sku}` | SKU `dp-{product id}`, deterministic |
+| Inventory item | `PUT /sell/inventory/v1/inventory_item/{sku}` | SKU `dp-<country>-<product id>`, deterministic and per marketplace (an inventory item is seller-wide on eBay) |
 | Offer | `GET offer?sku=` → `POST offer` or `PUT offer/{id}` | An existing offer is adopted, never duplicated |
 | Publish | `POST offer/{id}/publish` | Skipped when the offer is already published; the update reaches the live listing |
 | Record | `store_listings` row: listing id, offer id, SKU, URL | eBay rows are declared and erased under eBay's deletion contract |

@@ -43,11 +43,14 @@ class TaxonomyFakeEbay(FakeEbay):
         super().__init__()
         self.taxonomy_requests: list[httpx.Request] = []
         self.taxonomy_status = 200
+        self.app_token_status = 200
 
     async def _token(self, request: httpx.Request) -> httpx.Response:
         body = dict(httpx.QueryParams(request.content.decode()))
         if body.get("grant_type") == "client_credentials":
             self.token_requests.append(body)
+            if self.app_token_status != 200:
+                return httpx.Response(self.app_token_status, json={"error": "invalid_client"})
             return httpx.Response(
                 200,
                 json={

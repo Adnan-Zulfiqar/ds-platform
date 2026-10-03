@@ -32,10 +32,16 @@ class OfferTerms:
     multiple_variants: bool
 
 
-def ebay_sku(product_id: uuid.UUID) -> str:
+def ebay_sku(product_id: uuid.UUID, country: str) -> str:
     """Deterministic, so a retried publish adopts the inventory item and offer
-    it already created instead of making a second listing. 39 of eBay's 50."""
-    return f"dp-{product_id}"
+    it already created instead of making a second listing.
+
+    **Per marketplace.** eBay keys an inventory item by SKU across the whole
+    seller account; one SKU on two marketplaces would let publishing to the
+    second rewrite the first live listing's text, item specifics and stock.
+    ``dp-<country>-<product id>`` is 42 of eBay's 50 characters.
+    """
+    return f"dp-{country.lower()}-{product_id}"
 
 
 def _live_variants(product: Product) -> list[ProductVariant]:

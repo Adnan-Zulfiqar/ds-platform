@@ -55,11 +55,12 @@ from app.repositories.store import StoreRepository
 
 logger = get_logger(__name__)
 
-#: eBay's maximum page size for getOrders.
+#: Page size for getOrders (eBay allows up to 200; 50 keeps each page quick).
 _PAGE_SIZE = 50
 #: A manual import reads at most this many orders; older history is out of scope.
 _MAX_PAGES = 10
-_SKU = re.compile(r"^dp-([0-9a-f-]{36})$")
+#: ``dp-<country>-<id>`` (current) or ``dp-<id>`` (the first C3 format).
+_SKU = re.compile(r"^dp-(?:[a-z]{2}-)?([0-9a-f-]{36})$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,13 +307,18 @@ class EbayOrderService:
         product = await self.products.get_by_id(uuid.UUID(match.group(1)))
         return product.id if product is not None else None
 
-    async def _load(self, order_id: uuid.UUID) -> Order:
-        result = await self.session.execute(
+    async def _load(self, order_id: uuid.UUID, *, lock: bool = False) -> Order:
+        query = (
             self.orders._base_query()
             .where(Order.id == order_id)
             .options(selectinload(Order.items), selectinload(Order.shipments))
             .execution_options(populate_existing=True)
         )
+        if lock:
+            # Serialises two "mark shipped" requests for one order: the second
+            # waits, then sees the first one's shipment and sends nothing.
+            query = query.with_for_update(of=Order)
+        result = await self.session.execute(query)
         order = result.scalar_one_or_none()
         if order is None:
             raise NotFoundError("Order not found.")
@@ -326,7 +332,7 @@ class EbayOrderService:
         tracking_number: str,
         shipped_at: datetime | None,
     ) -> Shipment:
-        order = await self._load(order_id)
+        order = await self._load(order_id, lock=True)
         if order.source is not OrderSource.EBAY:
             raise ValidationError("Only eBay orders can be marked shipped on eBay.")
         if order.fulfillment_status is FulfillmentStatus.CANCELLED:

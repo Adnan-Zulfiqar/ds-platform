@@ -195,3 +195,12 @@ Owner approved `EBAY_C3_PROPOSAL.md` (D-C3-1 to D-C3-4) and ordered C3 → C6.
 | C6 operations | stacked on C5 | Unit + integration (health view) | Mocked eBay transport |
 
 No real eBay call has been made by any of these. Owner steps: `docs/ebay/EBAY_C6_OPERATIONS.md`.
+
+## Review of the new code, owner stack, flake B — 2026-10-03
+
+| Item | Result |
+|---|---|
+| Owner DB backup before touching the stack | `pg_dump -Fc` of `droppilot` (41 table-data entries, readable by `pg_restore -l`), kept in the task scratchpad |
+| Owner stack | backend/worker/beat/frontend recreated on images from `develop` `02e12fc` (no `.env` inside). The compose file bind-mounts `./backend` onto `/app`, so the running code is the owner's checkout (`0016543` plus the owner's uncommitted changes); the database was migrated 0034 → 0037 to match that checkout and **not** further, so its alembic stays consistent. `/health` 200. AI: `OpenAIProvider` loaded |
+| Reviews | Three independent reviews (publish path; sync/orders/deletion; OpenAI + eBay UI): 11 confirmed findings, all fixed in this change; OpenAI provider and settings precedence: nothing confirmed |
+| Flake B | Mechanism reproduced: guard reverted 5/5 fail, guard present 5/5 pass (DP-CR-015) |

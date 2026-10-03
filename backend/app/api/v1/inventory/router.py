@@ -6,10 +6,8 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy import event
 
 from app.api.deps import DbSession, RequireAdmin, RequireViewer
-from app.core.context import require_tenant_id
 from app.models.order import SyncTrigger
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.inventory import (
@@ -20,7 +18,7 @@ from app.schemas.inventory import (
 )
 from app.services.inventory_sync import InventorySyncService
 from app.services.product_import import ProductImportService
-from app.tasks.integrations.ebay import enqueue_price_quantity
+from app.tasks.integrations.ebay import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -73,15 +71,8 @@ async def sync_inventory(
         trigger=SyncTrigger.MANUAL,
         requested_by_user_id=principal.user_id,
     )
-    changed = list(service.changed_product_ids)
-    if changed:
-        # EBAY-C4: push moved stock to eBay once this request has committed.
-        tenant_id = require_tenant_id()
-
-        def on_commit(_session: object) -> None:
-            enqueue_price_quantity(tenant_id, changed)
-
-        event.listen(session.sync_session, "after_commit", on_commit, once=True)
+    # EBAY-C4: push moved stock to eBay once this request has committed.
+    push_price_quantity_after_commit(session, service.changed_product_ids)
     return InventorySyncRunRead.model_validate(run)
 
 

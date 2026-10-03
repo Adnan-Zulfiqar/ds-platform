@@ -25,6 +25,7 @@ from app.core.context import set_tenant_id
 from app.integrations.ebay.deletion import DeletionSubject, EbayStoreListingsOwner
 from app.integrations.ebay.taxonomy import forget_category_trees
 from app.integrations.ebay.tokens import forget_application_token
+from app.models.ebay import EbayListingDefaults
 from app.models.product import Product, ProductImage, ProductSource, ProductStatus
 from app.models.shopify import StoreListing
 from app.models.store import Store, StorePlatform, StoreStatus
@@ -226,7 +227,7 @@ async def test_publish_sends_the_listing_and_records_it(
     assert response.json()["storefrontUrl"] == "https://www.ebay.com/itm/110000000001"
 
     ((_, sku, item),) = ebay.calls("put_item")
-    assert sku == f"dp-{product_id}"
+    assert sku == f"dp-us-{product_id}"
     assert item["product"]["title"] == "Red ceramic mug, 350 ml"
     assert item["product"]["aspects"] == {"Brand": ["Acme"]}
     assert item["product"]["imageUrls"] == ["https://cdn.example/mug.jpg"]
@@ -249,7 +250,7 @@ async def test_publish_sends_the_listing_and_records_it(
     assert (listing.external_product_id, listing.external_offer_id, listing.external_sku) == (
         "110000000001",
         "OFFER-1",
-        f"dp-{product_id}",
+        f"dp-us-{product_id}",
     )
 
 
@@ -359,3 +360,43 @@ async def test_the_deletion_owner_erases_listings_by_immutable_id(
     assert await owner.erase(db_session, nobody) == 0
     assert await owner.erase(db_session, seller) == 1
     assert await owner.erase(db_session, seller) == 0
+
+
+async def test_an_application_token_failure_is_a_try_again_blocker(
+    client: AsyncClient, db_session: AsyncSession, ebay: PublishFakeEbay
+) -> None:
+    """Review finding: the platform's own credential failing must not tell the
+    merchant to reconnect, nor escape as a 500."""
+    headers, product_id, store_id = await prepared(client, db_session)
+    forget_application_token()
+    ebay.app_token_status = 401
+
+    response = await client.post(
+        READINESS_URL,
+        json={"productId": str(product_id), "storeId": str(store_id)},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    codes = {b["code"] for b in response.json()["blockers"]}
+    assert "ebay_requirements_unavailable" in codes
+
+
+async def test_reconnecting_as_another_seller_forgets_the_first_sellers_data(
+    client: AsyncClient, db_session: AsyncSession, ebay: PublishFakeEbay
+) -> None:
+    """Review finding: a different seller on the same connection row must not
+    inherit the previous seller's policies, location or listings."""
+    headers, product_id, store_id = await prepared(client, db_session)
+    payload = {"productId": str(product_id), "storeId": str(store_id)}
+    assert (await client.post(PUBLISH_URL, json=payload, headers=headers)).status_code == 200
+
+    ebay.seller_user_id = "immutable-ebay-user-id-0002"
+    await connect_fully(client, headers)
+
+    defaults = await db_session.scalar(sa.select(sa.func.count()).select_from(EbayListingDefaults))
+    listings = await db_session.scalar(sa.select(sa.func.count()).select_from(StoreListing))
+    assert (defaults, listings) == (0, 0)
+    # The eBay stores are parked until listing setup is saved for the new seller.
+    ready = await client.post(READINESS_URL, json=payload, headers=headers)
+    assert {b["code"] for b in ready.json()["blockers"]} == {"store_disconnected"}
