@@ -60,12 +60,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Protocol, cast
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.ebay import EbayConnection
+from app.models.ebay import EbayConnection, EbayListingDefaults
 
 logger = get_logger(__name__)
 
@@ -194,6 +194,37 @@ class EbayConnectionOwner:
         return erased
 
 
+class EbayListingDefaultsOwner:
+    """Erases the seller's chosen policy ids and location key (EBAY-C2).
+
+    The rows would also go by ``ON DELETE CASCADE`` when the connection owner
+    deletes the connection, but cascade is not a declared, counted erasure:
+    running first and deleting explicitly makes the processor's row count
+    true, and keeps erasure correct if the foreign key is ever changed.
+
+    Matched through the connection's ``ebay_user_id`` only, for the reason
+    ``EbayConnectionOwner`` gives. Crosses tenants for the same reason.
+    Idempotent: a redelivery finds nothing.
+    """
+
+    name = "ebay_listing_defaults"
+
+    async def erase(self, session: AsyncSession, subject: DeletionSubject) -> int:
+        if not subject.user_id:
+            logger.info("ebay_listing_defaults_erase_skipped_no_immutable_id")
+            return 0
+
+        connection_ids = select(EbayConnection.id).where(
+            EbayConnection.ebay_user_id == subject.user_id
+        )
+        result = await session.execute(
+            delete(EbayListingDefaults).where(EbayListingDefaults.connection_id.in_(connection_ids))
+        )
+        erased = int(cast("CursorResult[Any]", result).rowcount or 0)
+        logger.info("ebay_listing_defaults_erased", rows=erased)
+        return erased
+
+
 #: Declared in the **same change** that introduced ``ebay_connections`` — see
 #: migration ``0030``. The guard test fails if this and ``_OWNERS`` disagree, so
 #: shipping the table without its eraser is not possible.
@@ -206,10 +237,23 @@ EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
             "type, plus encrypted access and refresh tokens for the seller."
         ),
     ),
+    # EBAY-C2, migration 0037.
+    EbayStorageDeclaration(
+        storage="app.models.ebay.EbayListingDefaults",
+        owner_name="ebay_listing_defaults",
+        holds=(
+            "The seller's eBay business-policy ids and inventory location key, "
+            "chosen per marketplace."
+        ),
+    ),
 )
 
-#: One owner, matching the one declaration above.
-_OWNERS: Final[tuple[EbayDataOwner, ...]] = (EbayConnectionOwner(),)
+#: One owner per declaration. Defaults first: they hang off the connection
+#: row, and erasing them before it keeps both counts accurate.
+_OWNERS: Final[tuple[EbayDataOwner, ...]] = (
+    EbayListingDefaultsOwner(),
+    EbayConnectionOwner(),
+)
 
 
 class EbayAccountDeletionProcessor:

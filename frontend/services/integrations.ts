@@ -10,6 +10,11 @@ import type {
   AliExpressAuthorization,
   AliExpressStatus,
   EbayAuthorization,
+  EbayListingDefaults,
+  EbayListingDefaultsPayload,
+  EbayListingSetup,
+  EbayLocation,
+  EbayLocationPayload,
   EbayStatus,
   ShopifyAuthorization,
   ShopifyConnectPayload,
@@ -35,6 +40,8 @@ export const integrationKeys = {
   shopifyStatus: () => [...integrationKeys.shopify(), "status"] as const,
   ebay: () => [...integrationKeys.all, "ebay"] as const,
   ebayStatus: () => [...integrationKeys.ebay(), "status"] as const,
+  ebayListingSetup: (marketplaceId: string) =>
+    [...integrationKeys.ebay(), "listing-setup", marketplaceId] as const,
 };
 
 async function fetchAliExpressStatus(): Promise<AliExpressStatus> {
@@ -255,7 +262,70 @@ export function useDisconnectEbay() {
       await apiClient.delete("/integrations/ebay/disconnect");
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: integrationKeys.ebayStatus() });
+      // The listing defaults go with the connection (cascade), so every
+      // cached eBay read is stale, not only the status.
+      void queryClient.invalidateQueries({ queryKey: integrationKeys.ebay() });
+    },
+  });
+}
+
+/**
+ * EBAY-C2 listing setup: the seller's live policies and locations plus the
+ * saved defaults, for one marketplace. Read live by the server on every call,
+ * so this is fetched only when the panel is open (`enabled`).
+ */
+export function useEbayListingSetup(
+  marketplaceId: string,
+  enabled: boolean,
+): UseQueryResult<EbayListingSetup> {
+  return useQuery({
+    queryKey: integrationKeys.ebayListingSetup(marketplaceId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<EbayListingSetup>(
+        "/integrations/ebay/listing-setup",
+        { params: { marketplaceId } },
+      );
+      return data;
+    },
+    enabled,
+    // Each read costs five eBay calls; a merchant switching tabs should not
+    // repeat them. Saving invalidates explicitly.
+    staleTime: 60_000,
+  });
+}
+
+export function useSaveEbayListingDefaults() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: EbayListingDefaultsPayload): Promise<EbayListingDefaults> => {
+      const { data } = await apiClient.put<EbayListingDefaults>(
+        "/integrations/ebay/listing-defaults",
+        payload,
+      );
+      return data;
+    },
+    onSuccess: (_saved, payload) => {
+      void queryClient.invalidateQueries({
+        queryKey: integrationKeys.ebayListingSetup(payload.marketplaceId),
+      });
+    },
+  });
+}
+
+export function useCreateEbayLocation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: EbayLocationPayload): Promise<EbayLocation> => {
+      const { data } = await apiClient.post<EbayLocation>("/integrations/ebay/locations", payload);
+      return data;
+    },
+    onSuccess: () => {
+      // Locations are per seller, not per marketplace: every setup read is stale.
+      void queryClient.invalidateQueries({
+        queryKey: [...integrationKeys.ebay(), "listing-setup"],
+      });
     },
   });
 }

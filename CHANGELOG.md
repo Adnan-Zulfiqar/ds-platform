@@ -10,6 +10,18 @@ production release.
 
 ## [Unreleased]
 
+### Added — EBAY-C2
+
+- **eBay listing setup.** The eBay card gains a "Listing setup" panel: the
+  seller's shipping, payment and return policies and Inventory API locations,
+  read live per marketplace, and the defaults DropPilot will list with.
+  Admins can save defaults (each id re-checked against eBay) and create a
+  warehouse location. New table `ebay_listing_defaults` (migration `0037`),
+  bound to the connection with `ON DELETE CASCADE`, **declared and erased**
+  under eBay's account-deletion contract. No new OAuth scope. **Verified
+  against a mocked eBay transport only — no real eBay account has been
+  read or written.**
+
 ### Fixed
 
 - **A blank `KEY=` line in `backend/.env` no longer erases the root
