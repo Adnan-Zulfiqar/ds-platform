@@ -117,6 +117,7 @@ from app.integrations.shopify.webhook_reconciliation import ReconcileReport
 from app.integrations.woocommerce.connection import WooCommerceConnectionService
 from app.integrations.woocommerce.orders import WooCommerceOrderService
 from app.integrations.woocommerce.publish import WooCommercePublishService
+from app.integrations.woocommerce.webhook import receive_woocommerce_webhook
 from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
@@ -1572,3 +1573,15 @@ async def ship_woocommerce_order(
         tracking_number=shipment.tracking_number,
         shipped_at=shipment.shipped_at,
     )
+
+
+@router.post(
+    "/woocommerce/webhooks/{tenant_id}/{store_id}",
+    response_model=MessageResponse,
+    summary="Receive a WooCommerce order webhook",
+)
+async def woocommerce_webhook(tenant_id: UUID, store_id: UUID, request: Request) -> MessageResponse:
+    """Track E7 W4b. Unauthenticated by nature; every delivery is verified by
+    the store's own HMAC secret before anything is read (see ``webhook.py``)."""
+    await receive_woocommerce_webhook(request, tenant_id=tenant_id, store_id=store_id)
+    return MessageResponse(message="ok")

@@ -158,6 +158,15 @@ class WooCommerceOrderService:
         )
         return OrderImportOutcome(fetched=fetched, created=created, updated=updated)
 
+    async def refresh_order(self, store: Store, order_id: str) -> str:
+        """W4b: fetch one order's current state from the store and upsert it.
+        Used by webhooks, which are treated as a doorbell, not as data."""
+        client = self.connections.client_for(store)
+        raw = await client.get(f"/orders/{int(order_id)}")
+        if not isinstance(raw, Mapping):
+            return "skipped"
+        return await self._upsert(store, raw)
+
     async def _upsert(self, store: Store, raw: Mapping[str, Any]) -> str:
         order_id = _text(raw, "id")
         status = _text(raw, "status") or ""
