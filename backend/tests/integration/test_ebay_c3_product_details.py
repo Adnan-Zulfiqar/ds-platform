@@ -20,6 +20,9 @@ from app.integrations.ebay.taxonomy import forget_category_trees
 from app.integrations.ebay.tokens import forget_application_token
 from tests.integration.ebay_c1_live import ACCESS_TOKEN, FakeEbay, install
 from tests.integration.test_ebay_c1_api import auth_header, register, token_with_roles
+from tests.integration.test_ebay_c2_listing_setup import (
+    fresh_redis as fresh_redis,  # autouse: a Redis client per test event loop
+)
 from tests.integration.test_global_rules_api import seed_product
 
 pytestmark = pytest.mark.integration

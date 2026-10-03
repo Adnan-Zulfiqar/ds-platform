@@ -36,6 +36,9 @@ from tests.integration.test_ebay_c1_api import (
     token_with_roles,
 )
 from tests.integration.test_ebay_c2_listing_setup import CHOICE, SellerFakeEbay
+from tests.integration.test_ebay_c2_listing_setup import (
+    fresh_redis as fresh_redis,  # autouse: a Redis client per test event loop
+)
 from tests.integration.test_ebay_c3_product_details import TaxonomyFakeEbay
 
 pytestmark = pytest.mark.integration
