@@ -422,11 +422,49 @@ class EbayLocationCreate(CamelCaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# EBAY-C3: a product's eBay category and item specifics.
+# ---------------------------------------------------------------------------
+
+
+class EbayCategorySuggestionRead(CamelCaseModel):
+    category_id: str
+    name: str
+    path: str
+
+
+class EbayAspectRead(CamelCaseModel):
+    name: str
+    required: bool
+    selection_only: bool
+    multiple: bool
+    values: list[str]
+
+
+class EbayProductDetailsRead(CamelCaseModel):
+    marketplace_id: str
+    category_id: str | None = None
+    category_name: str | None = None
+    #: Aspect name → values, exactly as sent to eBay. Keys are not camel-cased.
+    aspects: dict[str, list[str]]
+    category_aspects: list[EbayAspectRead]
+    missing_required: list[str]
+
+
+class EbayProductDetailsUpdate(CamelCaseModel):
+    marketplace_id: str = Field(min_length=1, max_length=32)
+    category_id: str = Field(min_length=1, max_length=16)
+    category_name: str | None = Field(default=None, max_length=255)
+    aspects: dict[str, list[str]] = Field(default_factory=dict)
+
+
 __all__ = [
     "IDENTITY_DIGEST_PREFIX",
     "MARKETPLACE_ACCOUNT_DELETION",
     "ChallengeResponse",
+    "EbayAspectRead",
     "EbayAuthorizationResponse",
+    "EbayCategorySuggestionRead",
     "EbayConnectionRead",
     "EbayListingDefaultsRead",
     "EbayListingDefaultsUpdate",
@@ -434,6 +472,8 @@ __all__ = [
     "EbayLocationCreate",
     "EbayLocationRead",
     "EbayPolicyRead",
+    "EbayProductDetailsRead",
+    "EbayProductDetailsUpdate",
     "EbayStatusResponse",
     "MarketplaceAccountDeletion",
     "is_identity_digest",

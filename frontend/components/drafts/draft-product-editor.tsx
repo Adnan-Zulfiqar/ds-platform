@@ -11,6 +11,7 @@ import { DraftSeoPanel } from "@/components/drafts/draft-seo-panel";
 import { DraftShippingPanel } from "@/components/drafts/draft-shipping-panel";
 import { DraftVariantsPanel } from "@/components/drafts/draft-variants-panel";
 import { DraftPreviewPanel } from "@/components/drafts/draft-preview-panel";
+import { EbayProductDetailsIfConnected } from "@/components/drafts/ebay-product-details";
 import {
   ReviewPublishPanel,
   type PublishSaveFailureReason,
@@ -57,6 +58,7 @@ import {
 } from "@/services/drafts";
 import {
   invalidatePublishReadiness,
+  type PublishChannel,
   usePublishReadiness,
 } from "@/services/publish-readiness";
 import { useProductVersions } from "@/services/products";
@@ -828,6 +830,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   /** `replaceAiContent` is set only from the confirmed "Use my draft text
    * instead" dialog (review finding E-1). Every other publish keeps approved
    * AI text that is live on the store; the server enforces that too. */
+  // EBAY-C3: readiness and publish go to the chosen store's channel.
+  const publishChannel: PublishChannel =
+    storesQuery.data?.items.find((store) => store.id === publishStoreId)?.platform === "ebay"
+      ? "ebay"
+      : "shopify";
+
   async function handlePublish(options: { replaceAiContent?: boolean } = {}) {
     setPublishError(null);
     setPublishOk(null);
@@ -870,12 +878,14 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
       }
 
       const { data: result } = await apiClient.post<ShopifyPublishResult>(
-        "/integrations/shopify/publish",
+        `/integrations/${publishChannel}/publish`,
         {
           productId,
           storeId: publishStoreId,
           expectedUpdatedAt,
-          ...(options.replaceAiContent ? { replaceAiContent: true } : {}),
+          ...(options.replaceAiContent && publishChannel === "shopify"
+            ? { replaceAiContent: true }
+            : {}),
         },
       );
       setPublishResult(result);
@@ -951,6 +961,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
 
   const publishReadinessQuery = usePublishReadiness({
     productId,
+    channel: publishChannel,
     storeId: publishStoreId || null,
     draftUpdatedAt: dirty ? null : savedUpdatedAt,
     // Every tab, once a store is chosen: the "Before you publish" sidebar
@@ -983,6 +994,14 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const shopifyStores =
     storesQuery.data?.items.filter((store) => store.platform === "shopify") ??
     [];
+  // Review & publish offers Shopify stores and, once listing setup has
+  // created them, connected eBay marketplace stores (EBAY-C3).
+  const publishStores =
+    storesQuery.data?.items.filter(
+      (store) =>
+        store.platform === "shopify" ||
+        (store.platform === "ebay" && store.status === "connected"),
+    ) ?? [];
   const syncedListing =
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
@@ -1599,12 +1618,13 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
           {tab === "publishing" ? (
             <ReviewPublishPanel
               productId={productId}
-              stores={shopifyStores.map((store) => ({
+              stores={publishStores.map((store) => ({
                 id: store.id,
                 name: store.name,
                 status: store.status,
               }))}
               storeId={publishStoreId}
+              channelName={publishChannel === "ebay" ? "eBay" : "Shopify"}
               dirty={dirty}
               onStoreChange={(next) => {
                 setPublishStoreId(next);
@@ -1653,6 +1673,8 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
               onContinueEditing={() => selectTab("overview")}
             />
           ) : null}
+
+          {tab === "publishing" ? <EbayProductDetailsIfConnected productId={productId} /> : null}
 
           {tab === "media" ? (
             <DraftMediaPanel productId={productId} product={data} />

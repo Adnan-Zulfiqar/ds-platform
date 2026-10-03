@@ -331,6 +331,17 @@ export async function openMockedEditor(
 
   await blockGoogleIdentityScript(page);
 
+  // The Review & publish tab asks whether eBay is connected (EBAY-C3). Answered
+  // "not configured" by default so editor specs never reach a real backend;
+  // eBay specs register their own route afterwards, which wins.
+  await page.route("**/api/v1/integrations/ebay/status", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ configured: false, connected: false, connection: null }),
+    }),
+  );
+
   await page.route("**/api/v1/auth/refresh", (route) =>
     route.fulfill({
       status: 200,

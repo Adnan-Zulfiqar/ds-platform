@@ -215,6 +215,14 @@ class EbayPolicyNotFoundError(ValidationError):
     message = "That eBay policy or location no longer exists. Reload and choose again."
 
 
+class EbayListingRejectedError(ValidationError):
+    """eBay refused this listing (EBAY-C3). The message carries eBay's own
+    reasons, because only they tell the merchant what to fix."""
+
+    code = "ebay_listing_rejected"
+    message = "eBay refused the listing."
+
+
 __all__ = [
     "SERVICE_NAME",
     "EbayChallengeError",
@@ -222,6 +230,7 @@ __all__ = [
     "EbayError",
     "EbayIdentityUnavailableError",
     "EbayKeyUnavailableError",
+    "EbayListingRejectedError",
     "EbayNotConfiguredError",
     "EbayNotConnectedError",
     "EbayNotificationRejectedError",

@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -164,6 +164,24 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
             self._base_query().where(StoreListing.store_id == store_id)
         )
         return list(result.scalars().all())
+
+    async def erase_for_stores(self, store_ids: Sequence[uuid.UUID]) -> int:
+        """Physically delete this tenant's listings on the given stores.
+
+        Used only for eBay (EBAY-C3): an eBay listing row holds the seller's
+        listing, offer and SKU ids, and eBay's deletion contract does not
+        accept a soft delete. Tenant predicate included, as in every query
+        here.
+        """
+        if not store_ids:
+            return 0
+        result = await self.session.execute(
+            delete(StoreListing).where(
+                StoreListing.tenant_id == await self._current_tenant_id(),
+                StoreListing.store_id.in_(list(store_ids)),
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_for_product(self, product_id: uuid.UUID) -> Sequence[StoreListing]:
         result = await self.session.execute(

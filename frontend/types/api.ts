@@ -300,6 +300,40 @@ export interface EbayListingSetup {
 
 export type EbayListingDefaultsPayload = Omit<EbayListingDefaults, "updatedAt">;
 
+/** EBAY-C3: a category eBay suggests for a product. */
+export interface EbayCategorySuggestion {
+  categoryId: string;
+  name: string;
+  /** Root-first breadcrumb, e.g. "Home & Garden > Kitchen > Mugs". */
+  path: string;
+}
+
+export interface EbayAspect {
+  name: string;
+  required: boolean;
+  /** Only the listed values are accepted when true. */
+  selectionOnly: boolean;
+  multiple: boolean;
+  values: string[];
+}
+
+export interface EbayProductDetails {
+  marketplaceId: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  /** Aspect name → values, exactly as eBay receives them. */
+  aspects: Record<string, string[]>;
+  categoryAspects: EbayAspect[];
+  missingRequired: string[];
+}
+
+export interface EbayProductDetailsPayload {
+  marketplaceId: string;
+  categoryId: string;
+  categoryName?: string | null;
+  aspects: Record<string, string[]>;
+}
+
 export interface EbayLocationPayload {
   name: string;
   addressLine1?: string;

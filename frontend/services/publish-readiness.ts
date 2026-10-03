@@ -18,13 +18,17 @@ export const publishReadinessKeys = {
     ] as const,
 };
 
+/** Channels with a server publish check (EBAY-C3 added eBay). */
+export type PublishChannel = "shopify" | "ebay";
+
 export async function fetchPublishReadiness(params: {
   productId: string;
   storeId: string | null;
   expectedUpdatedAt?: string | null;
+  channel?: PublishChannel;
 }): Promise<ShopifyPublishReadiness> {
   const { data } = await apiClient.post<ShopifyPublishReadiness>(
-    "/integrations/shopify/publish-readiness",
+    `/integrations/${params.channel ?? "shopify"}/publish-readiness`,
     {
       productId: params.productId,
       storeId: params.storeId || null,
@@ -34,12 +38,13 @@ export async function fetchPublishReadiness(params: {
   return data;
 }
 
-/** Authoritative Shopify publish check for Review & publish. */
+/** Authoritative publish check for Review & publish, for the chosen store's channel. */
 export function usePublishReadiness(params: {
   productId: string;
   storeId: string | null;
   draftUpdatedAt: string | null;
   enabled: boolean;
+  channel?: PublishChannel;
 }): UseQueryResult<ShopifyPublishReadiness> {
   return useQuery({
     queryKey: publishReadinessKeys.detail(
@@ -52,6 +57,7 @@ export function usePublishReadiness(params: {
         productId: params.productId,
         storeId: params.storeId,
         expectedUpdatedAt: params.draftUpdatedAt,
+        channel: params.channel,
       }),
     enabled: params.enabled && Boolean(params.productId),
     staleTime: 0,

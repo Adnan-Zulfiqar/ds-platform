@@ -12,6 +12,16 @@ production release.
 
 ### Added
 
+- **Publish a draft to eBay (EBAY-C3).** Review & publish gains "eBay
+  details" (eBay's category suggestions and the item specifics the category
+  requires) and lists eBay marketplace stores beside Shopify ones. Publish
+  puts the inventory item, creates or adopts the offer, and publishes it;
+  a retry never makes a second listing. Readiness is now per channel
+  (D-C3-1). Migrations `0038` (product category/aspects per marketplace) and
+  `0039` (eBay store link on listing defaults; offer id and SKU on
+  `store_listings`). eBay listing rows are declared and erased under eBay's
+  deletion contract and deleted on disconnect. Single-variant products,
+  condition NEW. **Verified against a mocked eBay transport only.**
 - **OpenAI provider (`AI_PROVIDER=openai`).** The first real `AIProvider`:
   Chat Completions over the existing `httpx` dependency, transient-only
   retries with full-jitter backoff, `is_synthetic=False` results. Needs

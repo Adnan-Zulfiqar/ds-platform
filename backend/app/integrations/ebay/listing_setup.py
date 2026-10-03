@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
+from app.core.exceptions import ConflictError, ValidationError
 from app.core.logging import get_logger
 from app.integrations.ebay.connection import EbayConnectionService
 from app.integrations.ebay.exceptions import (
@@ -25,6 +25,7 @@ from app.integrations.ebay.exceptions import (
     EbayTokenRevokedError,
 )
 from app.integrations.ebay.seller_setup import (
+    EBAY_MARKETPLACES,
     EBAY_SUPPORTED_MARKETPLACES,
     EbayBusinessPolicies,
     EbayInventoryLocation,
@@ -32,7 +33,9 @@ from app.integrations.ebay.seller_setup import (
     NewInventoryLocation,
 )
 from app.models.ebay import EbayConnection, EbayConnectionStatus, EbayListingDefaults
+from app.models.store import Store, StorePlatform, StoreStatus
 from app.repositories.ebay import EbayListingDefaultsRepository
+from app.repositories.store import StoreRepository
 
 logger = get_logger(__name__)
 
@@ -62,6 +65,7 @@ class EbayListingSetupService:
     def __init__(self, session: AsyncSession) -> None:
         self.connections = EbayConnectionService(session)
         self.defaults = EbayListingDefaultsRepository(session)
+        self.stores = StoreRepository(session)
 
     async def get_setup(self, marketplace_id: str) -> ListingSetup:
         _require_supported(marketplace_id)
@@ -103,8 +107,10 @@ class EbayListingSetupService:
         if any(value not in allowed for value, allowed in checks):
             raise EbayPolicyNotFoundError()
 
+        store = await self.ensure_store(choice.marketplace_id)
         values = {
             "connection_id": connection.id,
+            "store_id": store.id,
             "fulfillment_policy_id": choice.fulfillment_policy_id,
             "payment_policy_id": choice.payment_policy_id,
             "return_policy_id": choice.return_policy_id,
@@ -117,6 +123,38 @@ class EbayListingSetupService:
             saved = await self.defaults.update(existing, **values)
         logger.info("ebay_listing_defaults_saved", marketplace_id=choice.marketplace_id)
         return saved
+
+    async def ensure_store(self, marketplace_id: str) -> Store:
+        """The ``Store`` that stands for one eBay marketplace (D-C3-2).
+
+        One per workspace and marketplace, found by its fixed slug, created on
+        the first save of defaults and marked connected again on later saves
+        (a disconnect marks it disconnected). Its currency is the
+        marketplace's and never changes (D-C3-4).
+        """
+        marketplace = EBAY_MARKETPLACES[marketplace_id]
+        slug = f"ebay-marketplace-{marketplace.country.lower()}"
+        store = await self.stores.get_by_slug(slug)
+        if store is not None and store.platform is not StorePlatform.EBAY:
+            # A hand-made store took the slug; never repurpose it.
+            raise ConflictError(
+                f"A store with the address '{slug}' already exists. Rename it, then save again."
+            )
+        if store is None:
+            return await self.stores.create(
+                name=f"eBay {marketplace.name}",
+                slug=slug,
+                platform=StorePlatform.EBAY,
+                status=StoreStatus.CONNECTED,
+                currency=marketplace.currency,
+                settings={
+                    "countryCode": marketplace.country,
+                    "ebayMarketplaceId": marketplace.id,
+                },
+            )
+        if store.status is not StoreStatus.CONNECTED:
+            store = await self.stores.update(store, status=StoreStatus.CONNECTED, last_error=None)
+        return store
 
     async def create_location(self, location: NewInventoryLocation) -> EbayInventoryLocation:
         if not (location.postal_code or (location.city and location.state_or_province)):

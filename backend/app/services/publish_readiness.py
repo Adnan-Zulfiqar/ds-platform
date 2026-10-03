@@ -1,7 +1,9 @@
 """Server-authoritative publish readiness.
 
 One evaluation path for both the readiness review endpoint and the final
-Shopify publish call. Frontend checklist advice must not duplicate these
+publish call, per channel (Shopify; eBay since EBAY-C3, D-C3-1). Shared
+checks run for every channel; platform checks are chosen by the store.
+Frontend checklist advice must not duplicate these
 rules or invent blockers the provider/business layer does not enforce.
 """
 
@@ -16,18 +18,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
+from app.integrations.ebay.connection import EbayConnectionService
+from app.integrations.ebay.exceptions import EbaySellerApiUnavailableError
+from app.integrations.ebay.listing_content import (
+    EBAY_TITLE_MAX,
+    image_urls,
+    listing_text,
+    offer_terms,
+)
+from app.integrations.ebay.product_details import EbayProductDetailsService
 from app.integrations.shopify.service import ShopifyService
 from app.integrations.shopify.sync import ShopifySyncService
 from app.models.integration import IntegrationStatus
 from app.models.product import Product
-from app.models.store import Store, StorePlatform
+from app.models.store import Store, StorePlatform, StoreStatus
+from app.repositories.ebay import EbayListingDefaultsRepository
 from app.repositories.product import ProductRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
 from app.services.import_destination import country_from_store_settings
 
 CHANNEL_SHOPIFY = "shopify"
+CHANNEL_EBAY = "ebay"
+_CHANNEL_PLATFORM = {CHANNEL_SHOPIFY: StorePlatform.SHOPIFY, CHANNEL_EBAY: StorePlatform.EBAY}
 
 # Stable machine-readable codes. Clients branch on these; copy may change.
 CODE_STORE_REQUIRED = "store_required"
@@ -39,6 +54,15 @@ CODE_DRAFT_VERSION_STALE = "draft_version_stale"
 CODE_TITLE_THIN = "title_thin"
 CODE_DESCRIPTION_EMPTY = "description_empty"
 CODE_IMAGES_MISSING = "images_missing"
+# EBAY-C3
+CODE_EBAY_SETUP_MISSING = "ebay_listing_setup_missing"
+CODE_EBAY_CATEGORY_MISSING = "ebay_category_missing"
+CODE_EBAY_ASPECTS_MISSING = "ebay_aspects_missing"
+CODE_EBAY_REQUIREMENTS_UNAVAILABLE = "ebay_requirements_unavailable"
+CODE_EBAY_MULTIPLE_VARIANTS = "ebay_multiple_variants"
+CODE_EBAY_TITLE_TOO_LONG = "ebay_title_too_long"
+CODE_PRICE_MISSING = "price_missing"
+CODE_QUANTITY_MISSING = "quantity_missing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +211,166 @@ class PublishReadinessService(BaseService):
             )
         return None
 
+    async def _ebay_blockers(self, *, product: Product, store: Store) -> list[PublishCheckItem]:
+        """What eBay would refuse, checked before an offer is sent (EBAY-C3).
+
+        Uses the same ``listing_content`` helpers as the publish, so a product
+        that passes here is the product that is sent.
+        """
+        items: list[PublishCheckItem] = []
+        marketplace_id = str((store.settings or {}).get("ebayMarketplaceId") or "")
+
+        connection = await EbayConnectionService(self.session).get_connection()
+        if (
+            connection is None
+            or not connection.is_usable
+            or store.status is not StoreStatus.CONNECTED
+        ):
+            items.append(
+                PublishCheckItem(
+                    code=CODE_STORE_DISCONNECTED,
+                    message="eBay is not connected. Reconnect it in Settings before publishing.",
+                    field="storeId",
+                    section="publishing",
+                    action="Open Integrations",
+                )
+            )
+            return items
+
+        defaults = await EbayListingDefaultsRepository(self.session).get_for_marketplace(
+            marketplace_id
+        )
+        if defaults is None or defaults.store_id != store.id:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_EBAY_SETUP_MISSING,
+                    message=(
+                        "Choose the shipping, payment and return policies and the warehouse "
+                        "for this eBay marketplace first (Integrations → eBay → Listing setup)."
+                    ),
+                    field="storeId",
+                    section="publishing",
+                    action="Open Integrations",
+                )
+            )
+
+        title, _ = listing_text(product)
+        if len(title) > EBAY_TITLE_MAX:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_EBAY_TITLE_TOO_LONG,
+                    message=(
+                        f"eBay titles are at most {EBAY_TITLE_MAX} characters; "
+                        f"this one has {len(title)}."
+                    ),
+                    field="title",
+                    section="overview",
+                    action="Go to Overview",
+                )
+            )
+        if not image_urls(product):
+            items.append(
+                PublishCheckItem(
+                    code=CODE_IMAGES_MISSING,
+                    message="eBay needs at least one product image (https).",
+                    field="images",
+                    section="media",
+                    action="Go to Media",
+                )
+            )
+
+        terms = offer_terms(product)
+        if terms.multiple_variants:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_EBAY_MULTIPLE_VARIANTS,
+                    message=(
+                        "eBay publishing supports one variant for now. Disable the other "
+                        "variants, or publish this product to Shopify."
+                    ),
+                    field="variants",
+                    section="variants",
+                    action="Go to Options & variants",
+                )
+            )
+        else:
+            if terms.price is None or terms.price <= 0:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_PRICE_MISSING,
+                        message="Set a selling price on the Pricing tab for this eBay store.",
+                        field="sellPrice",
+                        section="pricing",
+                        action="Go to Pricing",
+                    )
+                )
+            elif terms.currency != normalise_currency(store.currency):
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_SELLING_CURRENCY_MISMATCH,
+                        message=(
+                            f"The price is in {terms.currency or 'an unrecorded currency'}, "
+                            f"but this eBay marketplace sells in {store.currency}. "
+                            "Recalculate pricing for "
+                            "this store on the Pricing tab."
+                        ),
+                        field="sellPrice",
+                        section="pricing",
+                        action="Go to Pricing",
+                    )
+                )
+            if terms.quantity <= 0:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_QUANTITY_MISSING,
+                        message="eBay needs at least one item in stock.",
+                        field="stockQuantity",
+                        section="inventory",
+                        action="Go to Stock",
+                    )
+                )
+
+        destination = self._destination_blocker(product=product, store=store)
+        if destination is not None:
+            items.append(destination)
+
+        try:
+            has_category, missing = await EbayProductDetailsService(
+                self.session
+            ).missing_required_aspects(product.id, marketplace_id)
+        except EbaySellerApiUnavailableError:
+            items.append(
+                PublishCheckItem(
+                    code=CODE_EBAY_REQUIREMENTS_UNAVAILABLE,
+                    message="Could not check eBay's requirements for the category. Try again.",
+                    field=None,
+                    section="publishing",
+                    action=None,
+                )
+            )
+        else:
+            if not has_category:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_EBAY_CATEGORY_MISSING,
+                        message="Choose an eBay category in eBay details.",
+                        field="ebayCategory",
+                        section="publishing",
+                        action=None,
+                    )
+                )
+            elif missing:
+                items.append(
+                    PublishCheckItem(
+                        code=CODE_EBAY_ASPECTS_MISSING,
+                        message=f"eBay requires: {', '.join(missing)}.",
+                        field="ebayAspects",
+                        section="publishing",
+                        action=None,
+                    )
+                )
+        return items
+
     async def evaluate(
         self,
         *,
@@ -231,11 +415,11 @@ class PublishReadinessService(BaseService):
             )
 
         normalised_channel = (channel or "").strip().lower()
-        if normalised_channel != CHANNEL_SHOPIFY:
+        if normalised_channel not in _CHANNEL_PLATFORM:
             blockers.append(
                 PublishCheckItem(
                     code=CODE_UNSUPPORTED_CHANNEL,
-                    message="Only Shopify publishing is supported right now.",
+                    message="Only Shopify and eBay publishing are supported right now.",
                     field="channel",
                     section="publishing",
                     action=None,
@@ -263,7 +447,7 @@ class PublishReadinessService(BaseService):
                 )
             )
             return PublishReadinessResult(
-                channel=CHANNEL_SHOPIFY,
+                channel=normalised_channel,
                 store_id=None,
                 draft_id=product.id,
                 draft_updated_at=product.updated_at,
@@ -274,16 +458,21 @@ class PublishReadinessService(BaseService):
             )
 
         store = await self.stores.get_by_id_or_raise(store_id)
-        if store.platform is not StorePlatform.SHOPIFY:
+        if store.platform is not _CHANNEL_PLATFORM[normalised_channel]:
             blockers.append(
                 PublishCheckItem(
                     code=CODE_UNSUPPORTED_CHANNEL,
-                    message="Only Shopify stores can be used with this publish action.",
+                    message=(
+                        f"This is not a {normalised_channel.capitalize()} store. "
+                        "Choose a store for this channel."
+                    ),
                     field="storeId",
                     section="publishing",
                     action="Choose a store",
                 )
             )
+        elif store.platform is StorePlatform.EBAY:
+            blockers.extend(await self._ebay_blockers(product=product, store=store))
         else:
             connection = await self.shopify.connections.get_by_store(store_id)
             if connection is None or connection.status is not IntegrationStatus.CONNECTED:
@@ -310,7 +499,7 @@ class PublishReadinessService(BaseService):
 
         ordered_blockers = _sorted_items(blockers)
         return PublishReadinessResult(
-            channel=CHANNEL_SHOPIFY,
+            channel=normalised_channel,
             store_id=store_id,
             draft_id=product.id,
             draft_updated_at=product.updated_at,
@@ -354,6 +543,7 @@ class PublishReadinessService(BaseService):
 
 
 __all__ = [
+    "CHANNEL_EBAY",
     "CHANNEL_SHOPIFY",
     "CODE_DESCRIPTION_EMPTY",
     "CODE_DESTINATION_MISMATCH",

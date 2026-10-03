@@ -378,6 +378,15 @@ class EbayListingDefaults(IdentifiedBase):
         index=True,
     )
     marketplace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: EBAY-C3 (D-C3-2): the ``Store`` that represents this marketplace in the
+    #: editor and in ``store_listings``. SET NULL: the store outlives a
+    #: disconnect (it is marked disconnected), the defaults do not.
+    store_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     fulfillment_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
     payment_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
     return_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)

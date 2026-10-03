@@ -12,7 +12,7 @@ structurally rather than by discipline: the response models in
 from __future__ import annotations
 
 import json
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response, status
@@ -53,9 +53,13 @@ from app.integrations.ebay.listing_setup import (
     EbayListingSetupService,
     ListingDefaultsChoice,
 )
+from app.integrations.ebay.product_details import EbayProductDetails, EbayProductDetailsService
+from app.integrations.ebay.publish import EbayPublishService
 from app.integrations.ebay.schemas import (
     ChallengeResponse,
+    EbayAspectRead,
     EbayAuthorizationResponse,
+    EbayCategorySuggestionRead,
     EbayConnectionRead,
     EbayListingDefaultsRead,
     EbayListingDefaultsUpdate,
@@ -63,6 +67,8 @@ from app.integrations.ebay.schemas import (
     EbayLocationCreate,
     EbayLocationRead,
     EbayPolicyRead,
+    EbayProductDetailsRead,
+    EbayProductDetailsUpdate,
     EbayStatusResponse,
 )
 from app.integrations.ebay.seller_setup import (
@@ -101,7 +107,12 @@ from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
 from app.schemas.common import MessageResponse
-from app.services.publish_readiness import CHANNEL_SHOPIFY, PublishReadinessService
+from app.services.publish_readiness import (
+    CHANNEL_EBAY,
+    CHANNEL_SHOPIFY,
+    PublishReadinessResult,
+    PublishReadinessService,
+)
 
 logger = get_logger(__name__)
 
@@ -857,6 +868,172 @@ async def create_ebay_location(
         )
     )
     return _location_read(created)
+
+
+# ---------------------------------------------------------------------------
+# EBAY-C3: a product's eBay category and item specifics (D-C3-3).
+# ---------------------------------------------------------------------------
+
+
+def _details_read(details: EbayProductDetails) -> EbayProductDetailsRead:
+    return EbayProductDetailsRead(
+        marketplace_id=details.marketplace_id,
+        category_id=details.category_id,
+        category_name=details.category_name,
+        aspects=details.aspects,
+        category_aspects=[
+            EbayAspectRead(
+                name=a.name,
+                required=a.required,
+                selection_only=a.selection_only,
+                multiple=a.multiple,
+                values=list(a.values),
+            )
+            for a in details.category_aspects
+        ],
+        missing_required=list(details.missing_required),
+    )
+
+
+@router.get(
+    "/ebay/products/{product_id}/details",
+    response_model=EbayProductDetailsRead,
+    summary="A product's eBay category and item specifics",
+)
+async def ebay_product_details(
+    product_id: UUID,
+    session: DbSession,
+    _principal: RequireMember,
+    marketplace_id: Annotated[str, Query(alias="marketplaceId", max_length=32)] = "EBAY_US",
+) -> EbayProductDetailsRead:
+    details = await EbayProductDetailsService(session).get(product_id, marketplace_id)
+    return _details_read(details)
+
+
+@router.get(
+    "/ebay/products/{product_id}/category-suggestions",
+    response_model=list[EbayCategorySuggestionRead],
+    summary="eBay's category suggestions for a product",
+)
+async def ebay_category_suggestions(
+    product_id: UUID,
+    session: DbSession,
+    _principal: RequireMember,
+    marketplace_id: Annotated[str, Query(alias="marketplaceId", max_length=32)] = "EBAY_US",
+    q: Annotated[str | None, Query(max_length=350)] = None,
+) -> list[EbayCategorySuggestionRead]:
+    """Suggested from the product title unless ``q`` is given."""
+    suggestions = await EbayProductDetailsService(session).suggest_categories(
+        product_id, marketplace_id, q
+    )
+    return [
+        EbayCategorySuggestionRead(category_id=s.category_id, name=s.name, path=s.path)
+        for s in suggestions
+    ]
+
+
+@router.put(
+    "/ebay/products/{product_id}/details",
+    response_model=EbayProductDetailsRead,
+    summary="Choose a product's eBay category and item specifics",
+)
+async def save_ebay_product_details(
+    product_id: UUID,
+    body: EbayProductDetailsUpdate,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> EbayProductDetailsRead:
+    """Admin, matching the other draft edits. Partial aspects are allowed;
+    publish readiness reports what is still required."""
+    details = await EbayProductDetailsService(session).save(
+        product_id,
+        body.marketplace_id,
+        category_id=body.category_id,
+        category_name=body.category_name,
+        aspects=dict(body.aspects),
+    )
+    return _details_read(details)
+
+
+# ---------------------------------------------------------------------------
+# EBAY-C3: publish a draft to eBay. Same request and response shapes as the
+# Shopify routes, so the editor's publish flow handles both channels.
+# ---------------------------------------------------------------------------
+
+
+def _readiness_response(result: PublishReadinessResult) -> ShopifyPublishReadinessResponse:
+    def items(source: tuple[Any, ...]) -> list[ShopifyPublishCheckItem]:
+        return [
+            ShopifyPublishCheckItem(
+                code=item.code,
+                message=item.message,
+                field=item.field,
+                section=item.section,
+                action=item.action,
+            )
+            for item in source
+        ]
+
+    return ShopifyPublishReadinessResponse(
+        channel=result.channel,
+        store_id=result.store_id,
+        draft_id=result.draft_id,
+        draft_updated_at=result.draft_updated_at,
+        can_publish=result.can_publish,
+        blockers=items(result.blockers),
+        recommendations=items(result.recommendations),
+        checked_at=result.checked_at,
+    )
+
+
+@router.post(
+    "/ebay/publish-readiness",
+    response_model=ShopifyPublishReadinessResponse,
+    summary="Evaluate eBay publish blockers for a draft",
+)
+async def ebay_publish_readiness(
+    payload: ShopifyPublishReadinessRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyPublishReadinessResponse:
+    """The same rules ``POST /ebay/publish`` enforces, without publishing."""
+    result = await PublishReadinessService(session).evaluate(
+        channel=CHANNEL_EBAY,
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        expected_updated_at=payload.expected_updated_at,
+        enforce_version=False,
+    )
+    return _readiness_response(result)
+
+
+@router.post(
+    "/ebay/publish",
+    response_model=ShopifyPublishResponse,
+    summary="Publish a draft to eBay",
+)
+async def publish_to_ebay(
+    payload: ShopifyPublishReadinessRequest,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyPublishResponse:
+    """Admin only, matching Shopify publish. ``storeId`` is required."""
+    if payload.store_id is None:
+        from app.core.exceptions import ValidationError
+
+        raise ValidationError("storeId is required.")
+    result = await EbayPublishService(session).publish(
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        expected_updated_at=payload.expected_updated_at,
+    )
+    return ShopifyPublishResponse(
+        message=f"Published to eBay listing {result.listing_id}.",
+        listing_id=result.listing.id,
+        external_product_id=result.listing_id,
+        storefront_url=result.storefront_url,
+        updated=not result.created,
+    )
 
 
 @router.post(

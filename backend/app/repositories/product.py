@@ -23,6 +23,7 @@ from app.models.product import (
     Product,
     ProductImage,
     ProductImport,
+    ProductMarketplaceAttributes,
     ProductSource,
     ProductStatus,
     ProductVariant,
@@ -563,9 +564,28 @@ class ProductVersionRepository(TenantScopedRepository[ProductVersion]):
         return target
 
 
+class ProductMarketplaceAttributesRepository(TenantScopedRepository[ProductMarketplaceAttributes]):
+    """A product's category and item specifics per marketplace (EBAY-C3)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, ProductMarketplaceAttributes)
+
+    async def get_for(
+        self, product_id: uuid.UUID, marketplace_id: str
+    ) -> ProductMarketplaceAttributes | None:
+        result = await self.session.execute(
+            self._base_query().where(
+                ProductMarketplaceAttributes.product_id == product_id,
+                ProductMarketplaceAttributes.marketplace_id == marketplace_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
 __all__ = [
     "ProductImageRepository",
     "ProductImportRepository",
+    "ProductMarketplaceAttributesRepository",
     "ProductRepository",
     "ProductVariantRepository",
     "ProductVersionRepository",
