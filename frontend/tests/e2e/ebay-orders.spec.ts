@@ -133,3 +133,39 @@ test.describe("eBay orders (EBAY-C5)", () => {
     expect(calls.shipments).toEqual([{ carrierCode: "UPS", trackingNumber: "1Z999AA10123456784" }]);
   });
 });
+
+test.describe("Shopify fulfilment (Track E1)", () => {
+  test("marking a Shopify order shipped sends carrier, tracking and the notify choice", async ({ page }) => {
+    await mockOrders(page);
+    const shipped: unknown[] = [];
+    await page.route(`**/api/v1/orders/${ORDER_ID}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(ebayOrderDetail({ source: "shopify", externalId: "5001" })),
+      }),
+    );
+    await page.route(`**/api/v1/integrations/shopify/orders/${ORDER_ID}/fulfilments`, (route) => {
+      shipped.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "s-2", orderId: ORDER_ID }),
+      });
+    });
+    await page.goto(`/orders/${ORDER_ID}`);
+    const form = page.getByTestId("shopify-ship-form");
+    await expect(form).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("ebay-ship-form")).toHaveCount(0);
+
+    await form.getByLabel("Carrier").fill("DHL Express");
+    await form.getByLabel("Tracking number").fill("JD014600006281230000");
+    await form.getByLabel("Email the customer the tracking details").uncheck();
+    await form.getByRole("button", { name: "Send to Shopify" }).click();
+
+    await expect(form.getByTestId("shopify-ship-result")).toBeVisible();
+    expect(shipped).toEqual([
+      { company: "DHL Express", trackingNumber: "JD014600006281230000", notifyCustomer: false },
+    ]);
+  });
+});

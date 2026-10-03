@@ -86,11 +86,14 @@ from app.integrations.ebay.seller_setup import (
     NewInventoryLocation,
 )
 from app.integrations.ebay.signature import SIGNATURE_HEADER
+from app.integrations.shopify.fulfilment import ShopifyFulfilmentService, ShopifyTracking
 from app.integrations.shopify.schemas import (
     ShopifyAuthorizationResponse,
     ShopifyClaimInstallRequest,
     ShopifyConnectionRead,
     ShopifyConnectRequest,
+    ShopifyFulfilmentCreate,
+    ShopifyFulfilmentRead,
     ShopifyPublishCheckItem,
     ShopifyPublishReadinessRequest,
     ShopifyPublishReadinessResponse,
@@ -1150,6 +1153,38 @@ async def ebay_health(session: DbSession, _principal: RequireAdmin) -> EbayHealt
             if limits is not None
             else None
         ),
+    )
+
+
+@router.post(
+    "/shopify/orders/{order_id}/fulfilments",
+    response_model=ShopifyFulfilmentRead,
+    status_code=201,
+    summary="Tell Shopify an order has shipped, with tracking",
+)
+async def fulfil_shopify_order(
+    order_id: UUID,
+    body: ShopifyFulfilmentCreate,
+    session: DbSession,
+    _principal: RequireAdmin,
+) -> ShopifyFulfilmentRead:
+    """Track E1. Repeating a tracking number returns the existing shipment and
+    sends nothing to Shopify."""
+    shipment = await ShopifyFulfilmentService(session).mark_shipped(
+        order_id,
+        ShopifyTracking(
+            company=body.company.strip(),
+            number=body.tracking_number,
+            url=body.tracking_url,
+            notify_customer=body.notify_customer,
+        ),
+    )
+    return ShopifyFulfilmentRead(
+        id=shipment.id,
+        order_id=shipment.order_id,
+        carrier=shipment.carrier,
+        tracking_number=shipment.tracking_number,
+        shipped_at=shipment.shipped_at,
     )
 
 
