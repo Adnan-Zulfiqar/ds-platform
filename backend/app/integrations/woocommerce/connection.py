@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.encryption import (
     EncryptionNotConfiguredError,
+    decrypt,
     encrypt,
     is_encryption_configured,
 )
@@ -62,6 +63,18 @@ def _currency_from(settings: Any) -> str | None:
             value = str(item.get("value") or "").upper()
             return value if _CURRENCY.match(value) else None
     return None
+
+
+def is_usable(store: Store) -> bool:
+    """Connected through the verified path: keys present, and the currency
+    stamp only :meth:`WooCommerceConnectionService.connect` writes."""
+    return (
+        store.platform is StorePlatform.WOOCOMMERCE
+        and store.status is StoreStatus.CONNECTED
+        and bool(store.encrypted_credentials)
+        and store.currency_last_synced_at is not None
+        and bool(store.storefront_url)
+    )
 
 
 class WooCommerceConnectionService(BaseService):
@@ -137,6 +150,22 @@ class WooCommerceConnectionService(BaseService):
             candidate = f"{base}-{n}"
         return candidate
 
+    def client_for(self, store: Store) -> WooCommerceClient:
+        """A client for a store connected through :meth:`connect` (W2).
+
+        Requires the verified currency stamp as well as keys: a WooCommerce
+        store whose keys came from the generic store endpoint was never
+        checked, so publishing does not trust it.
+        """
+        if not is_usable(store):
+            raise ValidationError("This WooCommerce store is not connected.")
+        raw = json.loads(decrypt(store.encrypted_credentials or ""))
+        return WooCommerceClient(
+            site_url=str(store.storefront_url),
+            consumer_key=str(raw["consumer_key"]),
+            consumer_secret=str(raw["consumer_secret"]),
+        )
+
     async def list_stores(self) -> list[Store]:
         return await self.stores.list_by_platform(StorePlatform.WOOCOMMERCE)
 
@@ -156,4 +185,4 @@ class WooCommerceConnectionService(BaseService):
         return store
 
 
-__all__ = ["WooCommerceConnectionService"]
+__all__ = ["WooCommerceConnectionService", "is_usable"]

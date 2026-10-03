@@ -57,6 +57,15 @@ class WooCommerceAuthError(WooCommerceError):
     )
 
 
+class WooCommerceRejectedError(WooCommerceError):
+    """The store answered and said no (W2). Its own message is passed on —
+    it is the merchant's own site describing the merchant's own data."""
+
+    code = "woocommerce_rejected"
+    status_code = 422
+    message = "The WooCommerce store refused the request."
+
+
 class WooCommerceUnreachableError(WooCommerceError):
     code = "woocommerce_unreachable"
     status_code = 502
@@ -78,6 +87,17 @@ def normalise_site_url(raw: str) -> str:
     return f"https://{parsed.hostname.lower()}{path}"
 
 
+def _store_message(raw: bytes) -> str | None:
+    """WooCommerce errors are ``{"code", "message", "data"}``; pass on the
+    message, bounded, or fall back to the generic text."""
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    message = parsed.get("message") if isinstance(parsed, dict) else None
+    return f"WooCommerce: {str(message)[:300]}" if message else None
+
+
 class WooCommerceClient:
     def __init__(self, *, site_url: str, consumer_key: str, consumer_secret: str) -> None:
         self.site_url = normalise_site_url(site_url)
@@ -86,8 +106,19 @@ class WooCommerceClient:
     async def get(self, path: str, params: dict[str, str] | None = None) -> Any:
         return await self._request("GET", path, params=params)
 
+    async def post(self, path: str, body: dict[str, Any]) -> Any:
+        return await self._request("POST", path, body=body)
+
+    async def put(self, path: str, body: dict[str, Any]) -> Any:
+        return await self._request("PUT", path, body=body)
+
     async def _request(
-        self, method: str, path: str, *, params: dict[str, str] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
     ) -> Any:
         url = f"{self.site_url}{API_PREFIX}{path}"
         if params:
@@ -113,6 +144,7 @@ class WooCommerceClient:
                     method,
                     connection_url,
                     headers={"Host": hostname, "Accept": "application/json"},
+                    json=body,
                     extensions={"sni_hostname": hostname},
                 ) as response,
             ):
@@ -123,16 +155,20 @@ class WooCommerceClient:
                     )
                 if response.status_code in (401, 403):
                     raise WooCommerceAuthError()
-                body = bytearray()
+                received = bytearray()
                 async for chunk in response.aiter_bytes():
-                    body.extend(chunk)
-                    if len(body) > MAX_BODY:
+                    received.extend(chunk)
+                    if len(received) > MAX_BODY:
                         raise WooCommerceError("The store's response was too large.")
-                if response.status_code == 404:
+                # A 404 *from the REST API* (JSON with a message: "invalid
+                # product id") is an answer; a 404 page is a site without one.
+                if response.status_code == 404 and _store_message(bytes(received)) is None:
                     raise WooCommerceUnreachableError(
                         "No WooCommerce REST API was found at that address. Check that "
                         "WooCommerce is installed and permalinks are enabled."
                     )
+                if 400 <= response.status_code < 500:
+                    raise WooCommerceRejectedError(_store_message(bytes(received)))
                 if response.status_code >= 400:
                     raise WooCommerceError(details={"status": response.status_code})
         except httpx.TimeoutException:
@@ -140,7 +176,7 @@ class WooCommerceClient:
         except httpx.RequestError:
             raise WooCommerceUnreachableError() from None
         try:
-            return json.loads(bytes(body))
+            return json.loads(bytes(received))
         except ValueError:
             raise WooCommerceError("The store did not answer with JSON.") from None
 
@@ -149,6 +185,7 @@ __all__ = [
     "WooCommerceAuthError",
     "WooCommerceClient",
     "WooCommerceError",
+    "WooCommerceRejectedError",
     "WooCommerceUnreachableError",
     "WooCommerceUrlRejectedError",
     "normalise_site_url",
