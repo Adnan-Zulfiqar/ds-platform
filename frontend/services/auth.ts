@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 
 import { apiClient } from "@/lib/api-client";
@@ -243,4 +244,15 @@ export async function acceptInvitation(payload: AcceptInvitationPayload): Promis
   });
   setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
   return data;
+}
+
+/** The preview is keyed by the token; it is never retried, because a 404
+ * here is an answer ("this link is dead"), not a transient failure. */
+export function useInvitationPreview(token: string | null) {
+  return useQuery({
+    queryKey: [...authKeys.all, "invitation", token],
+    queryFn: () => previewInvitation(token as string),
+    enabled: Boolean(token),
+    retry: false,
+  });
 }
