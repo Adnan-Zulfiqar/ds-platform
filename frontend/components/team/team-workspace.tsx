@@ -34,7 +34,7 @@ const ROLE_HELP: Record<Invitation["role"], string> = {
  */
 export function TeamWorkspace() {
   const { hasRole } = useAuth();
-  const canManage = hasRole("admin");
+  const canManage = hasRole("owner") || hasRole("admin");
   const users = useUsers({ page: 1, size: 100, sortBy: "created_at", sortDir: "asc" });
 
   return (
