@@ -17,6 +17,12 @@ production release.
   profit floors hold after the fee; reported profit and margin are net.
   Migration `0042` (nullable: existing rules price exactly as before).
 
+### Added — scheduled eBay jobs (B-011, owner-approved)
+
+- Hourly eBay order import (last two days) and a six-hourly price/stock
+  backstop, each fanning out one task per connected workspace through the
+  new ids-only `EbayConnectedTenantsSweep` (CLAUDE.md §4 list updated).
+
 ### Fixed — review of EBAY-C2 to C6 and the OpenAI provider
 
 Three independent code reviews of the new eBay and AI code (2026-10-03);
