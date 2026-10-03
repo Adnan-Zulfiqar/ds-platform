@@ -8,10 +8,8 @@ unreachable", not a client mistake. `MissingPromptVariablesError` inherits
 `ValidationError` (422) instead: a caller who forgot a variable can fix their
 own request, which is exactly what distinguishes a 4xx from a 5xx here.
 
-Kept to what has an actual caller. Timeout, rate-limit, and malformed-
-response variants belong to whichever stage first makes a real outbound model
-call and can therefore raise them — adding them now would be exception classes
-with no caller, which is the thing CLAUDE.md's KISS rule warns against.
+The unavailable / rejected / malformed variants arrived with the first real
+outbound provider (`OpenAIProvider`), which is their caller.
 """
 
 from __future__ import annotations
@@ -47,6 +45,50 @@ class AIProviderNotConfiguredError(AIError):
     retryable = False
 
 
+class AIProviderUnavailableError(AIError):
+    """A timeout, a connection failure, a 5xx or a rate limit.
+
+    Retryable: the identical request can succeed a moment later. The provider
+    retries these itself, up to `AI_MAX_RETRIES`; reaching a caller means the
+    retries ran out.
+    """
+
+    code = "ai_provider_unavailable"
+    message = "The AI provider is temporarily unavailable."
+    retryable = True
+
+    def __init__(
+        self, message: str | None = None, *, retry_after_seconds: float | None = None
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class AIProviderRejectedError(AIError):
+    """The provider refused this request (a 4xx other than auth or 429).
+
+    Not retryable: an invalid model name or an oversized prompt fails the same
+    way every time.
+    """
+
+    code = "ai_provider_rejected"
+    message = "The AI provider rejected the request."
+    retryable = False
+
+
+class AIResponseMalformedError(AIError):
+    """The provider answered, but with nothing usable — no text, or not the
+    structure asked for.
+
+    Not retryable by the provider itself; a caller may run the whole
+    generation again.
+    """
+
+    code = "ai_response_malformed"
+    message = "The AI provider returned an unusable response."
+    retryable = False
+
+
 class MissingPromptVariablesError(ValidationError):
     """A prompt template could not be rendered — one or more `{{variables}}`
     it declares were not supplied.
@@ -72,5 +114,8 @@ __all__ = [
     "SERVICE_NAME",
     "AIError",
     "AIProviderNotConfiguredError",
+    "AIProviderRejectedError",
+    "AIProviderUnavailableError",
+    "AIResponseMalformedError",
     "MissingPromptVariablesError",
 ]
