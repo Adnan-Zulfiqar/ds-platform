@@ -2,7 +2,7 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-03 — remaining roadmap Tracks A–D in progress (owner standing order).
+**Updated:** 2026-10-03 (later) — Track E in progress (owner standing order, D-012 order).
 
 | Item | Value |
 |---|---|
@@ -30,6 +30,22 @@ Single continuation point after an interruption. Overwritten, not appended.
 | B | `OpenAIProvider` merged (#46, `9ffa700`); mocked-transport tests only, live call is owner item B-002 |
 | C | Audit only; nothing left that is not blocked on A4/A5 |
 | D | C2–C6 merged (#48–#52); review fixes in the follow-up PR. Live eBay steps are owner actions (`docs/ebay/EBAY_C6_OPERATIONS.md`) |
+
+## Track E (2026-10-03, D-012 order)
+
+| Item | State |
+|---|---|
+| B-011 scheduled eBay jobs | Merged (#54) |
+| E1 Shopify fulfilment push | PR #55 — waiting for CI, then merge. Stores must reconnect for the new scopes (owner) |
+| E2 sale fees (M24C) | PR #56 — waiting for CI. M27 freight quote blocked on a live AliExpress response |
+| E3 notification email | PR #57, stacked on #56 (migration 0043 after 0042). Merge after #56 |
+| E4 team invitations | Branch `feat/team-invitations`, stacked on E3 (migration 0044). PR after #57 |
+| E5 platform admin | **Blocked, B-013** — proposal in PR #58 |
+| E6 billing | **Blocked, B-014** — proposal in PR #58 |
+| E7 channels | WooCommerce next (no app approval needed); Etsy/TikTok need owner app registrations |
+
+Merge order: #55, #56, #57, then E4, then #58 (expect PROJECT_ROADMAP/CHANGELOG
+conflicts; resolve by keeping both sides).
 
 ## Next safe action
 
