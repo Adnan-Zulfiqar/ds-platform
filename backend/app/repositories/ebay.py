@@ -33,6 +33,7 @@ from app.core.exceptions import ConflictError
 from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
+    EbayConnectionStatus,
     EbayListingDefaults,
     NotificationProcessing,
     NotificationVerification,
@@ -245,8 +246,32 @@ class EbayListingDefaultsRepository(TenantScopedRepository[EbayListingDefaults])
         return result.scalar_one_or_none()
 
 
+class EbayConnectedTenantsSweep:
+    """Which workspaces have a usable eBay connection — tenant ids, nothing else.
+
+    **Unscoped by design, and approved for exactly this** (owner, 2026-10-03,
+    B-011; see CLAUDE.md §4). The scheduled eBay jobs need to *find* the
+    tenants to act on; every action they lead to then runs under that tenant's
+    own context through the scoped repositories. Returns ids only, never a
+    renderable row, so it cannot leak one workspace's data to another.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def connected_tenant_ids(self, *, limit: int = 5000) -> list[uuid.UUID]:
+        result = await self.session.execute(
+            select(EbayConnection.tenant_id)
+            .where(EbayConnection.status == EbayConnectionStatus.CONNECTED)
+            .order_by(EbayConnection.tenant_id)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
 __all__ = [
     "EbayComplianceLedgerRepository",
+    "EbayConnectedTenantsSweep",
     "EbayConnectionRepository",
     "EbayListingDefaultsRepository",
 ]

@@ -173,3 +173,16 @@ change. Runbook: `docs/operations/LOCAL_CANDIDATE_STACK.md`.
 
 All 25 Next 16 lint findings fixed in PR #42; the three react-hooks rules are
 back at their defaults.
+
+## D-012 — Owner decisions of 2026-10-03: B-011 approved; Track E in roadmap order
+
+**B-011 approved.** One new unscoped, ids-only class,
+`EbayConnectedTenantsSweep`, for the scheduled eBay jobs (hourly order
+import, six-hourly price/stock backstop). Added to CLAUDE.md §4's closed list
+in the same change. Every action it leads to runs under the tenant's context.
+
+**Track E** (`docs/CLAUDE_REMAINING_ROADMAP.md`) is authorised, in roadmap
+order: Shopify fulfilment push → FX M24B/M24C → outbound email → team
+invites → platform admin panel → subscription billing → WooCommerce / Etsy /
+TikTok. Each one: plan doc, implementation, gates, PR, CI, merge. Live
+provider testing stays with the owner.
