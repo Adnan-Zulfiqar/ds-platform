@@ -12,7 +12,7 @@ import {
  * the WooCommerce endpoints, and nothing goes to Shopify.
  */
 
-const WOO_STORE_ID = "55555555-5555-4555-8555-555555555555";
+const WOO_STORE_ID = "58585858-5858-4858-8858-585858585858";
 
 test("a WooCommerce store uses the WooCommerce readiness and publish endpoints", async ({
   page,
