@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from app.models.store import StorePlatform, StoreStatus
 from app.schemas.base import CamelCaseModel
@@ -81,3 +81,13 @@ class StoreStatisticsRead(CamelCaseModel):
     with_errors: int
     product_count: int
     last_activity_at: datetime | None
+
+
+class WooCommerceConnectRequest(CamelCaseModel):
+    """Track E7 W1. The key and secret are accepted once, verified against the
+    store, encrypted, and never returned."""
+
+    name: str = Field(default="", max_length=255)
+    site_url: str = Field(min_length=8, max_length=1024)
+    consumer_key: SecretStr
+    consumer_secret: SecretStr

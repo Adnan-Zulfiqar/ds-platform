@@ -332,6 +332,7 @@ export async function mockHomeApi(page: Page, scenario: HomeScenario): Promise<R
     if (path === "/integrations/aliexpress/status")
       return answer(route, scenario, "aliexpress", () => scenario.aliexpress);
     if (path === "/integrations/ebay/status") return answer(route, scenario, "ebay", () => scenario.ebay);
+    if (path === "/integrations/woocommerce/stores") return json([]);
     if (path === "/drafts") {
       log.drafts.push(url.search);
       return answer(route, scenario, "drafts", () => paged(scenario.drafts));

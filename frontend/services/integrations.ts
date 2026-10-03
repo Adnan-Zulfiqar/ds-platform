@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
+import { type Store, storeKeys } from "@/services/stores";
 import type {
   AliExpressAuthorization,
   AliExpressStatus,
@@ -423,6 +424,57 @@ export async function shipEbayOrder(
     payload,
   );
   return data;
+}
+
+// --- WooCommerce (Track E7, W1) ---------------------------------------------
+
+const woocommerceStoresKey = [...integrationKeys.all, "woocommerce", "stores"] as const;
+
+export interface WooCommerceConnectPayload {
+  name: string;
+  siteUrl: string;
+  consumerKey: string;
+  consumerSecret: string;
+}
+
+export function useWooCommerceStores(): UseQueryResult<Store[]> {
+  return useQuery({
+    queryKey: woocommerceStoresKey,
+    queryFn: async () => {
+      const { data } = await apiClient.get<Store[]>("/integrations/woocommerce/stores");
+      return data;
+    },
+  });
+}
+
+export function useConnectWooCommerce() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: WooCommerceConnectPayload) => {
+      const { data } = await apiClient.post<Store>("/integrations/woocommerce/connect", payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: woocommerceStoresKey });
+      void queryClient.invalidateQueries({ queryKey: storeKeys.all });
+    },
+  });
+}
+
+export function useDisconnectWooCommerce() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (storeId: string) => {
+      const { data } = await apiClient.post<Store>(
+        `/integrations/woocommerce/stores/${storeId}/disconnect`,
+      );
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: woocommerceStoresKey });
+      void queryClient.invalidateQueries({ queryKey: storeKeys.all });
+    },
+  });
 }
 
 /** Track E1: tell Shopify an order shipped. Repeating a tracking number is a no-op. */

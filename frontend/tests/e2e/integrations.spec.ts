@@ -112,7 +112,7 @@ test.describe("Integrations page", () => {
       channels.getByRole("button", { name: "Connect Shopify" }),
     ).toBeVisible();
     await expect(channels.getByText("Coming soon").first()).toBeVisible();
-    await expect(channels.getByText("WooCommerce")).toBeVisible();
+    await expect(page.getByTestId("planned-channels").getByText("Etsy")).toBeVisible();
     // Named, never offered: nothing in the planned row can be clicked.
     await expect(page.getByTestId("planned-channels").getByRole("button")).toHaveCount(0);
   });

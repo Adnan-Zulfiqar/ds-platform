@@ -477,7 +477,7 @@ class PublishReadinessService(BaseService):
             )
         elif store.platform is StorePlatform.EBAY:
             blockers.extend(await self._ebay_blockers(product=product, store=store))
-        else:
+        elif store.platform is StorePlatform.SHOPIFY:
             connection = await self.shopify.connections.get_by_store(store_id)
             if connection is None or connection.status is not IntegrationStatus.CONNECTED:
                 blockers.append(
@@ -500,6 +500,19 @@ class PublishReadinessService(BaseService):
             currency = self._currency_blocker(product=product, store=store)
             if currency is not None:
                 blockers.append(currency)
+        else:
+            # Track E7: Shopify is a named case, not the fallback. A channel
+            # added to _CHANNEL_PLATFORM without its own rules is refused here
+            # rather than silently checked against Shopify's.
+            blockers.append(
+                PublishCheckItem(
+                    code=CODE_UNSUPPORTED_CHANNEL,
+                    message="Publishing to this kind of store is not supported yet.",
+                    field="storeId",
+                    section="publishing",
+                    action=None,
+                )
+            )
 
         ordered_blockers = _sorted_items(blockers)
         return PublishReadinessResult(

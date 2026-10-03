@@ -215,6 +215,7 @@ export async function mockChannelsApi(page: Page, world: ChannelsWorld): Promise
     if (path === "/integrations/aliexpress/status")
       return world.fail.has("aliexpress") ? fail() : json(world.aliexpress);
     if (path === "/integrations/ebay/status") return world.fail.has("ebay") ? fail() : json(world.ebay);
+    if (path === "/integrations/woocommerce/stores") return json([]);
 
     if (path === "/integrations/shopify/connect" && method === "POST") {
       const body = request.postDataJSON() as { shop?: string };
