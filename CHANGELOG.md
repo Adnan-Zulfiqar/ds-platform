@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E7 W4a: import WooCommerce orders
+
+- "Import recent orders" on each connected WooCommerce store imports the
+  orders changed in the last 7 days (paged) into Orders, with recipient,
+  address, totals and line items. Line items are linked to their draft by
+  the W2 SKU. WooCommerce statuses are mapped to fulfilment and payment
+  statuses, and checkout drafts are skipped. Order ids are stored as
+  `<store id>:<order id>`, so two stores' order numbers never collide.
+  Migration `0045` adds `'woocommerce'` to `order_source`. Live order
+  webhooks are W4b.
+
 ### Added — Track E7 W3: WooCommerce price and stock follow the draft
 
 - After a committed edit, pricing apply, or inventory or supplier sync, a
