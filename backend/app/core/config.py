@@ -1124,6 +1124,18 @@ class AISettings(_EnvFileSettings):
         default=None,
         description="Base URL for a self-hosted model server, used when provider=local.",
     )
+    # No default model. Model names are retired on OpenAI's schedule, not
+    # ours; a baked-in default would eventually fail on every call while
+    # looking configured. Choosing `openai` without naming a model is a
+    # configuration error raised by the factory.
+    openai_model: str = Field(
+        default="",
+        description="OpenAI model id, e.g. the chat model the platform account is approved for.",
+    )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="OpenAI-compatible API root. Override only for a proxy or gateway.",
+    )
 
     request_timeout_seconds: float = Field(default=30.0, gt=0)
     connect_timeout_seconds: float = Field(default=5.0, gt=0)

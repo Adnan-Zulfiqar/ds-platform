@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added
+
+- **OpenAI provider (`AI_PROVIDER=openai`).** The first real `AIProvider`:
+  Chat Completions over the existing `httpx` dependency, transient-only
+  retries with full-jitter backoff, `is_synthetic=False` results. Needs
+  `AI_OPENAI_API_KEY` and `AI_OPENAI_MODEL`; a missing one is a named
+  configuration error, never a stub fallback. Temperature is not sent
+  (reasoning models reject it). An auth failure never echoes OpenAI's error
+  text, which quotes part of the key. **Verified with a mocked transport
+  only — no real OpenAI call has been made (B-002 stays open).**
+
 ### Fixed
 
 - **A blank `KEY=` line in `backend/.env` no longer erases the root
