@@ -32,10 +32,10 @@ a task delivered twice sends the same numbers twice.
   `BaseTask` retries with backoff without touching the listing.
 - **A broker outage does not fail the edit.** Enqueue failures are logged; the
   merchant's change is saved and can be sent from the product page.
-- **No cross-tenant sweep.** A periodic "push everything" would need a new
-  unscoped repository, which CLAUDE.md §4 reserves for explicit approval.
-  The event triggers plus the manual send cover the cases; a sweep can be
-  added with that approval.
+- **Backstop sweep (added after owner approval, B-011).**
+  `ebay.sweep_price_quantity_all` runs every six hours and queues a push for
+  every product with an eBay listing, in each connected workspace — so an
+  event push lost to a broker outage is corrected within hours.
 
 ## Verification
 

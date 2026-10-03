@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import require_tenant_id
 from app.core.exceptions import ShopifyWebhookReconcileBusyError
 from app.models.shopify import ShopifyConnection, StoreListing
+from app.models.store import Store, StorePlatform
 from app.repositories.base import BaseRepository, TenantScopedRepository
 
 #: PostgreSQL SQLSTATE for ``lock_timeout`` expiring on a row lock.
@@ -162,6 +163,21 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
     async def list_for_store(self, store_id: uuid.UUID) -> Sequence[StoreListing]:
         result = await self.session.execute(
             self._base_query().where(StoreListing.store_id == store_id)
+        )
+        return list(result.scalars().all())
+
+    async def product_ids_on_platform(
+        self, platform: StorePlatform, *, limit: int = 5000
+    ) -> list[uuid.UUID]:
+        """This tenant's product ids with a listing on a store of ``platform``
+        (EBAY-C4 sweep). Tenant predicate from ``_base_query``."""
+        result = await self.session.execute(
+            self._base_query()
+            .with_only_columns(StoreListing.product_id)
+            .join(Store, Store.id == StoreListing.store_id)
+            .where(Store.platform == platform)
+            .distinct()
+            .limit(limit)
         )
         return list(result.scalars().all())
 

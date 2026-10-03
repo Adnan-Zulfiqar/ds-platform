@@ -60,7 +60,7 @@ from app.models.email_verification import EmailVerificationToken
 from app.models.identity import UserIdentity
 from app.models.integration import AliExpressConnection
 from app.models.inventory import InventorySyncRun
-from app.models.notification import Notification
+from app.models.notification import Notification, NotificationEmailPreference
 from app.models.order import OrderSyncRun
 from app.models.pipeline_bulk import PipelineBulkRun, PipelineBulkRunCancelRequest
 from app.models.pricing import GlobalRuleVersion, PriceChange
@@ -173,6 +173,15 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
     UserReference("user_roles", UserRole, UserRole.user_id, "delete", None),
     UserReference(
         "notifications", Notification, Notification.user_id, "delete", Notification.tenant_id
+    ),
+    # Track E3: which kinds this person wanted by email. Personal, and
+    # meaningless without them.
+    UserReference(
+        "notification_email_preferences",
+        NotificationEmailPreference,
+        NotificationEmailPreference.user_id,
+        "delete",
+        NotificationEmailPreference.tenant_id,
     ),
     # A federated identity exists only so one person can sign in. Leaving it
     # behind would keep a Google subject pointing at an erased account — and
