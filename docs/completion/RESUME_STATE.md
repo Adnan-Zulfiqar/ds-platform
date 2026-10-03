@@ -2,7 +2,7 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-03 (later) — Track E in progress (owner standing order, D-012 order).
+**Updated:** 2026-10-03 (end of session) — Track E agent work complete; owner items open.
 
 | Item | Value |
 |---|---|
@@ -40,9 +40,13 @@ Single continuation point after an interruption. Overwritten, not appended.
 | E2 sale fees (M24C) | Merged (#56). M27 freight quote blocked on a live AliExpress response |
 | E3 notification email | Merged (#57). Real-inbox delivery not verified (owner: Resend + `EMAIL_APP_BASE_URL`) |
 | E4 team invitations | Merged (#59) |
-| E5 platform admin | **Blocked, B-013**: proposal in this docs PR |
-| E6 billing | **Blocked, B-014**: proposal in this docs PR |
-| E7 WooCommerce | W1 connect: PR #60. W2 publish: branch `feat/woocommerce-publish`, stacked on #60. W3–W5 next (W3 sweep needs a B-011-style approval). Etsy/TikTok: B-015 |
+| E5 platform admin | **Blocked, B-013**: owner chooses option A/B/C (`docs/track-e/E5_PLATFORM_ADMIN_PROPOSAL.md`) |
+| E6 billing | **Blocked, B-014**: owner decisions and sandbox account (`docs/track-e/E6_BILLING_PROPOSAL.md`) |
+| E7 WooCommerce | W1 #60, W2 #61, W3 #62, W4a #63 merged. W5 #64 and W4b webhooks #65 merge in that order once CI is green. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
+
+Every remaining Track E item is an owner decision or an owner registration.
+Nothing in Track E was verified against a live provider. For each stage,
+the stage doc in `docs/track-e/` lists what was verified and what was not.
 
 ## Next safe action
 
