@@ -397,5 +397,6 @@ async def test_reconnecting_as_another_seller_forgets_the_first_sellers_data(
     defaults = await db_session.scalar(sa.select(sa.func.count()).select_from(EbayListingDefaults))
     listings = await db_session.scalar(sa.select(sa.func.count()).select_from(StoreListing))
     assert (defaults, listings) == (0, 0)
+    # The eBay stores are parked until listing setup is saved for the new seller.
     ready = await client.post(READINESS_URL, json=payload, headers=headers)
-    assert "ebay_listing_setup_missing" in {b["code"] for b in ready.json()["blockers"]}
+    assert {b["code"] for b in ready.json()["blockers"]} == {"store_disconnected"}
