@@ -476,3 +476,15 @@ export function useDisconnectWooCommerce() {
     },
   });
 }
+
+/** Track E1: tell Shopify an order shipped. Repeating a tracking number is a no-op. */
+export async function shipShopifyOrder(
+  orderId: string,
+  payload: { company: string; trackingNumber: string; trackingUrl?: string; notifyCustomer: boolean },
+): Promise<{ id: string }> {
+  const { data } = await apiClient.post<{ id: string }>(
+    `/integrations/shopify/orders/${orderId}/fulfilments`,
+    payload,
+  );
+  return data;
+}
