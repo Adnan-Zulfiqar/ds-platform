@@ -18,9 +18,16 @@ body instead; both endpoints accept either.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.api.deps import CurrentPrincipal, CurrentTenant, CurrentUser, DbSession, RoleRepo
+from app.api.deps import (
+    CurrentPrincipal,
+    CurrentTenant,
+    CurrentUser,
+    DbSession,
+    RoleRepo,
+    endpoint_rate_limit,
+)
 from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, PermissionDeniedError
@@ -57,12 +64,18 @@ from app.schemas.auth import (
     VerifyEmailConfirmRequest,
 )
 from app.schemas.common import MessageResponse
+from app.schemas.invitation import (
+    InvitationAcceptRequest,
+    InvitationPreviewRead,
+    InvitationTokenRequest,
+)
 from app.schemas.user import UserRead
 from app.services.auth import AuthResult, AuthService, LegalAcceptance
 from app.services.email_verification import EmailVerificationService
 from app.services.google_auth import GoogleAuthService
 from app.services.login_throttle import StepUpThrottle
 from app.services.password_reset import PasswordResetService
+from app.services.team_invitations import TeamInvitationService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -237,6 +250,59 @@ async def register(
         last_name=payload.last_name,
     )
 
+    _set_refresh_cookie(
+        response,
+        result.tokens.refresh_token,
+        settings.security.refresh_token_ttl_days * 86_400,
+    )
+    return _build_auth_response(result, include_refresh_in_body=False)
+
+
+# Track E4. Unauthenticated, so counted per client address. The secret has
+# 256 bits; the limit is about load and noise, not about guessing.
+_invitation_limit = endpoint_rate_limit("invitation-accept", limit=30, window_seconds=600)
+
+
+@router.post(
+    "/invitations/preview",
+    response_model=InvitationPreviewRead,
+    summary="Describe the invitation behind a link",
+    dependencies=[Depends(_invitation_limit)],
+)
+async def preview_invitation(
+    payload: InvitationTokenRequest, session: DbSession
+) -> InvitationPreviewRead:
+    preview = await TeamInvitationService(session).preview(payload.token)
+    return InvitationPreviewRead(
+        email=preview.email,
+        role=preview.role,
+        workspace_name=preview.workspace_name,
+        expires_at=preview.expires_at,
+    )
+
+
+@router.post(
+    "/invitations/accept",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Accept a team invitation and sign in",
+    dependencies=[Depends(_invitation_limit)],
+)
+async def accept_invitation(
+    payload: InvitationAcceptRequest, session: DbSession, response: Response
+) -> AuthResponse:
+    result = await TeamInvitationService(session).accept(
+        token=payload.token,
+        password=payload.password.get_secret_value(),
+        acceptance=LegalAcceptance(
+            terms_accepted=payload.terms_accepted,
+            privacy_accepted=payload.privacy_accepted,
+            terms_version=payload.terms_version,
+            privacy_version=payload.privacy_version,
+        ),
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+    )
     _set_refresh_cookie(
         response,
         result.tokens.refresh_token,

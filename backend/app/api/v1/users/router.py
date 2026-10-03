@@ -10,8 +10,10 @@ transaction management, no error translation. Each is roughly three lines —
 validate, delegate, return — which is the shape every handler in this codebase
 should keep.
 
-Write endpoints are absent because creating a user requires password hashing and
-an invitation flow, which belong to the auth phase.
+Users are created by registration (the owner) and by accepting a team
+invitation (Track E4). The invitation endpoints live here because they manage
+the roster; accepting one lives in the auth router, beside registration,
+because it signs the new user in.
 """
 
 from __future__ import annotations
@@ -19,13 +21,25 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, status
 
-from app.api.deps import RequireViewer, UserRepo
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireAdmin,
+    RequireViewer,
+    UserRepo,
+    endpoint_rate_limit,
+)
+from app.models.role import RoleName
 from app.schemas.common import ListQueryParams, Page, list_query_params
+from app.schemas.invitation import InvitationCreate, InvitationRead
 from app.schemas.user import UserRead
+from app.services.team_invitations import TeamInvitationService
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+_invite_limit = endpoint_rate_limit("team-invite", limit=30, window_seconds=3600)
 
 
 @router.get(
@@ -56,6 +70,43 @@ async def list_users(
         size=params.size,
         total_items=total,
     )
+
+
+# Declared before "/{user_id}": that route would otherwise claim "invitations"
+# as an id and answer 422.
+@router.get("/invitations", response_model=list[InvitationRead], summary="Open invitations")
+async def list_invitations(session: DbSession, _authorized: RequireAdmin) -> list[InvitationRead]:
+    invitations = await TeamInvitationService(session).list_open()
+    return [InvitationRead.model_validate(i) for i in invitations]
+
+
+@router.post(
+    "/invitations",
+    response_model=InvitationRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Invite someone to the workspace",
+    dependencies=[Depends(_invite_limit)],
+)
+async def create_invitation(
+    payload: InvitationCreate, session: DbSession, _authorized: RequireAdmin, user: CurrentUser
+) -> InvitationRead:
+    """Emails a one-time link. Inviting an address that already has an open
+    invitation re-sends it with a fresh link and the given role."""
+    invitation = await TeamInvitationService(session).invite(
+        email=payload.email, role=RoleName(payload.role), inviter=user
+    )
+    return InvitationRead.model_validate(invitation)
+
+
+@router.delete(
+    "/invitations/{invitation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke an open invitation",
+)
+async def revoke_invitation(
+    invitation_id: uuid.UUID, session: DbSession, _authorized: RequireAdmin
+) -> None:
+    await TeamInvitationService(session).revoke(invitation_id)
 
 
 @router.get(

@@ -69,9 +69,9 @@ const SECTIONS: readonly SettingsSection[] = [
   {
     href: "/settings/team",
     label: "Team",
-    description: "Invite colleagues and manage their roles.",
+    description: "Invite colleagues and see who has access.",
     icon: Users,
-    available: false,
+    available: true,
   },
   {
     href: "/settings/billing",

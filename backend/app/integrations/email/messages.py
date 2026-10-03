@@ -13,7 +13,40 @@ from __future__ import annotations
 from app.core.config import settings
 from app.integrations.email.provider import EmailMessage, get_email_provider
 
-__all__ = ["send_notification_email", "send_password_reset_code"]
+__all__ = ["send_notification_email", "send_password_reset_code", "send_team_invitation"]
+
+
+async def send_team_invitation(
+    *, email: str, workspace_name: str, inviter_name: str | None, token: str, days_valid: int
+) -> None:
+    """Track E4. The token travels in the URL fragment, not the query string:
+    a fragment is never sent to a server, so it stays out of access logs and
+    out of the Referer of anything the accept page loads."""
+    from html import escape
+
+    link = f"{settings.email.app_base_url.rstrip('/')}/invite#token={token}"
+    who = inviter_name or "A colleague"
+    text = (
+        f"{who} invited you to join {workspace_name} on DropPilot.\n\n"
+        f"Accept the invitation: {link}\n\n"
+        f"The link works once and expires in {days_valid} days. "
+        "If you were not expecting this, ignore this email.\n"
+    )
+    html = (
+        f"<p>{escape(who)} invited you to join <strong>{escape(workspace_name)}</strong>"
+        " on DropPilot.</p>"
+        f'<p><a href="{escape(link)}">Accept the invitation</a></p>'
+        f"<p>The link works once and expires in {days_valid} days. "
+        "If you were not expecting this, ignore this email.</p>"
+    )
+    await get_email_provider().send(
+        EmailMessage(
+            to=email,
+            subject=f"You're invited to {workspace_name} on DropPilot"[:200],
+            text=text,
+            html=html,
+        )
+    )
 
 
 async def send_notification_email(*, email: str, title: str, body: str, href: str | None) -> None:

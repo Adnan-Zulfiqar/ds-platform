@@ -293,7 +293,7 @@ in mind. Nothing here is committed to a phase number.
 | Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
 | Real FX for pricing | M24A (FX), M24B (currency derivation) and M24C (landed cost; sale fees as % of price — Track E2) done. Remaining: AliExpress freight quote (M27), blocked on a real API response — [E2 doc](docs/track-e/E2_FX_FEES.md) |
 | Subscription billing | Plan limits attach to `tenants` |
-| Team management | Invitations; the `UserCreate` schema already exists for it |
+| Team management | Invitations done (Track E4) — [E4 doc](docs/track-e/E4_TEAM_INVITATIONS.md). Role changes and member removal not yet built |
 | Admin panel | Platform operations across tenants |
 | Email notifications | Done (Track E3): outbox + per-user kinds; real-inbox delivery not yet verified — [E3 doc](docs/track-e/E3_EMAIL_NOTIFICATIONS.md) |
 
