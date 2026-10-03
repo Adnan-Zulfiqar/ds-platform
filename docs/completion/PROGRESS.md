@@ -204,3 +204,40 @@ No real eBay call has been made by any of these. Owner steps: `docs/ebay/EBAY_C6
 | Owner stack | backend/worker/beat/frontend recreated on images from `develop` `02e12fc` (no `.env` inside). The compose file bind-mounts `./backend` onto `/app`, so the running code is the owner's checkout (`0016543` plus the owner's uncommitted changes); the database was migrated 0034 → 0037 to match that checkout and **not** further, so its alembic stays consistent. `/health` 200. AI: `OpenAIProvider` loaded |
 | Reviews | Three independent reviews (publish path; sync/orders/deletion; OpenAI + eBay UI): 11 confirmed findings, all fixed in this change; OpenAI provider and settings precedence: nothing confirmed |
 | Flake B | Mechanism reproduced: guard reverted 5/5 fail, guard present 5/5 pass (DP-CR-015) |
+
+## Track E — 2026-10-03
+
+Owner order D-012: E1 → E7, gates → PR → CI → merge for each item.
+
+- **Merged:**
+  - B-011 (#54);
+  - E1 Shopify fulfilment (#55);
+  - E2 sale fees (#56);
+  - E3 notification email (#57);
+  - E4 team invitations (#59);
+  - Track E proposals and blockers (#58);
+  - E7 WooCommerce W1–W5 and W4b webhooks (#60–#65).
+- **Blocked on the owner:**
+  - B-013 platform admin;
+  - B-014 billing;
+  - B-015 Etsy/TikTok registrations;
+  - B-016 WooCommerce sweep approval.
+- **Defects found by the gates and fixed before merge:**
+  - E3: email preferences were missing from the GDPR erasure declaration
+    (the schema-wide guard test caught it).
+  - E3: a second sweep in one session resent emails (autoflush is off).
+  - E4: a failed invitation email left the row behind. The email is now
+    sent before the row is written.
+  - W1: workspace closure did not clear `stores.encrypted_credentials`.
+    This was a gap from before Track E.
+- **Test-only fixes:**
+  - W2: a duplicated store id in a test.
+  - W4a: comparing a Decimal amount as a string.
+- **Operational:** `python -` in this shell starts a spinning REPL. It
+  happened twice and was stopped both times. Use script files instead.
+- **Not verified live:**
+  - a WooCommerce store;
+  - Resend delivery;
+  - Shopify reconnect with the new fulfilment scopes;
+  - webhook delivery to a public deployment.
+
