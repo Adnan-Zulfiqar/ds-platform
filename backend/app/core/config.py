@@ -1093,6 +1093,26 @@ class AIProviderName(StrEnum):
     LOCAL = "local"
 
 
+class WooCommerceSettings(_EnvFileSettings):
+    """Track E7 W4b. WooCommerce has no app credentials: each store connects
+    with its own keys. The only server-side setting is where stores deliver
+    order webhooks."""
+
+    model_config = SettingsConfigDict(env_prefix="WOOCOMMERCE_", extra="ignore")
+
+    #: Public base URL WooCommerce POSTs order webhooks to. Webhooks are
+    #: registered only when this is https — a store on the internet cannot
+    #: reach a developer's localhost, and registering an address it cannot
+    #: reach would only fill the store's webhook log with failures.
+    webhook_callback_base: str = Field(
+        default="http://localhost:8000/api/v1/integrations/woocommerce/webhooks",
+    )
+
+    @property
+    def registers_webhooks(self) -> bool:
+        return self.webhook_callback_base.strip().lower().startswith("https://")
+
+
 class AISettings(_EnvFileSettings):
     """AI provider selection and credentials.
 
@@ -1458,6 +1478,7 @@ class Settings(_EnvFileSettings):
     aliexpress: AliExpressSettings = Field(default_factory=AliExpressSettings)
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
     ebay: EbaySettings = Field(default_factory=EbaySettings)
+    woocommerce: WooCommerceSettings = Field(default_factory=WooCommerceSettings)
     ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")
