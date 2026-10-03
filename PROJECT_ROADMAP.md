@@ -270,7 +270,8 @@ synced). Plans:
 | 3 | Editor shell + Overview / Description / SEO / Publish panel | **Done (MVP) on `develop`** |
 | 4 | Media + structured variants | **Done (MVP) on `develop`** |
 | 5 | Pricing / inventory / shipping | **Done (MVP) on `cursor/draft-product-editor`** |
-| 6–8 | AI Studio, publish polish, E2E | Pending |
+| 6–7 | AI Studio proposals (via Phase 9 Stage 10), full readiness (DE-6b, PR #38), idempotent publish UX (DE-7, PR #37) | **Done on `develop`** |
+| 8 | Bulk tools (DE-8a: met by AI Studio bulk + Global Rules, D-010) and live E2E (DE-8b) | **Not complete: DE-8b blocked on B-003/B-004 (live providers)** |
 | UX-L2A | Compact command bar, grouped nav, shipping/checklist copy | **Integrated into `develop` (`e1dd0f0`); production undeployed** |
 | UX-L2B | Save-before-publish integrity + server publish authority | **Present in `develop` at `a543b029` (R7 tip fast-forwarded); production undeployed.** Historical UX-L2C follows on `feature/ux-l2c-live-state-clarity` (unmerged); the new dashboard programme is UX-L2D |
 | UX-L2D | Dashboard programme: shell, Home, catalogue, editor lifecycle, channels, hardening | **Merged into `develop` at `b52b223` (PR #9, 2026-09-17; accepted head `41c152c`); production undeployed.** Evidence in the Status table above |
@@ -290,7 +291,7 @@ in mind. Nothing here is committed to a phase number.
 | Additional store channels | WooCommerce / Etsy / TikTok — Track E7: WooCommerce planned in stages W0–W5 ([plan](docs/track-e/E7_WOOCOMMERCE_PLAN.md)); Etsy/TikTok blocked on owner app registrations (B-015). Shopify shipped in Phase 8; **eBay is connected** as of EBAY-C1, EBAY-C2 adds listing setup (policies, locations, defaults) and EBAY-C3 publishes a single-variant draft as a fixed-price listing (mocked eBay transport only; C4–C6 follow) — see [docs/ebay/MASTER_EBAY_ROADMAP.md](docs/ebay/MASTER_EBAY_ROADMAP.md) |
 | Shopify fulfilment push | ✅ Track E1 on `develop`: merchant marks a Shopify order shipped with tracking (`fulfillmentCreate`); new fulfilment scopes need a reconnect; faked-client tests only — [E1 doc](docs/track-e/E1_SHOPIFY_FULFILMENT.md) |
 | AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation merged (PR #26). Stage 10 merged (PR #36). Stage 11 report written; implementation accepted with notes by Cursor, release NOT READY; untagged. `StubProvider` only — no live model-quality verification. Production undeployed |
-| Product Workspace V2 | Stage 0 done; Stages 1–8 remaining (see above) |
+| Product Workspace V2 | Stages 0–7 done; Stage 8 live E2E (DE-8b) blocked on live providers (see above) |
 | Real FX for pricing | M24A (FX), M24B (currency derivation) and M24C (landed cost; sale fees as % of price — Track E2) done. Remaining: AliExpress freight quote (M27), blocked on a real API response — [E2 doc](docs/track-e/E2_FX_FEES.md) |
 | Subscription billing | Track E6 — **blocked on owner decisions** (provider, plans, prices, limits; B-014). Proposal: [E6 doc](docs/track-e/E6_BILLING_PROPOSAL.md) |
 | Team management | Invitations done (Track E4) — [E4 doc](docs/track-e/E4_TEAM_INVITATIONS.md). Role changes and member removal not yet built |
