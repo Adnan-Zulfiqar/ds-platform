@@ -111,6 +111,7 @@ export interface PricingRuleFormValues extends ScopeValue {
   maxPrice: string;
   dutyPercent: string;
   feesFixed: string;
+  saleFeePercent: string;
   rounding: PriceRounding;
   compareAtPercent: string;
   shippingCostHandling: ShippingCostHandling;
@@ -139,6 +140,7 @@ export function emptyPricingRule(): PricingRuleFormValues {
     maxPrice: "",
     dutyPercent: "",
     feesFixed: "",
+    saleFeePercent: "",
     rounding: "none",
     compareAtPercent: "",
     shippingCostHandling: "include_in_price",
@@ -168,6 +170,7 @@ export function pricingRuleToForm(rule: PricingRule): PricingRuleFormValues {
     maxPrice: rule.maxPrice ?? "",
     dutyPercent: rule.dutyPercent ?? "",
     feesFixed: rule.feesFixed ?? "",
+    saleFeePercent: rule.saleFeePercent ?? "",
     rounding: rule.rounding,
     compareAtPercent: rule.compareAtPercent ?? "",
     shippingCostHandling: rule.shippingCostHandling,
@@ -203,6 +206,7 @@ export function pricingFormToPayload(values: PricingRuleFormValues) {
     maxPrice: optional(values.maxPrice),
     dutyPercent: optional(values.dutyPercent),
     feesFixed: optional(values.feesFixed),
+    saleFeePercent: optional(values.saleFeePercent),
     rounding: values.rounding,
     compareAtPercent: optional(values.compareAtPercent),
     shippingCostHandling: values.shippingCostHandling,
@@ -243,6 +247,15 @@ export function validatePricingForm(
     !values.markupFixed.trim()
   ) {
     errors.markupPercent = "A hybrid rule needs a percentage, an amount, or both.";
+  }
+
+  if (values.saleFeePercent.trim()) {
+    const fee = Number(values.saleFeePercent);
+    if (!(fee >= 0 && fee < 100)) {
+      errors.saleFeePercent = "The sale fee must be at least 0% and below 100%.";
+    } else if (values.strategy === "target_margin" && Number(values.marginPercent) + fee >= 100) {
+      errors.saleFeePercent = "Target margin plus the sale fee must be below 100%.";
+    }
   }
 
   const min = Number(values.minPrice);
@@ -472,6 +485,16 @@ export function PricingRuleForm({
                 {...props}
                 value={values.feesFixed}
                 onChange={(value) => setField("feesFixed", value)}
+              />
+            )}
+          </Field>
+          <Field label="Sale fee (% of selling price)" error={errors.saleFeePercent}>
+            {(props) => (
+              <DecimalInput
+                {...props}
+                suffix="%"
+                value={values.saleFeePercent}
+                onChange={(value) => setField("saleFeePercent", value)}
               />
             )}
           </Field>

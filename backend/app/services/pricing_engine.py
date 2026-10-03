@@ -325,6 +325,16 @@ def compute_sell_price_before_rounding(*, cost: Decimal, rule: PricingRule) -> D
     return _strategy_price(cost=cost, rule=rule)[0].quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
 
 
+def sale_fee_percent(rule: PricingRule | None) -> Decimal:
+    """The rule's sale fee as a percentage, validated (0 <= fee < 100)."""
+    fee = getattr(rule, "sale_fee_percent", None) if rule is not None else None
+    if fee is None:
+        return Decimal("0")
+    if fee < 0 or fee >= Decimal("100"):
+        raise ValidationError("The sale fee must be at least 0% and below 100%.")
+    return Decimal(fee)
+
+
 def compute_sell_price(*, cost: Decimal, rule: PricingRule) -> Decimal:
     """Apply one rule's strategy to a **landed** cost.
 
@@ -362,6 +372,9 @@ def _strategy_price(*, cost: Decimal, rule: PricingRule) -> tuple[Decimal, Decim
     after rounding -- charm rounding is downward, so it can cross a floor the
     merchant set and has to be repaired against the same number.
     """
+    fee_percent = sale_fee_percent(rule)
+    #: Share of the price the merchant keeps after the sale fee.
+    keep = Decimal("1") - fee_percent / Decimal("100")
     if rule.strategy is PricingStrategy.PERCENTAGE_MARKUP:
         if rule.markup_percent is None:
             raise ValidationError("Percentage markup rules require markup_percent.")
@@ -375,9 +388,10 @@ def _strategy_price(*, cost: Decimal, rule: PricingRule) -> tuple[Decimal, Decim
             raise ValidationError("Target margin rules require margin_percent.")
         # Guarded at the schema layer too, but division by zero here would be
         # a 500 rather than a validation error, so it is checked twice.
-        if rule.margin_percent >= Decimal("100"):
-            raise ValidationError("Target margin must be below 100%.")
-        price = cost / (Decimal("1") - rule.margin_percent / Decimal("100"))
+        if rule.margin_percent + fee_percent >= Decimal("100"):
+            raise ValidationError("Target margin plus the sale fee must be below 100%.")
+        # Margin *after* the fee: price - fee * price - cost = margin * price.
+        price = cost / (Decimal("1") - (rule.margin_percent + fee_percent) / Decimal("100"))
     elif rule.strategy is PricingStrategy.HYBRID:
         if rule.markup_percent is None and rule.markup_fixed is None:
             raise ValidationError("Hybrid rules require markup_percent or markup_fixed.")
@@ -388,10 +402,15 @@ def _strategy_price(*, cost: Decimal, rule: PricingRule) -> tuple[Decimal, Decim
         tiered = _tiered_price(cost, rule.tiers)
         # No matching tier — fall back to cost so apply never invents a gain.
         price = cost if tiered is None else tiered
+    if rule.strategy is not PricingStrategy.TARGET_MARGIN and fee_percent > 0:
+        # Markups are on cost; the fee is then taken from the selling price,
+        # so the price is grossed up for the markup to survive it.
+        price = price / keep
 
     floor: Decimal | None = None
     if rule.min_profit is not None:
-        floor = cost + rule.min_profit
+        # Net of the sale fee: price * (1 - fee) - cost >= min_profit.
+        floor = (cost + rule.min_profit) / keep
     if rule.min_price is not None:
         floor = rule.min_price if floor is None else max(floor, rule.min_price)
     if floor is not None:
@@ -438,10 +457,20 @@ class PriceCalculation:
         return bool(self.review_reasons)
 
     @property
-    def profit(self) -> Decimal | None:
+    def sale_fee(self) -> Decimal | None:
+        """What the sale fee takes from this price (Track E2)."""
         if self.price is None:
             return None
-        return (self.price - self.landed.profit_basis).quantize(
+        fee = self.price * sale_fee_percent(self.rule) / Decimal("100")
+        return fee.quantize(_MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+    @property
+    def profit(self) -> Decimal | None:
+        """Net of the sale fee: what the merchant actually keeps."""
+        if self.price is None:
+            return None
+        fee = self.sale_fee or Decimal("0")
+        return (self.price - fee - self.landed.profit_basis).quantize(
             _MONEY_QUANT, rounding=ROUND_HALF_UP
         )
 
@@ -502,7 +531,9 @@ def calculate_price(
     # `compute_sell_price` because it is measured against the *profit basis*,
     # which differs from the pricing basis when shipping is absorbed.
     if rule.min_profit_per_variant is not None:
-        required = landed.profit_basis + rule.min_profit_per_variant
+        # Net of the sale fee, like the product-level floor (Track E2).
+        keep = Decimal("1") - sale_fee_percent(rule) / Decimal("100")
+        required = (landed.profit_basis + rule.min_profit_per_variant) / keep
         if price < required:
             price = _next_ending_above(required, rule.rounding)
             if rule.max_price is not None:

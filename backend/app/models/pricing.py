@@ -178,6 +178,11 @@ class PricingRule(TenantScopedBase):
     duty_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     #: Flat known fees per unit (payment processing, inspection, packaging).
     fees_fixed: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
+    #: Track E2 (M24C): fees charged as a share of the *selling* price —
+    #: marketplace final-value fees, payment processing. Unlike the fees
+    #: above they grow with the price, so the price is grossed up to keep
+    #: the markup, margin and profit floor true after the fee is taken.
+    sale_fee_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     #: Absolute price floor, independent of cost.
     min_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)
     max_price: Mapped[Decimal | None] = mapped_column(_MONEY, nullable=True)

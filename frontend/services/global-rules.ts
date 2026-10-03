@@ -101,6 +101,8 @@ export interface PricingRule extends ScopeIdentifiers {
   maxPrice: string | null;
   dutyPercent: string | null;
   feesFixed: string | null;
+  /** Track E2: marketplace/payment fee as a percentage of the selling price. */
+  saleFeePercent: string | null;
   rounding: PriceRounding;
   compareAtPercent: string | null;
   shippingCostHandling: ShippingCostHandling;

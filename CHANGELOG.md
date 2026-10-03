@@ -10,6 +10,13 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E2 sale fees (M24C)
+
+- Pricing rules take a **sale fee as a % of the selling price** (marketplace
+  and payment fees). Prices are grossed up so markup, target margin and
+  profit floors hold after the fee; reported profit and margin are net.
+  Migration `0042` (nullable: existing rules price exactly as before).
+
 ### Fixed — review of EBAY-C2 to C6 and the OpenAI provider
 
 Three independent code reviews of the new eBay and AI code (2026-10-03);
