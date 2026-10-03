@@ -15,7 +15,7 @@ import json
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import (
@@ -24,6 +24,7 @@ from app.api.deps import (
     OptionalPrincipal,
     RequireAdmin,
     RequireMember,
+    endpoint_rate_limit,
 )
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -110,12 +111,14 @@ from app.integrations.shopify.service import (
 from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.integrations.shopify.webhook_reconciliation import ReconcileReport
+from app.integrations.woocommerce.connection import WooCommerceConnectionService
 from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
 from app.repositories.product import ProductRepository
 from app.schemas.common import MessageResponse
+from app.schemas.store import StoreRead, WooCommerceConnectRequest
 from app.services.publish_readiness import (
     CHANNEL_EBAY,
     CHANNEL_SHOPIFY,
@@ -126,6 +129,12 @@ from app.services.publish_readiness import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
+
+# Track E7: each connect attempt makes outbound calls to an address the
+# caller chose, so it is counted more tightly than ordinary traffic.
+_woocommerce_connect_limit = endpoint_rate_limit(
+    "woocommerce-connect", limit=10, window_seconds=600
+)
 
 
 def _to_read_model(connection: AliExpressConnection) -> AliExpressConnectionRead:
@@ -1378,3 +1387,50 @@ async def sync_shopify_orders(
 )
 async def shopify_webhook(topic: str, request: Request) -> ShopifyWebhookAckResponse:
     return await receive_shopify_webhook(request, topic=topic)
+
+
+# --- WooCommerce (Track E7, W1) ---------------------------------------------
+
+
+@router.get(
+    "/woocommerce/stores",
+    response_model=list[StoreRead],
+    summary="WooCommerce stores in this workspace",
+)
+async def woocommerce_stores(session: DbSession, _principal: CurrentPrincipal) -> list[StoreRead]:
+    stores = await WooCommerceConnectionService(session).list_stores()
+    return [StoreRead.model_validate(s) for s in stores]
+
+
+@router.post(
+    "/woocommerce/connect",
+    response_model=StoreRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Connect a WooCommerce store with REST API keys",
+    dependencies=[Depends(_woocommerce_connect_limit)],
+)
+async def connect_woocommerce(
+    payload: WooCommerceConnectRequest, session: DbSession, principal: RequireAdmin
+) -> StoreRead:
+    """Verifies the keys against the store before saving anything. Admin or
+    owner only, like every other channel connection."""
+    store = await WooCommerceConnectionService(session).connect(
+        name=payload.name,
+        site_url=payload.site_url,
+        consumer_key=payload.consumer_key.get_secret_value(),
+        consumer_secret=payload.consumer_secret.get_secret_value(),
+        user_id=principal.user_id,
+    )
+    return StoreRead.model_validate(store)
+
+
+@router.post(
+    "/woocommerce/stores/{store_id}/disconnect",
+    response_model=StoreRead,
+    summary="Forget a WooCommerce store's API keys",
+)
+async def disconnect_woocommerce(
+    store_id: UUID, session: DbSession, _principal: RequireAdmin
+) -> StoreRead:
+    store = await WooCommerceConnectionService(session).disconnect(store_id)
+    return StoreRead.model_validate(store)

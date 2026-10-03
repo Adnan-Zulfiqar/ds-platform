@@ -244,6 +244,34 @@ def _connection_url(
     return urlunparse(("https", netloc, path, "", query, ""))
 
 
+async def pin_https_target(
+    logical_url: str, *, resolver: HostnameResolver = system_resolve
+) -> tuple[str, str]:
+    """Validate one HTTPS hop and pin it to a vetted address.
+
+    Returns ``(logical_hostname, connection_url)``. The caller connects to
+    ``connection_url`` and sends ``logical_hostname`` as ``Host`` and SNI, so
+    httpx never resolves the name a second time. Shared by every outbound
+    call to a URL a customer supplied (images; WooCommerce sites), so there
+    is exactly one SSRF contract. Raises an :class:`ImageFetchError`
+    subclass when the URL or any resolved address is not acceptable.
+    """
+    logical_hostname, path, query, kind = _parse_logical(logical_url)
+    if kind == "literal":
+        chosen = choose_connectable([logical_hostname])
+    else:
+        try:
+            # `getaddrinfo` blocks; run it off the event loop so one slow
+            # resolver cannot stall every other request (finding B-3).
+            resolved = await asyncio.to_thread(resolver, logical_hostname)
+        except ImageFetchError:
+            raise
+        except OSError as exc:
+            raise ImageFetchDnsFailure from exc
+        chosen = choose_connectable(resolved)
+    return logical_hostname, _connection_url(chosen, path=path, query=query)
+
+
 def _media_type(content_type: str | None) -> str:
     return (content_type or "").split(";", 1)[0].strip().lower()
 
@@ -296,20 +324,9 @@ class ImageFetcher:
             return payload
 
     async def _hop(self, logical_url: str) -> tuple[str, str] | tuple[str, bytes]:
-        logical_hostname, path, query, kind = _parse_logical(logical_url)
-        if kind == "literal":
-            chosen = choose_connectable([logical_hostname])
-        else:
-            try:
-                # `getaddrinfo` blocks; run it off the event loop so one slow
-                # resolver cannot stall every other request (finding B-3).
-                resolved = await asyncio.to_thread(self._resolver, logical_hostname)
-            except ImageFetchError:
-                raise
-            except OSError as exc:
-                raise ImageFetchDnsFailure from exc
-            chosen = choose_connectable(resolved)
-        connection_url = _connection_url(chosen, path=path, query=query)
+        logical_hostname, connection_url = await pin_https_target(
+            logical_url, resolver=self._resolver
+        )
         timeout = httpx.Timeout(READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
         try:
             if self._transport is not None:
@@ -409,5 +426,6 @@ __all__ = [
     "ImageFetcher",
     "choose_connectable",
     "normalize_ip",
+    "pin_https_target",
     "system_resolve",
 ]

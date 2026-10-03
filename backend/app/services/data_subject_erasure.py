@@ -606,6 +606,14 @@ class WorkspaceClosureService(_CountingService):
                     select(func.count()).select_from(model).where(tenant_column == tenant_id)
                 ),
             )
+        outcome.record(
+            "store_credentials",
+            await self._count(
+                select(func.count())
+                .select_from(Store)
+                .where(Store.tenant_id == tenant_id, Store.encrypted_credentials.is_not(None))
+            ),
+        )
         return outcome
 
     async def erase(self, tenant_id: uuid.UUID) -> ErasureOutcome:
@@ -625,6 +633,16 @@ class WorkspaceClosureService(_CountingService):
                 f"{label}_deleted",
                 await self._affected(delete(model).where(tenant_column == tenant_id)),
             )
+        # Credentials kept on the store row itself (WooCommerce keys, and any
+        # given to the generic store endpoint) were missed before Track E7.
+        outcome.record(
+            "store_credentials_cleared",
+            await self._affected(
+                update(Store)
+                .where(Store.tenant_id == tenant_id, Store.encrypted_credentials.is_not(None))
+                .values(encrypted_credentials=None)
+            ),
+        )
 
         logger.info("workspace_closed", tenant_id=str(tenant_id), rows=outcome.total)
         return outcome
