@@ -19,8 +19,10 @@ import httpx
 import pytest
 from fakeredis import aioredis as fake_aioredis
 from httpx import AsyncClient
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.context import set_tenant_id
 from app.integrations.aliexpress import client as client_module
 from app.integrations.aliexpress import service as service_module
@@ -332,21 +334,41 @@ class TestImport:
         assert failed[0]["errorCode"] == "aliexpress_product_unavailable"
         assert failed[0]["externalId"] == "999"
 
-    async def test_import_without_a_connection_is_rejected(
+    async def test_import_without_a_catalog_token_or_connection_names_the_real_cause(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Neither the platform catalog token nor a merchant connection: the
+        error is "import is not configured on this server", not "connect
+        AliExpress" — merchant OAuth is only for orders and tracking."""
         patch_aliexpress(monkeypatch, supplier_handler)
+        monkeypatch.setattr(settings.aliexpress, "catalog_access_token", None)
         body = await register(client)
 
         response = await client.post(
             IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=auth_header(body)
         )
 
-        # 409: the request is well formed, but the workspace is in the wrong
-        # state to satisfy it. Not 404 — the endpoint exists — and not 400,
-        # which would suggest the client sent something wrong.
-        assert response.status_code == 409
-        assert response.json()["code"] == "aliexpress_not_connected"
+        assert response.status_code == 503
+        assert response.json()["code"] == "aliexpress_catalog_not_configured"
+
+    async def test_import_with_the_catalog_token_needs_no_merchant_connection(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        patch_aliexpress(monkeypatch, supplier_handler)
+        monkeypatch.setattr(
+            settings.aliexpress, "catalog_access_token", SecretStr("platform-catalog-token")
+        )
+        body = await register(client)
+
+        response = await client.post(
+            IMPORT_URL, json={"externalId": REAL_PRODUCT_ID}, headers=auth_header(body)
+        )
+
+        assert response.status_code in (200, 201), response.text
+        status = await client.get(
+            "/api/v1/integrations/aliexpress/status", headers=auth_header(body)
+        )
+        assert status.json()["connected"] is False  # imported without any OAuth
 
     async def test_a_blank_identifier_is_rejected(
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
