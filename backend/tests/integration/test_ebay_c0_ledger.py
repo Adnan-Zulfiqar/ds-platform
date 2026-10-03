@@ -350,6 +350,8 @@ class TestEbayUserDataIsDeclaredAndErasable:
             "app.models.ebay.EbayListingDefaults": "ebay_listing_defaults",
             # EBAY-C3: eBay rows of store_listings.
             "app.models.shopify.StoreListing (rows on eBay stores)": "ebay_store_listings",
+            # EBAY-C5: eBay buyers on imported orders.
+            "app.models.order.Order (source = ebay)": "ebay_order_buyers",
         }
         for declaration in declarations:
             assert declaration.holds.strip(), "a declaration says nothing about what it holds"

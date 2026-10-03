@@ -1021,7 +1021,7 @@ export interface ProductWorkspaceCounts {
   products: number;
 }
 
-export type OrderSource = "aliexpress" | "manual";
+export type OrderSource = "aliexpress" | "manual" | "shopify" | "ebay";
 
 export type FulfillmentStatus =
   | "pending"

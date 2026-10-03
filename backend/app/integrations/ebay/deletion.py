@@ -61,12 +61,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Protocol, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.ebay import EbayConnection, EbayListingDefaults
+from app.models.order import Order, OrderSource
 from app.models.shopify import StoreListing
 from app.models.store import Store, StorePlatform
 
@@ -197,6 +198,53 @@ class EbayConnectionOwner:
         return erased
 
 
+class EbayOrderBuyersOwner:
+    """Anonymises an eBay buyer's personal data on imported orders (EBAY-C5).
+
+    **Matched on the buyer's username**, unlike every other owner here, and on
+    purpose: eBay's order data identifies the buyer only by ``username`` —
+    there is no immutable buyer id to key on. The trade-off is stated rather
+    than hidden: a buyer who renamed before the notice is missed (their old
+    orders keep the old name), and a later buyer who takes a released name
+    could have the earlier buyer's orders anonymised — which removes data,
+    never exposes it. Exact, case-sensitive match only.
+
+    **Anonymise, not delete**: the order is the merchant's sales record
+    (amounts, items, dates). The buyer's name, phone and address, and the
+    username itself, are set to NULL — irreversibly, which is what eBay's
+    contract requires. Crosses tenants: one buyer can have bought from many
+    workspaces. Idempotent: a second run matches nothing.
+    """
+
+    name = "ebay_order_buyers"
+
+    async def erase(self, session: AsyncSession, subject: DeletionSubject) -> int:
+        if not subject.username:
+            logger.info("ebay_order_buyers_erase_skipped_no_username")
+            return 0
+        result = await session.execute(
+            update(Order)
+            .where(
+                Order.source == OrderSource.EBAY,
+                Order.marketplace_buyer_username == subject.username,
+            )
+            .values(
+                marketplace_buyer_username=None,
+                buyer_name=None,
+                recipient_name=None,
+                recipient_phone=None,
+                address_line1=None,
+                address_line2=None,
+                city=None,
+                province=None,
+                postal_code=None,
+            )
+        )
+        erased = int(cast("CursorResult[Any]", result).rowcount or 0)
+        logger.info("ebay_order_buyers_anonymised", rows=erased)
+        return erased
+
+
 class EbayStoreListingsOwner:
     """Erases the seller's eBay listing rows (EBAY-C3).
 
@@ -273,6 +321,15 @@ EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
             "type, plus encrypted access and refresh tokens for the seller."
         ),
     ),
+    # EBAY-C5, migration 0040: eBay buyers on imported orders.
+    EbayStorageDeclaration(
+        storage="app.models.order.Order (source = ebay)",
+        owner_name="ebay_order_buyers",
+        holds=(
+            "The eBay buyer's username, name, phone and shipping address on "
+            "orders imported from eBay."
+        ),
+    ),
     # EBAY-C3, migration 0039: eBay rows of a shared table.
     EbayStorageDeclaration(
         storage="app.models.shopify.StoreListing (rows on eBay stores)",
@@ -293,6 +350,7 @@ EBAY_STORAGE_DECLARATIONS: Final[tuple[EbayStorageDeclaration, ...]] = (
 #: One owner per declaration. Defaults first: they hang off the connection
 #: row, and erasing them before it keeps both counts accurate.
 _OWNERS: Final[tuple[EbayDataOwner, ...]] = (
+    EbayOrderBuyersOwner(),
     EbayStoreListingsOwner(),
     EbayListingDefaultsOwner(),
     EbayConnectionOwner(),

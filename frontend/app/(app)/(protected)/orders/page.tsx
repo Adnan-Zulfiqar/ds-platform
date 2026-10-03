@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { OrderStatisticsCards } from "@/components/orders/order-statistics-cards";
 import { OrderTable } from "@/components/orders/order-table";
+import { EbayImportOrdersButton } from "@/components/orders/ebay-orders";
 import { SyncOrdersDialog } from "@/components/orders/sync-orders-dialog";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -19,8 +20,13 @@ export default function OrdersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Orders"
-        description="Orders synchronised from your connected suppliers."
-        actions={<SyncOrdersDialog />}
+        description="Orders synchronised from your connected suppliers and sales channels."
+        actions={
+          <div className="flex flex-wrap items-start gap-2">
+            <EbayImportOrdersButton />
+            <SyncOrdersDialog />
+          </div>
+        }
       />
       <OrderStatisticsCards />
       <OrderTable />

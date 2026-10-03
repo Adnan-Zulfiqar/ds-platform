@@ -62,6 +62,8 @@ class OrderSource(StrEnum):
     ALIEXPRESS = "aliexpress"
     MANUAL = "manual"
     SHOPIFY = "shopify"
+    #: EBAY-C5. Orders sold on an eBay marketplace.
+    EBAY = "ebay"
 
 
 class FulfillmentStatus(StrEnum):
@@ -276,6 +278,11 @@ class Order(TenantScopedBase):
     # --- Buyer & destination (minimised) -------------------------------------
     buyer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     buyer_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    #: EBAY-C5: the eBay buyer's username, the only buyer key eBay's order
+    #: data carries. Kept solely so an eBay account-deletion notice for that
+    #: buyer can find and anonymise this order (``EbayOrderBuyersOwner``).
+    #: Null on every non-eBay order.
+    marketplace_buyer_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     recipient_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     recipient_phone: Mapped[str | None] = mapped_column(String(64), nullable=True)

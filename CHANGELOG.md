@@ -12,6 +12,12 @@ production release.
 
 ### Added
 
+- **eBay orders (EBAY-C5).** Import eBay orders into Orders (re-import
+  updates), mark an order shipped on eBay with carrier and tracking (once per
+  tracking number), and reflect eBay cancellations. Migration `0040`. eBay
+  buyers' data on orders is declared and anonymised on eBay's deletion
+  notice, matched by username (the only buyer key eBay order data has).
+  **Verified against a mocked eBay transport only.**
 - **eBay price and stock stay current (EBAY-C4).** After a product edit, a
   supplier refresh or an inventory sync commits, the product's price and
   quantity are sent to its eBay listings (`bulkUpdatePriceQuantity`, absolute

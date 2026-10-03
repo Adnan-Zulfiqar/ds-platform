@@ -17,7 +17,7 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | **EBAY-C2** | Seller policies, marketplaces, inventory locations, listing defaults | **complete on `develop` (mocked eBay transport only)** — [`EBAY_C2_LISTING_SETUP.md`](EBAY_C2_LISTING_SETUP.md) |
 | **EBAY-C3** | Draft-to-eBay listing publication | **complete on `develop` (mocked eBay transport only)** — [`EBAY_C3_PUBLISH.md`](EBAY_C3_PUBLISH.md); proposal approved 2026-10-03 |
 | **EBAY-C4** | Inventory and pricing synchronisation | **complete on `develop` (mocked eBay transport only)** — [`EBAY_C4_PRICE_QUANTITY.md`](EBAY_C4_PRICE_QUANTITY.md) |
-| EBAY-C5 | Orders, fulfilment, tracking, cancellation | not started |
+| **EBAY-C5** | Orders, fulfilment, tracking, cancellation | **complete on `develop` (mocked eBay transport only; import on demand)** — [`EBAY_C5_ORDERS.md`](EBAY_C5_ORDERS.md) |
 | EBAY-C6 | Production growth-check and operational hardening | not started |
 
 **EBAY-C0 and EBAY-C0.1 are complete and running in production.** C0.1 was

@@ -458,6 +458,32 @@ class EbayProductDetailsUpdate(CamelCaseModel):
     aspects: dict[str, list[str]] = Field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# EBAY-C5: orders and shipments.
+# ---------------------------------------------------------------------------
+
+
+class EbayOrderImportResponse(CamelCaseModel):
+    fetched: int
+    created: int
+    updated: int
+
+
+class EbayShipmentCreate(CamelCaseModel):
+    #: eBay's carrier code, e.g. ``USPS``, ``UPS``, ``ROYAL_MAIL``, ``DHL``.
+    carrier_code: str = Field(min_length=2, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    tracking_number: str = Field(min_length=4, max_length=64, pattern=r"^[A-Za-z0-9\-]+$")
+    shipped_at: datetime | None = None
+
+
+class EbayShipmentRead(CamelCaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    carrier: str | None = None
+    tracking_number: str | None = None
+    shipped_at: datetime | None = None
+
+
 __all__ = [
     "IDENTITY_DIGEST_PREFIX",
     "MARKETPLACE_ACCOUNT_DELETION",
@@ -471,9 +497,12 @@ __all__ = [
     "EbayListingSetupResponse",
     "EbayLocationCreate",
     "EbayLocationRead",
+    "EbayOrderImportResponse",
     "EbayPolicyRead",
     "EbayProductDetailsRead",
     "EbayProductDetailsUpdate",
+    "EbayShipmentCreate",
+    "EbayShipmentRead",
     "EbayStatusResponse",
     "MarketplaceAccountDeletion",
     "is_identity_digest",

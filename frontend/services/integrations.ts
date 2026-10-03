@@ -398,3 +398,25 @@ export async function sendEbayPriceQuantity(productId: string): Promise<{ messag
   );
   return data;
 }
+
+/** EBAY-C5: import eBay orders changed in the last `days` days. */
+export async function importEbayOrders(days = 7): Promise<{ fetched: number; created: number; updated: number }> {
+  const { data } = await apiClient.post<{ fetched: number; created: number; updated: number }>(
+    "/integrations/ebay/orders/import",
+    undefined,
+    { params: { days } },
+  );
+  return data;
+}
+
+/** EBAY-C5: tell eBay an order shipped. Repeating a tracking number is a no-op. */
+export async function shipEbayOrder(
+  orderId: string,
+  payload: { carrierCode: string; trackingNumber: string },
+): Promise<{ id: string }> {
+  const { data } = await apiClient.post<{ id: string }>(
+    `/integrations/ebay/orders/${orderId}/shipments`,
+    payload,
+  );
+  return data;
+}
