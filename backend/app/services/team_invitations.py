@@ -31,7 +31,7 @@ from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.context import set_tenant_id
+from app.core.context import require_tenant_id, set_tenant_id
 from app.core.exceptions import (
     ConflictError,
     ExternalServiceError,
@@ -113,42 +113,40 @@ class TeamInvitationService(BaseService):
         if await UserRepository(self.session).email_taken(address):
             raise ConflictError("This person is already a member of the workspace.")
 
-        secret = secrets.token_urlsafe(32)
-        expires_at = datetime.now(UTC) + INVITATION_TTL
         existing = await self.invitations.open_for_email(address)
-        if existing is None:
-            if await self.invitations.count_open_unexpired() >= MAX_OPEN_INVITATIONS:
-                raise ConflictError("Too many open invitations. Revoke some before sending more.")
-            invitation = await self.invitations.create(
-                email=address,
-                role=role.value,
-                token_hash=_hash(secret),
-                invited_by_user_id=inviter.id,
-                expires_at=expires_at,
-            )
-        else:
-            invitation = await self.invitations.update(
-                existing,
-                role=role.value,
-                token_hash=_hash(secret),
-                invited_by_user_id=inviter.id,
-                expires_at=expires_at,
-            )
+        if existing is None and (
+            await self.invitations.count_open_unexpired() >= MAX_OPEN_INVITATIONS
+        ):
+            raise ConflictError("Too many open invitations. Revoke some before sending more.")
 
-        tenant = await self.tenants.get_by_id(invitation.tenant_id)
+        # Send first, write second. If the send fails nothing is written, so
+        # there is no invitation that nobody received. If the write fails
+        # after a send, the emailed link simply does not work, which is
+        # harmless. The reverse order would depend on the caller rolling back.
+        secret = secrets.token_urlsafe(32)
+        tenant_id = require_tenant_id()
+        tenant = await self.tenants.get_by_id(tenant_id)
         try:
             await send_team_invitation(
                 email=address,
                 workspace_name=tenant.name if tenant is not None else "a workspace",
                 inviter_name=inviter.full_name,
-                token=f"{invitation.tenant_id}.{secret}",
+                token=f"{tenant_id}.{secret}",
                 days_valid=INVITATION_TTL.days,
             )
         except EmailDeliveryError:
-            # Raised so the request's transaction rolls back: an invitation
-            # nobody received is worse than none, because it blocks a retry
-            # with "already invited" in the admin's mind.
             raise InvitationEmailError(service="email") from None
+
+        values = {
+            "role": role.value,
+            "token_hash": _hash(secret),
+            "invited_by_user_id": inviter.id,
+            "expires_at": datetime.now(UTC) + INVITATION_TTL,
+        }
+        if existing is None:
+            invitation = await self.invitations.create(email=address, **values)
+        else:
+            invitation = await self.invitations.update(existing, **values)
         self.logger.info("team_invitation_sent", invitation_id=str(invitation.id), role=role.value)
         return invitation
 

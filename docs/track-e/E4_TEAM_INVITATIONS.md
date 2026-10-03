@@ -46,8 +46,8 @@ recording email provider.** No real mailbox was used.
     has a DropPilot account. The check happens at acceptance, so an admin
     cannot use invites to probe whether a stranger has an account.
   - **The real fix:** tenant-qualified login. It is not in this track.
-- **A failed send rolls the invitation back** (503
-  `invitation_email_failed`). An invitation nobody received only blocks a
+- **The email is sent before the row is written**, so a failed send (503
+  `invitation_email_failed`) leaves nothing behind. An invitation nobody received would only block a
   retry.
 - **Not included:**
   - Changing a member's role.
@@ -89,7 +89,7 @@ recording email provider.** No real mailbox was used.
   - roles that may invite, and who may be invited;
   - an account that already exists elsewhere;
   - terms and password-strength refusals that do not use up the link;
-  - email failure rolling the invitation back.
+  - an email failure writing no invitation.
 - `tests/unit/test_team_invitation_repository_scoping.py` checks tenant
   isolation on the compiled SQL.
 - `frontend/tests/e2e/team-invitations.spec.ts` runs against a mocked API.
