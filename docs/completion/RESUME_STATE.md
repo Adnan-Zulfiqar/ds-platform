@@ -36,16 +36,13 @@ Single continuation point after an interruption. Overwritten, not appended.
 | Item | State |
 |---|---|
 | B-011 scheduled eBay jobs | Merged (#54) |
-| E1 Shopify fulfilment push | PR #55 — waiting for CI, then merge. Stores must reconnect for the new scopes (owner) |
-| E2 sale fees (M24C) | PR #56 — waiting for CI. M27 freight quote blocked on a live AliExpress response |
-| E3 notification email | PR #57, stacked on #56 (migration 0043 after 0042). Merge after #56 |
-| E4 team invitations | Branch `feat/team-invitations`, stacked on E3 (migration 0044). PR after #57 |
-| E5 platform admin | **Blocked, B-013** — proposal in PR #58 |
-| E6 billing | **Blocked, B-014** — proposal in PR #58 |
-| E7 channels | WooCommerce next (no app approval needed); Etsy/TikTok need owner app registrations |
-
-Merge order: #55, #56, #57, then E4, then #58 (expect PROJECT_ROADMAP/CHANGELOG
-conflicts; resolve by keeping both sides).
+| E1 Shopify fulfilment push | Merged (#55). Stores connected earlier must reconnect for the new scopes (owner) |
+| E2 sale fees (M24C) | Merged (#56). M27 freight quote blocked on a live AliExpress response |
+| E3 notification email | Merged (#57). Real-inbox delivery not verified (owner: Resend + `EMAIL_APP_BASE_URL`) |
+| E4 team invitations | Merged (#59) |
+| E5 platform admin | **Blocked, B-013**: proposal in this docs PR |
+| E6 billing | **Blocked, B-014**: proposal in this docs PR |
+| E7 WooCommerce | W1 connect: PR #60. W2 publish: branch `feat/woocommerce-publish`, stacked on #60. W3–W5 next (W3 sweep needs a B-011-style approval). Etsy/TikTok: B-015 |
 
 ## Next safe action
 
