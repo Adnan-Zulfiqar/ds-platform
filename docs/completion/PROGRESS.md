@@ -174,3 +174,12 @@ Pinned baseline `develop` @ `7af51f9` (merge of PR #45).
 | C2 — DE-8a bulk tools | Resolved as D-010: AI Studio bulk + Global Rules bulk pricing; "Refresh ×n", "Publish Selected", scheduling are future. Nothing implied by the plans is missing |
 | C3 — DE-8b live E2E | Blocked on A4/A5 (B-003, B-004) |
 
+## Remaining roadmap, Tracks B and D — 2026-10-03
+
+| Item | Result |
+|---|---|
+| Track A docs | PR #47, CI 10/10 on `f92346f`, merged `8ee9eba` |
+| Track B — `OpenAIProvider` | PR #46: local gate pytest 3497 passed, CI 10/10 on `12c7650`, merged `9ffa700`. Mocked transport only; no real OpenAI call (B-002 open) |
+| Track D — EBAY-C2 listing setup | PR #48: local gate pytest 3498 passed, alembic `0037`; Playwright 44/44 (panel, channels, eBay specs). Mocked eBay transport only |
+| Track D — EBAY-C3…C6 | Not started. `docs/ebay/EBAY_C3_PROPOSAL.md` lists the architecture decisions (multi-channel readiness, eBay store model, item specifics) that CLAUDE.md §12.1 requires the owner to approve first; C4–C6 build on C3 |
+

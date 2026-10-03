@@ -33,6 +33,7 @@ from app.core.exceptions import ConflictError
 from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
+    EbayListingDefaults,
     NotificationProcessing,
     NotificationVerification,
 )
@@ -215,4 +216,26 @@ class EbayConnectionRepository(TenantScopedRepository[EbayConnection]):
         return super()._translate_integrity_error(exc)
 
 
-__all__ = ["EbayComplianceLedgerRepository", "EbayConnectionRepository"]
+class EbayListingDefaultsRepository(TenantScopedRepository[EbayListingDefaults]):
+    """A workspace's chosen eBay policies and location, per marketplace.
+
+    Tenant-scoped like every business repository. Erasure across tenants on
+    eBay's instruction is not here; it is ``EbayListingDefaultsOwner`` in
+    ``app.integrations.ebay.deletion``.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, EbayListingDefaults)
+
+    async def get_for_marketplace(self, marketplace_id: str) -> EbayListingDefaults | None:
+        result = await self.session.execute(
+            self._base_query().where(EbayListingDefaults.marketplace_id == marketplace_id)
+        )
+        return result.scalar_one_or_none()
+
+
+__all__ = [
+    "EbayComplianceLedgerRepository",
+    "EbayConnectionRepository",
+    "EbayListingDefaultsRepository",
+]

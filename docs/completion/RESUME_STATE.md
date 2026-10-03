@@ -27,12 +27,12 @@ Single continuation point after an interruption. Overwritten, not appended.
 | Track | State |
 |---|---|
 | A | Agent items done (A1 images, A2 flake A reproduced). A3–A5 OPEN with owner checklists in `BLOCKERS.md`; B-009 (encryption key missing from root `.env`) found |
-| B | `OpenAIProvider` — PR #46 (mocked-transport tests only) |
+| B | `OpenAIProvider` merged (#46, `9ffa700`); mocked-transport tests only, live call is owner item B-002 |
 | C | Audit only; nothing left that is not blocked on A4/A5 |
-| D | EBAY-C2 listing setup on `feat/ebay-c2-listing-setup`; C3–C6 follow |
+| D | EBAY-C2 in PR #48. C3–C6 wait on owner approval of `docs/ebay/EBAY_C3_PROPOSAL.md` |
 
 ## Next safe action
 
-Continue the open track PRs in order (A docs → #46 → C2 → C3…). Do **not**
+After #48: every remaining item is an owner action or an approval (C3 proposal). Do **not**
 tag `phase-9-complete` or mark Draft Editor Stage 8 complete. Owner items:
 B-009 first, then B-007 recreate, then B-002/B-003/B-004 checklists.

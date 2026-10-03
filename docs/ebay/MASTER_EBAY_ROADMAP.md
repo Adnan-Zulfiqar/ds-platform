@@ -14,8 +14,8 @@ deletion endpoint would mean building on a keyset that cannot be used.
 | **EBAY-C0** | Compliance challenge, signed deletion notifications, safe configuration | **complete** |
 | **EBAY-C0.1** | Retry idempotency hotfix — identity digest replaces the raw-body digest | **complete, deployed** |
 | **EBAY-C1** | OAuth connect / reconnect / disconnect, encrypted per-tenant tokens, functional integration card | **complete on branch, not deployed** |
-| EBAY-C2 | Seller policies, marketplaces, inventory locations | not started |
-| EBAY-C3 | Draft-to-eBay listing publication | not started |
+| **EBAY-C2** | Seller policies, marketplaces, inventory locations, listing defaults | **complete on `develop` (mocked eBay transport only)** — [`EBAY_C2_LISTING_SETUP.md`](EBAY_C2_LISTING_SETUP.md) |
+| EBAY-C3 | Draft-to-eBay listing publication | **proposal awaiting owner approval** — [`EBAY_C3_PROPOSAL.md`](EBAY_C3_PROPOSAL.md) |
 | EBAY-C4 | Inventory and pricing synchronisation | not started |
 | EBAY-C5 | Orders, fulfilment, tracking, cancellation | not started |
 | EBAY-C6 | Production growth-check and operational hardening | not started |

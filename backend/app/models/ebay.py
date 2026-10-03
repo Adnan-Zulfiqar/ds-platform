@@ -347,10 +347,54 @@ class EbayConnection(IdentifiedBase):
         return f"<EbayConnection id={self.id} tenant_id={self.tenant_id} status={self.status}>"
 
 
+class EbayListingDefaults(IdentifiedBase):
+    """The policies and location DropPilot uses when it lists for a seller.
+
+    One row per workspace and marketplace (EBAY-C2). The ids are the seller's
+    own eBay objects, so the row is eBay data tied to a seller account: it is
+    declared in ``EBAY_STORAGE_DECLARATIONS`` and erased with the account.
+
+    **Bound to the connection, not only the tenant.** A policy id means nothing
+    under a different seller, so the row is removed (``ON DELETE CASCADE``)
+    when the connection is — on disconnect and on eBay's deletion notice
+    alike. No soft delete, for the same reason as ``EbayConnection``.
+
+    Ids are stored as eBay returns them and re-validated against the seller's
+    live lists on every save; they are not trusted to still exist later.
+    """
+
+    __tablename__ = "ebay_listing_defaults"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ebay_connections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    fulfillment_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payment_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    return_policy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    merchant_location_key: Mapped[str] = mapped_column(String(36), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "marketplace_id", name="uq_ebay_listing_defaults_tenant_marketplace"
+        ),
+    )
+
+
 __all__ = [
     "EbayComplianceNotification",
     "EbayConnection",
     "EbayConnectionStatus",
+    "EbayListingDefaults",
     "NotificationProcessing",
     "NotificationVerification",
 ]

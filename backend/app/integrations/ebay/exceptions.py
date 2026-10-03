@@ -191,6 +191,30 @@ class EbaySellerAlreadyLinkedError(ConflictError):
     message = "That eBay account is already connected to another DropPilot workspace."
 
 
+class EbayNotConnectedError(ConflictError):
+    """The workspace has no eBay seller connection to act with (EBAY-C2)."""
+
+    code = "ebay_not_connected"
+    message = "Connect an eBay seller account first."
+
+
+class EbaySellerApiUnavailableError(EbayError):
+    """An Account or Inventory API call failed for a reason other than auth."""
+
+    code = "ebay_seller_api_unavailable"
+    message = "eBay did not answer. Please try again in a moment."
+
+
+class EbayPolicyNotFoundError(ValidationError):
+    """A chosen policy or location is not among the seller's current ones.
+
+    Usually the seller deleted it in Seller Hub after the panel loaded.
+    """
+
+    code = "ebay_policy_not_found"
+    message = "That eBay policy or location no longer exists. Reload and choose again."
+
+
 __all__ = [
     "SERVICE_NAME",
     "EbayChallengeError",
@@ -199,10 +223,13 @@ __all__ = [
     "EbayIdentityUnavailableError",
     "EbayKeyUnavailableError",
     "EbayNotConfiguredError",
+    "EbayNotConnectedError",
     "EbayNotificationRejectedError",
     "EbayOAuthStateError",
     "EbayPayloadTooLargeError",
+    "EbayPolicyNotFoundError",
     "EbaySellerAlreadyLinkedError",
+    "EbaySellerApiUnavailableError",
     "EbaySignatureError",
     "EbayTokenExchangeError",
     "EbayTokenRevokedError",

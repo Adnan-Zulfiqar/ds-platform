@@ -20,6 +20,15 @@ production release.
   (reasoning models reject it). An auth failure never echoes OpenAI's error
   text, which quotes part of the key. **Verified with a mocked transport
   only — no real OpenAI call has been made (B-002 stays open).**
+- **eBay listing setup (EBAY-C2).** The eBay card gains a "Listing setup" panel: the
+  seller's shipping, payment and return policies and Inventory API locations,
+  read live per marketplace, and the defaults DropPilot will list with.
+  Admins can save defaults (each id re-checked against eBay) and create a
+  warehouse location. New table `ebay_listing_defaults` (migration `0037`),
+  bound to the connection with `ON DELETE CASCADE`, **declared and erased**
+  under eBay's account-deletion contract. No new OAuth scope. **Verified
+  against a mocked eBay transport only — no real eBay account has been
+  read or written.**
 
 ### Fixed
 

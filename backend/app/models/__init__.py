@@ -28,6 +28,7 @@ from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
     EbayConnectionStatus,
+    EbayListingDefaults,
     NotificationProcessing,
     NotificationVerification,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "EbayComplianceNotification",
     "EbayConnection",
     "EbayConnectionStatus",
+    "EbayListingDefaults",
     "EmailVerificationToken",
     "FulfillmentStatus",
     "IdentifiedBase",

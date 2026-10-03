@@ -262,6 +262,54 @@ export interface EbayAuthorization {
   expiresInSeconds: number;
 }
 
+/** EBAY-C2: one of the seller's own business policies. */
+export interface EbayPolicy {
+  id: string;
+  name: string;
+}
+
+export interface EbayLocation {
+  key: string;
+  name: string | null;
+  city: string | null;
+  postalCode: string | null;
+  country: string | null;
+  enabled: boolean;
+}
+
+export interface EbayListingDefaults {
+  marketplaceId: string;
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+  merchantLocationKey: string;
+  updatedAt: string;
+}
+
+export interface EbayListingSetup {
+  marketplaceId: string;
+  supportedMarketplaces: string[];
+  businessPoliciesEnabled: boolean;
+  /** `null` (not empty) when the seller has not enabled business policies. */
+  fulfillmentPolicies: EbayPolicy[] | null;
+  paymentPolicies: EbayPolicy[] | null;
+  returnPolicies: EbayPolicy[] | null;
+  locations: EbayLocation[];
+  defaults: EbayListingDefaults | null;
+}
+
+export type EbayListingDefaultsPayload = Omit<EbayListingDefaults, "updatedAt">;
+
+export interface EbayLocationPayload {
+  name: string;
+  addressLine1?: string;
+  city?: string;
+  stateOrProvince?: string;
+  postalCode?: string;
+  /** ISO 3166-1 alpha-2, upper case. */
+  country: string;
+}
+
 export interface LoginPayload {
   email: string;
   password: string;

@@ -1,10 +1,11 @@
 "use client";
 
-import { AlertCircle, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
 import { useState } from "react";
 
 import { ChannelCard, ChannelFacts, formatChannelDate } from "@/components/integrations/channel-card";
 import { DisconnectDialog } from "@/components/integrations/disconnect-dialog";
+import { EbayListingSetupPanel } from "@/components/integrations/ebay-listing-setup";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api-client";
@@ -52,6 +53,9 @@ const DISCONNECT_CONSEQUENCES = [
 export function EbayCard() {
   const { hasRole } = useAuth();
   const canManage = hasRole("owner") || hasRole("admin");
+  // Listing setup reads the seller's eBay account; viewers are not shown it.
+  const canReadSetup = canManage || hasRole("member");
+  const [setupOpen, setSetupOpen] = useState(false);
   const statusQuery = useEbayStatus();
   const connect = useConnectEbay();
   const disconnect = useDisconnectEbay();
@@ -181,6 +185,31 @@ export function EbayCard() {
               { label: "Last verified", value: formatChannelDate(connection.lastVerifiedAt) },
             ]}
           />
+        ) : null}
+
+        {connection && channel.kind === "connected" && canReadSetup ? (
+          <div className="space-y-3">
+            <Button
+              variant="outline"
+              className="min-h-11 sm:min-h-9"
+              aria-expanded={setupOpen}
+              aria-controls="ebay-listing-setup"
+              data-testid="ebay-listing-setup-toggle"
+              onClick={() => setSetupOpen((open) => !open)}
+            >
+              {setupOpen ? (
+                <ChevronUp className="mr-2 h-4 w-4" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="mr-2 h-4 w-4" aria-hidden="true" />
+              )}
+              Listing setup
+            </Button>
+            {setupOpen ? (
+              <div id="ebay-listing-setup">
+                <EbayListingSetupPanel initialMarketplace={connection.marketplaceId} canManage={canManage} />
+              </div>
+            ) : null}
+          </div>
         ) : null}
       </ChannelCard>
 

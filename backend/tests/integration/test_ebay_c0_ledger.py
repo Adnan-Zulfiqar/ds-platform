@@ -344,9 +344,13 @@ class TestEbayUserDataIsDeclaredAndErasable:
         two agreement tests above while erasing nothing real.
         """
         declarations = EbayAccountDeletionProcessor.declarations()
-        assert [d.storage for d in declarations] == ["app.models.ebay.EbayConnection"]
-        assert declarations[0].owner_name == "ebay_connection"
-        assert declarations[0].holds.strip(), "the declaration says nothing about what it holds"
+        assert {d.storage: d.owner_name for d in declarations} == {
+            "app.models.ebay.EbayConnection": "ebay_connection",
+            # EBAY-C2: the chosen policy ids and location key.
+            "app.models.ebay.EbayListingDefaults": "ebay_listing_defaults",
+        }
+        for declaration in declarations:
+            assert declaration.holds.strip(), "a declaration says nothing about what it holds"
 
     def test_the_store_platform_enum_offers_ebay_without_storing_user_data(self) -> None:
         """A named platform is not the same as stored personal data.

@@ -356,12 +356,84 @@ class EbayAuthorizationResponse(CamelCaseModel):
     expires_in_seconds: int
 
 
+# ---------------------------------------------------------------------------
+# EBAY-C2: listing setup. Ids are the seller's own eBay objects; nothing here
+# carries a token or eBay's immutable user id.
+# ---------------------------------------------------------------------------
+
+
+class EbayPolicyRead(CamelCaseModel):
+    id: str
+    name: str
+
+
+class EbayLocationRead(CamelCaseModel):
+    key: str
+    name: str | None = None
+    city: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    enabled: bool
+
+
+class EbayListingDefaultsRead(CamelCaseModel):
+    marketplace_id: str
+    fulfillment_policy_id: str
+    payment_policy_id: str
+    return_policy_id: str
+    merchant_location_key: str
+    updated_at: datetime
+
+
+class EbayListingSetupResponse(CamelCaseModel):
+    """Everything the listing-setup panel needs in one read.
+
+    Policy lists are ``None`` (not empty) when the seller has not enabled
+    business policies — "you have none" and "eBay will not let you have any
+    yet" need different instructions.
+    """
+
+    marketplace_id: str
+    supported_marketplaces: list[str]
+    business_policies_enabled: bool
+    fulfillment_policies: list[EbayPolicyRead] | None = None
+    payment_policies: list[EbayPolicyRead] | None = None
+    return_policies: list[EbayPolicyRead] | None = None
+    locations: list[EbayLocationRead]
+    defaults: EbayListingDefaultsRead | None = None
+
+
+class EbayListingDefaultsUpdate(CamelCaseModel):
+    marketplace_id: str = Field(min_length=1, max_length=32)
+    fulfillment_policy_id: str = Field(min_length=1, max_length=64)
+    payment_policy_id: str = Field(min_length=1, max_length=64)
+    return_policy_id: str = Field(min_length=1, max_length=64)
+    merchant_location_key: str = Field(min_length=1, max_length=36)
+
+
+class EbayLocationCreate(CamelCaseModel):
+    name: str = Field(min_length=1, max_length=1000)
+    address_line1: str | None = Field(default=None, max_length=128)
+    city: str | None = Field(default=None, max_length=128)
+    state_or_province: str | None = Field(default=None, max_length=128)
+    postal_code: str | None = Field(default=None, max_length=16)
+    country: str = Field(
+        min_length=2, max_length=2, pattern=r"^[A-Z]{2}$", description="ISO 3166-1 alpha-2."
+    )
+
+
 __all__ = [
     "IDENTITY_DIGEST_PREFIX",
     "MARKETPLACE_ACCOUNT_DELETION",
     "ChallengeResponse",
     "EbayAuthorizationResponse",
     "EbayConnectionRead",
+    "EbayListingDefaultsRead",
+    "EbayListingDefaultsUpdate",
+    "EbayListingSetupResponse",
+    "EbayLocationCreate",
+    "EbayLocationRead",
+    "EbayPolicyRead",
     "EbayStatusResponse",
     "MarketplaceAccountDeletion",
     "is_identity_digest",

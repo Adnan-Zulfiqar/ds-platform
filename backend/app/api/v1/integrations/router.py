@@ -18,7 +18,13 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
-from app.api.deps import CurrentPrincipal, DbSession, OptionalPrincipal, RequireAdmin
+from app.api.deps import (
+    CurrentPrincipal,
+    DbSession,
+    OptionalPrincipal,
+    RequireAdmin,
+    RequireMember,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.request_body import read_bounded_body
@@ -43,11 +49,27 @@ from app.integrations.ebay.exceptions import (
     EbayOAuthStateError,
     EbaySellerAlreadyLinkedError,
 )
+from app.integrations.ebay.listing_setup import (
+    EbayListingSetupService,
+    ListingDefaultsChoice,
+)
 from app.integrations.ebay.schemas import (
     ChallengeResponse,
     EbayAuthorizationResponse,
     EbayConnectionRead,
+    EbayListingDefaultsRead,
+    EbayListingDefaultsUpdate,
+    EbayListingSetupResponse,
+    EbayLocationCreate,
+    EbayLocationRead,
+    EbayPolicyRead,
     EbayStatusResponse,
+)
+from app.integrations.ebay.seller_setup import (
+    EBAY_SUPPORTED_MARKETPLACES,
+    EbayInventoryLocation,
+    EbayPolicy,
+    NewInventoryLocation,
 )
 from app.integrations.ebay.signature import SIGNATURE_HEADER
 from app.integrations.shopify.schemas import (
@@ -74,7 +96,7 @@ from app.integrations.shopify.service import (
 from app.integrations.shopify.sync import ShopifySyncService
 from app.integrations.shopify.webhook import receive_shopify_webhook
 from app.integrations.shopify.webhook_reconciliation import ReconcileReport
-from app.models.ebay import EbayConnection
+from app.models.ebay import EbayConnection, EbayListingDefaults
 from app.models.integration import AliExpressConnection
 from app.models.role import RoleName
 from app.models.shopify import ShopifyConnection
@@ -733,6 +755,108 @@ async def disconnect_ebay(session: DbSession, _principal: RequireAdmin) -> Messa
             else "No eBay connection was present."
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# EBAY-C2: listing setup — the seller's policies and locations, and the
+# defaults this workspace lists with. Reads for members, writes for admins.
+# docs/ebay/EBAY_C2_LISTING_SETUP.md
+# ---------------------------------------------------------------------------
+
+
+def _policies_read(policies: tuple[EbayPolicy, ...]) -> list[EbayPolicyRead]:
+    return [EbayPolicyRead(id=p.id, name=p.name) for p in policies]
+
+
+def _location_read(location: EbayInventoryLocation) -> EbayLocationRead:
+    return EbayLocationRead(
+        key=location.key,
+        name=location.name,
+        city=location.city,
+        postal_code=location.postal_code,
+        country=location.country,
+        enabled=location.enabled,
+    )
+
+
+def _defaults_read(defaults: EbayListingDefaults) -> EbayListingDefaultsRead:
+    return EbayListingDefaultsRead(
+        marketplace_id=defaults.marketplace_id,
+        fulfillment_policy_id=defaults.fulfillment_policy_id,
+        payment_policy_id=defaults.payment_policy_id,
+        return_policy_id=defaults.return_policy_id,
+        merchant_location_key=defaults.merchant_location_key,
+        updated_at=defaults.updated_at,
+    )
+
+
+@router.get(
+    "/ebay/listing-setup",
+    response_model=EbayListingSetupResponse,
+    summary="The seller's eBay policies, locations and saved listing defaults",
+)
+async def ebay_listing_setup(
+    session: DbSession,
+    _principal: RequireMember,
+    marketplace_id: Annotated[str, Query(alias="marketplaceId", max_length=32)] = "EBAY_US",
+) -> EbayListingSetupResponse:
+    """Read live from eBay on every call; only the chosen defaults are stored."""
+    setup = await EbayListingSetupService(session).get_setup(marketplace_id)
+    policies = setup.policies
+    return EbayListingSetupResponse(
+        marketplace_id=setup.marketplace_id,
+        supported_marketplaces=list(EBAY_SUPPORTED_MARKETPLACES),
+        business_policies_enabled=setup.business_policies_enabled,
+        fulfillment_policies=_policies_read(policies.fulfillment) if policies else None,
+        payment_policies=_policies_read(policies.payment) if policies else None,
+        return_policies=_policies_read(policies.returns) if policies else None,
+        locations=[_location_read(loc) for loc in setup.locations],
+        defaults=_defaults_read(setup.defaults) if setup.defaults else None,
+    )
+
+
+@router.put(
+    "/ebay/listing-defaults",
+    response_model=EbayListingDefaultsRead,
+    summary="Choose the policies and location eBay listings will use",
+)
+async def save_ebay_listing_defaults(
+    body: EbayListingDefaultsUpdate, session: DbSession, _principal: RequireAdmin
+) -> EbayListingDefaultsRead:
+    """Each id is checked against the seller's current eBay objects first."""
+    saved = await EbayListingSetupService(session).save_defaults(
+        ListingDefaultsChoice(
+            marketplace_id=body.marketplace_id,
+            fulfillment_policy_id=body.fulfillment_policy_id,
+            payment_policy_id=body.payment_policy_id,
+            return_policy_id=body.return_policy_id,
+            merchant_location_key=body.merchant_location_key,
+        )
+    )
+    return _defaults_read(saved)
+
+
+@router.post(
+    "/ebay/locations",
+    response_model=EbayLocationRead,
+    status_code=201,
+    summary="Create a warehouse location on the seller's eBay account",
+)
+async def create_ebay_location(
+    body: EbayLocationCreate, session: DbSession, _principal: RequireAdmin
+) -> EbayLocationRead:
+    """Admin only: this writes to the seller's eBay account."""
+    created = await EbayListingSetupService(session).create_location(
+        NewInventoryLocation(
+            name=body.name,
+            address_line1=body.address_line1,
+            city=body.city,
+            state_or_province=body.state_or_province,
+            postal_code=body.postal_code,
+            country=body.country,
+        )
+    )
+    return _location_read(created)
 
 
 @router.post(

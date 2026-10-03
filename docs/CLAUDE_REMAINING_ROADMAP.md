@@ -190,8 +190,8 @@ START NOW:
 
 - [x] Pin updated to current `origin/develop` (`7af51f9`, 2026-10-03)
 - [x] Track A agent items done or blocked with OWNER checklist (`docs/completion/BLOCKERS.md`)
-- [ ] Track B provider PR (if keys available) or scaffolding + tests
-- [ ] Track C audit / remaining DE items
-- [ ] Track D: only after owner has not paused eBay — start at C2 plan
-- [ ] PROGRESS.md + RESUME_STATE.md updated
+- [x] Track B provider PR (if keys available) or scaffolding + tests — #46, no key: mocked tests only
+- [x] Track C audit / remaining DE items — `PROGRESS.md`; DE-8b blocked on A4/A5
+- [x] Track D: only after owner has not paused eBay — start at C2 plan — C2 #48; C3 proposal awaits approval
+- [x] PROGRESS.md + RESUME_STATE.md updated
 - [ ] No secrets in git status
