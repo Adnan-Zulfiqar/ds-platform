@@ -22,6 +22,7 @@ from app.api.v1 import (
     analytics,
     auth,
     automation,
+    billing,
     drafts,
     global_rules,
     integrations,
@@ -58,5 +59,6 @@ api_router.include_router(automation.router)
 api_router.include_router(notifications.router)
 api_router.include_router(analytics.router)
 api_router.include_router(platform.router)
+api_router.include_router(billing.router)
 
 __all__ = ["api_router"]

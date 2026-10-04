@@ -401,6 +401,8 @@ class TestSecretsStayOutOfEveryArtefact:
         "SHOPIFY_API_SECRET",
         "ALIEXPRESS_APP_SECRET",
         "ALIEXPRESS_CATALOG_ACCESS_TOKEN",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
     }
 
     def test_the_environment_template_contains_no_real_value(self) -> None:
@@ -435,6 +437,7 @@ class TestSecretsStayOutOfEveryArtefact:
                 "SHOPIFY_FRONTEND_RETURN_URL",
                 # Blank on purpose: the platform admin panel stays off (D-015).
                 "PLATFORM_ADMIN_ALLOWED_CIDRS",
+                "STRIPE_TRIAL_DAYS",
                 "ALIEXPRESS_FRONTEND_RETURN_URL",
                 "EBAY_FRONTEND_RETURN_URL",
             }:

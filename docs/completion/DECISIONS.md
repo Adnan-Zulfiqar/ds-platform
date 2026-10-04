@@ -237,3 +237,37 @@ The owner chose these on 2026-10-04 from the proposal in `docs/track-e/E5_PLATFO
   itself the rights back.
 - **Accounts** are created only by `scripts/create_platform_admin.py` on the
   server.
+
+## D-016 — Subscription billing: Stripe, three plans, a 30-day trial once (Track E6)
+
+The owner made these choices on 2026-10-04:
+
+- **Provider: Stripe Billing.** It was chosen over Paddle, the proposal's
+  recommendation. Tax registration and filing therefore stay with DESIRLY
+  LIMITED; Stripe Tax can calculate but does not remit. Checkout and the
+  customer portal are Stripe-hosted, so no card data and no publishable key
+  touch DropPilot.
+- **Plans** (monthly, USD):
+
+  | Plan | Price | Listings | AI add-on |
+  |---|---|---|---|
+  | Starter | $12 | 200 | $8 |
+  | Growth | $30 | 450 | $12 |
+  | Pro | $70 | 1000 | $17 |
+
+  The add-on unlocks unlimited AI; without it there is no AI. Listings
+  count each published product once per enabled variant, per store.
+- **Trial: 30 days, no card, once.** A workspace whose store (Shopify shop,
+  eBay seller or WooCommerce site) already used a trial on another account
+  does not get a second one (E6b).
+- **After the trial with no subscription:** read-only. Existing listings keep
+  syncing and nothing is deleted.
+- **Stripe is the source of truth.** Webhooks are doorbells: the
+  subscription is re-read from Stripe, and the workspace comes from Stripe's
+  copy of its metadata, which must match the customer this workspace
+  created. After checkout the app also syncs explicitly, so this works
+  before webhooks can reach a local machine.
+- **Agent choice, open to the owner:** during the trial a workspace gets
+  Growth's 450 listings and **no AI**, because AI calls cost money per
+  request. `TRIAL_LISTING_LIMIT` in `app/services/billing.py` is the one
+  place to change this.

@@ -6,13 +6,14 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import require_tenant_id
 from app.core.exceptions import ShopifyWebhookReconcileBusyError
-from app.models.shopify import ShopifyConnection, StoreListing
+from app.models.product import ProductVariant
+from app.models.shopify import ListingSyncStatus, ShopifyConnection, StoreListing
 from app.models.store import Store, StorePlatform
 from app.repositories.base import BaseRepository, TenantScopedRepository
 
@@ -180,6 +181,31 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def listings_used(self) -> int:
+        """Track E6: billable listings. Each published product counts once per
+        enabled variant (at least one), on each store it is published to. A
+        product with 10 variations on two stores is 20. Removed listings and
+        drafts never published do not count."""
+        variants = (
+            select(func.greatest(func.count(ProductVariant.id), 1))
+            .where(
+                ProductVariant.tenant_id == StoreListing.tenant_id,
+                ProductVariant.product_id == StoreListing.product_id,
+                ProductVariant.deleted_at.is_(None),
+                ProductVariant.is_enabled.is_(True),
+            )
+            .scalar_subquery()
+        )
+        query = (
+            self._base_query()
+            .with_only_columns(func.coalesce(func.sum(variants), 0))
+            .where(
+                StoreListing.status != ListingSyncStatus.REMOVED,
+                StoreListing.external_product_id.is_not(None),
+            )
+        )
+        return int((await self.session.execute(query)).scalar_one())
 
     async def erase_for_stores(self, store_ids: Sequence[uuid.UUID]) -> int:
         """Physically delete this tenant's listings on the given stores.
