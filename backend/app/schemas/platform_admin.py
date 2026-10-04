@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import Field, SecretStr
 
@@ -29,4 +30,38 @@ class PlatformAdminRead(CamelCaseModel):
     last_login_at: datetime | None
 
 
-__all__ = ["PlatformAdminRead", "PlatformLoginRequest", "PlatformLoginResponse"]
+class PlatformTenantRead(CamelCaseModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    status: str
+    is_active: bool
+    created_at: datetime
+    users: int
+    connected_stores: int
+
+
+class PlatformTenantStateChange(CamelCaseModel):
+    """Every suspension or reactivation says why; the reason is audited."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class PlatformAuditRead(CamelCaseModel):
+    id: uuid.UUID
+    created_at: datetime
+    admin_id: uuid.UUID | None
+    action: str
+    target_tenant_id: uuid.UUID | None
+    detail: dict[str, Any]
+    client_ip: str | None
+
+
+__all__ = [
+    "PlatformAdminRead",
+    "PlatformAuditRead",
+    "PlatformLoginRequest",
+    "PlatformLoginResponse",
+    "PlatformTenantRead",
+    "PlatformTenantStateChange",
+]
