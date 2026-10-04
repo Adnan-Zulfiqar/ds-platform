@@ -510,6 +510,10 @@ class ShopifyService(BaseService):
             )
 
         await self.session.flush()
+        # Track E6b: one free trial per store, whichever account connects it.
+        from app.tasks.billing import claim_trial_after_commit
+
+        claim_trial_after_commit(self.session, platform="shopify", identity=shop_domain)
         logger.info(
             "shopify_oauth_completed",
             shop_domain=shop_domain,

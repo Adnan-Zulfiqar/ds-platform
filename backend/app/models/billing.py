@@ -10,12 +10,14 @@ workspace's creation time plus ``STRIPE_TRIAL_DAYS``.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import TenantScopedBase
+from app.models.base import IdentifiedBase, TenantScopedBase
 
 
 class TenantSubscription(TenantScopedBase):
@@ -51,4 +53,22 @@ class TenantSubscription(TenantScopedBase):
     )
 
 
-__all__ = ["TenantSubscription"]
+class TrialFingerprint(IdentifiedBase):
+    """A store that has already had a free trial (Track E6b, D-016).
+
+    Not tenant data: a one-way hash of the store's public identity (Shopify
+    shop domain, eBay seller id, WooCommerce site), and the workspace that
+    first used it. It is kept when that workspace is closed, because the
+    point is that a new account cannot repeat the trial with the same store.
+    """
+
+    __tablename__ = "trial_fingerprints"
+
+    #: sha256 of ``"<platform>:<identity>"``, lower-cased.
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    first_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+__all__ = ["TenantSubscription", "TrialFingerprint"]

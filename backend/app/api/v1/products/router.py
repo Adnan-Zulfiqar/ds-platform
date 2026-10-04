@@ -20,7 +20,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy import event
 
-from app.api.deps import DbSession, RequireAdmin, RequireViewer, endpoint_rate_limit
+from app.api.deps import (
+    BillingWrite,
+    DbSession,
+    RequireAdmin,
+    RequireViewer,
+    endpoint_rate_limit,
+)
 from app.integrations.aliexpress.catalog import normalise_product_id
 from app.integrations.shopify.schemas import (
     ShopifyPublishCheckItem,
@@ -593,6 +599,7 @@ async def list_product_versions(
     response_model=ProductDetailRead,
     status_code=status.HTTP_201_CREATED,
     summary="Import a product from AliExpress",
+    dependencies=[BillingWrite],
 )
 async def import_product(
     session: DbSession,

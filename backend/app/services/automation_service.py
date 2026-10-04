@@ -169,8 +169,11 @@ class AutomationService(BaseService):
             external_id = config.get("external_id")
             if not external_id:
                 raise ValueError("import_product requires config.external_id")
+            from app.services.entitlements import BillingGate
             from app.services.product_import import ProductImportService
 
+            # Track E6b: a new import, so it needs an active trial or plan.
+            await BillingGate(self.session).require_can_write()
             product = await ProductImportService(self.session).import_product(
                 external_id=str(external_id),
                 ship_to_country=(

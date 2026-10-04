@@ -75,6 +75,10 @@ class WooCommercePublishService:
         store_id: uuid.UUID,
         expected_updated_at: datetime | None,
     ) -> WooCommercePublishResult:
+        # Track E6b: a new listing must fit the plan (republishing is free).
+        from app.services.entitlements import BillingGate
+
+        await BillingGate(self.session).require_room_for(product_id=product_id, store_id=store_id)
         locked = await self.products.lock_for_update(product_id, timeout_ms=PUBLISH_LOCK_TIMEOUT_MS)
         if locked is None:
             raise NotFoundError("Product not found.")

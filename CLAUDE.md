@@ -139,6 +139,10 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     tenant-owned row). These are the **only** request-path exception. They
     are reachable solely behind `RequirePlatformAdmin`, which is a separate
     token audience plus TOTP plus an IP allow-list, and is off by default.
+  - one free trial per store (Track E6b, owner requirement 2026-10-04,
+    D-016): `TrialFingerprintRegistry`. It holds a one-way hash of a
+    store's public identity and returns a boolean, never a row. It runs only
+    in the `billing.claim_trial` Celery task, not on a request path.
 
   **Do not add to this list without explicit approval**, and never on a
   request path. `tests/unit/test_unscoped_repositories_are_a_closed_list.py`
