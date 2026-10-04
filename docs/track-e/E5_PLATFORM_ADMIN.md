@@ -8,7 +8,7 @@ approved, impersonation out. Built in stages:
 | E5a | Operator identity: table, password + TOTP sign-in, platform tokens, IP allow-list, audit, CLI | Done |
 | E5b | `PlatformTenantDirectory`: workspace list + suspend / reactivate, audited | Done |
 | E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Done |
-| E5d | Frontend `/platform` pages | Planned |
+| E5d | Frontend `/platform` pages | Done |
 
 ## E5a as built
 
@@ -105,6 +105,48 @@ directory class. An unknown workspace gets 404; a tenant token gets 401.
 `test_platform_admin_health.py` checks that the window and the workspace
 boundary are respected: a 30-hour-old failure and another workspace's
 failure are not counted. It also checks the 404 and the 401.
+
+## E5d as built
+
+`/platform` is a single page outside the tenant app: no `AuthProvider`, no
+tenant navigation, and `noindex`.
+
+- **Sign-in form.** Email, password and the 6-digit code. If the panel is
+  switched off for the caller's network (the API answers 404), the form says
+  so.
+- **Console.** The workspace list (search, paging), a workspace panel with
+  the health counts and suspend/reactivate behind a required reason, and the
+  last 20 audit entries.
+- **A separate API client** (`lib/platform/client.ts`):
+  - it never sends the tenant token and never refreshes;
+  - it sends no cookies;
+  - the platform token lives in memory only, so a reload ends the operator
+    session;
+  - errors use the same `ApiError` shape through the shared `toApiError`.
+
+### Turning it on (owner)
+
+1. On the server, create an operator:
+   `docker exec -it droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`.
+   Type the password twice, then add the printed `otpauth://` URI to your
+   authenticator app. It is shown only once.
+2. Set `PLATFORM_ADMIN_ALLOWED_CIDRS` to your own network, e.g.
+   `203.0.113.4/32`. On this PC, browsing through `localhost`, that is
+   `127.0.0.1/32,172.16.0.0/12` (local only). The API sees Docker's bridge address
+   unless the proxy forwards the client IP.
+3. Recreate the backend container, then open `/platform`.
+
+### Verified (E5d)
+
+`frontend/tests/e2e/platform-console.spec.ts` runs against a mocked API. It
+checks that:
+
+- sign-in sends exactly email, password and code, with no tenant token;
+- later calls carry the platform token;
+- the list, health and audit render;
+- suspend is disabled until a reason is typed, then sends exactly that
+  reason;
+- a switched-off panel shows its own message.
 
 ---
 

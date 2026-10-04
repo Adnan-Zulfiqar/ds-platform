@@ -295,7 +295,7 @@ in mind. Nothing here is committed to a phase number.
 | Real FX for pricing | M24A (FX), M24B (currency derivation) and M24C (landed cost; sale fees as % of price — Track E2) done. Remaining: AliExpress freight quote (M27), blocked on a real API response — [E2 doc](docs/track-e/E2_FX_FEES.md) |
 | Subscription billing | Track E6 — **blocked on owner decisions** (provider, plans, prices, limits; B-014). Proposal: [E6 doc](docs/track-e/E6_BILLING_PROPOSAL.md) |
 | Team management | Invitations done (Track E4) — [E4 doc](docs/track-e/E4_TEAM_INVITATIONS.md). Role changes and member removal not yet built |
-| Admin panel | Track E5 (D-015): E5a identity, E5b directory/suspend and E5c health done; E5d frontend next — [E5 doc](docs/track-e/E5_PLATFORM_ADMIN.md) |
+| Admin panel | Track E5 (D-015): E5a–E5d done: operator login, workspace directory and suspend, health counts, `/platform` console — [E5 doc](docs/track-e/E5_PLATFORM_ADMIN.md) |
 | Email notifications | Done (Track E3): outbox + per-user kinds; real-inbox delivery not yet verified — [E3 doc](docs/track-e/E3_EMAIL_NOTIFICATIONS.md) |
 
 ---
