@@ -218,11 +218,87 @@ def decode_token(token: str, *, expected_type: TokenType) -> TokenClaims:
         raise AuthenticationError("The authentication token is not valid.") from exc
 
 
+# --- Platform operators (Track E5, D-015) ------------------------------------
+#
+# A separate audience as well as a separate ``typ``. ``decode_token`` verifies
+# the tenant audience, so a platform token is refused by every tenant route;
+# ``decode_platform_token`` verifies the platform audience, so a tenant token
+# — even an owner's — is refused by every platform route. Neither check
+# depends on a handler remembering to look.
+
+PLATFORM_TOKEN_TYPE: Final = "platform"  # noqa: S105 — a JWT "typ" claim value, not a credential
+
+
+def platform_audience() -> str:
+    return f"{settings.security.jwt_audience}:platform"
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformClaims:
+    admin_id: uuid.UUID
+    jti: str
+    expires_at: datetime
+
+
+def create_platform_token(*, admin_id: uuid.UUID) -> IssuedToken:
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(minutes=settings.platform_admin.token_ttl_minutes)
+    jti = uuid.uuid4().hex
+    token = jwt.encode(
+        {
+            "sub": str(admin_id),
+            "typ": PLATFORM_TOKEN_TYPE,
+            "jti": jti,
+            "iat": int(now.timestamp()),
+            "exp": int(expires_at.timestamp()),
+            "iss": settings.security.jwt_issuer,
+            "aud": platform_audience(),
+        },
+        settings.security.secret_key.get_secret_value(),
+        algorithm=settings.security.jwt_algorithm,
+    )
+    return IssuedToken(token=token, jti=jti, expires_at=expires_at)
+
+
+def decode_platform_token(token: str) -> PlatformClaims:
+    """Uniform failure for every reason, as for tenant tokens."""
+    refused = AuthenticationError("The authentication token is not valid.")
+    try:
+        payload = jwt.decode(
+            token,
+            settings.security.secret_key.get_secret_value(),
+            algorithms=[settings.security.jwt_algorithm],
+            audience=platform_audience(),
+            issuer=settings.security.jwt_issuer,
+            leeway=settings.security.jwt_leeway_seconds,
+            options={"require": ["sub", "exp", "iat", "jti", "typ", "iss", "aud"]},
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise TokenExpiredError() from exc
+    except jwt.InvalidTokenError as exc:
+        logger.debug("platform_token_rejected", reason=type(exc).__name__)
+        raise refused from exc
+    if payload.get("typ") != PLATFORM_TOKEN_TYPE:
+        raise refused
+    try:
+        return PlatformClaims(
+            admin_id=uuid.UUID(payload["sub"]),
+            jti=str(payload["jti"]),
+            expires_at=datetime.fromtimestamp(payload["exp"], tz=UTC),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise refused from exc
+
+
 __all__ = [
+    "PLATFORM_TOKEN_TYPE",
     "IssuedToken",
+    "PlatformClaims",
     "TokenClaims",
     "TokenType",
     "create_access_token",
+    "create_platform_token",
     "create_refresh_token",
+    "decode_platform_token",
     "decode_token",
 ]

@@ -11,6 +11,7 @@ flat object with fifty attributes.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from enum import StrEnum
 from functools import lru_cache
@@ -1106,6 +1107,36 @@ class AIProviderName(StrEnum):
     LOCAL = "local"
 
 
+class PlatformAdminSettings(_EnvFileSettings):
+    """Track E5: the platform-operator panel (decision D-015).
+
+    **Off unless configured.** With no allowed networks, every ``/platform``
+    route answers 404 — the panel does not exist on a deployment that has not
+    deliberately turned it on.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PLATFORM_ADMIN_", extra="ignore")
+
+    #: Comma-separated CIDRs allowed to reach ``/api/v1/platform/*``, e.g.
+    #: ``203.0.113.4/32,10.0.0.0/8``. Empty disables the panel.
+    allowed_cidrs: str = ""
+    #: Platform sessions are short and not refreshable: an operator signs in
+    #: again, with a fresh one-time code.
+    token_ttl_minutes: int = Field(default=30, ge=5, le=240)
+
+    @property
+    def networks(self) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+        out: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for raw in self.allowed_cidrs.split(","):
+            if raw.strip():
+                out.append(ipaddress.ip_network(raw.strip(), strict=False))
+        return tuple(out)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.networks)
+
+
 class WooCommerceSettings(_EnvFileSettings):
     """Track E7 W4b. WooCommerce has no app credentials: each store connects
     with its own keys. The only server-side setting is where stores deliver
@@ -1492,6 +1523,7 @@ class Settings(_EnvFileSettings):
     shopify: ShopifySettings = Field(default_factory=ShopifySettings)
     ebay: EbaySettings = Field(default_factory=EbaySettings)
     woocommerce: WooCommerceSettings = Field(default_factory=WooCommerceSettings)
+    platform_admin: PlatformAdminSettings = Field(default_factory=PlatformAdminSettings)
     ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")

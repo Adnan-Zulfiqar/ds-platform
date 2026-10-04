@@ -28,6 +28,7 @@ from app.api.v1 import (
     inventory,
     notifications,
     orders,
+    platform,
     pricing,
     products,
     stores,
@@ -56,5 +57,6 @@ api_router.include_router(pricing.router)
 api_router.include_router(automation.router)
 api_router.include_router(notifications.router)
 api_router.include_router(analytics.router)
+api_router.include_router(platform.router)
 
 __all__ = ["api_router"]
