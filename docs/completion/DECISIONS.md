@@ -213,3 +213,27 @@ response is upserted. Replays and out-of-order deliveries cannot write older
 state over newer, so there is no replay cache to fail open or closed. The
 cost is one extra API call per delivery. Webhooks are registered only when
 `WOOCOMMERCE_WEBHOOK_CALLBACK_BASE` is https.
+
+## D-015 — Platform admin panel: separate identity, TOTP, allow-list (Track E5)
+
+The owner chose these on 2026-10-04 from the proposal in `docs/track-e/E5_PLATFORM_ADMIN.md`.
+
+- **Option A.** Platform operators have their own `platform_admins` table,
+  Argon2id password and **mandatory TOTP**, and their own token. A platform
+  token carries the audience `<api>:platform`, so no tenant route accepts
+  it, and a tenant token (even an owner's) is refused by every platform
+  route. No tenant role can become a platform admin.
+- **Off by default.** `PLATFORM_ADMIN_ALLOWED_CIDRS` is empty, so every
+  `/api/v1/platform/*` route returns 404, including sign-in.
+- **`PlatformTenantDirectory` approved** as the only request-path exception
+  to CLAUDE.md §4. It returns tenants and counts only, never a tenant-owned
+  row, and sits behind `RequirePlatformAdmin`.
+- **Impersonation is out** of the first version.
+- **Audit.** Every operator action, and every failed sign-in, is written to
+  `platform_admin_audit`. Failures are committed in their own transaction so
+  that a refused request's rollback cannot erase them. The application has
+  no update or delete path for the audit table. A database-level revoke is
+  not used, because the application role owns its tables and could grant
+  itself the rights back.
+- **Accounts** are created only by `scripts/create_platform_admin.py` on the
+  server.

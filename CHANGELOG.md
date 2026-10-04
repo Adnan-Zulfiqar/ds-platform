@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E5a: platform operator identity
+
+- **Separate operator identity.** Operators have their own accounts
+  (`platform_admins`, migration `0046`), signing in with a password plus a
+  TOTP code. Platform tokens use their own audience, so tenant routes never
+  accept them and platform routes never accept tenant tokens.
+- **Off by default.** `/api/v1/platform/*` answers 404 unless
+  `PLATFORM_ADMIN_ALLOWED_CIDRS` lists the caller's network.
+- **Audit.** Every sign-in is audited, including refusals.
+- **Accounts** are created only with `scripts/create_platform_admin.py`
+  (D-015).
+- **New guard test.** Any repository that escapes tenant scoping without
+  being on CLAUDE.md §4's list now fails a test.
+
 ### Changed — AliExpress import without merchant OAuth; clearer callback failures
 
 - **Paste-to-import no longer requires merchant OAuth.** Product fetch uses

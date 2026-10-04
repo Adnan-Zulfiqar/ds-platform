@@ -132,9 +132,17 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     `PipelineBulkRunSweep`, `EbayConnectedTenantsSweep` (approved by the
     owner 2026-10-03, B-011: tenant ids of connected eBay workspaces for the
     scheduled eBay jobs).
+  - platform operators (Track E5, owner-approved 2026-10-04, D-015):
+    `PlatformAdminRepository` and `PlatformAdminAuditRepository` (operator
+    accounts and their audit trail sit above every tenant), and
+    `PlatformTenantDirectory` (workspace list and counts, never a
+    tenant-owned row). These are the **only** request-path exception. They
+    are reachable solely behind `RequirePlatformAdmin`, which is a separate
+    token audience plus TOTP plus an IP allow-list, and is off by default.
 
   **Do not add to this list without explicit approval**, and never on a
-  request path.
+  request path. `tests/unit/test_unscoped_repositories_are_a_closed_list.py`
+  fails when a `BaseRepository` subclass escapes tenant scoping unlisted.
 - If an unscoped query is genuinely required, put it in a separate,
   explicitly-named class. Never add a bypass method to a scoped repository —
   it is one autocomplete away from being used on an ordinary request path.
