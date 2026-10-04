@@ -10,6 +10,13 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E5d: platform operator console
+
+- `/platform`: operator sign-in (password + one-time code), workspace list
+  with health counts, suspend/reactivate with a reason, and the audit trail.
+  It uses its own API client: no tenant token, no refresh, and the token
+  is kept in memory only.
+
 ### Added — Track E5c: workspace health counts
 
 - Operators see a workspace's failed order and inventory syncs, failed
