@@ -26,6 +26,7 @@
  *   frame-src    accounts.google.com     — the account chooser it opens
  *   connect-src  accounts.google.com     — the calls GIS makes while signing in
  *   img-src      *.googleusercontent.com — avatars on the account chooser
+ *   img-src      SUPPLIER_IMAGE_ORIGINS  — product photos, see below
  *
  * `'unsafe-inline'` remains on **styles** only. Next.js injects critical CSS
  * inline and offers no nonce for it; inline CSS is not script execution, and
@@ -59,6 +60,26 @@ export const API_ORIGIN = new URL(
 export const GOOGLE_IDENTITY_ORIGIN = "https://accounts.google.com";
 
 /**
+ * Where product photos are served from. Imported products keep their
+ * supplier's image URLs (gallery, variants, and `<img>` tags inside the
+ * supplier description), so without these every product image is blocked.
+ *
+ * Named hosts, not `https:`. Supplier description HTML is third-party
+ * content: an open `img-src` would let any description load tracking
+ * pixels that report each merchant's visit. Add a host here when a new
+ * supplier or channel is imported from.
+ *
+ *   *.alicdn.com           AliExpress image CDN (ae01–ae04)
+ *   *.aliexpress-media.com AliExpress's newer image host
+ *   cdn.shopify.com        products imported from a Shopify store
+ */
+export const SUPPLIER_IMAGE_ORIGINS = [
+  "https://*.alicdn.com",
+  "https://*.aliexpress-media.com",
+  "https://cdn.shopify.com",
+] as const;
+
+/**
  * Webpack's development runtime evaluates module factories via `eval`.
  * Without `'unsafe-eval'`, `next dev` downloads every chunk and then refuses
  * to run them — React never hydrates, the login form stays a native GET, and
@@ -80,7 +101,7 @@ export function buildContentSecurityPolicy(nonce: string): string {
     // 'unsafe-eval' only in development — see SCRIPT_SRC_EVAL above.
     `script-src 'self' 'nonce-${nonce}'${SCRIPT_SRC_EVAL} ${GOOGLE_IDENTITY_ORIGIN}`,
     `style-src 'self' 'unsafe-inline' ${GOOGLE_IDENTITY_ORIGIN}`,
-    "img-src 'self' data: https://*.googleusercontent.com",
+    `img-src 'self' data: https://*.googleusercontent.com ${SUPPLIER_IMAGE_ORIGINS.join(" ")}`,
     "font-src 'self' data:",
     `connect-src 'self' ${API_ORIGIN} ${GOOGLE_IDENTITY_ORIGIN}`,
     `frame-src ${GOOGLE_IDENTITY_ORIGIN}`,
