@@ -1428,6 +1428,31 @@ class BackupSettings(_EnvFileSettings):
     max_drill_age_days: int = Field(default=90, ge=1)
 
 
+class StripeSettings(_EnvFileSettings):
+    """Track E6: subscription billing through Stripe (owner decision 2026-10-04).
+
+    Checkout and the customer portal are Stripe-hosted pages, so no card data
+    and no publishable key ever touch DropPilot. Without a secret key the
+    billing endpoints answer ``billing_not_configured`` and every workspace
+    stays on its trial terms.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="STRIPE_", extra="ignore")
+
+    secret_key: SecretStr | None = None
+    webhook_secret: SecretStr | None = None
+    api_base: str = "https://api.stripe.com"
+    #: Every workspace gets this many free days once (see TrialFingerprint).
+    trial_days: int = Field(default=30, ge=0, le=90)
+    #: Seconds a signed webhook stays acceptable (Stripe's own default).
+    webhook_tolerance_seconds: int = Field(default=300, ge=30)
+    request_timeout_seconds: float = Field(default=20.0, gt=0)
+
+    @property
+    def configured(self) -> bool:
+        return self.secret_key is not None and bool(self.secret_key.get_secret_value().strip())
+
+
 class FxSettings(_EnvFileSettings):
     """Exchange-rate provider configuration.
 
@@ -1524,6 +1549,7 @@ class Settings(_EnvFileSettings):
     ebay: EbaySettings = Field(default_factory=EbaySettings)
     woocommerce: WooCommerceSettings = Field(default_factory=WooCommerceSettings)
     platform_admin: PlatformAdminSettings = Field(default_factory=PlatformAdminSettings)
+    stripe: StripeSettings = Field(default_factory=StripeSettings)
     ai: AISettings = Field(default_factory=AISettings)
 
     @field_validator("cors_origins", "allowed_hosts", mode="before")

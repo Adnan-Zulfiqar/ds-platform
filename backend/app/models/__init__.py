@@ -24,6 +24,7 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
+from app.models.billing import TenantSubscription
 from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
@@ -179,6 +180,7 @@ __all__ = [
     "TenantMixin",
     "TenantScopedBase",
     "TenantStatus",
+    "TenantSubscription",
     "TimestampMixin",
     "TrackingEvent",
     "UUIDPrimaryKeyMixin",
