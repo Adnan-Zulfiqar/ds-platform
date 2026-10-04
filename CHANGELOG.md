@@ -17,6 +17,18 @@ production release.
   the trial end. The page re-reads the subscription on return from Checkout.
 - **Settings index.** The Billing card is now live.
 
+### Fixed — supplier product images blocked by the CSP
+
+- **Every imported product image was blocked.** That covered the gallery,
+  variant photos, the editor thumbnail and the `<img>` tags in the supplier
+  description. The cause was the Content-Security-Policy's `img-src`, which
+  listed only Google avatars.
+- **The fix allows named hosts.** `img-src` now lists the AliExpress CDNs
+  (`*.alicdn.com`, `*.aliexpress-media.com`) and `cdn.shopify.com`. It does
+  not allow any `https:` host, because supplier HTML is third-party content
+  and could otherwise load tracking pixels.
+- **Regression test:** `csp.spec.ts`.
+
 ### Added — Track E6b: plan limits and one trial per store
 
 - **Listing limit at publish.** Counted per variant. Republishing is free.
