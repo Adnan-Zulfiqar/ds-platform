@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E6b: plan limits and one trial per store
+
+- **Listing limit at publish.** Counted per variant. Republishing is free.
+- **AI add-on gate.** AI is refused on trial and on any plan without the
+  add-on.
+- **Read-only after the trial without a plan.** New imports are refused,
+  while refresh, sync and orders keep running.
+- **One free trial per store.** A store that already gave one workspace a
+  trial ends the trial of any later workspace that connects it. Only a
+  one-way hash of the store's identity is stored.
+- **402 errors.** `listing_limit_reached`, `ai_addon_required` and
+  `billing_inactive`. Nothing is enforced without Stripe configured.
+- **Migration.** `0048` adds `trial_fingerprints`.
+
 ### Added — Track E6a: subscription billing core (Stripe)
 
 - **Plans.** Starter $12 (200 listings), Growth $30 (450) and Pro $70
