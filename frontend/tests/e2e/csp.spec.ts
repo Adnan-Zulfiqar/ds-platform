@@ -217,6 +217,22 @@ test.describe("The policy the browser actually enforces", () => {
     );
   });
 
+  test("supplier product photos are allowed, but not any image host", async ({ page }) => {
+    // Regression: imported AliExpress images (gallery, variants and the
+    // description's own <img> tags) were all blocked by an img-src that only
+    // listed Google avatars.
+    const response = await page.goto("/login");
+    const header = response?.headers()["content-security-policy"] ?? "";
+    const imgSrc = header.split(";").map((d) => d.trim()).find((d) => d.startsWith("img-src")) ?? "";
+
+    for (const host of ["https://*.alicdn.com", "https://*.aliexpress-media.com", "https://cdn.shopify.com"]) {
+      expect(imgSrc.split(" ")).toContain(host);
+    }
+    // Supplier HTML is third-party content: no open scheme or wildcard.
+    expect(imgSrc.split(" ")).not.toContain("https:");
+    expect(imgSrc.split(" ")).not.toContain("*");
+  });
+
   for (const route of ["/login", "/register", "/privacy"]) {
     test(`${route} renders with no CSP violation in the console`, async ({ page }) => {
       test.skip(!(await isApiReachable()), "Backend API is not reachable.");

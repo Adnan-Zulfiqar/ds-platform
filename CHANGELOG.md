@@ -10,6 +10,18 @@ production release.
 
 ## [Unreleased]
 
+### Fixed — supplier product images blocked by the CSP
+
+- **Every imported product image was blocked.** That covered the gallery,
+  variant photos, the editor thumbnail and the `<img>` tags in the supplier
+  description. The cause was the Content-Security-Policy's `img-src`, which
+  listed only Google avatars.
+- **The fix allows named hosts.** `img-src` now lists the AliExpress CDNs
+  (`*.alicdn.com`, `*.aliexpress-media.com`) and `cdn.shopify.com`. It does
+  not allow any `https:` host, because supplier HTML is third-party content
+  and could otherwise load tracking pixels.
+- **Regression test:** `csp.spec.ts`.
+
 ### Added — Track E6a: subscription billing core (Stripe)
 
 - **Plans.** Starter $12 (200 listings), Growth $30 (450) and Pro $70
