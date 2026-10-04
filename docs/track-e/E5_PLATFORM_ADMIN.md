@@ -5,8 +5,8 @@ approved, impersonation out. Built in stages:
 
 | Stage | Scope | State |
 |---|---|---|
-| E5a | Operator identity: table, password + TOTP sign-in, platform tokens, IP allow-list, audit, CLI | Done (this PR) |
-| E5b | `PlatformTenantDirectory`: workspace list + suspend / reactivate, audited | Next |
+| E5a | Operator identity: table, password + TOTP sign-in, platform tokens, IP allow-list, audit, CLI | Done |
+| E5b | `PlatformTenantDirectory`: workspace list + suspend / reactivate, audited | Done |
 | E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Planned |
 | E5d | Frontend `/platform` pages | Planned |
 
@@ -58,6 +58,34 @@ approved, impersonation out. Built in stages:
 
 - The CLI script against the running stack. It needs the operator's own
   password at a terminal.
+
+## E5b as built
+
+- **Workspace list.** `GET /api/v1/platform/tenants?page&size&q` returns each
+  workspace's id, name, slug, status, active flag and creation time, with
+  two counts: active users and connected stores. Nothing tenant-owned is
+  ever returned. Search is case-insensitive on name and slug, with `%` and
+  `_` matched literally.
+- **Suspend and reactivate.** `POST …/tenants/{id}/suspend` and
+  `…/reactivate` each take a **reason** (required, 3–500 characters). They
+  set `is_active` and `status` (`suspended` / `active`) and write an audit
+  row with the reason and the previous state, in the same transaction.
+- **When a suspension bites.** Sign-in, Google sign-in and token refresh
+  already refuse an inactive workspace uniformly, so a suspension takes
+  effect at the next refresh: within one access-token lifetime (15 minutes).
+- **Audit view.** `GET /api/v1/platform/audit?limit` shows the most recent
+  operator actions.
+
+### Verified (E5b)
+
+`tests/integration/test_platform_admin_directory.py` covers:
+
+- the list returning only directory fields and counts;
+- literal wildcards in search;
+- a suspension refusing tenant login, a reactivation restoring it, and both
+  being audited with their reasons;
+- a missing reason getting 422, and an unknown workspace getting 404;
+- a tenant owner refused by the directory.
 
 ---
 

@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E5b: workspace directory, suspend and reactivate
+
+- Platform operators can list every workspace, with user and
+  connected-store counts and search. They can suspend or reactivate a
+  workspace with a required, audited reason; suspension takes effect within
+  one access-token lifetime. Operators also get a recent-actions audit view.
+  No tenant-owned data is exposed (D-015).
+
 ### Added — Track E5a: platform operator identity
 
 - **Separate operator identity.** Operators have their own accounts
