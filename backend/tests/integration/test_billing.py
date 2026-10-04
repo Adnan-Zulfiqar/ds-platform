@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib
 import json
 import time
 import uuid
@@ -24,7 +25,6 @@ from httpx import AsyncClient
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.billing import router as billing_router
 from app.core.config import settings
 from app.integrations.stripe import client as stripe_client
 from app.models.billing import TenantSubscription
@@ -134,7 +134,9 @@ def stripe(monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession) -> FakeStr
         yield db_session
         await db_session.flush()
 
-    monkeypatch.setattr(billing_router, "transaction", shared)
+    # The package re-exports the APIRouter as `router`, so load the module itself.
+    billing_module = importlib.import_module("app.api.v1.billing.router")
+    monkeypatch.setattr(billing_module, "transaction", shared)
     return fake
 
 
