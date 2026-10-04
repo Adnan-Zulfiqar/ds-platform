@@ -10,6 +10,13 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E6c: Settings → Billing
+
+- **Billing page.** Plan cards with the AI add-on, Stripe Checkout,
+  prorated plan switching and Stripe's portal (owner only), listing usage and
+  the trial end. The page re-reads the subscription on return from Checkout.
+- **Settings index.** The Billing card is now live.
+
 ### Added — Track E6b: plan limits and one trial per store
 
 - **Listing limit at publish.** Counted per variant. Republishing is free.

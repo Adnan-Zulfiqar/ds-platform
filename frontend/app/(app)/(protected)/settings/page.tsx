@@ -78,7 +78,7 @@ const SECTIONS: readonly SettingsSection[] = [
     label: "Billing",
     description: "Subscription plan and payment method.",
     icon: CreditCard,
-    available: false,
+    available: true,
   },
 ];
 
