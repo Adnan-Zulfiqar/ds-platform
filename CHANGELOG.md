@@ -10,6 +10,12 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E5c: workspace health counts
+
+- Operators see a workspace's failed order and inventory syncs, failed
+  notification emails (last 24 hours) and listings in error, as counts
+  only.
+
 ### Added — Track E5b: workspace directory, suspend and reactivate
 
 - Platform operators can list every workspace, with user and

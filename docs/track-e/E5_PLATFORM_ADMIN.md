@@ -7,7 +7,7 @@ approved, impersonation out. Built in stages:
 |---|---|---|
 | E5a | Operator identity: table, password + TOTP sign-in, platform tokens, IP allow-list, audit, CLI | Done |
 | E5b | `PlatformTenantDirectory`: workspace list + suspend / reactivate, audited | Done |
-| E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Planned |
+| E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Done |
 | E5d | Frontend `/platform` pages | Planned |
 
 ## E5a as built
@@ -86,6 +86,25 @@ approved, impersonation out. Built in stages:
   being audited with their reasons;
 - a missing reason getting 422, and an unknown workspace getting 404;
 - a tenant owner refused by the directory.
+
+## E5c as built
+
+`GET /api/v1/platform/tenants/{id}/health` returns four **counts** for one
+workspace, and never the rows behind them:
+
+- failed order syncs in the last 24 hours;
+- failed inventory syncs in the last 24 hours;
+- listings currently in error;
+- notification emails that failed in the last 24 hours (E3 outbox).
+
+Every query is a `count` filtered by `tenant_id`, on the approved
+directory class. An unknown workspace gets 404; a tenant token gets 401.
+
+### Verified (E5c)
+
+`test_platform_admin_health.py` checks that the window and the workspace
+boundary are respected: a 30-hour-old failure and another workspace's
+failure are not counted. It also checks the 404 and the 401.
 
 ---
 
