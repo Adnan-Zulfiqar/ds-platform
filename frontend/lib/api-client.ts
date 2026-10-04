@@ -152,7 +152,6 @@ apiClient.interceptors.response.use(
 
     if (error.response) {
       const status = error.response.status;
-      const body = error.response.data;
       const isAuthEndpoint = NO_REFRESH_PATHS.some((path) => config?.url?.includes(path));
 
       // One refresh attempt, then one retry. `_retried` prevents a loop when
@@ -163,30 +162,37 @@ apiClient.interceptors.response.use(
           return apiClient(config);
         }
       }
-
-      return Promise.reject(
-        new ApiError({
-          code: body?.code ?? "http_error",
-          message: body?.message ?? `Request failed with status ${status}.`,
-          status,
-          details: body?.details,
-          requestId: body?.requestId ?? error.response.headers["x-request-id"] ?? null,
-        }),
-      );
     }
 
-    // No response: timeout, DNS failure, offline, or a CORS rejection. These
-    // are indistinguishable from the browser for security reasons, so the
-    // message stays deliberately vague rather than guessing wrongly.
-    const isTimeout = error.code === "ECONNABORTED";
-    return Promise.reject(
-      new ApiError({
-        code: isTimeout ? "timeout" : "network_error",
-        message: isTimeout
-          ? "The request timed out. Please try again."
-          : "Could not reach the server. Check your connection and try again.",
-        status: null,
-      }),
-    );
+    return Promise.reject(toApiError(error));
   },
 );
+
+/**
+ * One translation from an axios failure to {@link ApiError}, shared with the
+ * platform-operator client (Track E5d) so both speak the same error shape.
+ */
+export function toApiError(error: AxiosError<ApiErrorResponse>): ApiError {
+  if (error.response) {
+    const status = error.response.status;
+    const body = error.response.data;
+    return new ApiError({
+      code: body?.code ?? "http_error",
+      message: body?.message ?? `Request failed with status ${status}.`,
+      status,
+      details: body?.details,
+      requestId: body?.requestId ?? error.response.headers["x-request-id"] ?? null,
+    });
+  }
+  // No response: timeout, DNS failure, offline, or a CORS rejection. These
+  // are indistinguishable from the browser for security reasons, so the
+  // message stays deliberately vague rather than guessing wrongly.
+  const isTimeout = error.code === "ECONNABORTED";
+  return new ApiError({
+    code: isTimeout ? "timeout" : "network_error",
+    message: isTimeout
+      ? "The request timed out. Please try again."
+      : "Could not reach the server. Check your connection and try again.",
+    status: null,
+  });
+}
