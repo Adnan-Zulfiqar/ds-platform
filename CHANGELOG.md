@@ -10,6 +10,18 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E6a: subscription billing core (Stripe)
+
+- **Plans.** Starter $12 (200 listings), Growth $30 (450) and Pro $70
+  (1000), each with an unlimited-AI add-on ($8, $12 and $17).
+- **Trial.** 30 days free, during which Stripe starts charging only when the
+  trial ends.
+- **Endpoints.** Stripe Checkout and customer portal, plan and add-on
+  changes, an explicit sync on return from Checkout, and a signed webhook
+  that re-reads the subscription from Stripe (D-016).
+- **Migration.** `0047` adds `tenant_subscriptions`.
+- **Not yet enforced.** Limits arrive in E6b.
+
 ### Added — Track E5d: platform operator console
 
 - `/platform`: operator sign-in (password + one-time code), workspace list

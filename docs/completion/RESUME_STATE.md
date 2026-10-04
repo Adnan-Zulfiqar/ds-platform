@@ -41,7 +41,7 @@ Single continuation point after an interruption. Overwritten, not appended.
 | E3 notification email | Merged (#57). Real-inbox delivery not verified (owner: Resend + `EMAIL_APP_BASE_URL`) |
 | E4 team invitations | Merged (#59) |
 | E5 platform admin | Decided 2026-10-04 (D-015). E5a identity in progress; E5b–E5d follow (`docs/track-e/E5_PLATFORM_ADMIN.md`) |
-| E6 billing | **Blocked, B-014**: owner decisions and sandbox account (`docs/track-e/E6_BILLING_PROPOSAL.md`) |
+| E6 billing | Decided 2026-10-04 (D-016, Stripe). E6a core in progress; E6b limits, E6c billing page follow (`docs/track-e/E6_BILLING.md`) |
 | E7 WooCommerce | All merged: W1 #60, W2 #61, W3 #62, W4a #63, W5 #64, W4b webhooks #65. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
 
 Every remaining Track E item is an owner decision or an owner registration.
