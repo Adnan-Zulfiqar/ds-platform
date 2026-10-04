@@ -80,8 +80,8 @@ class TestStage6ProtectedBoundaries:
         assert "analysis" not in block
         assert "altText" in block
 
-    def test_ci_expected_alembic_head_is_0047(self) -> None:
+    def test_ci_expected_alembic_head_is_0048(self) -> None:
         text = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        assert 'current" != "0047"' in text
-        assert "Expected Alembic head 0047" in text
+        assert 'current" != "0048"' in text
+        assert "Expected Alembic head 0048" in text
         assert "Expected Alembic head 0042" not in text

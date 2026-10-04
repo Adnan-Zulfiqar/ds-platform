@@ -82,6 +82,7 @@ celery_app.conf.update(
         "app.tasks.integrations.shopify",
         "app.tasks.integrations.ebay",
         "app.tasks.integrations.woocommerce",
+        "app.tasks.billing",
         "app.tasks.products",
         "app.tasks.orders",
         "app.tasks.inventory",

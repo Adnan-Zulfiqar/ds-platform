@@ -5,8 +5,8 @@ plans and a 30-day free trial, granted once. Built in stages:
 
 | Stage | Scope | State |
 |---|---|---|
-| E6a | Stripe client, subscription state, checkout, plan change, portal, sync, signed webhook | Done (this PR) |
-| E6b | Enforcement: listing limit at publish, AI add-on gate, read-only after trial, trial once per store | Next |
+| E6a | Stripe client, subscription state, checkout, plan change, portal, sync, signed webhook | Done (PR #73) |
+| E6b | Enforcement: listing limit at publish, AI add-on gate, read-only after trial, trial once per store | Done (this PR) |
 | E6c | Settings → Billing page | Planned |
 
 ## Plans
@@ -101,6 +101,57 @@ keys. No code changes.
 - A real sandbox checkout. It needs the backend recreated with this code and
   the test card `4242 4242 4242 4242` entered on Stripe's page, which is an
   owner step.
+
+## E6b as built
+
+Nothing is enforced while `STRIPE_SECRET_KEY` is blank, so self-hosted and
+test deployments behave as before.
+
+| Where | Check | Error (HTTP 402) |
+|---|---|---|
+| eBay, Shopify, WooCommerce publish | room for the product's listings, before the lock | `listing_limit_reached` (details: used, limit, needed) |
+| `POST /products/import`, automation import step | trial running or plan paid | `billing_inactive` |
+| AI prompt execution, image analysis | AI add-on on a paid plan | `ai_addon_required` (or `billing_inactive`) |
+
+- **Counting.** A listing is a product published to one store, counted as
+  its enabled variants (at least 1). Republishing an already-listed product
+  is free. Removed listings do not count.
+- **Trial.** It gets the Growth limit (450, `TRIAL_LISTING_LIMIT`) and no
+  AI. This was my default, not the owner's; it is one constant to change.
+- **After the trial without a plan.** The workspace is read-only for new
+  work, while refresh, sync and orders keep flowing. Blocking an existing
+  customer's order flow over billing would hurt their buyers, not them.
+- **One trial per store.** When a store connects (Shopify OAuth, eBay OAuth,
+  WooCommerce keys), a Celery task `billing.claim_trial` records a SHA-256 of
+  the store's identity. If another workspace had already recorded it, the
+  new workspace's trial ends at once. A paying workspace is not touched. A
+  closed first workspace still counts. The task runs after commit and is
+  idempotent.
+- **`TrialFingerprintRegistry`** is unscoped by necessity and was added to
+  the CLAUDE.md §4 closed list: a hash in, a boolean out, Celery only.
+- **Migration.** `0048` adds `trial_fingerprints`.
+
+### Verified (E6b)
+
+`tests/integration/test_billing_limits.py`, 7 tests on real Postgres. They
+cover:
+- the per-variant count across two stores;
+- the exact limit and a free republish;
+- AI refused on trial and on Pro without the add-on;
+- `/products/import` returning 402 after the trial;
+- nothing enforced without Stripe;
+- the trial claim: first use, the same account twice, a reused store, a
+  paying workspace and a deleted holder.
+
+The test found one bug, which is fixed: the import check ran before the
+tenant was bound.
+
+### Not verified (E6b)
+
+- The publish and AI wiring is exercised through `BillingGate`, not through
+  each marketplace's publish endpoint.
+- The connection hooks have not been run against live Shopify, eBay or
+  WooCommerce.
 
 ---
 

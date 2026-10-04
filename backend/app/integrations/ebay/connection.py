@@ -219,6 +219,10 @@ class EbayConnectionService:
             identity=identity,
             user_id=user_id,
         )
+        # Track E6b: one free trial per store, whichever account connects it.
+        from app.tasks.billing import claim_trial_after_commit
+
+        claim_trial_after_commit(self.session, platform="ebay", identity=identity.user_id)
         logger.info(
             "ebay_oauth_completed",
             tenant_id=str(tenant_id),

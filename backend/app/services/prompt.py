@@ -169,6 +169,10 @@ class PromptService(BaseService):
         if not execute:
             return rendered, required, None
 
+        # Track E6b: every AI feature reaches the provider through here.
+        from app.services.entitlements import BillingGate
+
+        await BillingGate(self.session).require_ai()
         started = time.monotonic()
         try:
             provider = get_ai_provider(settings)
@@ -229,6 +233,10 @@ class PromptService(BaseService):
         prompt = await self.get_active(name)
         rendered = PromptRenderer.render(prompt.template, variables)
 
+        # Track E6b: every AI feature reaches the provider through here.
+        from app.services.entitlements import BillingGate
+
+        await BillingGate(self.session).require_ai()
         started = time.monotonic()
         try:
             provider = get_ai_provider(settings)

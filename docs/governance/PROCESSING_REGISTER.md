@@ -297,6 +297,27 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Evidence** — `app/services/team_invitations.py`,
   `app/services/data_subject_erasure.py`.
 
+### 10e. Subscription billing (Track E6)
+
+* **Data** — per workspace: the Stripe customer and subscription ids, plan,
+  AI add-on, status, and the trial and billing-period dates
+  (`tenant_subscriptions`). Card details never reach DropPilot; they are
+  entered on Stripe's own pages. Per connected store: a SHA-256 of the
+  platform and the store's public identity (Shopify shop domain, eBay seller
+  id, WooCommerce site), plus the first workspace that used it
+  (`trial_fingerprints`).
+* **Purpose** — charge for the service, and stop the same store from getting
+  a second free trial through a new account (owner requirement, D-016).
+* **Role** — controller. **Proposed basis** — performance of a contract;
+  for the fingerprint, a legitimate interest in preventing trial abuse.
+* **Recipients** — Stripe, the payment processor.
+* **Retention** — the subscription row lives as long as the workspace. The
+  fingerprint is **kept** after the workspace closes, because that is its
+  whole purpose. The reference to the workspace is cleared (`SET NULL`), and
+  the hash alone does not name the store without already knowing it.
+* **Evidence** — `app/services/billing.py`, `app/tasks/billing.py`,
+  `app/repositories/billing.py`.
+
 ### 11. Support and privacy requests
 
 * **Data** — whatever the person includes in their email.

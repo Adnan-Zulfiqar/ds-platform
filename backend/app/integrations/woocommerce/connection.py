@@ -152,6 +152,12 @@ class WooCommerceConnectionService(BaseService):
         if existing is not None:
             await self._remove_webhooks(store, client)
         await self._register_webhooks(store, client, key=key, secret=secret)
+        # Track E6b: one free trial per store, whichever account connects it.
+        from app.tasks.billing import claim_trial_after_commit
+
+        claim_trial_after_commit(
+            self.session, platform="woocommerce", identity=str(values["external_store_id"])
+        )
         logger.info("woocommerce_connected", store_id=str(store.id))
         return store
 

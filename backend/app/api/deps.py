@@ -157,6 +157,21 @@ async def get_current_principal(
 CurrentPrincipal = Annotated[AuthenticatedUser, Depends(get_current_principal)]
 
 
+# --- Billing (Track E6b) -------------------------------------------------------
+
+
+async def require_billing_write(session: DbSession, _principal: CurrentPrincipal) -> None:
+    """New imports need an active trial or plan (no-op without Stripe).
+    Refreshes and syncs do not use this, so existing data keeps flowing.
+    Depends on the principal because that is what binds the tenant."""
+    from app.services.entitlements import BillingGate
+
+    await BillingGate(session).require_can_write()
+
+
+BillingWrite = Depends(require_billing_write)
+
+
 # --- Platform operators (Track E5, D-015) ------------------------------------
 
 
@@ -487,6 +502,7 @@ def endpoint_rate_limit(
 
 __all__ = [
     "BearerCredentials",
+    "BillingWrite",
     "Cache",
     "CurrentPrincipal",
     "CurrentTenant",

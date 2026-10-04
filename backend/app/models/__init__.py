@@ -24,7 +24,7 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
-from app.models.billing import TenantSubscription
+from app.models.billing import TenantSubscription, TrialFingerprint
 from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
@@ -183,6 +183,7 @@ __all__ = [
     "TenantSubscription",
     "TimestampMixin",
     "TrackingEvent",
+    "TrialFingerprint",
     "UUIDPrimaryKeyMixin",
     "User",
     "UserIdentity",
