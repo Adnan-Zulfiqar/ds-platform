@@ -41,6 +41,15 @@ class PlatformTenantRead(CamelCaseModel):
     connected_stores: int
 
 
+class PlatformTenantHealthRead(CamelCaseModel):
+    tenant_id: uuid.UUID
+    window_hours: int
+    failed_order_syncs: int
+    failed_inventory_syncs: int
+    listings_in_error: int
+    failed_notification_emails: int
+
+
 class PlatformTenantStateChange(CamelCaseModel):
     """Every suspension or reactivation says why; the reason is audited."""
 
@@ -62,6 +71,7 @@ __all__ = [
     "PlatformAuditRead",
     "PlatformLoginRequest",
     "PlatformLoginResponse",
+    "PlatformTenantHealthRead",
     "PlatformTenantRead",
     "PlatformTenantStateChange",
 ]

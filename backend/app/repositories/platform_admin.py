@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.inventory import InventorySyncRun
+from app.models.notification import Notification
+from app.models.order import OrderSyncRun, SyncRunStatus
 from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit
+from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StoreStatus
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -87,6 +91,18 @@ class TenantDirectoryRow:
     created_at: datetime
     users: int
     connected_stores: int
+
+
+@dataclass(frozen=True, slots=True)
+class TenantHealth:
+    """Counts only (E5c). What is failing, not what the failing thing is."""
+
+    tenant_id: uuid.UUID
+    window_hours: int
+    failed_order_syncs: int
+    failed_inventory_syncs: int
+    listings_in_error: int
+    failed_notification_emails: int
 
 
 class PlatformTenantDirectory:
@@ -171,10 +187,52 @@ class PlatformTenantDirectory:
             for r in rows
         ], total
 
+    async def health(self, tenant_id: uuid.UUID, *, window_hours: int = 24) -> TenantHealth:
+        """Operational counts for one workspace. Every query is a ``count``
+        filtered by ``tenant_id`` and returns a number, never a row."""
+        since = datetime.now(UTC) - timedelta(hours=window_hours)
+
+        async def count(query: Any) -> int:
+            return int((await self.session.execute(query)).scalar_one())
+
+        return TenantHealth(
+            tenant_id=tenant_id,
+            window_hours=window_hours,
+            failed_order_syncs=await count(
+                select(func.count(OrderSyncRun.id)).where(
+                    OrderSyncRun.tenant_id == tenant_id,
+                    OrderSyncRun.status == SyncRunStatus.FAILED,
+                    OrderSyncRun.created_at >= since,
+                )
+            ),
+            failed_inventory_syncs=await count(
+                select(func.count(InventorySyncRun.id)).where(
+                    InventorySyncRun.tenant_id == tenant_id,
+                    InventorySyncRun.status == SyncRunStatus.FAILED,
+                    InventorySyncRun.created_at >= since,
+                )
+            ),
+            listings_in_error=await count(
+                select(func.count(StoreListing.id)).where(
+                    StoreListing.tenant_id == tenant_id,
+                    StoreListing.deleted_at.is_(None),
+                    StoreListing.status == ListingSyncStatus.ERROR,
+                )
+            ),
+            failed_notification_emails=await count(
+                select(func.count(Notification.id)).where(
+                    Notification.tenant_id == tenant_id,
+                    Notification.email_status == "failed",
+                    Notification.created_at >= since,
+                )
+            ),
+        )
+
 
 __all__ = [
     "PlatformAdminAuditRepository",
     "PlatformAdminRepository",
     "PlatformTenantDirectory",
     "TenantDirectoryRow",
+    "TenantHealth",
 ]

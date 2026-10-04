@@ -21,6 +21,7 @@ from app.schemas.platform_admin import (
     PlatformAuditRead,
     PlatformLoginRequest,
     PlatformLoginResponse,
+    PlatformTenantHealthRead,
     PlatformTenantRead,
     PlatformTenantStateChange,
 )
@@ -133,3 +134,15 @@ async def platform_audit(
 ) -> list[PlatformAuditRead]:
     rows = await PlatformAdminService(session).recent_audit(limit=limit)
     return [PlatformAuditRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.get(
+    "/tenants/{tenant_id}/health",
+    response_model=PlatformTenantHealthRead,
+    summary="A workspace's failure counts over the last 24 hours",
+)
+async def platform_tenant_health(
+    tenant_id: uuid.UUID, session: DbSession, _admin: RequirePlatformAdmin
+) -> PlatformTenantHealthRead:
+    health = await PlatformAdminService(session).tenant_health(tenant_id)
+    return PlatformTenantHealthRead.model_validate(health, from_attributes=True)

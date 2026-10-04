@@ -41,6 +41,7 @@ from app.repositories.platform_admin import (
     PlatformAdminRepository,
     PlatformTenantDirectory,
     TenantDirectoryRow,
+    TenantHealth,
 )
 from app.repositories.tenant import TenantRepository
 from app.services.base import BaseService
@@ -171,6 +172,11 @@ class PlatformAdminService(BaseService):
             page=1, size=1, tenant_id=tenant.id
         )
         return rows[0]
+
+    async def tenant_health(self, tenant_id: uuid.UUID) -> TenantHealth:
+        if await TenantRepository(self.session).get_by_id(tenant_id) is None:
+            raise NotFoundError.for_resource("Workspace", tenant_id)
+        return await PlatformTenantDirectory(self.session).health(tenant_id)
 
     async def recent_audit(self, *, limit: int) -> list[PlatformAdminAudit]:
         return await self.audit.recent(limit=limit)
