@@ -241,3 +241,41 @@ Owner order D-012: E1 → E7, gates → PR → CI → merge for each item.
   - Shopify reconnect with the new fulfilment scopes;
   - webhook delivery to a public deployment.
 
+## E5, E6, CSP fix and application analysis — 2026-10-04
+
+- **Merged into `develop`** (each on 10/10 CI, merged with
+  `--match-head-commit`): E5a–E5d platform operator console (#69–#72),
+  E6a–E6c Stripe billing (#73–#75), CSP supplier-image fix (#76).
+- **Tunnel:** the owner moved `api.whiteto.com` off the DESKTOP-8D5VPLK
+  connector. 10/10 probes now reach the backend on this PC (previously
+  0/10). The owner then completed AliExpress OAuth and imported a listing.
+- **Defect found live by the owner:** every imported product image was
+  blocked by the CSP `img-src` (only Google avatars were allowed). Fixed in
+  #76 with named hosts, not `https:`; regression test in `csp.spec.ts`.
+  The owner's frontend container was rebuilt from the merged tree and
+  recreated; the live header was verified on `localhost:3000`.
+- **Defect found by the E6b tests before merge:** `require_billing_write`
+  ran before the tenant was bound (500 instead of 402). Fixed in #74.
+- **Application analysis** (three read-only sweeps, key claims re-checked
+  by hand):
+  - `shipment.refresh` Celery task fails every run with
+    `TypeError: got multiple values for argument 'limit'`
+    (`tasks/shipments.py:20`; reproduced locally, scheduled every 6 h).
+  - Scheduled stock sync pushes only to eBay, not WooCommerce
+    (`tasks/inventory.py:17`).
+  - User-menu Profile link → `/settings/profile`, which does not exist.
+  - Shopify `publish_product` / `push_inventory` / `push_price` tasks are
+    defined but never enqueued; no automatic Shopify price/stock push.
+  - No Shopify GDPR webhooks (`customers/redact`, `shop/redact`).
+  - Backend has edit/delete for automation rules, pricing rules and stores,
+    and a prompts API; none has a UI.
+  - No auto-ordering to the supplier and no supplier-tracking sync.
+  - No production deployment exists; no Sentry/metrics/alerting.
+  None of these were fixed this session; the owner has not yet chosen an
+  order. B-015 and B-016 are deliberately untouched (owner instruction).
+- **Harness notes:** retargeting a PR's base does not start CI
+  (`pull_request` has no `edited` type); push a develop merge instead.
+  Two gate runs at once collide on the shared `dp-gate-*` containers.
+- **Not verified live:** a Stripe checkout; the billing gate through each
+  marketplace's publish endpoint; the trial-claim hooks against real
+  stores; the E5 console against a real operator account.
