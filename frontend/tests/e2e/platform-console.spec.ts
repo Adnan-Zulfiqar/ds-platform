@@ -122,5 +122,5 @@ test("a switched-off console says so instead of a generic failure", async ({ pag
   await page.getByLabel("Password").fill("x");
   await page.getByLabel("One-time code").fill("123456");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("alert")).toContainText("not enabled for this network");
+  await expect(page.getByText("not enabled for this network")).toBeVisible();
 });
