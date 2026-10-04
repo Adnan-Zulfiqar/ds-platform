@@ -10,6 +10,13 @@ production release.
 
 ## [Unreleased]
 
+### Added — Track E6c: Settings → Billing
+
+- **Billing page.** Plan cards with the AI add-on, Stripe Checkout,
+  prorated plan switching and Stripe's portal (owner only), listing usage and
+  the trial end. The page re-reads the subscription on return from Checkout.
+- **Settings index.** The Billing card is now live.
+
 ### Fixed — supplier product images blocked by the CSP
 
 - **Every imported product image was blocked.** That covered the gallery,

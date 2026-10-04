@@ -6,8 +6,8 @@ plans and a 30-day free trial, granted once. Built in stages:
 | Stage | Scope | State |
 |---|---|---|
 | E6a | Stripe client, subscription state, checkout, plan change, portal, sync, signed webhook | Done (PR #73) |
-| E6b | Enforcement: listing limit at publish, AI add-on gate, read-only after trial, trial once per store | Done (this PR) |
-| E6c | Settings → Billing page | Planned |
+| E6b | Enforcement: listing limit at publish, AI add-on gate, read-only after trial, trial once per store | Done (PR #74) |
+| E6c | Settings → Billing page | Done (this PR) |
 
 ## Plans
 
@@ -152,6 +152,46 @@ tenant was bound.
   each marketplace's publish endpoint.
 - The connection hooks have not been run against live Shopify, eBay or
   WooCommerce.
+
+## E6c as built
+
+`/settings/billing`, linked from the settings index:
+- the current state (free trial, plan with status, or no active plan);
+- listing usage against the limit;
+- the trial end, or the renewal or end date.
+
+The owner can:
+- choose a plan, with or without the AI add-on, which goes to Stripe
+  Checkout;
+- switch plan once paying, which is prorated by Stripe;
+- open Stripe's portal for card and invoices.
+
+Other roles see the page without actions. On return from Checkout
+(`?checkout=success`) the page asks the server to re-read the subscription
+once. The 402 errors from E6b carry readable messages, which the existing
+error displays already show.
+
+### Verified (E6c)
+
+`tests/e2e/billing.spec.ts`, 4 tests, against a mocked API:
+- the trial and usage render;
+- Pro with AI shows $87 and sends `{plan: "pro", aiAddon: true}` to
+  Checkout, then follows the Stripe URL;
+- a return from Checkout syncs exactly once;
+- a viewer sees no actions;
+- the index links to the page.
+
+Lint, typecheck and the production build pass.
+
+### Before charging real customers (owner)
+
+- **Terms §12** still says no paid Plan is on sale, and §14 says Plans are
+  not refunded pro rata. Stripe prorates plan *changes* (a downgrade gives
+  a credit). The legal copy is the owner's to update; I did not edit it.
+- Roll the webhook signing secret, since it appeared in a tool log during
+  set-up. Then switch to live keys and create the live prices with the same
+  lookup keys.
+- Confirm the trial limits (450 listings, no AI).
 
 ---
 

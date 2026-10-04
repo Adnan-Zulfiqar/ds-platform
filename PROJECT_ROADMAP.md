@@ -293,7 +293,7 @@ in mind. Nothing here is committed to a phase number.
 | AI optimisation (Phase 9) | Stages 1–9 merged (Stage 9: PR #24, merge `72e7692`; post-merge CI 35656740281 10/10). Review remediation merged (PR #26). Stage 10 merged (PR #36). Stage 11 report written; implementation accepted with notes by Cursor, release NOT READY; untagged. `StubProvider` only — no live model-quality verification. Production undeployed |
 | Product Workspace V2 | Stages 0–7 done; Stage 8 live E2E (DE-8b) blocked on live providers (see above) |
 | Real FX for pricing | M24A (FX), M24B (currency derivation) and M24C (landed cost; sale fees as % of price — Track E2) done. Remaining: AliExpress freight quote (M27), blocked on a real API response — [E2 doc](docs/track-e/E2_FX_FEES.md) |
-| Subscription billing | Track E6 (D-016, Stripe): E6a checkout/portal/sync/webhook and E6b limits + trial-once done; E6c billing page next — [E6 doc](docs/track-e/E6_BILLING.md) |
+| Subscription billing | Track E6 (D-016, Stripe): E6a checkout/portal/sync/webhook, E6b limits + trial-once and E6c billing page done; live sandbox checkout and Terms update are owner steps — [E6 doc](docs/track-e/E6_BILLING.md) |
 | Team management | Invitations done (Track E4) — [E4 doc](docs/track-e/E4_TEAM_INVITATIONS.md). Role changes and member removal not yet built |
 | Admin panel | Track E5 (D-015): E5a–E5d done: operator login, workspace directory and suspend, health counts, `/platform` console — [E5 doc](docs/track-e/E5_PLATFORM_ADMIN.md) |
 | Email notifications | Done (Track E3): outbox + per-user kinds; real-inbox delivery not yet verified — [E3 doc](docs/track-e/E3_EMAIL_NOTIFICATIONS.md) |
