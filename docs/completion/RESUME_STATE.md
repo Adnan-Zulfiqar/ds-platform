@@ -40,7 +40,7 @@ Single continuation point after an interruption. Overwritten, not appended.
 | E2 sale fees (M24C) | Merged (#56). M27 freight quote blocked on a live AliExpress response |
 | E3 notification email | Merged (#57). Real-inbox delivery not verified (owner: Resend + `EMAIL_APP_BASE_URL`) |
 | E4 team invitations | Merged (#59) |
-| E5 platform admin | **Blocked, B-013**: owner chooses option A/B/C (`docs/track-e/E5_PLATFORM_ADMIN_PROPOSAL.md`) |
+| E5 platform admin | Decided 2026-10-04 (D-015). E5a identity in progress; E5b–E5d follow (`docs/track-e/E5_PLATFORM_ADMIN.md`) |
 | E6 billing | **Blocked, B-014**: owner decisions and sandbox account (`docs/track-e/E6_BILLING_PROPOSAL.md`) |
 | E7 WooCommerce | All merged: W1 #60, W2 #61, W3 #62, W4a #63, W5 #64, W4b webhooks #65. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
 

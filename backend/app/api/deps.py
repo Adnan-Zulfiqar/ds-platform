@@ -19,6 +19,7 @@ The resolution chain:
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Annotated
 
@@ -40,6 +41,7 @@ from app.core.rate_limit import limiter
 from app.core.redis import CacheClient
 from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
+from app.models.platform_admin import PlatformAdmin
 from app.models.role import RoleName
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -153,6 +155,49 @@ async def get_current_principal(
 
 
 CurrentPrincipal = Annotated[AuthenticatedUser, Depends(get_current_principal)]
+
+
+# --- Platform operators (Track E5, D-015) ------------------------------------
+
+
+def require_platform_network(request: Request) -> None:
+    """404 unless the panel is enabled and the caller is on an allowed network.
+
+    404, not 403: on a deployment that has not enabled the panel, or to a
+    caller outside the allow-list, the platform routes do not exist. Runs
+    before anything else on every platform route, including sign-in.
+    """
+    from app.core.client_ip import resolve_client_ip
+
+    networks = settings.platform_admin.networks
+    raw = resolve_client_ip(request)
+    if not networks or raw is None:
+        raise NotFoundError()
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError:
+        raise NotFoundError() from None
+    if not any(address in network for network in networks):
+        raise NotFoundError()
+
+
+async def get_platform_admin(
+    request: Request, credentials: BearerCredentials, session: DbSession
+) -> PlatformAdmin:
+    """The signed-in platform operator. A tenant token, even an owner's, is
+    refused: it carries the tenant audience, which platform tokens never do."""
+    from app.core.tokens import decode_platform_token
+    from app.services.platform_admin import PlatformAdminService
+
+    require_platform_network(request)
+    if credentials is None or not credentials.credentials:
+        raise AuthenticationError("An access token is required to use this endpoint.")
+    claims = decode_platform_token(credentials.credentials)
+    return await PlatformAdminService(session).active_admin(claims.admin_id)
+
+
+PlatformNetwork = Depends(require_platform_network)
+RequirePlatformAdmin = Annotated[PlatformAdmin, Depends(get_platform_admin)]
 
 
 async def get_optional_principal(
@@ -448,10 +493,12 @@ __all__ = [
     "CurrentUser",
     "DbSession",
     "OptionalPrincipal",
+    "PlatformNetwork",
     "RefreshTokenRepo",
     "RequireAdmin",
     "RequireMember",
     "RequireOwner",
+    "RequirePlatformAdmin",
     "RequireViewer",
     "RoleRepo",
     "TenantRepo",

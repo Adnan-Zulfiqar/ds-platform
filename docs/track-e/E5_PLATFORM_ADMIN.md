@@ -1,6 +1,67 @@
-# Track E5 — platform admin panel: proposal (needs owner approval)
+# Track E5 — platform admin panel
 
-Status: **proposal only. Nothing built.** Blocker **B-013**.
+Status: **decided 2026-10-04 (D-015)**: option A, `PlatformTenantDirectory`
+approved, impersonation out. Built in stages:
+
+| Stage | Scope | State |
+|---|---|---|
+| E5a | Operator identity: table, password + TOTP sign-in, platform tokens, IP allow-list, audit, CLI | Done (this PR) |
+| E5b | `PlatformTenantDirectory`: workspace list + suspend / reactivate, audited | Next |
+| E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Planned |
+| E5d | Frontend `/platform` pages | Planned |
+
+## E5a as built
+
+- **Tables (migration `0046`).** `platform_admins` holds the email, the
+  Argon2id hash, the TOTP seed encrypted with the platform key, the last
+  accepted TOTP step, and `is_active`. `platform_admin_audit` is append-only
+  in the application.
+- **Sign-in** is `POST /api/v1/platform/auth/login {email, password, code}`.
+  - **Same refusal for everything.** An unknown email, a wrong password, a
+    wrong code, a reused code and a disabled account all get the same 401
+    and message.
+  - **Rate limit.** 10 attempts per 15 minutes per address.
+  - **Failed attempts** are audited in their own transaction.
+  - **TOTP** is RFC 6238: SHA-1, 30 seconds, 6 digits, ±1 step for clock
+    drift. A code works once.
+  - **Token.** A successful sign-in returns a platform token that lasts 30
+    minutes (`PLATFORM_ADMIN_TOKEN_TTL_MINUTES`) and cannot be refreshed.
+- **Separation.** The platform token uses its own audience
+  (`<api>:platform`), so tenant routes refuse it, and platform routes refuse
+  tenant tokens.
+- **Off by default.** The `PLATFORM_ADMIN_ALLOWED_CIDRS` allow-list is empty
+  by default, and then every `/api/v1/platform/*` route answers 404.
+- **Creating an operator** happens on the server only:
+  `docker exec -it droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`.
+  The script reads the password twice and prints the `otpauth://` URI
+  **once**, to add to an authenticator app.
+- **Closed-list guard.** `tests/unit/test_unscoped_repositories_are_a_closed_list.py`
+  now fails if any repository escapes tenant scoping without being on
+  CLAUDE.md §4.
+
+### Verified (E5a)
+
+- RFC 6238 Appendix B test vectors, drift and malformed codes
+  (`test_totp.py`).
+- Token separation in both directions (`test_platform_tokens.py`).
+- Integration tests (`test_platform_admin_auth.py`) on real Postgres:
+  - sign-in to `/me`;
+  - a uniform refusal for each failure, each audited;
+  - one-time codes;
+  - a disabled admin refused;
+  - an owner token refused by the platform, and a platform token refused by
+    tenant routes;
+  - 404 when off, or outside the allow-list;
+  - duplicate admin refused.
+
+### Not verified
+
+- The CLI script against the running stack. It needs the operator's own
+  password at a terminal.
+
+---
+
+*Original proposal (kept for the record):*
 
 ## Why this needs approval before any code
 

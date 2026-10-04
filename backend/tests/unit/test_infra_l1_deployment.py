@@ -433,6 +433,8 @@ class TestSecretsStayOutOfEveryArtefact:
                 "LOG_INCLUDE_REQUEST_BODY",
                 "NEXT_PUBLIC_API_URL",
                 "SHOPIFY_FRONTEND_RETURN_URL",
+                # Blank on purpose: the platform admin panel stays off (D-015).
+                "PLATFORM_ADMIN_ALLOWED_CIDRS",
                 "ALIEXPRESS_FRONTEND_RETURN_URL",
                 "EBAY_FRONTEND_RETURN_URL",
             }:
