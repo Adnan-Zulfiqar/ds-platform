@@ -57,7 +57,21 @@ export interface AutomationRuleCreatePayload {
 export const automationKeys = {
   all: ["automation"] as const,
   list: (query: ListQuery) => [...automationKeys.all, "list", query] as const,
+  runs: (query: ListQuery) => [...automationKeys.all, "runs", query] as const,
 };
+
+/** `GET /automation/runs`: the run history, which had no screen. */
+export function useAutomationRuns(query: ListQuery = {}): UseQueryResult<Page<AutomationRun>> {
+  return useQuery({
+    queryKey: automationKeys.runs(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<AutomationRun>>("/automation/runs", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
 
 export function useAutomationRules(
   query: ListQuery = {},
@@ -82,6 +96,40 @@ export function useCreateAutomationRule() {
         payload,
       );
       return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: automationKeys.all });
+    },
+  });
+}
+
+export interface AutomationRuleUpdatePayload {
+  name?: string;
+  schedule?: AutomationSchedule;
+  storeId?: string | null;
+  config?: Record<string, unknown>;
+  isActive?: boolean;
+}
+
+/** `PATCH /automation/rules/{id}`: the endpoint existed without a UI. */
+export function useUpdateAutomationRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: AutomationRuleUpdatePayload & { id: string }) => {
+      const { data } = await apiClient.patch<AutomationRule>(`/automation/rules/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: automationKeys.all });
+    },
+  });
+}
+
+export function useDeleteAutomationRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/automation/rules/${id}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: automationKeys.all });

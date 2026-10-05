@@ -36,11 +36,55 @@ export interface InventorySyncRun {
   createdAt: string;
 }
 
+export interface InventoryChange {
+  id: string;
+  syncRunId: string | null;
+  productId: string;
+  variantId: string | null;
+  storeId: string | null;
+  previousQuantity: number;
+  newQuantity: number;
+  reason: string;
+  note: string | null;
+  createdAt: string;
+}
+
 export const inventoryKeys = {
   all: ["inventory"] as const,
   list: (query: ListQuery) => [...inventoryKeys.all, "list", query] as const,
-  runs: () => [...inventoryKeys.all, "runs"] as const,
+  runs: (query: ListQuery) => [...inventoryKeys.all, "runs", query] as const,
+  changes: (query: ListQuery) => [...inventoryKeys.all, "changes", query] as const,
 };
+
+/** `GET /inventory/sync-runs`: did the sync run, and what did it find. */
+export function useInventorySyncRuns(
+  query: ListQuery = {},
+): UseQueryResult<Page<InventorySyncRun>> {
+  return useQuery({
+    queryKey: inventoryKeys.runs(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<InventorySyncRun>>("/inventory/sync-runs", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
+
+/** `GET /inventory/changes`: every quantity movement, newest first. */
+export function useInventoryChanges(
+  query: ListQuery = {},
+): UseQueryResult<Page<InventoryChange>> {
+  return useQuery({
+    queryKey: inventoryKeys.changes(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<InventoryChange>>("/inventory/changes", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
 
 export function useInventory(
   query: ListQuery = {},
