@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added - edit, pause and delete for automation and pricing rules
+
+- **Rules were create-only in the UI** although the API has had `PATCH`
+  and `DELETE` since Phase 6. Each row on Automation and Pricing now has
+  Edit (in place), Pause / Resume and Delete.
+- **Delete is two clicks**, no native dialog: a misclick disarms itself
+  after a few seconds.
+- Editable fields follow what the API accepts for an update: name and
+  schedule for an automation rule; name, markup percent and the two price
+  guards for a pricing rule. An emptied guard is sent as `null` to clear it.
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,
