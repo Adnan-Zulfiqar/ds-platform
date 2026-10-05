@@ -28,13 +28,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import clear_context, set_tenant_id
 from app.core.logging import get_logger
 from app.database.session import transaction
 from app.integrations.aliexpress.exceptions import AliExpressError
-from app.models.product import Product, ProductStatus
+from app.models.product import Product, ProductStatus, ProductVariant
 from app.services.product_import import ProductImportService
+from app.tasks.integrations import channels
 from app.workers.base import BaseTask
 from app.workers.celery_app import celery_app
 
@@ -75,13 +77,46 @@ async def _sync_one(product_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
                 logger.info("product_sync_skipped", product_id=str(product_id))
                 return False
 
+            before = await price_stock_snapshot(session, product_id)
             await service.import_product(
                 external_id=product.external_id,
                 ship_to_country=product.import_ship_to_country or product.ship_to_country,
             )
-            return True
+            after = await price_stock_snapshot(session, product_id)
+        # Committed. Only a real movement is pushed: the sweep refreshes every
+        # stale product, and a push per unchanged product would be an
+        # outbound call per listing every twelve hours for nothing.
+        if after != before:
+            channels.enqueue_price_quantity(tenant_id, [product_id])
+        return True
     finally:
         clear_context()
+
+
+async def price_stock_snapshot(
+    session: AsyncSession, product_id: uuid.UUID
+) -> tuple[tuple[Any, ...], ...]:
+    """What a channel would receive for this product: the product's own
+    price and stock, then each live variant's. Two indexed reads."""
+    product = (
+        await session.execute(
+            sa.select(Product.sell_price, Product.stock_quantity).where(Product.id == product_id)
+        )
+    ).one_or_none()
+    variants = (
+        await session.execute(
+            sa.select(
+                ProductVariant.external_variant_id,
+                ProductVariant.sell_price,
+                ProductVariant.list_price,
+                ProductVariant.stock_quantity,
+                ProductVariant.is_enabled,
+            )
+            .where(ProductVariant.product_id == product_id, ProductVariant.deleted_at.is_(None))
+            .order_by(ProductVariant.external_variant_id)
+        )
+    ).all()
+    return (tuple(product) if product else (), *(tuple(row) for row in variants))
 
 
 @celery_app.task(

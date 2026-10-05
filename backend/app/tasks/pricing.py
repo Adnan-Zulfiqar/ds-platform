@@ -35,6 +35,7 @@ from app.services.rule_application import (
     RuleApplicationService,
     stale_running_predicate,
 )
+from app.tasks.integrations import channels
 from app.workers.base import BaseTask, enqueue
 from app.workers.celery_app import celery_app
 
@@ -107,7 +108,11 @@ async def _recalculate(tenant_id: uuid.UUID) -> int:
     try:
         async with transaction() as session:
             changes = await PricingEngine(session).apply(PricingApplyRequest())
-            return len(changes)
+            changed = [change.product_id for change in changes]
+        # Committed: the channel pushes read the new prices. The manual
+        # endpoint already did this; the scheduled run silently did not.
+        channels.enqueue_price_quantity(tenant_id, changed)
+        return len(changes)
     finally:
         clear_context()
 
