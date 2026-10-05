@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Changed - the draft editor no longer calls the API directly
+
+- The editor's conflict reads and its publish call went through
+  `apiClient` inside the component, against the rule that `services/`
+  owns every endpoint. They now use `fetchDraft` and a new `publishDraft`
+  in `services/drafts.ts`. The conflict read still bypasses the query
+  cache on purpose; that reason is now on the service function. No
+  behaviour change.
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,
