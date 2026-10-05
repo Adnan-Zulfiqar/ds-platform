@@ -57,7 +57,21 @@ export interface AutomationRuleCreatePayload {
 export const automationKeys = {
   all: ["automation"] as const,
   list: (query: ListQuery) => [...automationKeys.all, "list", query] as const,
+  runs: (query: ListQuery) => [...automationKeys.all, "runs", query] as const,
 };
+
+/** `GET /automation/runs`: the run history, which had no screen. */
+export function useAutomationRuns(query: ListQuery = {}): UseQueryResult<Page<AutomationRun>> {
+  return useQuery({
+    queryKey: automationKeys.runs(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<AutomationRun>>("/automation/runs", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
 
 export function useAutomationRules(
   query: ListQuery = {},

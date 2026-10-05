@@ -10,6 +10,16 @@ production release.
 
 ## [Unreleased]
 
+### Added - history on the Pricing, Inventory and Automation pages
+
+- **Pricing** lists the last 20 price changes the rules applied (the page
+  always said "every change is audited" and never showed the audit).
+- **Inventory** lists the last 10 sync runs with their outcome, and the
+  last 20 stock movements.
+- **Automation** lists the last 20 runs across every rule, by rule name.
+- All three API lists existed since Phase 6 without a screen. Read-only,
+  no backend change.
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,

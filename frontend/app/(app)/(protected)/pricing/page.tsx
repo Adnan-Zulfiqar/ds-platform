@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { PriceChangeLog } from "@/components/pricing/price-change-log";
 import { PricingActions } from "@/components/pricing/pricing-actions";
 import { PricingRulesPanel } from "@/components/pricing/pricing-rules-panel";
 import { PageHeader } from "@/components/ui/page-header";
@@ -15,6 +16,7 @@ export default function PricingPage() {
         actions={<PricingActions />}
       />
       <PricingRulesPanel />
+      <PriceChangeLog />
     </div>
   );
 }
