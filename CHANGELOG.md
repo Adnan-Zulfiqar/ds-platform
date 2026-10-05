@@ -19,6 +19,17 @@ production release.
 - `LoggingMailer` never logs an address or a body; only the domain, the
   subject and the body length.
 
+### Fixed - the Profile link went to a 404
+
+- **Settings -> Profile now exists.** The user menu linked to
+  `/settings/profile`, which had no page. The new page shows the signed-in
+  user's name, email and verification state, workspace and role, and offers
+  two actions the API already had without a UI: resend the verification
+  email, and sign out of every device. Password changes link to the
+  reset-by-code flow; the API has no edit-name or change-password endpoint,
+  so neither is offered.
+- **Settings index.** The Profile card is live instead of "Coming soon".
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,

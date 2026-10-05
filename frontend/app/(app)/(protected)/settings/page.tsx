@@ -64,7 +64,7 @@ const SECTIONS: readonly SettingsSection[] = [
     label: "Profile",
     description: "Your name, email address, and password.",
     icon: User,
-    available: false,
+    available: true,
   },
   {
     href: "/settings/team",
