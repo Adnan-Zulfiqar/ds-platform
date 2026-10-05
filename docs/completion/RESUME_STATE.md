@@ -2,11 +2,11 @@
 
 Single continuation point after an interruption. Overwritten, not appended.
 
-**Updated:** 2026-10-04 (end of session) — E5, E6 and the CSP image fix merged; owner items open.
+**Updated:** 2026-10-05 (end of session) — gap fixes from the 2026-10-04 analysis merged; owner items open.
 
 | Item | Value |
 |---|---|
-| Candidate | `develop` @ `21c86a7abb3a7ade5f43f54e4e06649078c44d9a` (PR #75 merge; every PR #69–#76 merged on 10/10 CI) |
+| Candidate | `develop` @ `901007c8eb90171bf40a276dd995201fd3f9f68b` (every PR #69–#85 merged on 10/10 CI; #84 merged) |
 | Independent verdict | Cursor on `e63508e`: implementation ACCEPTED WITH NON-BLOCKING NOTES; release NOT READY |
 | `main` | `3ce66d4` — untouched |
 | Untracked files to preserve | `C:\Projects\ds-platform\AGENTS.md`; root `.env` (local-only key, D-004); `backend/.env` |
@@ -43,6 +43,7 @@ Single continuation point after an interruption. Overwritten, not appended.
 | E5 platform admin | All merged: E5a #69, E5b #70, E5c #71, E5d #72 (`docs/track-e/E5_PLATFORM_ADMIN.md`). Off by default; needs `PLATFORM_ADMIN_ALLOWED_CIDRS` and an operator account |
 | E6 billing | All merged: E6a #73, E6b #74, E6c #75 (`docs/track-e/E6_BILLING.md`). Sandbox keys in the root `.env`. Owner: confirm trial limits (450 listings, no AI), update Terms §12/§14, roll the webhook secret, run one test checkout |
 | CSP image fix | #76 merged. Supplier image hosts allowed in `img-src`; the owner's `droppilot-frontend-1` was recreated on the new image (old image kept as `droppilot-frontend:pre-csp-fix`) |
+| Gap fixes (2026-10-05) | #78 Profile page (user-menu 404), #79 edit/pause/delete rules, #80 history screens, #81 scheduled sweeps reach every channel + `shipment.refresh` crash, #82 editor calls via `services/`, #83 Shopify privacy webhooks, #85 billing sync race, #84 inventory-sync and mailer tests. Each gated locally and merged on 10/10 CI. Owner: set the three compliance webhook URLs in the Partner Dashboard (`docs/PHASE_8_1_LIVE_DEPLOY.md` §5) |
 | E7 WooCommerce | All merged: W1 #60, W2 #61, W3 #62, W4a #63, W5 #64, W4b webhooks #65. The periodic sweep needs approval (**B-016**). Etsy/TikTok: **B-015** |
 
 Every remaining Track E item is an owner decision or an owner registration.
@@ -59,6 +60,22 @@ changes. The running backend therefore has none of E5, E6 or migrations
 recreate backend/worker/beat on fresh images, then
 `docker compose -p droppilot exec backend alembic upgrade head`.
 Only the frontend container is on `develop` (#76).
+
+## Remaining gaps from the 2026-10-04 analysis (not built)
+
+- Automatic supplier ordering and supplier-tracking sync back to the store
+  (needs a live AliExpress order contract, B-004).
+- Returns, refunds and cancellations; a second supplier.
+- Profile editing (name, password change) needs API endpoints that do not
+  exist; Google link/unlink UI; Customers and Suppliers pages.
+- `/health` returns `version` and `environment` unauthenticated (minor).
+- Unused frontend service functions (candidates for removal after a
+  closer check); thin e2e coverage on inventory/pricing/automation
+  workflows beyond the new specs.
+- No production deployment, backups, Sentry/metrics/alerting (owner
+  items in `docs/operations/`).
+- `shipment.refresh` and `orders.refresh_status` both run every 6 h and
+  now do the same work twice.
 
 ## Next safe action
 
