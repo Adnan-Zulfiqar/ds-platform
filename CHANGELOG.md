@@ -10,6 +10,23 @@ production release.
 
 ## [Unreleased]
 
+### Added - Shopify's mandatory privacy webhooks
+
+- **`customers/redact`, `shop/redact` and `customers/data_request`** are
+  now handled on the existing HMAC-verified Shopify receiver. Shopify
+  requires all three for app approval; until now they were acknowledged by
+  the generic handler and did nothing.
+- **Redaction is exact.** Shopify names the order ids; DropPilot blanks the
+  buyer's name, phone and address on precisely those orders, in the one
+  workspace and store the shop belongs to. `shop/redact` blanks every
+  order of that store and still works after uninstall has removed the
+  connection. The country code stays.
+- **A data request is referred.** The merchant is the controller, so the
+  workspace gets an in-app notification carrying the Shopify customer and
+  order ids (never the email or phone) and replies through Shopify.
+- **Owner step:** the compliance webhook URL is set in the Partner
+  Dashboard, not subscribed by the app. See `docs/PHASE_8_1_LIVE_DEPLOY.md`.
+
 ### Changed - the draft editor no longer calls the API directly
 
 - The editor's conflict reads and its publish call went through
