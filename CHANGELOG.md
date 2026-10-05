@@ -10,6 +10,15 @@ production release.
 
 ## [Unreleased]
 
+### Tests - inventory sync and the mailer
+
+- `InventorySyncService` had no direct test: a stock move is recorded once
+  and queued for the channels, a no-op refresh records nothing, one failing
+  product does not fail the run, an outright failure is marked and
+  reported, and two syncs cannot overlap.
+- `LoggingMailer` never logs an address or a body; only the domain, the
+  subject and the body length.
+
 ### Added - Shopify's mandatory privacy webhooks
 
 - **`customers/redact`, `shop/redact` and `customers/data_request`** are
