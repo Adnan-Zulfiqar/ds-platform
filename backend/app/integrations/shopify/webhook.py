@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.core.redis import RedisPurpose, get_redis
 from app.database.session import transaction
 from app.integrations.shopify.auth import verify_webhook_hmac
+from app.integrations.shopify.compliance import COMPLIANCE_TOPICS, ShopifyComplianceService
 from app.integrations.shopify.schemas import ShopifyWebhookAckResponse
 from app.integrations.shopify.sync import ShopifySyncService
 
@@ -39,6 +40,9 @@ _MUTATING_TOPICS = frozenset(
         "app-uninstalled",
         "app/uninstalled",
     }
+    # The privacy topics write (redaction) or notify (data request), so a
+    # replay with no dedup store must fail closed like any other mutation.
+    | COMPLIANCE_TOPICS
 )
 
 
@@ -104,17 +108,32 @@ async def receive_shopify_webhook(request: Request, *, topic: str) -> ShopifyWeb
             from app.repositories.shopify import ShopifyMaintenanceRepository
 
             maint = ShopifyMaintenanceRepository(session)
-            match = await maint.get_connected_by_shop_domain(shop_domain)
-            if match is None:
-                logger.warning("shopify_webhook_unknown_shop", shop_domain=shop_domain)
-                return ShopifyWebhookAckResponse()
+            match = None
+            if topic in COMPLIANCE_TOPICS:
+                # ``shop/redact`` comes 48 hours after uninstall, when the
+                # connection row is gone. The store row keeps the domain.
+                located = await maint.store_for_shop_domain(shop_domain)
+                if located is None:
+                    logger.warning("shopify_webhook_unknown_shop", shop_domain=shop_domain)
+                    return ShopifyWebhookAckResponse()
+                tenant_id, store_id = located
+            else:
+                match = await maint.get_connected_by_shop_domain(shop_domain)
+                if match is None:
+                    logger.warning("shopify_webhook_unknown_shop", shop_domain=shop_domain)
+                    return ShopifyWebhookAckResponse()
+                tenant_id, store_id = match.tenant_id, match.store_id
 
-            set_tenant_id(match.tenant_id)
+            set_tenant_id(tenant_id)
             try:
                 if topic in {"orders-create", "orders-updated", "orders/create", "orders/updated"}:
                     sync = ShopifySyncService(session)
-                    await sync.upsert_order_from_shopify(store_id=match.store_id, raw=payload)
-                elif topic in {"app-uninstalled", "app/uninstalled"}:
+                    await sync.upsert_order_from_shopify(store_id=store_id, raw=payload)
+                elif topic in COMPLIANCE_TOPICS:
+                    await ShopifyComplianceService(session).handle(
+                        topic, payload, store_id=store_id
+                    )
+                elif match is not None and topic in {"app-uninstalled", "app/uninstalled"}:
                     # Token is dead; release the global shop_domain claim so
                     # another workspace (or reconnect) is not blocked.
                     from app.integrations.shopify.service import ShopifyService

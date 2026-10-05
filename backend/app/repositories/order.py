@@ -9,9 +9,10 @@ which is strictly worse than leaking a product title.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order import (
@@ -62,6 +63,42 @@ class OrderRepository(TenantScopedRepository[Order]):
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def redact_buyer_fields(
+        self, *, store_id: uuid.UUID, external_ids: Sequence[str] | None
+    ) -> int:
+        """Blank the buyer's personal details on this tenant's orders for one
+        store: every order when ``external_ids`` is ``None`` (``shop/redact``),
+        otherwise exactly the listed marketplace order ids
+        (``customers/redact``). The country stays: it is not personal and the
+        merchant's reporting uses it. Tenant predicate included, as in every
+        write here.
+        """
+        if external_ids is not None and not external_ids:
+            return 0
+        statement = (
+            update(Order)
+            .where(
+                Order.tenant_id == await self._current_tenant_id(),
+                Order.store_id == store_id,
+                Order.deleted_at.is_(None),
+            )
+            .values(
+                buyer_name=None,
+                marketplace_buyer_username=None,
+                recipient_name=None,
+                recipient_phone=None,
+                address_line1=None,
+                address_line2=None,
+                city=None,
+                province=None,
+                postal_code=None,
+            )
+        )
+        if external_ids is not None:
+            statement = statement.where(Order.external_id.in_(list(external_ids)))
+        result = await self.session.execute(statement)
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def list_orders(
         self,

@@ -46,6 +46,35 @@ Until then:
 * Never approximate. `test_neither_scope_touches_buyer_fields` exists to keep
   that true.
 
+### The Shopify exception: redaction by exact order id
+
+Shopify's mandatory privacy webhooks are different in kind from a request
+that arrives by email, and are handled automatically
+(`app/integrations/shopify/compliance.py`, since 2026-10-05):
+
+* **`customers/redact`** names the Shopify order ids to redact. DropPilot
+  stores that id as `orders.external_id`, so the match is exact and limited
+  to the one workspace and store the shop belongs to. The buyer's name,
+  phone and address lines are blanked on those orders; the country code is
+  kept. With no order ids listed, nothing is touched.
+* **`shop/redact`** (48 hours after uninstall) blanks the buyer details on
+  every order of that store. The connection and token were already deleted
+  on uninstall.
+* **`customers/data_request`** is **referred**: the workspace receives an
+  in-app notification with the customer and order ids, and the merchant,
+  as controller, answers the customer through Shopify. The notification
+  never carries the customer's email or phone.
+
+Every delivery is HMAC-verified and replay-protected like any other
+Shopify webhook, and each outcome is logged with ids and counts. There is
+no separate ledger table: the notification row (for a data request) and the
+log line are the record. If a durable receipt per redaction is required for
+an audit, that is a schema change to propose, not something to improvise.
+
+`tests/integration/test_shopify_gdpr_webhooks.py` proves the exact-id
+scope, including that another workspace's order with the same Shopify id
+is untouched.
+
 ---
 
 ## 1. Verify who is asking
