@@ -18,6 +18,32 @@ production release.
   the in-flight read before writing its result. Found as a flaky e2e in
   CI (`billing.spec.ts`), but it was a real race.
 
+### Fixed - scheduled tasks that never reached the channels
+
+- **`shipment.refresh` failed on every run** with `TypeError: multiple
+  values for argument 'limit'`: it passed its own `self` to a bound task.
+  It now calls the order refresh correctly, with the same limit.
+- **Shopify never received automatic price or stock pushes.** The Shopify
+  push tasks existed since Phase 8 but nothing enqueued them. A new
+  `shopify.push_price_quantity` task joins the channel fan-out, so every
+  trigger that reached eBay and WooCommerce now reaches Shopify too.
+- **The scheduled inventory sweep pushed only to eBay.** It now uses the
+  shared fan-out (eBay, WooCommerce, Shopify).
+- **The scheduled pricing recalculation pushed to nothing.** The manual
+  endpoint already pushed; the 12-hourly run now does the same.
+- **The supplier refresh pushed to nothing.** It now pushes a product whose
+  price or stock moved, and only then: an unchanged product costs no call.
+
+### Added - history on the Pricing, Inventory and Automation pages
+
+- **Pricing** lists the last 20 price changes the rules applied (the page
+  always said "every change is audited" and never showed the audit).
+- **Inventory** lists the last 10 sync runs with their outcome, and the
+  last 20 stock movements.
+- **Automation** lists the last 20 runs across every rule, by rule name.
+- All three API lists existed since Phase 6 without a screen. Read-only,
+  no backend change.
+
 ### Added - edit, pause and delete for automation and pricing rules
 
 - **Rules were create-only in the UI** although the API has had `PATCH`
