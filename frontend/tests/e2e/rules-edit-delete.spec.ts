@@ -49,8 +49,19 @@ const PRICING_RULE = {
   updatedAt: "2026-10-01T00:00:00Z",
 };
 
+/** The real `Page` envelope: `items` plus `meta`. */
 function page1(items: unknown[]) {
-  return { items, total: items.length, page: 1, size: 50, pages: 1 };
+  return {
+    items,
+    meta: {
+      page: 1,
+      size: 50,
+      totalItems: items.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrevious: false,
+    },
+  };
 }
 
 /** One in-memory list per test, mutated by the PATCH and DELETE handlers. */
