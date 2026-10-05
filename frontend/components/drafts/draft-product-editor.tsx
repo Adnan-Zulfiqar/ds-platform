@@ -47,9 +47,11 @@ import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatDateTime, formatMoney } from "@/lib/utils";
-import { apiClient, ApiError } from "@/lib/api-client";
+import { ApiError } from "@/lib/api-client";
 import {
   draftKeys,
+  fetchDraft,
+  publishDraft,
   useDraft,
   useDraftListings,
   useDraftSeoScore,
@@ -620,9 +622,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     setConflictPhase("detected");
 
     try {
-      const { data: latest } = await apiClient.get<ProductDetail>(
-        `/drafts/${productId}`,
-      );
+      const latest = await fetchDraft(productId);
       setConflictServerSnapshot(latest);
     } catch {
       // The banner and both recovery actions still work without it --
@@ -691,9 +691,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
     let server = conflictServerSnapshot;
     if (!server) {
       try {
-        const { data: latest } = await apiClient.get<ProductDetail>(
-          `/drafts/${productId}`,
-        );
+        const latest = await fetchDraft(productId);
         setConflictServerSnapshot(latest);
         server = latest;
       } catch (err) {
@@ -886,17 +884,14 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         return;
       }
 
-      const { data: result } = await apiClient.post<ShopifyPublishResult>(
-        `/integrations/${publishChannel}/publish`,
-        {
-          productId,
-          storeId: publishStoreId,
-          expectedUpdatedAt,
-          ...(options.replaceAiContent && publishChannel === "shopify"
-            ? { replaceAiContent: true }
-            : {}),
-        },
-      );
+      const result = await publishDraft(publishChannel, {
+        productId,
+        storeId: publishStoreId,
+        expectedUpdatedAt,
+        ...(options.replaceAiContent && publishChannel === "shopify"
+          ? { replaceAiContent: true }
+          : {}),
+      });
       setPublishResult(result);
       setPublishResultAt(Date.now());
       const baseMessage = result.message || "Publish completed.";

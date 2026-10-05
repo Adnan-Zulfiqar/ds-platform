@@ -78,11 +78,20 @@ export function useOpenBillingPortal() {
   });
 }
 
+/**
+ * A mutation that returns the fresh status becomes the cached status. The
+ * in-flight GET is cancelled first: on return from Checkout the page's own
+ * status read and the sync race, and a stale read landing second would
+ * overwrite the paid state with the trial one (seen as a flaky e2e).
+ */
 function useStatusMutation<T>(fn: (input: T) => Promise<BillingStatus>) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: fn,
-    onSuccess: (status) => queryClient.setQueryData(billingKeys.all, status),
+    onSuccess: async (status) => {
+      await queryClient.cancelQueries({ queryKey: billingKeys.all });
+      queryClient.setQueryData(billingKeys.all, status);
+    },
   });
 }
 
