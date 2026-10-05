@@ -20,6 +20,28 @@ production release.
 - All three API lists existed since Phase 6 without a screen. Read-only,
   no backend change.
 
+### Added - edit, pause and delete for automation and pricing rules
+
+- **Rules were create-only in the UI** although the API has had `PATCH`
+  and `DELETE` since Phase 6. Each row on Automation and Pricing now has
+  Edit (in place), Pause / Resume and Delete.
+- **Delete is two clicks**, no native dialog: a misclick disarms itself
+  after a few seconds.
+- Editable fields follow what the API accepts for an update: name and
+  schedule for an automation rule; name, markup percent and the two price
+  guards for a pricing rule. An emptied guard is sent as `null` to clear it.
+
+### Fixed - the Profile link went to a 404
+
+- **Settings -> Profile now exists.** The user menu linked to
+  `/settings/profile`, which had no page. The new page shows the signed-in
+  user's name, email and verification state, workspace and role, and offers
+  two actions the API already had without a UI: resend the verification
+  email, and sign out of every device. Password changes link to the
+  reset-by-code flow; the API has no edit-name or change-password endpoint,
+  so neither is offered.
+- **Settings index.** The Profile card is live instead of "Coming soon".
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,

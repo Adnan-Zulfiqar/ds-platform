@@ -121,6 +121,42 @@ export function useCreatePricingRule() {
   });
 }
 
+export interface PricingRuleUpdatePayload {
+  name?: string;
+  priority?: number;
+  markupPercent?: string | null;
+  markupFixed?: string | null;
+  minProfit?: string | null;
+  maxPrice?: string | null;
+  isActive?: boolean;
+}
+
+/** `PATCH /pricing/rules/{id}`: the endpoint existed without a UI. */
+export function useUpdatePricingRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: PricingRuleUpdatePayload & { id: string }) => {
+      const { data } = await apiClient.patch<PricingRule>(`/pricing/rules/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pricingKeys.all });
+    },
+  });
+}
+
+export function useDeletePricingRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/pricing/rules/${id}`);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pricingKeys.all });
+    },
+  });
+}
+
 export function usePreviewPricing() {
   return useMutation({
     mutationFn: async (payload: { storeId?: string; limit?: number } = {}) => {

@@ -103,6 +103,40 @@ export function useCreateAutomationRule() {
   });
 }
 
+export interface AutomationRuleUpdatePayload {
+  name?: string;
+  schedule?: AutomationSchedule;
+  storeId?: string | null;
+  config?: Record<string, unknown>;
+  isActive?: boolean;
+}
+
+/** `PATCH /automation/rules/{id}`: the endpoint existed without a UI. */
+export function useUpdateAutomationRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: AutomationRuleUpdatePayload & { id: string }) => {
+      const { data } = await apiClient.patch<AutomationRule>(`/automation/rules/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: automationKeys.all });
+    },
+  });
+}
+
+export function useDeleteAutomationRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/automation/rules/${id}`);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: automationKeys.all });
+    },
+  });
+}
+
 export function useRunAutomation() {
   const queryClient = useQueryClient();
   return useMutation({
