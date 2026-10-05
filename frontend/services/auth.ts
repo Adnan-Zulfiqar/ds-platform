@@ -61,6 +61,23 @@ export async function logout(): Promise<void> {
 }
 
 /**
+ * Revoke every session of the signed-in user, on every device. Unlike
+ * `logout`, a failure is surfaced: the user asked for a security action and
+ * must know if it did not happen. The caller follows it with `logout()` to
+ * clear this tab's own state.
+ */
+export async function logoutAll(): Promise<string> {
+  const { data } = await apiClient.post<{ message: string }>("/auth/logout-all", {});
+  return data.message;
+}
+
+/** Ask the server to (re)send the email verification link. */
+export async function requestEmailVerification(): Promise<string> {
+  const { data } = await apiClient.post<{ message: string }>("/auth/verify-email/request", {});
+  return data.message;
+}
+
+/**
  * Exchange the httpOnly refresh cookie for a new access token.
  *
  * Called once when the app boots, because the access token lives only in memory
