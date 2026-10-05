@@ -231,6 +231,22 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
         )
         return list(result.scalars().all())
 
+    async def list_for_product_on_platform(
+        self, product_id: uuid.UUID, platform: StorePlatform
+    ) -> Sequence[StoreListing]:
+        """The product's live listings on stores of one platform. Removed
+        listings are skipped: pushing to them would re-create the product."""
+        result = await self.session.execute(
+            self._base_query()
+            .join(Store, Store.id == StoreListing.store_id)
+            .where(
+                StoreListing.product_id == product_id,
+                Store.platform == platform,
+                StoreListing.status != ListingSyncStatus.REMOVED,
+            )
+        )
+        return list(result.scalars().all())
+
 
 class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
     """Unscoped sweep / webhook lookup — documented unscoped repository.

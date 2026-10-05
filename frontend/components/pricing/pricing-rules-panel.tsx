@@ -18,11 +18,29 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ConfirmDeleteButton } from "@/components/ui/confirm-delete-button";
 import {
   useCreatePricingRule,
+  useDeletePricingRule,
   usePricingRules,
+  useUpdatePricingRule,
+  type PricingRule,
   type PricingStrategy,
 } from "@/services/pricing";
+
+interface RuleDraft {
+  id: string;
+  name: string;
+  markupPercent: string;
+  minProfit: string;
+  maxPrice: string;
+}
+
+/** Empty input means "clear the guard", which the API spells `null`. */
+function money(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
 
 export function PricingRulesPanel() {
   const { data, isLoading, isError, refetch } = usePricingRules({
@@ -30,6 +48,10 @@ export function PricingRulesPanel() {
     size: 50,
   });
   const create = useCreatePricingRule();
+  const update = useUpdatePricingRule();
+  const remove = useDeletePricingRule();
+  const [draft, setDraft] = useState<RuleDraft | null>(null);
+  const [rowStatus, setRowStatus] = useState<string | null>(null);
   const [name, setName] = useState("Default markup");
   const [strategy, setStrategy] = useState<PricingStrategy>("percentage_markup");
   const [markupPercent, setMarkupPercent] = useState("30");
@@ -143,46 +165,191 @@ export function PricingRulesPanel() {
           description="Create a global markup rule, preview, then apply."
         />
       ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Scope</TableHead>
-                <TableHead>Strategy</TableHead>
-                <TableHead>Markup</TableHead>
-                <TableHead>Guards</TableHead>
-                <TableHead>Active</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rules.map((rule) => (
-                <TableRow key={rule.id}>
-                  <TableCell className="font-medium">{rule.name}</TableCell>
-                  <TableCell>{rule.scope}</TableCell>
-                  <TableCell>{rule.strategy}</TableCell>
-                  <TableCell>
-                    {rule.markupPercent
-                      ? `${rule.markupPercent}%`
-                      : rule.markupFixed ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {[
-                      rule.minProfit ? `min profit ${rule.minProfit}` : null,
-                      rule.maxPrice ? `max ${rule.maxPrice}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={rule.isActive ? "success" : "secondary"}>
-                      {rule.isActive ? "active" : "inactive"}
-                    </Badge>
-                  </TableCell>
+        <div className="space-y-2">
+          {rowStatus && (
+            <p className="text-sm text-muted-foreground" role="status">
+              {rowStatus}
+            </p>
+          )}
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Strategy</TableHead>
+                  <TableHead>Markup</TableHead>
+                  <TableHead>Guards</TableHead>
+                  <TableHead>Active</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rules.map((rule) => {
+                  const editing = draft?.id === rule.id;
+                  const busy = update.isPending || remove.isPending;
+                  const fail = (err: unknown, fallback: string) =>
+                    setRowStatus(err instanceof Error ? err.message : fallback);
+                  const toggle = (row: PricingRule) =>
+                    update.mutate(
+                      { id: row.id, isActive: !row.isActive },
+                      { onError: (err) => fail(err, "Update failed.") },
+                    );
+                  return (
+                    <TableRow key={rule.id} data-testid="pricing-rule-row">
+                      <TableCell className="font-medium">
+                        {editing ? (
+                          <Input
+                            aria-label={`Name of ${rule.name}`}
+                            value={draft.name}
+                            onChange={(event) =>
+                              setDraft({ ...draft, name: event.target.value })
+                            }
+                          />
+                        ) : (
+                          rule.name
+                        )}
+                      </TableCell>
+                      <TableCell>{rule.scope}</TableCell>
+                      <TableCell>{rule.strategy}</TableCell>
+                      <TableCell>
+                        {editing && rule.strategy === "percentage_markup" ? (
+                          <Input
+                            aria-label={`Markup percent of ${rule.name}`}
+                            inputMode="decimal"
+                            value={draft.markupPercent}
+                            onChange={(event) =>
+                              setDraft({ ...draft, markupPercent: event.target.value })
+                            }
+                          />
+                        ) : rule.markupPercent ? (
+                          `${rule.markupPercent}%`
+                        ) : (
+                          (rule.markupFixed ?? "—")
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {editing ? (
+                          <div className="flex gap-1">
+                            <Input
+                              aria-label={`Min profit of ${rule.name}`}
+                              placeholder="min profit"
+                              inputMode="decimal"
+                              value={draft.minProfit}
+                              onChange={(event) =>
+                                setDraft({ ...draft, minProfit: event.target.value })
+                              }
+                            />
+                            <Input
+                              aria-label={`Max price of ${rule.name}`}
+                              placeholder="max price"
+                              inputMode="decimal"
+                              value={draft.maxPrice}
+                              onChange={(event) =>
+                                setDraft({ ...draft, maxPrice: event.target.value })
+                              }
+                            />
+                          </div>
+                        ) : (
+                          [
+                            rule.minProfit ? `min profit ${rule.minProfit}` : null,
+                            rule.maxPrice ? `max ${rule.maxPrice}` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "—"
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={rule.isActive ? "success" : "secondary"}>
+                          {rule.isActive ? "active" : "inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="space-x-1 whitespace-nowrap text-right">
+                        {editing ? (
+                          <>
+                            <Button
+                              size="sm"
+                              disabled={busy || draft.name.trim() === ""}
+                              onClick={() =>
+                                update.mutate(
+                                  {
+                                    id: draft.id,
+                                    name: draft.name,
+                                    markupPercent:
+                                      rule.strategy === "percentage_markup"
+                                        ? money(draft.markupPercent)
+                                        : undefined,
+                                    minProfit: money(draft.minProfit),
+                                    maxPrice: money(draft.maxPrice),
+                                  },
+                                  {
+                                    onSuccess: () => {
+                                      setDraft(null);
+                                      setRowStatus("Rule updated.");
+                                    },
+                                    onError: (err) => fail(err, "Update failed."),
+                                  },
+                                )
+                              }
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy}
+                              onClick={() => setDraft(null)}
+                            >
+                              Cancel
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy}
+                              aria-label={`Edit ${rule.name}`}
+                              onClick={() =>
+                                setDraft({
+                                  id: rule.id,
+                                  name: rule.name,
+                                  markupPercent: rule.markupPercent ?? "",
+                                  minProfit: rule.minProfit ?? "",
+                                  maxPrice: rule.maxPrice ?? "",
+                                })
+                              }
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={busy}
+                              aria-label={`${rule.isActive ? "Pause" : "Resume"} ${rule.name}`}
+                              onClick={() => toggle(rule)}
+                            >
+                              {rule.isActive ? "Pause" : "Resume"}
+                            </Button>
+                            <ConfirmDeleteButton
+                              label={rule.name}
+                              disabled={busy}
+                              onConfirm={() =>
+                                remove.mutate(rule.id, {
+                                  onSuccess: () => setRowStatus(`Deleted "${rule.name}".`),
+                                  onError: (err) => fail(err, "Delete failed."),
+                                })
+                              }
+                            />
+                          </>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
     </div>
