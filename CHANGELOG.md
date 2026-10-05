@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - the billing page could show the trial after a paid checkout
+
+- On return from Stripe Checkout the page reads the status and syncs the
+  subscription at the same time. If the plain read landed second it
+  overwrote the paid state with the stale trial one. The sync now cancels
+  the in-flight read before writing its result. Found as a flaky e2e in
+  CI (`billing.spec.ts`), but it was a real race.
+
 ### Fixed - scheduled tasks that never reached the channels
 
 - **`shipment.refresh` failed on every run** with `TypeError: multiple
