@@ -279,3 +279,36 @@ Owner order D-012: E1 → E7, gates → PR → CI → merge for each item.
 - **Not verified live:** a Stripe checkout; the billing gate through each
   marketplace's publish endpoint; the trial-claim hooks against real
   stores; the E5 console against a real operator account.
+
+## Gap fixes from the analysis — 2026-10-05
+
+Owner instruction: "analyse the whole application and fix the errors and
+gaps" (B-015/B-016 excluded). Each item on its own branch, gated locally,
+then merged on 10/10 CI, serially because every PR adds a CHANGELOG entry
+at the same anchor.
+
+- **#81** scheduled sweeps: `shipment.refresh` TypeError fixed; one
+  channel fan-out (eBay, WooCommerce, **Shopify**, which had push tasks
+  nothing enqueued); inventory, pricing and supplier-refresh sweeps now
+  push; supplier refresh pushes only when price or stock moved. Full gate
+  3742 passed.
+- **#83** Shopify `customers/redact`, `shop/redact`, `customers/data_request`:
+  exact order-id redaction scoped to one workspace and store, works after
+  uninstall, data requests referred to the merchant. `TrialFingerprint`-style
+  care: ids only, never contact details. Full gate 3738 passed. The
+  processing register and DSR runbook record the Shopify exception.
+- **#78** Profile page (the user menu's 404); **#79** edit/pause/delete for
+  automation and pricing rules; **#80** price-change, sync-run and
+  automation-run history; **#82** editor calls moved into `services/`
+  (CLAUDE.md rule); **#84** tests for inventory sync and the mailer.
+- **#85** a real race found by CI: on return from Checkout the stale
+  status read could overwrite the synced paid state. Fixed; billing spec
+  run 8x with no flake.
+- **Harness notes:** a PR with merge conflicts gets no CI run at all;
+  retargeting a base does not trigger CI; `"All checks passed!"` from
+  ruff matched a `grep " passed"` guard, so a targeted pre-run that found
+  no tests still let the full gate start (harmless, but the guard was
+  wrong).
+- **Not verified live:** Shopify's app-review delivery of the privacy
+  webhooks; a real automatic push to a Shopify store; the owner's running
+  backend is still on the old branch (see the owner stack note).
