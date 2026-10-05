@@ -17,6 +17,7 @@ import type {
   ProductDetail,
   ProductUpdatePayload,
   SeoScore,
+  ShopifyPublishResult,
   StoreListing,
 } from "@/types/api";
 
@@ -57,8 +58,37 @@ export function useDrafts(
   });
 }
 
-async function fetchDraft(id: string): Promise<ProductDetail> {
+/**
+ * Exported for the editor's conflict path, which must read the server's
+ * copy without touching the query cache (a cached write could disturb the
+ * draft the merchant is still editing).
+ */
+export async function fetchDraft(id: string): Promise<ProductDetail> {
   const { data } = await apiClient.get<ProductDetail>(`/drafts/${id}`);
+  return data;
+}
+
+export interface PublishDraftPayload {
+  productId: string;
+  storeId: string;
+  /** The version the merchant saw; the server refuses a stale one (UX-L2B). */
+  expectedUpdatedAt: string;
+  replaceAiContent?: boolean;
+}
+
+/**
+ * Publish a saved draft to one channel's store. A plain function, not a
+ * mutation hook: the editor sequences it after its own save and owns the
+ * result state, and nothing in the query cache describes a publish.
+ */
+export async function publishDraft(
+  channel: "shopify" | "ebay" | "woocommerce",
+  payload: PublishDraftPayload,
+): Promise<ShopifyPublishResult> {
+  const { data } = await apiClient.post<ShopifyPublishResult>(
+    `/integrations/${channel}/publish`,
+    payload,
+  );
   return data;
 }
 
