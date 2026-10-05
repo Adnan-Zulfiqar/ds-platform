@@ -19,6 +19,77 @@ production release.
 - `LoggingMailer` never logs an address or a body; only the domain, the
   subject and the body length.
 
+### Added - Shopify's mandatory privacy webhooks
+
+- **`customers/redact`, `shop/redact` and `customers/data_request`** are
+  now handled on the existing HMAC-verified Shopify receiver. Shopify
+  requires all three for app approval; until now they were acknowledged by
+  the generic handler and did nothing.
+- **Redaction is exact.** Shopify names the order ids; DropPilot blanks the
+  buyer's name, phone and address on precisely those orders, in the one
+  workspace and store the shop belongs to. `shop/redact` blanks every
+  order of that store and still works after uninstall has removed the
+  connection. The country code stays.
+- **A data request is referred.** The merchant is the controller, so the
+  workspace gets an in-app notification carrying the Shopify customer and
+  order ids (never the email or phone) and replies through Shopify.
+- **Owner step:** the compliance webhook URL is set in the Partner
+  Dashboard, not subscribed by the app. See `docs/PHASE_8_1_LIVE_DEPLOY.md`.
+
+### Changed - the draft editor no longer calls the API directly
+
+- The editor's conflict reads and its publish call went through
+  `apiClient` inside the component, against the rule that `services/`
+  owns every endpoint. They now use `fetchDraft` and a new `publishDraft`
+  in `services/drafts.ts`. The conflict read still bypasses the query
+  cache on purpose; that reason is now on the service function. No
+  behaviour change.
+
+### Fixed - the billing page could show the trial after a paid checkout
+
+- On return from Stripe Checkout the page reads the status and syncs the
+  subscription at the same time. If the plain read landed second it
+  overwrote the paid state with the stale trial one. The sync now cancels
+  the in-flight read before writing its result. Found as a flaky e2e in
+  CI (`billing.spec.ts`), but it was a real race.
+
+### Fixed - scheduled tasks that never reached the channels
+
+- **`shipment.refresh` failed on every run** with `TypeError: multiple
+  values for argument 'limit'`: it passed its own `self` to a bound task.
+  It now calls the order refresh correctly, with the same limit.
+- **Shopify never received automatic price or stock pushes.** The Shopify
+  push tasks existed since Phase 8 but nothing enqueued them. A new
+  `shopify.push_price_quantity` task joins the channel fan-out, so every
+  trigger that reached eBay and WooCommerce now reaches Shopify too.
+- **The scheduled inventory sweep pushed only to eBay.** It now uses the
+  shared fan-out (eBay, WooCommerce, Shopify).
+- **The scheduled pricing recalculation pushed to nothing.** The manual
+  endpoint already pushed; the 12-hourly run now does the same.
+- **The supplier refresh pushed to nothing.** It now pushes a product whose
+  price or stock moved, and only then: an unchanged product costs no call.
+
+### Added - history on the Pricing, Inventory and Automation pages
+
+- **Pricing** lists the last 20 price changes the rules applied (the page
+  always said "every change is audited" and never showed the audit).
+- **Inventory** lists the last 10 sync runs with their outcome, and the
+  last 20 stock movements.
+- **Automation** lists the last 20 runs across every rule, by rule name.
+- All three API lists existed since Phase 6 without a screen. Read-only,
+  no backend change.
+
+### Added - edit, pause and delete for automation and pricing rules
+
+- **Rules were create-only in the UI** although the API has had `PATCH`
+  and `DELETE` since Phase 6. Each row on Automation and Pricing now has
+  Edit (in place), Pause / Resume and Delete.
+- **Delete is two clicks**, no native dialog: a misclick disarms itself
+  after a few seconds.
+- Editable fields follow what the API accepts for an update: name and
+  schedule for an automation rule; name, markup percent and the two price
+  guards for a pricing rule. An emptied guard is sent as `null` to clear it.
+
 ### Fixed - the Profile link went to a 404
 
 - **Settings -> Profile now exists.** The user menu linked to

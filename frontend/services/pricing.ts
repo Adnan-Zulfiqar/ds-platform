@@ -78,7 +78,21 @@ export interface PricingRuleCreatePayload {
 export const pricingKeys = {
   all: ["pricing"] as const,
   list: (query: ListQuery) => [...pricingKeys.all, "list", query] as const,
+  changes: (query: ListQuery) => [...pricingKeys.all, "changes", query] as const,
 };
+
+/** `GET /pricing/changes`: the audit trail, which had no screen. */
+export function usePriceChanges(query: ListQuery = {}): UseQueryResult<Page<PriceChange>> {
+  return useQuery({
+    queryKey: pricingKeys.changes(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<PriceChange>>("/pricing/changes", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
 
 export function usePricingRules(
   query: ListQuery = {},
@@ -100,6 +114,42 @@ export function useCreatePricingRule() {
     mutationFn: async (payload: PricingRuleCreatePayload) => {
       const { data } = await apiClient.post<PricingRule>("/pricing/rules", payload);
       return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pricingKeys.all });
+    },
+  });
+}
+
+export interface PricingRuleUpdatePayload {
+  name?: string;
+  priority?: number;
+  markupPercent?: string | null;
+  markupFixed?: string | null;
+  minProfit?: string | null;
+  maxPrice?: string | null;
+  isActive?: boolean;
+}
+
+/** `PATCH /pricing/rules/{id}`: the endpoint existed without a UI. */
+export function useUpdatePricingRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...payload }: PricingRuleUpdatePayload & { id: string }) => {
+      const { data } = await apiClient.patch<PricingRule>(`/pricing/rules/${id}`, payload);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: pricingKeys.all });
+    },
+  });
+}
+
+export function useDeletePricingRule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/pricing/rules/${id}`);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: pricingKeys.all });

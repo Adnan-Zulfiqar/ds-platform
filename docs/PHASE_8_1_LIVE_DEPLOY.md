@@ -102,6 +102,7 @@ Public POST `/webhook` without HMAC → **401** (handler alive). Valid HMAC / to
 | Embedded | Off | No App Bridge path in code |
 | Scopes | `read_products,write_products,read_inventory,write_inventory,read_orders,read_locations` | Code default + `.env.example` |
 | Client ID / distribution / install eligibility | — | **Dashboard visual only** |
+| **Compliance webhooks** (Customer data request, Customer data erasure, Shop data erasure) | `https://api.whiteto.com/api/v1/integrations/shopify/webhook` for all three | Handled since 2026-10-05 (`app/integrations/shopify/compliance.py`). These topics cannot be subscribed by the app; the Dashboard is the only place they are set. Shopify's app review sends a signed test delivery to each |
 
 Client secret never printed.
 

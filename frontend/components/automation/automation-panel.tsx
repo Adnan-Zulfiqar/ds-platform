@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDeleteButton } from "@/components/ui/confirm-delete-button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
@@ -22,8 +23,11 @@ import { formatDateTime } from "@/lib/utils";
 import {
   useAutomationRules,
   useCreateAutomationRule,
+  useDeleteAutomationRule,
   useRunAutomation,
+  useUpdateAutomationRule,
   type AutomationAction,
+  type AutomationRule,
   type AutomationSchedule,
 } from "@/services/automation";
 
@@ -38,18 +42,38 @@ const ACTIONS: Array<{ value: AutomationAction; label: string }> = [
 
 const SCHEDULES: AutomationSchedule[] = ["manual", "hourly", "daily", "weekly"];
 
+const SELECT_CLASS =
+  "h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm";
+
+function describe(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
+/**
+ * Rules are edited in place, one row at a time. The draft lives in local
+ * state until Save, so the React Query row stays the only saved truth, and
+ * only the fields the API accepts for an update (name, schedule, active)
+ * are editable; the action is fixed at creation.
+ */
 export function AutomationPanel() {
   const { data, isLoading, isError, refetch } = useAutomationRules({
     page: 1,
     size: 50,
   });
   const create = useCreateAutomationRule();
+  const update = useUpdateAutomationRule();
+  const remove = useDeleteAutomationRule();
   const run = useRunAutomation();
   const [name, setName] = useState("Nightly inventory sync");
   const [action, setAction] = useState<AutomationAction>("sync_inventory");
   const [schedule, setSchedule] = useState<AutomationSchedule>("daily");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{
+    id: string;
+    name: string;
+    schedule: AutomationSchedule;
+  } | null>(null);
 
   if (isError) {
     return (
@@ -61,6 +85,35 @@ export function AutomationPanel() {
   }
 
   const rules = data?.items ?? [];
+  const busy = update.isPending || remove.isPending;
+
+  function saveDraft() {
+    if (!draft) return;
+    update.mutate(
+      { id: draft.id, name: draft.name, schedule: draft.schedule },
+      {
+        onSuccess: () => {
+          setDraft(null);
+          setStatus("Rule updated.");
+        },
+        onError: (err) => setStatus(describe(err, "Update failed.")),
+      },
+    );
+  }
+
+  function toggleActive(rule: AutomationRule) {
+    update.mutate(
+      { id: rule.id, isActive: !rule.isActive },
+      { onError: (err) => setStatus(describe(err, "Update failed.")) },
+    );
+  }
+
+  function deleteRule(rule: AutomationRule) {
+    remove.mutate(rule.id, {
+      onSuccess: () => setStatus(`Deleted "${rule.name}".`),
+      onError: (err) => setStatus(describe(err, "Delete failed.")),
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -72,8 +125,7 @@ export function AutomationPanel() {
           create.mutate(
             { name, action, schedule },
             {
-              onError: (err) =>
-                setError(err instanceof Error ? err.message : "Create failed."),
+              onError: (err) => setError(describe(err, "Create failed.")),
             },
           );
         }}
@@ -94,7 +146,7 @@ export function AutomationPanel() {
             aria-label="Action"
             value={action}
             onChange={(event) => setAction(event.target.value as AutomationAction)}
-            className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+            className={SELECT_CLASS}
           >
             {ACTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -112,7 +164,7 @@ export function AutomationPanel() {
             onChange={(event) =>
               setSchedule(event.target.value as AutomationSchedule)
             }
-            className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+            className={SELECT_CLASS}
           >
             {SCHEDULES.map((value) => (
               <option key={value} value={value}>
@@ -153,43 +205,129 @@ export function AutomationPanel() {
                 <TableHead>Last run</TableHead>
                 <TableHead>Failures</TableHead>
                 <TableHead>Active</TableHead>
-                <TableHead className="text-right">Run</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rules.map((rule) => (
-                <TableRow key={rule.id}>
-                  <TableCell className="font-medium">{rule.name}</TableCell>
-                  <TableCell>{rule.action}</TableCell>
-                  <TableCell>{rule.schedule}</TableCell>
-                  <TableCell>{formatDateTime(rule.lastRunAt)}</TableCell>
-                  <TableCell>{rule.consecutiveFailures}</TableCell>
-                  <TableCell>
-                    <Badge variant={rule.isActive ? "success" : "secondary"}>
-                      {rule.isActive ? "active" : "inactive"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={run.isPending}
-                      onClick={() => {
-                        run.mutate(rule.id, {
-                          onSuccess: (result) =>
-                            setStatus(`Run ${result.id}: ${result.status}`),
-                          onError: (err) =>
-                            setStatus(
-                              err instanceof Error ? err.message : "Run failed.",
-                            ),
-                        });
-                      }}
-                    >
-                      Run now
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {rules.map((rule) => {
+                const editing = draft?.id === rule.id;
+                return (
+                  <TableRow key={rule.id} data-testid="automation-rule-row">
+                    <TableCell className="font-medium">
+                      {editing ? (
+                        <Input
+                          aria-label={`Name of ${rule.name}`}
+                          value={draft.name}
+                          onChange={(event) =>
+                            setDraft({ ...draft, name: event.target.value })
+                          }
+                        />
+                      ) : (
+                        rule.name
+                      )}
+                    </TableCell>
+                    <TableCell>{rule.action}</TableCell>
+                    <TableCell>
+                      {editing ? (
+                        <select
+                          aria-label={`Schedule of ${rule.name}`}
+                          value={draft.schedule}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              schedule: event.target.value as AutomationSchedule,
+                            })
+                          }
+                          className={SELECT_CLASS}
+                        >
+                          {SCHEDULES.map((value) => (
+                            <option key={value} value={value}>
+                              {value}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        rule.schedule
+                      )}
+                    </TableCell>
+                    <TableCell>{formatDateTime(rule.lastRunAt)}</TableCell>
+                    <TableCell>{rule.consecutiveFailures}</TableCell>
+                    <TableCell>
+                      <Badge variant={rule.isActive ? "success" : "secondary"}>
+                        {rule.isActive ? "active" : "inactive"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="space-x-1 whitespace-nowrap text-right">
+                      {editing ? (
+                        <>
+                          <Button
+                            size="sm"
+                            disabled={busy || draft.name.trim() === ""}
+                            onClick={saveDraft}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => setDraft(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={run.isPending}
+                            onClick={() => {
+                              run.mutate(rule.id, {
+                                onSuccess: (result) =>
+                                  setStatus(`Run ${result.id}: ${result.status}`),
+                                onError: (err) =>
+                                  setStatus(describe(err, "Run failed.")),
+                              });
+                            }}
+                          >
+                            Run now
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            aria-label={`Edit ${rule.name}`}
+                            onClick={() =>
+                              setDraft({
+                                id: rule.id,
+                                name: rule.name,
+                                schedule: rule.schedule,
+                              })
+                            }
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            aria-label={`${rule.isActive ? "Pause" : "Resume"} ${rule.name}`}
+                            onClick={() => toggleActive(rule)}
+                          >
+                            {rule.isActive ? "Pause" : "Resume"}
+                          </Button>
+                          <ConfirmDeleteButton
+                            label={rule.name}
+                            disabled={busy}
+                            onConfirm={() => deleteRule(rule)}
+                          />
+                        </>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>

@@ -231,6 +231,22 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
         )
         return list(result.scalars().all())
 
+    async def list_for_product_on_platform(
+        self, product_id: uuid.UUID, platform: StorePlatform
+    ) -> Sequence[StoreListing]:
+        """The product's live listings on stores of one platform. Removed
+        listings are skipped: pushing to them would re-create the product."""
+        result = await self.session.execute(
+            self._base_query()
+            .join(Store, Store.id == StoreListing.store_id)
+            .where(
+                StoreListing.product_id == product_id,
+                Store.platform == platform,
+                StoreListing.status != ListingSyncStatus.REMOVED,
+            )
+        )
+        return list(result.scalars().all())
+
 
 class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
     """Unscoped sweep / webhook lookup — documented unscoped repository.
@@ -260,6 +276,21 @@ class ShopifyMaintenanceRepository(BaseRepository[ShopifyConnection]):
             select(ShopifyConnection).where(ShopifyConnection.shop_domain == shop_domain)
         )
         return result.scalar_one_or_none()
+
+    async def store_for_shop_domain(self, shop_domain: str) -> tuple[uuid.UUID, uuid.UUID] | None:
+        """``(tenant_id, store_id)`` for the Shopify store with this domain,
+        connected or not. Shopify's ``shop/redact`` arrives 48 hours after
+        uninstall, when the connection row is already gone; the store row
+        keeps the domain in ``external_store_id``. Ids only, never a row."""
+        result = await self.session.execute(
+            select(Store.tenant_id, Store.id).where(
+                Store.platform == StorePlatform.SHOPIFY,
+                Store.external_store_id == shop_domain,
+                Store.deleted_at.is_(None),
+            )
+        )
+        row = result.first()
+        return (row[0], row[1]) if row is not None else None
 
     async def get_connected_by_shop_domain(self, shop_domain: str) -> ShopifyConnection | None:
         """Indexed domain lookup for HMAC-verified webhooks — not a table scan."""
