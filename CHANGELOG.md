@@ -10,6 +10,22 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - scheduled tasks that never reached the channels
+
+- **`shipment.refresh` failed on every run** with `TypeError: multiple
+  values for argument 'limit'`: it passed its own `self` to a bound task.
+  It now calls the order refresh correctly, with the same limit.
+- **Shopify never received automatic price or stock pushes.** The Shopify
+  push tasks existed since Phase 8 but nothing enqueued them. A new
+  `shopify.push_price_quantity` task joins the channel fan-out, so every
+  trigger that reached eBay and WooCommerce now reaches Shopify too.
+- **The scheduled inventory sweep pushed only to eBay.** It now uses the
+  shared fan-out (eBay, WooCommerce, Shopify).
+- **The scheduled pricing recalculation pushed to nothing.** The manual
+  endpoint already pushed; the 12-hourly run now does the same.
+- **The supplier refresh pushed to nothing.** It now pushes a product whose
+  price or stock moved, and only then: an unchanged product costs no call.
+
 ### Added — Track E6c: Settings → Billing
 
 - **Billing page.** Plan cards with the AI add-on, Stripe Checkout,

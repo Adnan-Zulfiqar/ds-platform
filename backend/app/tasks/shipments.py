@@ -17,4 +17,7 @@ def refresh_shipments(self: Any, limit: int = 500, **_: Any) -> Any:
     This task is an explicit alias so beat and automation can schedule
     ``shipment.refresh`` without coupling callers to the orders module name.
     """
-    return refresh_status(self, limit=limit)
+    # ``run``, not a direct call with ``self``: ``refresh_status`` is a bound
+    # task, so Celery supplies its own ``self`` and passing ours raised
+    # ``TypeError: multiple values for 'limit'`` on every scheduled run.
+    return refresh_status.run(limit=limit)
