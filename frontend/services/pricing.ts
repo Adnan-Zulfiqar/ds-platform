@@ -78,7 +78,21 @@ export interface PricingRuleCreatePayload {
 export const pricingKeys = {
   all: ["pricing"] as const,
   list: (query: ListQuery) => [...pricingKeys.all, "list", query] as const,
+  changes: (query: ListQuery) => [...pricingKeys.all, "changes", query] as const,
 };
+
+/** `GET /pricing/changes`: the audit trail, which had no screen. */
+export function usePriceChanges(query: ListQuery = {}): UseQueryResult<Page<PriceChange>> {
+  return useQuery({
+    queryKey: pricingKeys.changes(query),
+    queryFn: async () => {
+      const { data } = await apiClient.get<Page<PriceChange>>("/pricing/changes", {
+        params: query,
+      });
+      return data;
+    },
+  });
+}
 
 export function usePricingRules(
   query: ListQuery = {},
