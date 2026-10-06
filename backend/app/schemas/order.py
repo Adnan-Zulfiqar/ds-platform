@@ -186,6 +186,8 @@ class OrderStatisticsRead(CamelCaseModel):
 
 
 __all__ = [
+    "FulfilmentSettingsRead",
+    "FulfilmentSettingsUpdate",
     "OrderDetailRead",
     "OrderItemRead",
     "OrderRead",
@@ -194,5 +196,39 @@ __all__ = [
     "OrderSyncRunRead",
     "OrderTimelineEntryRead",
     "ShipmentRead",
+    "SupplierOrderRead",
     "TrackingEventRead",
 ]
+
+
+# --- Supplier orders (Track F, D-017) -----------------------------------------
+
+
+class SupplierOrderRead(CamelCaseModel):
+    """The AliExpress order behind a channel order. No address: that stays on
+    the order and is never echoed back here."""
+
+    status: Literal["none", "needs_review", "queued", "placing", "placed", "failed", "shipped"]
+    trigger: str | None = None
+    review_reasons: list[str] = Field(default_factory=list)
+    external_order_ids: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    placed_at: datetime | None = None
+    tracking_number: str | None = None
+    tracking_carrier: str | None = None
+    tracking_pushed_at: datetime | None = None
+    #: Where the merchant pays the unpaid AliExpress order.
+    payment_url: str | None = None
+
+
+class FulfilmentSettingsRead(CamelCaseModel):
+    auto_order: bool
+    auto_tracking: bool
+    fallback_shipping_method: str | None
+
+
+class FulfilmentSettingsUpdate(CamelCaseModel):
+    auto_order: bool
+    auto_tracking: bool
+    fallback_shipping_method: str | None = Field(default=None, max_length=128)

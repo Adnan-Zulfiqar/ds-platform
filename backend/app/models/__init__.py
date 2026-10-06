@@ -101,6 +101,7 @@ from app.models.rule_application import (
 )
 from app.models.shopify import ListingSyncStatus, ShopifyConnection, StoreListing
 from app.models.store import Store, StorePlatform, StoreStatus
+from app.models.supplier_order import FulfilmentSettings, SupplierOrder, SupplierOrderStatus
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User
 
@@ -119,6 +120,7 @@ __all__ = [
     "EbayListingDefaults",
     "EmailVerificationToken",
     "FulfillmentStatus",
+    "FulfilmentSettings",
     "IdentifiedBase",
     "IdentityProvider",
     "ImportStatus",
@@ -174,6 +176,8 @@ __all__ = [
     "StoreListing",
     "StorePlatform",
     "StoreStatus",
+    "SupplierOrder",
+    "SupplierOrderStatus",
     "SyncRunStatus",
     "SyncTrigger",
     "Tenant",
