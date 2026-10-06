@@ -336,8 +336,8 @@ trigger rather than a date.
 
 | Stage | Scope | State |
 |---|---|---|
-| F1 | Shopify order lines with variants; AliExpress refresh scoped to AliExpress orders | PR #87 |
-| F2 | Supplier orders, review, "Place on AliExpress", placement task | In review |
+| F1 | Shopify order lines with variants; AliExpress refresh scoped to AliExpress orders | Merged (#87) |
+| F2 | Supplier orders, review, "Place on AliExpress", placement task | Merged (#88) |
 | F3 | Automatic mode, tracking sync to the store | In review |
 | F4 | Order panel and settings screens | Planned |
 
