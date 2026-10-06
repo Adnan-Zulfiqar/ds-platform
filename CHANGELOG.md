@@ -10,6 +10,36 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - Track F review: no path can buy the same goods twice
+
+An independent review of F1-F4, done before the code reached any running
+stack, found that the "never order twice" guarantee did not hold.
+
+- **The create call was retried by the AliExpress client** (up to four
+  sends on a timeout or 5xx). `aliexpress.ds.order.create` is now sent
+  exactly once (`call(..., retry=False)`), and the placement task no longer
+  inherits the base task's automatic retries.
+- **An unclear answer was saved as "failed"**, which offered "Try again".
+  Timeouts, server errors, crashes after sending, a success without order
+  ids and any unreadable body are now **unknown**: the order stays "being
+  sent", says to check AliExpress, and can only be tried again after the
+  merchant releases it (`POST /orders/{id}/supplier-order/release`). Only an
+  explicit refusal is "failed".
+- **Turning auto-order on could buy orders already fulfilled.** Fulfilled,
+  shipped, delivered and refunded orders are refused, and auto mode only
+  takes orders placed after it was switched on (migration `0051`,
+  `fulfilment_settings.auto_order_enabled_at`; a workspace that had it on
+  must switch it on again).
+- **Quantities.** Shopify lines use `current_quantity` (order edits); a line
+  at 0 is not ordered (it used to become 1).
+- **Stuck rows.** A missing AliExpress connection fails before anything is
+  sent; a "queued" row whose task was lost is re-sent by the 3-hourly
+  sweep; the order page stops polling after about five minutes.
+- **Tracking.** The manual push locks the row (no double push); a push the
+  store refused is not repeated every three hours.
+- **Billing.** Auto mode now stops when the subscription lapses, like the
+  button.
+
 ### Added - Track F4: supplier-order panel and Fulfilment settings
 
 - **Order page.** Shopify, eBay and WooCommerce orders show the AliExpress

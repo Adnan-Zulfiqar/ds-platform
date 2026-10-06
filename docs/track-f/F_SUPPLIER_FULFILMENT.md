@@ -40,7 +40,8 @@ ids is a failure**, never a placed order.
 ## How placing works (F2)
 
 1. **Review.** An order is placeable only when:
-   - it is a Shopify, eBay or WooCommerce order, paid, not cancelled;
+   - it is a Shopify, eBay or WooCommerce order, paid, not cancelled, and
+     not already fulfilled, shipped, delivered or refunded;
    - the address has name, phone, address line, city and country;
    - it is not going to Brazil or Chile (AliExpress needs a tax id there,
      which DropPilot does not store);
@@ -57,13 +58,35 @@ ids is a failure**, never a placed order.
    *before* AliExpress is called; then the call; then `placed` (with the
    AliExpress order ids) or `failed` (with AliExpress's code and message).
 
-**What prevents a double order.** The task never retries
-(`max_retries=0`), and only `queued` rows are placed. A crash between the
-call and recording its answer leaves `placing`, which nothing retries: the
-merchant checks AliExpress first. A second request on a `queued`,
-`placing`, `placed` or `shipped` row is a 409. `out_order_id` carries
-DropPilot's order id; whether AliExpress also de-duplicates on it is not
-documented.
+**What prevents a double order** (corrected after the independent review
+of 2026-10-06, which found the first version did not guarantee it):
+
+- The create call is sent **exactly once**: `client.call(..., retry=False)`
+  bypasses the client's own retry loop, and the task sets
+  `autoretry_for=()` and `max_retries=0`.
+- Only `queued` rows are placed; a redelivered task finds `placing` and
+  does nothing.
+- **Three outcomes, not two.** *Placed* needs a success flag and order
+  ids. *Failed* is only an explicit refusal (`is_success: false`, an error
+  envelope, an AliExpress error response), the one state that may be
+  retried. Everything else (timeout, 5xx, a crash after sending, success
+  without ids, an unreadable body) is **unknown**: the row stays `placing`
+  with `error_code = outcome_unknown`, a new request is a 409, and only the
+  merchant's **release** (after checking AliExpress) turns it into
+  `failed`.
+- If AliExpress is not connected, nothing is sent and the row fails.
+- Two first requests at once (button and auto mode) are settled by the
+  unique constraint: one wins, the other is a 409.
+- `out_order_id` carries DropPilot's order id; whether AliExpress also
+  de-duplicates on it is not documented.
+
+## Automatic mode
+
+Every paid order a channel import sees is offered to auto mode after
+commit. It is placed only if *Auto-order* is on, billing allows writes, the
+order has no supplier order yet, and it was **placed after the switch was
+turned on** (`auto_order_enabled_at`). Switching the mode on never reaches
+back to orders the merchant already handled another way.
 
 ## How tracking works (F3)
 
@@ -73,7 +96,11 @@ already sweeps, so no new unscoped lookup). For each placed order it asks
 `aliexpress.ds.order.tracking.get`, stores the number and carrier, and, with
 *Auto-tracking* on, sends it to the store through the same "mark shipped"
 code the manual forms use (idempotent on the tracking number), with buyer
-notification. A store refusal is recorded on the row and the number kept.
+notification. A store refusal is recorded on the row and the number kept, and the push
+is not repeated automatically (the merchant uses *Send tracking to the
+store*). The manual push locks the row, so a double click cannot push
+twice. The same 3-hourly sweep re-sends any `queued` row whose task was
+lost (only `queued` rows are ever placed, so this cannot place twice).
 
 **One parcel only.** An order split across several AliExpress sellers
 produces several parcels; the channel "mark shipped" calls take one number

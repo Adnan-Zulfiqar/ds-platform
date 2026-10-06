@@ -102,11 +102,17 @@ class AliExpressClient:
         *,
         api_path: str = "",
         require_token: bool = True,
+        retry: bool = True,
     ) -> dict[str, Any]:
         """Invoke an AliExpress API method and return its payload.
 
         ``method`` is the API name (for example ``aliexpress.ds.product.get``).
         Raises a typed :class:`AliExpressError` on any failure.
+
+        ``retry=False`` sends the request exactly once. Required for any call
+        that creates something (``aliexpress.ds.order.create``): after a
+        timeout or a 5xx AliExpress may already have acted, and a retry
+        could create it twice.
         """
         payload: dict[str, Any] = {"method": method, **(params or {})}
 
@@ -122,7 +128,9 @@ class AliExpressClient:
             api_path=api_path,
         )
 
-        return await self._request_with_retries(self._config.api_base_url, signed, operation=method)
+        return await self._request_with_retries(
+            self._config.api_base_url, signed, operation=method, retry=retry
+        )
 
     async def exchange_token(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         """Perform a token create or refresh call.
@@ -150,7 +158,7 @@ class AliExpressClient:
     # -- Transport ----------------------------------------------------------
 
     async def _request_with_retries(
-        self, url: str, params: dict[str, Any], *, operation: str
+        self, url: str, params: dict[str, Any], *, operation: str, retry: bool = True
     ) -> dict[str, Any]:
         """Send the request, retrying only failures that could resolve themselves."""
         decision = await self._rate_limiter.acquire(self._tenant_id)
@@ -162,14 +170,16 @@ class AliExpressClient:
 
         last_error: AliExpressError | None = None
 
-        # One initial attempt plus `max_retries` retries.
-        for attempt in range(self._config.max_retries + 1):
+        # One initial attempt plus `max_retries` retries (none when the call
+        # must not be repeated).
+        attempts = self._config.max_retries + 1 if retry else 1
+        for attempt in range(attempts):
             try:
                 return await self._request_once(url, params, operation=operation)
             except AliExpressError as exc:
                 last_error = exc
 
-                if not exc.retryable or attempt == self._config.max_retries:
+                if not exc.retryable or attempt == attempts - 1:
                     raise
 
                 delay = compute_backoff(

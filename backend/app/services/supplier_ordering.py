@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ValidationError
@@ -45,6 +46,11 @@ TAX_ID_COUNTRIES = frozenset({"BR", "CL"})
 #: Statuses from which a new placement may start. ``placing`` is absent on
 #: purpose: a stuck ``placing`` needs a human to check AliExpress first.
 _RESTARTABLE = frozenset({SupplierOrderStatus.NEEDS_REVIEW.value, SupplierOrderStatus.FAILED.value})
+
+#: Orders that left the merchant's hands already.
+_ALREADY_HANDLED = frozenset(
+    {FulfillmentStatus.FULFILLED, FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +93,11 @@ class SupplierOrderingService(BaseService):
             "auto_tracking": auto_tracking,
             "fallback_shipping_method": (fallback_shipping_method or "").strip() or None,
         }
+        was_on = bool(row and row.auto_order)
+        if auto_order and not was_on:
+            values["auto_order_enabled_at"] = datetime.now(UTC)
+        elif not auto_order:
+            values["auto_order_enabled_at"] = None
         if row is None:
             return await self.settings_rows.create(**values)
         return await self.settings_rows.update(row, **values)
@@ -99,6 +110,12 @@ class SupplierOrderingService(BaseService):
             reasons.append("not_a_channel_order")
         if order.fulfillment_status is FulfillmentStatus.CANCELLED:
             reasons.append("order_cancelled")
+        if order.fulfillment_status in _ALREADY_HANDLED:
+            # Shipped by hand or by another tool before DropPilot saw it:
+            # buying it again from AliExpress would send a second parcel.
+            reasons.append("order_already_fulfilled")
+        if order.fulfillment_status is FulfillmentStatus.REFUNDED:
+            reasons.append("order_refunded")
         if order.payment_status is not PaymentStatus.PAID:
             reasons.append("order_not_paid")
 
@@ -140,7 +157,12 @@ class SupplierOrderingService(BaseService):
             reasons.append("no_order_lines")
             return []
         lines: list[PlaceLine] = []
+        line_problems = 0
         for item in order.items:
+            if item.quantity <= 0:
+                # Removed from the order by an edit: nothing to buy.
+                continue
+            line_problems += 1  # undone below when the line resolves
             if item.product_id is None:
                 reasons.append(f"line_{item.external_item_id or item.id}:not_a_droppilot_product")
                 continue
@@ -162,13 +184,16 @@ class SupplierOrderingService(BaseService):
             if not (chosen.external_attributes or "").strip():
                 reasons.append(f"line_{item.external_item_id or item.id}:no_supplier_sku")
                 continue
+            line_problems -= 1
             lines.append(
                 PlaceLine(
                     product_id=product.external_id,
                     sku_attr=str(chosen.external_attributes),
-                    quantity=max(1, item.quantity),
+                    quantity=item.quantity,
                 )
             )
+        if not lines and not line_problems:
+            reasons.append("no_order_lines")  # every line was removed
         return lines
 
     # --- the button and the switch ------------------------------------------
@@ -200,7 +225,15 @@ class SupplierOrderingService(BaseService):
         }
         existing = await self.supplier_orders.for_order(order.id, lock=True)
         if existing is None:
-            row = await self.supplier_orders.create(order_id=order.id, **values)
+            try:
+                async with self.session.begin_nested():
+                    row = await self.supplier_orders.create(order_id=order.id, **values)
+            except IntegrityError as exc:
+                # Two first requests at once (the button and auto mode): the
+                # unique constraint lets one through; the other is a 409.
+                raise ConflictError(
+                    "This order was already sent to AliExpress or is being sent now."
+                ) from exc
         elif existing.status in _RESTARTABLE:
             row = await self.supplier_orders.update(existing, **values)
         else:
@@ -217,9 +250,20 @@ class SupplierOrderingService(BaseService):
         )
         return row
 
-    async def get(self, order_id: uuid.UUID) -> SupplierOrder | None:
+    async def get(self, order_id: uuid.UUID, *, lock: bool = False) -> SupplierOrder | None:
         await self.orders.get_by_id_or_raise(order_id)  # 404 across tenants
-        return await self.supplier_orders.for_order(order_id)
+        return await self.supplier_orders.for_order(order_id, lock=lock)
+
+    @staticmethod
+    def auto_eligible(order: Order, settings: FulfilmentSettings) -> bool:
+        """Auto mode only takes orders placed after it was switched on.
+        Turning it on must never reach back and buy orders the merchant
+        already handled some other way."""
+        since = settings.auto_order_enabled_at
+        if not settings.auto_order or since is None:
+            return False
+        placed = order.external_created_at or order.created_at
+        return placed is not None and placed >= since
 
     # --- used by the task, one transaction each -------------------------------
 
@@ -249,6 +293,38 @@ class SupplierOrderingService(BaseService):
             ],
         )
         return row, review, settings.fallback_shipping_method if settings else None
+
+    async def record_unknown(self, supplier_order_id: uuid.UUID, *, reason: str) -> None:
+        """AliExpress may or may not have created the order (a timeout, a
+        server error, or a crash after the call). The row stays ``placing``,
+        which nothing retries, and says why; the merchant checks AliExpress
+        and then releases it (:meth:`release`) or leaves it."""
+        row = await self.supplier_orders.get_locked(supplier_order_id)
+        if row is None:
+            return
+        await self.supplier_orders.update(
+            row,
+            error_code="outcome_unknown",
+            error_message=(
+                f"AliExpress did not answer clearly ({reason}). Check your AliExpress "
+                "orders before trying again, so the goods are not bought twice."
+            )[:1024],
+        )
+
+    async def release(self, order_id: uuid.UUID) -> SupplierOrder:
+        """The merchant checked AliExpress and found no order: let them try
+        again. Only from ``placing``; everything else has a definite state."""
+        await self.orders.get_by_id_or_raise(order_id)  # 404 across tenants
+        row = await self.supplier_orders.for_order(order_id, lock=True)
+        if row is None or row.status != SupplierOrderStatus.PLACING.value:
+            raise ConflictError("Only an order stuck while being sent can be released.")
+        logger.info("supplier_order_released", order_id=str(order_id))
+        return await self.supplier_orders.update(
+            row,
+            status=SupplierOrderStatus.FAILED.value,
+            error_code="released_by_merchant",
+            error_message="Released after checking AliExpress: no order had been created.",
+        )
 
     async def record_outcome(
         self,

@@ -96,6 +96,12 @@ class FulfilmentSettings(TenantScopedBase):
     )
     #: Used only if AliExpress refuses the supplier's default method.
     fallback_shipping_method: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: When *Auto-order* was last switched on. Auto mode only takes orders
+    #: placed after this, so switching it on never buys orders the merchant
+    #: already handled another way.
+    auto_order_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 __all__ = ["FulfilmentSettings", "SupplierOrder", "SupplierOrderStatus"]

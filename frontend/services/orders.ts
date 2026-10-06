@@ -186,7 +186,10 @@ export function useSupplierOrder(orderId: string): UseQueryResult<SupplierOrder>
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "queued" || status === "placing" ? 3000 : false;
+      const waiting = status === "queued" || status === "placing";
+      // Stop after about five minutes: a row still waiting by then needs
+      // the merchant (an unclear answer), not more polling.
+      return waiting && query.state.dataUpdateCount < 100 ? 3000 : false;
     },
   });
 }
@@ -211,6 +214,13 @@ export function usePlaceSupplierOrder(orderId: string) {
 
 export function usePushSupplierTracking(orderId: string) {
   return useSupplierMutation(orderId, "/supplier-order/push-tracking");
+}
+
+/** After an unclear answer from AliExpress the order stays "being sent";
+ * once the merchant has checked AliExpress and found no order, this lets
+ * it be placed again. */
+export function useReleaseSupplierOrder(orderId: string) {
+  return useSupplierMutation(orderId, "/supplier-order/release");
 }
 
 export function useFulfilmentSettings(): UseQueryResult<FulfilmentSettings> {

@@ -94,11 +94,7 @@ def test_a_success_needs_the_flag_and_order_ids(payload: dict[str, object]) -> N
 @pytest.mark.parametrize(
     ("payload", "code"),
     [
-        (  # flag without ids
-            {"result": {"is_success": True, "order_list": {"number": []}}},
-            None,
-        ),
-        (  # documented failure
+        (  # documented refusal
             {
                 "result": {
                     "is_success": False,
@@ -119,16 +115,34 @@ def test_a_success_needs_the_flag_and_order_ids(payload: dict[str, object]) -> N
             },
             "isv.x",
         ),
-        ({}, "unreadable_response"),
-        ({"something": "else"}, "unreadable_response"),
     ],
 )
-def test_anything_short_of_a_clear_success_is_a_failure(
-    payload: dict[str, object], code: str | None
+def test_an_explicit_refusal_is_a_failure_that_may_be_retried(
+    payload: dict[str, object], code: str
 ) -> None:
     outcome = parse_place(payload)
     assert not outcome.ok
+    assert not outcome.unknown
     assert outcome.error_code == code
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"result": {"is_success": True, "order_list": {"number": []}}},  # success, no ids
+        {"result": {"order_list": {"number": [8001]}}},  # ids, no flag
+        {},
+        {"something": "else"},
+    ],
+    ids=["success_without_ids", "ids_without_flag", "empty", "unreadable"],
+)
+def test_an_unclear_answer_is_unknown_never_failed(payload: dict[str, object]) -> None:
+    """Review finding C2: the success body has never been seen, so a body
+    the parser cannot read may be a placed order. Calling it "failed" would
+    offer "try again" and could buy the goods twice."""
+    outcome = parse_place(payload)
+    assert not outcome.ok
+    assert outcome.unknown
 
 
 def test_tracking_numbers_are_found_wherever_the_body_puts_them() -> None:

@@ -732,7 +732,17 @@ class ShopifySyncService(BaseService):
             if not isinstance(line, dict) or line.get("id") is None:
                 continue
             product_id, variant_id = await self._variant_for_line(line, store_id=store_id)
-            quantity = line.get("quantity") if isinstance(line.get("quantity"), int) else 1
+            # ``current_quantity`` reflects order edits (a removed line is 0);
+            # ``quantity`` is what was first ordered.
+            current = line.get("current_quantity")
+            original = line.get("quantity")
+            quantity = (
+                current
+                if isinstance(current, int)
+                else original
+                if isinstance(original, int)
+                else 1
+            )
             price = line.get("price")
             self.session.add(
                 OrderItem(

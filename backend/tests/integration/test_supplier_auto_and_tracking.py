@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -112,11 +113,20 @@ async def test_auto_mode_queues_new_paid_orders_and_leaves_the_rest(
     _, tenant_id = await workspace(client)
     await switches(db_session, auto_order=True, auto_tracking=False)
     product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
-    fresh = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
-    unpaid = await channel_order(
-        db_session, tenant_id, [(product_id, only, 1)], payment_status=PaymentStatus.UNPAID
+    after = datetime.now(UTC) + timedelta(seconds=1)  # bought after the switch
+    fresh = await channel_order(
+        db_session, tenant_id, [(product_id, only, 1)], external_created_at=after
     )
-    reviewed = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
+    unpaid = await channel_order(
+        db_session,
+        tenant_id,
+        [(product_id, only, 1)],
+        payment_status=PaymentStatus.UNPAID,
+        external_created_at=after,
+    )
+    reviewed = await channel_order(
+        db_session, tenant_id, [(product_id, only, 1)], external_created_at=after
+    )
     await SupplierOrderRepository(db_session).create(
         order_id=reviewed, status=SupplierOrderStatus.FAILED.value, trigger="manual"
     )
@@ -130,6 +140,64 @@ async def test_auto_mode_queues_new_paid_orders_and_leaves_the_rest(
     assert await rows.for_order(unpaid) is None
     failed = await rows.for_order(reviewed)
     assert failed is not None and failed.status == SupplierOrderStatus.FAILED.value  # untouched
+
+
+async def test_auto_mode_never_reaches_back_to_orders_from_before_the_switch(
+    client: AsyncClient, db_session: AsyncSession, shared: FakeAliExpress
+) -> None:
+    """Review C3: switching auto-order on must not buy recent orders the
+    merchant already handled another way."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    before = await channel_order(
+        db_session,
+        tenant_id,
+        [(product_id, only, 1)],
+        external_created_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    await switches(db_session, auto_order=True, auto_tracking=False)
+
+    assert await tasks._auto_place(tenant_id, [before]) == 0
+    set_tenant_id(tenant_id)
+    assert await SupplierOrderRepository(db_session).for_order(before) is None
+
+    # Switching it off and on again moves the start forward, not back.
+    first = (await SupplierOrderingService(db_session).settings()).auto_order_enabled_at
+    await switches(db_session, auto_order=True, auto_tracking=True)  # still on
+    assert (await SupplierOrderingService(db_session).settings()).auto_order_enabled_at == first
+    await switches(db_session, auto_order=False, auto_tracking=True)
+    assert (await SupplierOrderingService(db_session).settings()).auto_order_enabled_at is None
+
+
+async def test_auto_mode_stops_when_the_subscription_lapses(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shared: FakeAliExpress,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review C8: the button is billing-gated; auto mode must be too."""
+    from pydantic import SecretStr
+
+    from app.core.config import settings as app_settings
+    from app.services.billing import BillingService
+
+    monkeypatch.setattr(app_settings.stripe, "secret_key", SecretStr("sk_test_auto"))
+    _, tenant_id = await workspace(client)
+    row = await BillingService(db_session)._row()
+    row.trial_ends_at = datetime.now(UTC) - timedelta(minutes=1)
+    await db_session.flush()
+    await switches(db_session, auto_order=True, auto_tracking=False)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(
+        db_session,
+        tenant_id,
+        [(product_id, only, 1)],
+        external_created_at=datetime.now(UTC) + timedelta(seconds=1),
+    )
+
+    assert await tasks._auto_place(tenant_id, [order_id]) == 0
+    set_tenant_id(tenant_id)
+    assert await SupplierOrderRepository(db_session).for_order(order_id) is None
 
 
 async def test_a_paid_shopify_import_offers_the_order_to_auto_mode(
@@ -273,6 +341,56 @@ async def test_a_store_refusal_is_recorded_and_the_number_kept(
     assert row.status == SupplierOrderStatus.PLACED.value
     assert row.tracking_number == "LP00123"
     assert row.error_code == "tracking_push:validation_error"
+
+
+async def test_a_refused_push_is_not_repeated_every_three_hours(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shared: FakeAliExpress,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review C7: after one store refusal the sweep keeps the number fresh
+    but leaves the push to the merchant."""
+    _, tenant_id = await workspace(client)
+    await switches(db_session, auto_order=False, auto_tracking=True)
+    _, row = await placed(db_session, tenant_id, source=OrderSource.EBAY)
+    shared.tracking["8001"] = "LP00123"
+    attempts: list[object] = []
+
+    async def refuse(_self: object, _oid: uuid.UUID, **_: Any) -> None:
+        attempts.append(1)
+        raise ValidationError("Unknown carrier code.")
+
+    monkeypatch.setattr("app.integrations.ebay.orders.EbayOrderService.mark_shipped", refuse)
+
+    await tasks._sync_tracking(tenant_id, limit=10)
+    second = await tasks._sync_tracking(tenant_id, limit=10)
+    set_tenant_id(tenant_id)
+    assert len(attempts) == 1
+    assert second == {"checked": 1, "found": 1, "pushed": 0, "failed": 0}
+    assert row.error_code == "tracking_push:validation_error"
+
+
+async def test_a_queued_order_whose_task_was_lost_is_sent_again(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shared: FakeAliExpress,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review C5: a lost enqueue left a row "queued" forever."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
+    row = await SupplierOrderRepository(db_session).create(
+        order_id=order_id, status=SupplierOrderStatus.QUEUED.value, trigger="manual"
+    )
+    row.updated_at = datetime.now(UTC) - timedelta(minutes=30)
+    await db_session.flush()
+    requeued: list[uuid.UUID] = []
+    monkeypatch.setattr(tasks, "place_after_commit", lambda _s, row_id: requeued.append(row_id))
+
+    await tasks._sync_tracking(tenant_id, limit=10)
+    assert requeued == [row.id]
 
 
 async def test_several_parcels_are_never_pushed_as_one(
