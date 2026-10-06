@@ -10,6 +10,23 @@ production release.
 
 ## [Unreleased]
 
+### Added - Track F2: place the AliExpress order behind a channel order
+
+- **"Place on AliExpress".** `POST /orders/{id}/supplier-order` queues the
+  order; a background task places it with `aliexpress.ds.order.create`.
+  The order AliExpress creates is unpaid; the merchant pays it there.
+- **Review before placing.** Only paid Shopify, eBay and WooCommerce orders
+  with a complete address, outside Brazil and Chile, whose every line maps
+  to exactly one AliExpress SKU. Anything else waits in `needs_review` with
+  reasons.
+- **No double orders.** The task never retries; only `queued` rows are
+  placed; a row left `placing` after a crash waits for the merchant.
+- **Switches.** `GET/PUT /orders/fulfilment/settings`: *Auto-order*,
+  *Auto-tracking* and a fallback shipping method, all off by default (used
+  from F3).
+- **Migration.** `0050` adds `supplier_orders` and `fulfilment_settings`.
+- **Not verified live:** no real order has been placed (D-017).
+
 ### Tests - inventory sync and the mailer
 
 - `InventorySyncService` had no direct test: a stock move is recorded once

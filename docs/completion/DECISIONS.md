@@ -271,3 +271,30 @@ The owner made these choices on 2026-10-04:
   Growth's 450 listings and **no AI**, because AI calls cost money per
   request. `TRIAL_LISTING_LIMIT` in `app/services/billing.py` is the one
   place to change this.
+
+## D-017 — Supplier auto-ordering and tracking sync (Track F)
+
+The owner made these choices on 2026-10-05:
+
+- **Button first, auto switch.** Each Shopify, eBay or WooCommerce order can
+  be placed on AliExpress with one action; a per-workspace *Auto-order*
+  switch, off by default, places paid orders automatically.
+- **Shipping method: the supplier's default**, with an optional fallback in
+  the workspace settings.
+- **Tracking:** sent to the store automatically when *Auto-tracking* is on,
+  and the buyer is notified through the store's own shipping email.
+- **One probe** of the order API with an empty request (cannot create an
+  order) was approved and run: `aliexpress.ds.order.create` is reachable.
+
+Agent design choices, recorded for review:
+
+- Orders are placed only when every line maps to exactly one AliExpress SKU;
+  anything else waits in `needs_review` rather than being guessed.
+- The placement task never retries, and a row left `placing` is never
+  placed again automatically, so a lost answer cannot buy the goods twice.
+- Orders split across several AliExpress sellers are never given one
+  tracking number automatically.
+- Brazil and Chile orders are placed by hand (AliExpress needs a tax id that
+  DropPilot does not store).
+
+Details and what remains unverified: `docs/track-f/F_SUPPLIER_FULFILMENT.md`.
