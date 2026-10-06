@@ -331,3 +331,14 @@ trigger rather than a date.
 | Read replica for analytics | When reporting contends with transactional load |
 | PgBouncer | When replicas × pool size approaches `max_connections` |
 | Domain event bus | When a second subscriber to a state change appears |
+
+## Track F — supplier auto-ordering and tracking sync (D-017)
+
+| Stage | Scope | State |
+|---|---|---|
+| F1 | Shopify order lines with variants; AliExpress refresh scoped to AliExpress orders | PR #87 |
+| F2 | Supplier orders, review, "Place on AliExpress", placement task | In review |
+| F3 | Automatic mode, tracking sync to the store | In progress |
+| F4 | Order panel and settings screens | Planned |
+
+Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPLIER_FULFILMENT.md).

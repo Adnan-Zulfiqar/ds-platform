@@ -318,6 +318,26 @@ basis, who receives it, how long it lasts, what erasure does, and the evidence.
 * **Evidence** — `app/services/billing.py`, `app/tasks/billing.py`,
   `app/repositories/billing.py`.
 
+### 10f. Supplier ordering (Track F)
+
+* **Data** — when an order is placed on AliExpress: the recipient's name,
+  phone and shipping address, the products and quantities. DropPilot keeps,
+  per order, only the AliExpress order ids, product ids, SKU strings and
+  quantities (`supplier_orders`), and later the parcel's tracking number and
+  carrier. No address is copied into `supplier_orders`.
+* **Purpose** — have the supplier ship the merchant's customer's order, and
+  give the customer the tracking number.
+* **Role** — processor, on the merchant's instruction (the merchant chose to
+  place the order, or turned on automatic ordering). **Proposed basis** —
+  performance of the merchant's contract with their customer.
+* **Recipients** — AliExpress (Alibaba.com Singapore E-Commerce Private
+  Limited), which receives the address to deliver the goods; the sales
+  channel (Shopify, eBay, WooCommerce), which receives the tracking number.
+* **Retention** — the `supplier_orders` row lives as long as the order.
+  When a user is erased, `requested_by_user_id` is **cleared**.
+* **Evidence** — `app/services/supplier_ordering.py`,
+  `app/tasks/supplier_orders.py`, `app/services/data_subject_erasure.py`.
+
 ### 11. Support and privacy requests
 
 * **Data** — whatever the person includes in their email.
