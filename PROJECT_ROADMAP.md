@@ -339,6 +339,6 @@ trigger rather than a date.
 | F1 | Shopify order lines with variants; AliExpress refresh scoped to AliExpress orders | Merged (#87) |
 | F2 | Supplier orders, review, "Place on AliExpress", placement task | Merged (#88) |
 | F3 | Automatic mode, tracking sync to the store | In review |
-| F4 | Order panel and settings screens | Planned |
+| F4 | Order panel and settings screens | In review |
 
 Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPLIER_FULFILMENT.md).

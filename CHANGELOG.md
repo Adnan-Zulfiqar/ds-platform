@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added - Track F4: supplier-order panel and Fulfilment settings
+
+- **Order page.** Shopify, eBay and WooCommerce orders show the AliExpress
+  order behind them: the state, review reasons in plain sentences, **Place
+  on AliExpress**, a **Pay on AliExpress** link once placed, the tracking
+  number, and **Send tracking to the store** for a single parcel. The panel
+  refreshes on its own while the order is being sent. Viewers see the state
+  without actions.
+- **Settings -> Fulfilment.** The *Auto-order* and *Auto-tracking* switches
+  (off by default) and the optional fallback shipping method.
+
 ### Added - Track F3: automatic ordering and tracking sync
 
 - **Automatic mode.** With *Auto-order* on, every paid Shopify, eBay or
