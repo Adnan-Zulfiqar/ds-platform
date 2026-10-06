@@ -33,7 +33,7 @@ from app.core.logging import get_logger
 from app.database.session import transaction
 from app.integrations.aliexpress.exceptions import AliExpressError
 from app.models.integration import AliExpressConnection, IntegrationStatus
-from app.models.order import OrderSyncRun, SyncTrigger
+from app.models.order import OrderSource, OrderSyncRun, SyncTrigger
 from app.repositories.order import OrderSyncRunRepository
 from app.services.order_sync import OrderSyncService
 from app.workers.base import BaseTask
@@ -150,7 +150,9 @@ async def _refresh_tenant_orders(tenant_id: uuid.UUID, *, limit: int) -> int:
     try:
         async with transaction() as session:
             service = OrderSyncService(session)
-            orders = await service.orders.list_active_between(limit=limit)
+            orders = await service.orders.list_active_between(
+                source=OrderSource.ALIEXPRESS, limit=limit
+            )
             for order in orders:
                 try:
                     await service.refresh_order(order)

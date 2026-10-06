@@ -20,13 +20,15 @@ from app.integrations.shopify.client import ShopifyClient
 from app.integrations.shopify.service import ShopifyService
 from app.models.order import (
     FulfillmentStatus,
+    Order,
+    OrderItem,
     OrderSource,
     PaymentStatus,
 )
 from app.models.product import Product, ProductVersion
 from app.models.shopify import ListingContentSource, ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform
-from app.repositories.order import OrderRepository
+from app.repositories.order import OrderItemRepository, OrderRepository
 from app.repositories.product import ProductRepository, ProductVersionRepository
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
@@ -688,12 +690,78 @@ class ShopifySyncService(BaseService):
         }
 
         if existing is None:
-            await self.orders.create(
+            order = await self.orders.create(
                 source=OrderSource.SHOPIFY,
                 external_id=external_id,
                 **values,
             )
+            await self._replace_items(order, raw, store_id=store_id)
             return "created"
 
         await self.orders.update(existing, **values)
+        await self._replace_items(existing, raw, store_id=store_id)
         return "updated"
+
+    async def _replace_items(
+        self, order: Order, raw: dict[str, Any], *, store_id: uuid.UUID
+    ) -> None:
+        """Store the order's lines, each linked to the exact catalogue variant
+        when it is a DropPilot listing. Until this existed Shopify orders had
+        no lines at all, so nothing could be ordered from the supplier.
+
+        Replaced, not merged, as the AliExpress sync does: Shopify's line set
+        is authoritative. A line for a product DropPilot did not publish is
+        kept with no product link and is simply not orderable.
+        """
+        lines = raw.get("line_items")
+        if not isinstance(lines, list):
+            return
+        items = OrderItemRepository(self.session)
+        await items.delete_for_order(order.id)
+        currency = raw.get("currency")
+        for line in lines:
+            if not isinstance(line, dict) or line.get("id") is None:
+                continue
+            product_id, variant_id = await self._variant_for_line(line, store_id=store_id)
+            quantity = line.get("quantity") if isinstance(line.get("quantity"), int) else 1
+            price = line.get("price")
+            self.session.add(
+                OrderItem(
+                    tenant_id=order.tenant_id,
+                    order_id=order.id,
+                    external_item_id=str(line["id"]),
+                    external_product_id=(
+                        str(line["product_id"]) if line.get("product_id") is not None else None
+                    ),
+                    product_id=product_id,
+                    variant_id=variant_id,
+                    title=(str(line.get("title") or "")[:512]) or None,
+                    quantity=quantity,
+                    unit_price=Decimal(str(price)) if price is not None else None,
+                    currency=currency if isinstance(currency, str) else None,
+                )
+            )
+        await self.session.flush()
+
+    async def _variant_for_line(
+        self, line: dict[str, Any], *, store_id: uuid.UUID
+    ) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+        """Map a Shopify line back to DropPilot's product and variant through
+        the listing's own variant map (written at publish). ``price:`` keys
+        in that map are cached prices, not variant ids, and are skipped."""
+        shopify_product = line.get("product_id")
+        if shopify_product is None:
+            return None, None
+        listing = await self.listings.get_by_external_product(
+            store_id=store_id, external_product_id=str(shopify_product)
+        )
+        if listing is None:
+            return None, None
+        wanted = str(line.get("variant_id") or "")
+        for ours, theirs in (listing.external_variant_map or {}).items():
+            if not ours.startswith("price:") and str(theirs) == wanted:
+                try:
+                    return listing.product_id, uuid.UUID(ours)
+                except ValueError:
+                    break
+        return listing.product_id, None

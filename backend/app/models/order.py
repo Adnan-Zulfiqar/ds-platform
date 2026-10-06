@@ -350,7 +350,10 @@ class OrderItem(TenantScopedBase):
 
     __tablename__ = "order_items"
 
-    __table_args__ = (Index("ix_order_items_tenant_order", "tenant_id", "order_id"),)
+    __table_args__ = (
+        Index("ix_order_items_tenant_order", "tenant_id", "order_id"),
+        Index("ix_order_items_tenant_variant", "tenant_id", "variant_id"),
+    )
 
     order_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -369,6 +372,16 @@ class OrderItem(TenantScopedBase):
         nullable=True,
     )
     external_product_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    #: The exact catalogue variant, when the channel says which one was sold
+    #: (Shopify does). Placing a supplier order needs the AliExpress SKU per
+    #: line, and a product link alone is ambiguous for a multi-variant
+    #: product. SET NULL for the same reason as ``product_id``.
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("product_variants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
 

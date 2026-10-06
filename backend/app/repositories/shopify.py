@@ -225,6 +225,19 @@ class StoreListingRepository(TenantScopedRepository[StoreListing]):
         )
         return int(getattr(result, "rowcount", 0) or 0)
 
+    async def get_by_external_product(
+        self, *, store_id: uuid.UUID, external_product_id: str
+    ) -> StoreListing | None:
+        """The listing a channel order line points at, by the channel's own
+        product id. Tenant predicate from ``_base_query``."""
+        result = await self.session.execute(
+            self._base_query().where(
+                StoreListing.store_id == store_id,
+                StoreListing.external_product_id == external_product_id,
+            )
+        )
+        return result.scalars().first()
+
     async def list_for_product(self, product_id: uuid.UUID) -> Sequence[StoreListing]:
         result = await self.session.execute(
             self._base_query().where(StoreListing.product_id == product_id)

@@ -149,13 +149,19 @@ class OrderRepository(TenantScopedRepository[Order]):
         return {str(status.value): count for status, count in result.all()}
 
     async def list_active_between(
-        self, *, since: datetime | None = None, limit: int = 500
+        self,
+        *,
+        source: OrderSource,
+        since: datetime | None = None,
+        limit: int = 500,
     ) -> list[Order]:
-        """Orders still in flight, oldest sync first.
+        """Orders still in flight from one source, oldest sync first.
 
         Feeds the status-refresh task: terminal orders (delivered, cancelled,
         refunded) no longer change upstream, so refreshing them spends quota to
-        learn nothing.
+        learn nothing. ``source`` is required: without it the AliExpress
+        refresh sent Shopify, eBay and WooCommerce order ids to AliExpress
+        (found 2026-10-05).
         """
         active = (
             FulfillmentStatus.PENDING,
@@ -166,7 +172,9 @@ class OrderRepository(TenantScopedRepository[Order]):
             FulfillmentStatus.SHIPPED,
             FulfillmentStatus.DISPUTED,
         )
-        query = self._base_query().where(Order.fulfillment_status.in_(active))
+        query = self._base_query().where(
+            Order.fulfillment_status.in_(active), Order.source == source
+        )
         if since is not None:
             query = query.where(Order.external_created_at >= since)
         query = query.order_by(Order.last_synced_at.asc().nulls_first()).limit(limit)
