@@ -28,6 +28,16 @@ production release.
 - **Not verified live:** no real tracking number has been read from
   AliExpress yet.
 
+### Fixed - Track F1: Shopify order lines, and the AliExpress refresh scope (PR #87)
+
+- **Shopify orders were stored with no lines**, so nothing could be ordered
+  from the supplier. Each import now keeps the lines, linked to the exact
+  catalogue variant through the listing's variant map (migration `0049`
+  adds `order_items.variant_id`).
+- **The 6-hourly AliExpress refresh sent Shopify, eBay and WooCommerce
+  order ids to AliExpress.** It now looks only at AliExpress orders.
+- This entry was missing from #87 itself and is added here.
+
 ### Added - Track F2: place the AliExpress order behind a channel order
 
 - **"Place on AliExpress".** `POST /orders/{id}/supplier-order` queues the
