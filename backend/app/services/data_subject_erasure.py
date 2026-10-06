@@ -71,6 +71,7 @@ from app.models.role import UserRole
 from app.models.rule_application import RuleApplication
 from app.models.shopify import ShopifyConnection
 from app.models.store import Store
+from app.models.supplier_order import SupplierOrder
 from app.models.user import User
 
 logger = get_logger(__name__)
@@ -228,6 +229,13 @@ USER_REFERENCES: Final[tuple[UserReference, ...]] = (
         OrderSyncRun.requested_by_user_id,
         "clear",
         OrderSyncRun.tenant_id,
+    ),
+    UserReference(
+        "supplier_orders",
+        SupplierOrder,
+        SupplierOrder.requested_by_user_id,
+        "clear",
+        SupplierOrder.tenant_id,
     ),
     UserReference(
         "price_changes", PriceChange, PriceChange.applied_by_user_id, "clear", PriceChange.tenant_id

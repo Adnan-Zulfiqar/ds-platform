@@ -18,11 +18,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query, status
 
-from app.api.deps import DbSession, RequireAdmin, RequireViewer
+from app.api.deps import BillingWrite, CurrentPrincipal, DbSession, RequireAdmin, RequireViewer
+from app.integrations.aliexpress.ordering import PAYMENT_URL
 from app.models.order import FulfillmentStatus, Order, OrderSource
+from app.models.supplier_order import SupplierOrder, SupplierOrderStatus
 from app.repositories.order import OrderRepository
 from app.schemas.common import ListQueryParams, Page, list_query_params
 from app.schemas.order import (
+    FulfilmentSettingsRead,
+    FulfilmentSettingsUpdate,
     OrderDetailRead,
     OrderItemRead,
     OrderRead,
@@ -31,9 +35,12 @@ from app.schemas.order import (
     OrderSyncRunRead,
     OrderTimelineEntryRead,
     ShipmentRead,
+    SupplierOrderRead,
     TrackingEventRead,
 )
 from app.services.order_sync import OrderSyncService
+from app.services.supplier_ordering import SupplierOrderingService, ensure_admin_can_place
+from app.tasks.supplier_orders import place_after_commit
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -182,6 +189,104 @@ async def sync_orders(
         requested_by_user_id=principal.user_id,
     )
     return OrderSyncRunRead.model_validate(run)
+
+
+# --- Supplier ordering (Track F, D-017) ---------------------------------------
+# Declared before "/{order_id}" so "fulfilment" is never read as an order id.
+
+
+def _supplier(row: SupplierOrder | None) -> SupplierOrderRead:
+    if row is None:
+        return SupplierOrderRead(status="none")
+    awaiting_payment = row.status == SupplierOrderStatus.PLACED.value
+    return SupplierOrderRead.model_validate(
+        {
+            "status": row.status,
+            "trigger": row.trigger,
+            "review_reasons": row.review_reasons,
+            "external_order_ids": row.external_order_ids,
+            "error_code": row.error_code,
+            "error_message": row.error_message,
+            "placed_at": row.placed_at,
+            "tracking_number": row.tracking_number,
+            "tracking_carrier": row.tracking_carrier,
+            "tracking_pushed_at": row.tracking_pushed_at,
+            "payment_url": PAYMENT_URL if awaiting_payment else None,
+        }
+    )
+
+
+@router.get(
+    "/fulfilment/settings",
+    response_model=FulfilmentSettingsRead,
+    summary="The workspace's auto-order and auto-tracking switches",
+)
+async def get_fulfilment_settings(
+    session: DbSession, _authorized: RequireViewer
+) -> FulfilmentSettingsRead:
+    row = await SupplierOrderingService(session).settings()
+    return FulfilmentSettingsRead(
+        auto_order=bool(row and row.auto_order),
+        auto_tracking=bool(row and row.auto_tracking),
+        fallback_shipping_method=row.fallback_shipping_method if row else None,
+    )
+
+
+@router.put(
+    "/fulfilment/settings",
+    response_model=FulfilmentSettingsRead,
+    summary="Turn auto-order and auto-tracking on or off",
+)
+async def update_fulfilment_settings(
+    payload: FulfilmentSettingsUpdate, session: DbSession, _authorized: RequireAdmin
+) -> FulfilmentSettingsRead:
+    row = await SupplierOrderingService(session).update_settings(
+        auto_order=payload.auto_order,
+        auto_tracking=payload.auto_tracking,
+        fallback_shipping_method=payload.fallback_shipping_method,
+    )
+    return FulfilmentSettingsRead(
+        auto_order=row.auto_order,
+        auto_tracking=row.auto_tracking,
+        fallback_shipping_method=row.fallback_shipping_method,
+    )
+
+
+@router.get(
+    "/{order_id}/supplier-order",
+    response_model=SupplierOrderRead,
+    summary="The AliExpress order behind this order",
+)
+async def get_supplier_order(
+    session: DbSession,
+    _authorized: RequireViewer,
+    order_id: Annotated[uuid.UUID, Path()],
+) -> SupplierOrderRead:
+    return _supplier(await SupplierOrderingService(session).get(order_id))
+
+
+@router.post(
+    "/{order_id}/supplier-order",
+    response_model=SupplierOrderRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Place this order on AliExpress",
+    dependencies=[BillingWrite],
+)
+async def place_supplier_order(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    principal: CurrentPrincipal,
+    order_id: Annotated[uuid.UUID, Path()],
+) -> SupplierOrderRead:
+    """Queues the placement; the AliExpress call runs in a background task.
+    The order AliExpress creates is unpaid; the merchant pays it there."""
+    ensure_admin_can_place(await OrderRepository(session).get_by_id_or_raise(order_id))
+    row = await SupplierOrderingService(session).request(
+        order_id, user_id=principal.user_id, trigger="manual"
+    )
+    if row.status == SupplierOrderStatus.QUEUED.value:
+        place_after_commit(session, row.id)
+    return _supplier(row)
 
 
 @router.get(
