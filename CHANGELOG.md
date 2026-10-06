@@ -10,6 +10,34 @@ production release.
 
 ## [Unreleased]
 
+### Added - Track F3: automatic ordering and tracking sync
+
+- **Automatic mode.** With *Auto-order* on, every paid Shopify, eBay or
+  WooCommerce order that arrives (import or webhook) is reviewed and, if it
+  maps cleanly, placed on AliExpress. An order that already has a supplier
+  order (placed, failed, in review) is never touched automatically.
+- **Tracking sync.** Every three hours DropPilot asks AliExpress
+  (`aliexpress.ds.order.tracking.get`) for each placed order's tracking
+  number and stores it. With *Auto-tracking* on it is sent to the store
+  through the same "mark shipped" code as the manual forms, and the buyer
+  gets the store's shipping email. A store refusal is recorded and the
+  number kept.
+- **One parcel only.** An order split across several AliExpress sellers is
+  never given one tracking number automatically.
+- **Manual push.** `POST /orders/{id}/supplier-order/push-tracking`.
+- **Not verified live:** no real tracking number has been read from
+  AliExpress yet.
+
+### Fixed - Track F1: Shopify order lines, and the AliExpress refresh scope (PR #87)
+
+- **Shopify orders were stored with no lines**, so nothing could be ordered
+  from the supplier. Each import now keeps the lines, linked to the exact
+  catalogue variant through the listing's variant map (migration `0049`
+  adds `order_items.variant_id`).
+- **The 6-hourly AliExpress refresh sent Shopify, eBay and WooCommerce
+  order ids to AliExpress.** It now looks only at AliExpress orders.
+- This entry was missing from #87 itself and is added here.
+
 ### Added - Track F2: place the AliExpress order behind a channel order
 
 - **"Place on AliExpress".** `POST /orders/{id}/supplier-order` queues the
