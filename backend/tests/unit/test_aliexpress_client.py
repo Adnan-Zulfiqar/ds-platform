@@ -26,6 +26,7 @@ from app.integrations.aliexpress.auth import (
 from app.integrations.aliexpress.client import AliExpressClient
 from app.integrations.aliexpress.exceptions import (
     AliExpressAuthError,
+    AliExpressError,
     AliExpressRateLimitError,
     AliExpressResponseError,
     AliExpressTimeoutError,
@@ -478,3 +479,43 @@ class TestBackoff:
         recovering provider."""
         samples = {compute_backoff(3, base_seconds=1, max_seconds=60) for _ in range(50)}
         assert len(samples) > 1
+
+
+class TestCreateCallsAreNeverRepeated:
+    """Track F review C1: the client retried every retryable error, so a
+    timeout or 5xx on ``aliexpress.ds.order.create`` could be sent up to four
+    times and buy the goods four times."""
+
+    @pytest.mark.parametrize(
+        "fail",
+        [
+            lambda request: httpx.Response(503, text="busy"),
+            lambda request: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=request)),
+        ],
+        ids=["server_error", "read_timeout"],
+    )
+    async def test_retry_false_sends_exactly_once(
+        self, monkeypatch: pytest.MonkeyPatch, fail: Any
+    ) -> None:
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return fail(request)
+
+        monkeypatch.setattr(client_module.httpx, "AsyncClient", mock_client(handler))
+        with pytest.raises(AliExpressError):
+            await build().call("aliexpress.ds.order.create", {"p": "1"}, retry=False)
+        assert len(sent) == 1
+
+    async def test_ordinary_calls_still_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(503, text="busy")
+
+        monkeypatch.setattr(client_module.httpx, "AsyncClient", mock_client(handler))
+        with pytest.raises(AliExpressError):
+            await build().call("aliexpress.ds.product.get", {"p": "1"})
+        assert len(sent) > 1

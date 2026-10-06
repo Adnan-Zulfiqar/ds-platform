@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDeleteButton } from "@/components/ui/confirm-delete-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/utils";
@@ -14,6 +15,7 @@ import {
   type SupplierOrderStatus,
   usePlaceSupplierOrder,
   usePushSupplierTracking,
+  useReleaseSupplierOrder,
   useSupplierOrder,
 } from "@/services/orders";
 import type { OrderDetail } from "@/types/api";
@@ -69,6 +71,7 @@ export function SupplierOrderPanel({ order }: { order: OrderDetail }) {
   const supplier = useSupplierOrder(order.id);
   const place = usePlaceSupplierOrder(order.id);
   const push = usePushSupplierTracking(order.id);
+  const release = useReleaseSupplierOrder(order.id);
 
   if (!CHANNELS.has(order.source)) return null;
   if (supplier.isLoading || !supplier.data) return <Skeleton className="h-32 w-full" />;
@@ -77,7 +80,8 @@ export function SupplierOrderPanel({ order }: { order: OrderDetail }) {
   const state = STATUS[row.status];
   const canPlace = canAct && ["none", "needs_review", "failed"].includes(row.status);
   const canPush = canAct && row.status === "placed" && !!row.trackingNumber && row.externalOrderIds.length === 1;
-  const failure = place.error ?? push.error;
+  const failure = place.error ?? push.error ?? release.error;
+  const unknown = row.status === "placing" && row.errorCode === "outcome_unknown";
 
   return (
     <Card data-testid="supplier-order-panel">
@@ -103,11 +107,19 @@ export function SupplierOrderPanel({ order }: { order: OrderDetail }) {
         {row.status === "failed" && row.errorMessage && (
           <p className="text-destructive">{row.errorMessage}</p>
         )}
-        {row.status === "placing" && (
+        {row.status === "placing" && !unknown && (
           <p className="text-muted-foreground">
             If this does not finish within a few minutes, check your AliExpress orders before
             trying again, so the goods are not bought twice.
           </p>
+        )}
+        {unknown && (
+          <Alert data-testid="supplier-order-unknown">
+            <AlertDescription>
+              {row.errorMessage} If AliExpress has the order, pay it there. If it does not, release
+              it here and place it again.
+            </AlertDescription>
+          </Alert>
         )}
         {row.externalOrderIds.length > 0 && (
           <p>
@@ -143,6 +155,15 @@ export function SupplierOrderPanel({ order }: { order: OrderDetail }) {
                 Pay on AliExpress <ExternalLink className="ml-1 h-3 w-3" aria-hidden="true" />
               </a>
             </Button>
+          )}
+          {canAct && row.status === "placing" && (
+            <ConfirmDeleteButton
+              label="the stuck supplier order"
+              text="No order on AliExpress? Release"
+              confirmText="Confirm: AliExpress has no such order"
+              disabled={release.isPending}
+              onConfirm={() => release.mutate()}
+            />
           )}
           {canPush && (
             <Button variant="outline" disabled={push.isPending} onClick={() => push.mutate()}>

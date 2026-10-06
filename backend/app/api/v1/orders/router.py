@@ -292,6 +292,22 @@ async def place_supplier_order(
 
 
 @router.post(
+    "/{order_id}/supplier-order/release",
+    response_model=SupplierOrderRead,
+    summary="After checking AliExpress, allow a stuck order to be tried again",
+)
+async def release_supplier_order(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    order_id: Annotated[uuid.UUID, Path()],
+) -> SupplierOrderRead:
+    """Only for an order left "being sent" (no clear answer from AliExpress).
+    The merchant confirms AliExpress has no such order; it becomes failed
+    and can be placed again."""
+    return _supplier(await SupplierOrderingService(session).release(order_id))
+
+
+@router.post(
     "/{order_id}/supplier-order/push-tracking",
     response_model=SupplierOrderRead,
     summary="Send the AliExpress tracking number to the store",
@@ -303,7 +319,8 @@ async def push_supplier_tracking(
 ) -> SupplierOrderRead:
     """For workspaces with auto-tracking off, or after a store refused it."""
     service = SupplierOrderingService(session)
-    row = await service.get(order_id)
+    # Locked: a double click or the three-hourly task must not push twice.
+    row = await service.get(order_id, lock=True)
     if row is None:
         raise NotFoundError("This order has not been sent to AliExpress.")
     return _supplier(await SupplierTrackingService(session).push(row))

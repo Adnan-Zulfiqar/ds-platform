@@ -22,14 +22,20 @@ from typing import Any
 from sqlalchemy import event
 
 from app.core.context import clear_context, require_tenant_id, set_tenant_id
+from app.core.exceptions import AppError, ConflictError
 from app.core.logging import get_logger
 from app.database.session import transaction
-from app.integrations.aliexpress.exceptions import AliExpressError
+from app.integrations.aliexpress.exceptions import (
+    AliExpressError,
+    AliExpressTimeoutError,
+    AliExpressUnavailableError,
+)
 from app.integrations.aliexpress.ordering import PLACE_METHOD, parse_place, place_params
 from app.integrations.aliexpress.service import AliExpressService
 from app.models.order import PaymentStatus
 from app.models.supplier_order import SupplierOrderStatus
 from app.repositories.supplier_order import SupplierOrderRepository
+from app.services.entitlements import BillingGate
 from app.services.supplier_ordering import SupplierOrderingService
 from app.services.supplier_tracking import SupplierTrackingService
 from app.workers.base import BaseTask
@@ -42,7 +48,8 @@ async def _place(tenant_id: uuid.UUID, supplier_order_id: uuid.UUID) -> str:
     set_tenant_id(tenant_id)
     try:
         async with transaction() as session:
-            started = await SupplierOrderingService(session).begin_placing(supplier_order_id)
+            service = SupplierOrderingService(session)
+            started = await service.begin_placing(supplier_order_id)
             if started is None:
                 return "skipped"
             row, review, fallback = started
@@ -54,18 +61,50 @@ async def _place(tenant_id: uuid.UUID, supplier_order_id: uuid.UUID) -> str:
                 lines=review.lines,
                 shipping_method=fallback,
             )
+            # The client (and any token refresh) is settled before anything
+            # is sent, inside the transaction that commits "placing". If it
+            # cannot be built, nothing reached AliExpress: a plain failure.
+            try:
+                client = await AliExpressService(session).authenticated_client()
+            except Exception as exc:
+                await service.record_outcome(
+                    supplier_order_id,
+                    ok=False,
+                    order_ids=[],
+                    error_code=getattr(exc, "code", None) or type(exc).__name__,
+                    error_message=str(exc) or "AliExpress is not connected.",
+                )
+                return "failed"
 
         try:
-            async with transaction() as session:
-                client = await AliExpressService(session).authenticated_client()
-                payload = await client.call(PLACE_METHOD, params)
+            # Exactly once: a retried create could buy the goods twice.
+            payload = await client.call(PLACE_METHOD, params, retry=False)
             outcome = parse_place(payload)
+            if outcome.unknown:
+                await _record_unknown(supplier_order_id, reason=outcome.error_code or "unclear")
+                logger.warning(
+                    "supplier_order_outcome_unknown",
+                    order_id=str(order_id),
+                    error=outcome.error_code,
+                )
+                return "unknown"
+        except (AliExpressTimeoutError, AliExpressUnavailableError) as exc:
+            # No answer, or a server error: AliExpress may have created the
+            # order anyway. Not "failed" (that invites a retry): it stays
+            # "placing" until the merchant has checked AliExpress.
+            await _record_unknown(supplier_order_id, reason=exc.code)
+            logger.warning("supplier_order_outcome_unknown", order_id=str(order_id), error=exc.code)
+            return "unknown"
         except AliExpressError as exc:
             # A refusal is an answer: AliExpress did not create the order.
             outcome = parse_place({})
             outcome = type(outcome)(
                 False, [], getattr(exc, "upstream_code", None) or exc.code, str(exc)
             )
+        except Exception as exc:  # anything else after sending: also unknown
+            await _record_unknown(supplier_order_id, reason=type(exc).__name__)
+            logger.exception("supplier_order_outcome_unknown", order_id=str(order_id))
+            return "unknown"
 
         async with transaction() as session:
             await SupplierOrderingService(session).record_outcome(
@@ -87,7 +126,19 @@ async def _place(tenant_id: uuid.UUID, supplier_order_id: uuid.UUID) -> str:
         clear_context()
 
 
-@celery_app.task(base=BaseTask, bind=True, name="supplier_orders.place", max_retries=0)
+async def _record_unknown(supplier_order_id: uuid.UUID, *, reason: str) -> None:
+    async with transaction() as session:
+        await SupplierOrderingService(session).record_unknown(supplier_order_id, reason=reason)
+
+
+@celery_app.task(
+    base=BaseTask,
+    bind=True,
+    name="supplier_orders.place",
+    max_retries=0,
+    # BaseTask retries every exception; placing must never be repeated.
+    autoretry_for=(),
+)
 def place(self: Any, tenant_id: str, supplier_order_id: str, **_: Any) -> str:
     """No automatic retries: a retry after an unknown outcome could double
     the order. A failure is recorded and the merchant retries."""
@@ -124,13 +175,24 @@ async def _auto_place(tenant_id: uuid.UUID, order_ids: list[uuid.UUID]) -> int:
             settings = await service.settings()
             if settings is None or not settings.auto_order:
                 return 0
+            try:
+                # The manual button is billing-gated; auto mode must be too.
+                await BillingGate(session).require_can_write()
+            except AppError:
+                logger.info("supplier_auto_place_billing_inactive")
+                return 0
             for order_id in order_ids:
                 if await service.supplier_orders.for_order(order_id) is not None:
                     continue
                 order = await service.orders.get_by_id(order_id)
                 if order is None or order.payment_status is not PaymentStatus.PAID:
                     continue
-                row = await service.request(order_id, user_id=None, trigger="auto")
+                if not service.auto_eligible(order, settings):
+                    continue  # placed before auto mode was switched on
+                try:
+                    row = await service.request(order_id, user_id=None, trigger="auto")
+                except ConflictError:
+                    continue  # the button got there first
                 if row.status == SupplierOrderStatus.QUEUED.value:
                     place_after_commit(session, row.id)
                     queued += 1
@@ -183,10 +245,13 @@ async def _sync_tracking(tenant_id: uuid.UUID, *, limit: int) -> dict[str, int]:
     counts = {"checked": 0, "found": 0, "pushed": 0, "failed": 0}
     try:
         async with transaction() as session:
-            ids = [
-                row.id
-                for row in await SupplierOrderRepository(session).awaiting_tracking(limit=limit)
-            ]
+            rows = SupplierOrderRepository(session)
+            ids = [row.id for row in await rows.awaiting_tracking(limit=limit)]
+            # A placement whose enqueue was lost (broker down) would sit in
+            # "queued" forever. Only "queued" rows are ever placed, so sending
+            # them again cannot place twice.
+            for stale in await rows.stale_queued():
+                place_after_commit(session, stale.id)
         for row_id in ids:
             try:
                 async with transaction() as session:
@@ -200,6 +265,10 @@ async def _sync_tracking(tenant_id: uuid.UUID, *, limit: int) -> dict[str, int]:
                         continue
                     counts["found"] += 1
                     if not await service.auto_push_enabled():
+                        continue
+                    if (row.error_code or "").startswith("tracking_push:"):
+                        # The store refused before; repeating every three
+                        # hours would fail the same way. The merchant pushes.
                         continue
                     try:
                         async with session.begin_nested():

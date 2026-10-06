@@ -23,7 +23,12 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import set_tenant_id
-from app.integrations.aliexpress.exceptions import AliExpressResponseError
+from app.core.exceptions import ConflictError, ValidationError
+from app.integrations.aliexpress.exceptions import (
+    AliExpressResponseError,
+    AliExpressTimeoutError,
+    AliExpressUnavailableError,
+)
 from app.models.order import FulfillmentStatus, Order, OrderItem, OrderSource, PaymentStatus
 from app.models.product import Product, ProductSource, ProductStatus, ProductVariant
 from app.models.supplier_order import SupplierOrderStatus
@@ -39,9 +44,13 @@ class FakeAliExpress:
     def __init__(self, answer: dict[str, Any] | Exception) -> None:
         self.answer = answer
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.retry_flags: list[bool] = []
 
-    async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    async def call(
+        self, method: str, params: dict[str, Any], *, retry: bool = True
+    ) -> dict[str, Any]:
         self.calls.append((method, params))
+        self.retry_flags.append(retry)
         if isinstance(self.answer, Exception):
             raise self.answer
         return self.answer
@@ -175,6 +184,7 @@ async def test_a_clean_order_is_placed_with_the_exact_sku_and_address(
     assert row.placed_at is not None
     [(method, params)] = aliexpress.calls
     assert method == "aliexpress.ds.order.create"
+    assert aliexpress.retry_flags == [False]  # review C1: never re-sent
     body = json.loads(params["param_place_order_request4_open_api_d_t_o"])
     assert body["product_items"] == [
         {"product_id": 1005001, "product_count": 2, "sku_attr": "14:Blue"}
@@ -242,11 +252,11 @@ async def test_a_second_request_cannot_start_a_second_order(
     "answer",
     [
         {"result": {"is_success": False, "error_code": "B_STOCK", "error_msg": "out of stock"}},
-        {"unexpected": "shape"},
         AliExpressResponseError("refused", upstream_code="isv.permission"),
     ],
+    ids=["explicit_refusal", "error_envelope"],
 )
-async def test_a_refused_or_unreadable_answer_is_failed_and_can_be_retried(
+async def test_an_explicit_refusal_is_failed_and_can_be_retried(
     client: AsyncClient,
     db_session: AsyncSession,
     aliexpress: FakeAliExpress,
@@ -265,6 +275,118 @@ async def test_a_refused_or_unreadable_answer_is_failed_and_can_be_retried(
     aliexpress.answer = PLACED  # the merchant fixes the cause and retries
     row = await place(db_session, tenant_id, order_id)
     assert row.status == SupplierOrderStatus.PLACED.value
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"unexpected": "shape"},
+        {"result": {"is_success": True, "order_list": {"number": []}}},
+        AliExpressTimeoutError(),
+        AliExpressUnavailableError("502 from the gateway"),
+        RuntimeError("worker lost the connection"),
+    ],
+    ids=["unreadable", "success_without_ids", "timeout", "server_error", "crash"],
+)
+async def test_an_unclear_answer_waits_for_the_merchant_and_is_never_retried(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    aliexpress: FakeAliExpress,
+    answer: dict[str, Any] | Exception,
+) -> None:
+    """Review C2: AliExpress may have created the order. The row stays
+    "placing" with outcome_unknown, a new request is refused, and only the
+    merchant's release (after checking AliExpress) allows another try."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
+    aliexpress.answer = answer
+
+    row = await place(db_session, tenant_id, order_id)
+    assert row.status == SupplierOrderStatus.PLACING.value
+    assert row.error_code == "outcome_unknown"
+    assert "Check your AliExpress orders" in (row.error_message or "")
+    with pytest.raises(ConflictError):
+        await SupplierOrderingService(db_session).request(order_id, user_id=None, trigger="manual")
+    assert len(aliexpress.calls) == 1
+
+    released = await SupplierOrderingService(db_session).release(order_id)
+    assert released.status == SupplierOrderStatus.FAILED.value
+    aliexpress.answer = PLACED
+    row = await place(db_session, tenant_id, order_id)
+    assert row.status == SupplierOrderStatus.PLACED.value
+
+
+async def test_release_is_only_for_a_stuck_order(
+    client: AsyncClient, db_session: AsyncSession, aliexpress: FakeAliExpress
+) -> None:
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
+    await place(db_session, tenant_id, order_id)  # placed
+    with pytest.raises(ConflictError):
+        await SupplierOrderingService(db_session).release(order_id)
+
+
+async def test_no_call_is_made_when_aliexpress_is_not_connected(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    aliexpress: FakeAliExpress,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review C5: building the client failed outside the error handling and
+    left the row "placing" forever. Nothing was sent, so it is a failure."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
+
+    async def not_connected(_self: object) -> None:
+        raise ValidationError("AliExpress is not connected for this workspace.")
+
+    monkeypatch.setattr(tasks.AliExpressService, "authenticated_client", not_connected)
+    row = await place(db_session, tenant_id, order_id)
+    assert row.status == SupplierOrderStatus.FAILED.value
+    assert aliexpress.calls == []
+
+
+async def test_already_fulfilled_or_refunded_orders_are_not_bought_again(
+    client: AsyncClient, db_session: AsyncSession, aliexpress: FakeAliExpress
+) -> None:
+    """Review C3."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    for status, reason in (
+        (FulfillmentStatus.FULFILLED, "order_already_fulfilled"),
+        (FulfillmentStatus.SHIPPED, "order_already_fulfilled"),
+        (FulfillmentStatus.DELIVERED, "order_already_fulfilled"),
+        (FulfillmentStatus.REFUNDED, "order_refunded"),
+    ):
+        order_id = await channel_order(
+            db_session, tenant_id, [(product_id, only, 1)], fulfillment_status=status
+        )
+        row = await place(db_session, tenant_id, order_id)
+        assert row.status == SupplierOrderStatus.NEEDS_REVIEW.value
+        assert reason in row.review_reasons
+    assert aliexpress.calls == []
+
+
+async def test_removed_lines_are_not_ordered_and_quantities_are_exact(
+    client: AsyncClient, db_session: AsyncSession, aliexpress: FakeAliExpress
+) -> None:
+    """Review C4: a line edited down to 0 is not bought (it used to become 1)."""
+    _, tenant_id = await workspace(client)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    order_id = await channel_order(
+        db_session, tenant_id, [(product_id, only, 3), (product_id, only, 0)]
+    )
+    row = await place(db_session, tenant_id, order_id)
+    assert row.status == SupplierOrderStatus.PLACED.value
+    assert row.request_lines == [{"productId": "1005001", "skuAttr": "14:Only", "quantity": 3}]
+
+    emptied = await channel_order(db_session, tenant_id, [(product_id, only, 0)])
+    row = await place(db_session, tenant_id, emptied)
+    assert row.status == SupplierOrderStatus.NEEDS_REVIEW.value
+    assert row.review_reasons == ["no_order_lines"]
 
 
 async def test_a_row_left_placing_is_never_placed_again(

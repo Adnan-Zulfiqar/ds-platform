@@ -14,10 +14,15 @@ export function ConfirmDeleteButton({
   label,
   onConfirm,
   disabled,
+  text = "Delete",
+  confirmText = "Confirm delete",
 }: {
   label: string;
   onConfirm: () => void;
   disabled?: boolean;
+  /** The first click's wording; the action need not be a delete. */
+  text?: string;
+  confirmText?: string;
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -33,10 +38,10 @@ export function ConfirmDeleteButton({
         size="sm"
         variant="ghost"
         disabled={disabled}
-        aria-label={`Delete ${label}`}
+        aria-label={`${text} ${label}`}
         onClick={() => setArmed(true)}
       >
-        Delete
+        {text}
       </Button>
     );
   }
@@ -45,13 +50,13 @@ export function ConfirmDeleteButton({
       size="sm"
       variant="destructive"
       disabled={disabled}
-      aria-label={`Confirm delete ${label}`}
+      aria-label={`${confirmText} ${label}`}
       onClick={() => {
         setArmed(false);
         onConfirm();
       }}
     >
-      Confirm delete
+      {confirmText}
     </Button>
   );
 }

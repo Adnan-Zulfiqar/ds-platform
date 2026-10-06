@@ -54,10 +54,14 @@ class PlaceAddress:
 
 @dataclass(frozen=True, slots=True)
 class PlaceOutcome:
+    """``ok`` placed; ``unknown`` AliExpress may or may not have placed it;
+    neither means an explicit refusal (the only state that may be retried)."""
+
     ok: bool
     order_ids: list[str]
     error_code: str | None
     error_message: str | None
+    unknown: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,24 +141,27 @@ def _ids(value: Any) -> list[str]:
 
 
 def parse_place(payload: dict[str, Any]) -> PlaceOutcome:
-    """Read ``aliexpress.ds.order.create``'s answer.
+    """Read ``aliexpress.ds.order.create``'s answer, three ways.
 
-    Success needs *both* an explicit success flag and at least one order id.
-    Anything else is a failure carrying whatever code and message were
-    found, so an unreadable answer can never be mistaken for a placed order.
+    * **Placed:** an explicit success flag *and* at least one order id.
+    * **Refused:** an explicit ``is_success: false``, or an error envelope.
+      AliExpress said no, so trying again cannot buy twice.
+    * **Unknown:** anything else (success without ids, a body DropPilot
+      cannot read). The success body has never been seen live, so an
+      unreadable answer may well be a placed order; it must never be
+      offered as "try again".
     """
     for node in _walk(payload):
         if "is_success" in node or "order_list" in node:
             ids = _ids(node.get("order_list"))
-            success = node.get("is_success") in (True, "true", "True")
-            if success and ids:
+            flag = node.get("is_success")
+            code = str(node.get("error_code") or "") or None
+            message = str(node.get("error_msg") or node.get("error_message") or "") or None
+            if flag in (True, "true", "True") and ids:
                 return PlaceOutcome(True, ids, None, None)
-            return PlaceOutcome(
-                False,
-                ids,
-                str(node.get("error_code") or "") or None,
-                str(node.get("error_msg") or node.get("error_message") or "") or None,
-            )
+            if flag in (False, "false", "False"):
+                return PlaceOutcome(False, ids, code or "refused", message)
+            return PlaceOutcome(False, ids, code or "unclear_success", message, unknown=True)
     for node in _walk(payload):
         if "code" in node and ("msg" in node or "sub_msg" in node):
             return PlaceOutcome(
@@ -164,7 +171,11 @@ def parse_place(payload: dict[str, Any]) -> PlaceOutcome:
                 str(node.get("sub_msg") or node.get("msg")),
             )
     return PlaceOutcome(
-        False, [], "unreadable_response", "AliExpress returned an answer DropPilot could not read."
+        False,
+        [],
+        "unreadable_response",
+        "AliExpress returned an answer DropPilot could not read.",
+        unknown=True,
     )
 
 

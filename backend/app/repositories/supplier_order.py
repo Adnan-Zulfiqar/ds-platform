@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +29,15 @@ class SupplierOrderRepository(TenantScopedRepository[SupplierOrder]):
     async def get_locked(self, supplier_order_id: uuid.UUID) -> SupplierOrder | None:
         query = self._base_query().where(SupplierOrder.id == supplier_order_id).with_for_update()
         return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def stale_queued(self, *, older_than_minutes: int = 10) -> Sequence[SupplierOrder]:
+        """Rows still ``queued`` long after their task should have run."""
+        cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
+        query = self._base_query().where(
+            SupplierOrder.status == SupplierOrderStatus.QUEUED.value,
+            SupplierOrder.updated_at < cutoff,
+        )
+        return list((await self.session.execute(query)).scalars().all())
 
     async def awaiting_tracking(self, *, limit: int = 200) -> Sequence[SupplierOrder]:
         """Placed orders with no tracking pushed yet, least recently checked first."""

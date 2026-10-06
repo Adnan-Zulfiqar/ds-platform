@@ -276,7 +276,7 @@ class TestTheDrill:
     def test_the_source_is_at_the_current_head_with_the_data_seeded(
         self, source_database: dict[str, str]
     ) -> None:
-        assert source_database["revision"] == "0050"
+        assert source_database["revision"] == "0051"
         assert source_database["tenants"] == str(TENANTS)
         assert source_database["users"] == str(TENANTS * USERS_PER_TENANT)
         assert source_database["stores"] == str(TENANTS)
@@ -289,7 +289,7 @@ class TestTheDrill:
     ) -> None:
         manifest = taken_backup.manifest
         assert manifest.database == SOURCE_DB
-        assert manifest.alembic_revision == "0050"
+        assert manifest.alembic_revision == "0051"
         assert manifest.postgres_version.startswith("PostgreSQL 17")
         assert manifest.dump_format == "pg_dump/custom"
         assert manifest.plaintext_bytes > 0
@@ -343,14 +343,14 @@ class TestTheDrill:
         )
         assert outcome.dry_run is False
         assert outcome.target_database == RESTORE_DB
-        assert outcome.alembic_revision == "0050"
+        assert outcome.alembic_revision == "0051"
 
         restored = _measure(RESTORE_DB)
         assert restored == source_database, "the restored database differs from the source"
 
         # Named individually so a failure says which property broke rather than
         # printing two large dictionaries.
-        assert restored["revision"] == "0050"
+        assert restored["revision"] == "0051"
         assert restored["tenants_digest"] == source_database["tenants_digest"]
         assert restored["users_digest"] == source_database["users_digest"]
         assert restored["stores_digest"] == source_database["stores_digest"]
