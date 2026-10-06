@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - background tasks failed after the first one in each worker
+
+- **Every Celery task after the first in a worker process could fail** with
+  "attached to a different loop" or "Event loop is closed". Tasks run their
+  async work with `asyncio.run` (a new event loop each time) while the
+  database engine kept pooled connections bound to the loop that opened
+  them. Only the pricing task had a workaround. Found on 2026-10-06 when
+  `notifications.send_emails` failed in the owner's running worker; it also
+  affected the new supplier-order tasks.
+- **Fix:** worker processes switch the shared engine to `NullPool` at start
+  (`worker_init` / `worker_process_init`), re-binding the same session
+  factory so every module sees it. The API keeps its pool. One connection
+  per transaction in the worker.
+
 ### Fixed - Track F review: no path can buy the same goods twice
 
 An independent review of F1-F4, done before the code reached any running

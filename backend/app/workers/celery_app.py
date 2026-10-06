@@ -18,7 +18,13 @@ from __future__ import annotations
 from typing import Any
 
 from celery import Celery
-from celery.signals import setup_logging, task_postrun, task_prerun
+from celery.signals import (
+    setup_logging,
+    task_postrun,
+    task_prerun,
+    worker_init,
+    worker_process_init,
+)
 
 from app.core.config import settings
 from app.core.context import RequestContext, clear_context
@@ -27,6 +33,20 @@ from app.core.logging import configure_logging, get_logger
 logger = get_logger(__name__)
 
 celery_app = Celery("droppilot")
+
+
+@worker_init.connect
+@worker_process_init.connect
+def _worker_database(**_: Any) -> None:
+    """Every worker process uses a pool-less engine: tasks run on a new event
+    loop each time, and a pooled connection cannot cross loops. See
+    ``app.database.session.use_null_pool_for_worker``. Both signals: the
+    first covers the solo pool and the prefork parent, the second each
+    forked child. Idempotent."""
+    from app.database.session import use_null_pool_for_worker
+
+    use_null_pool_for_worker()
+
 
 celery_app.conf.update(
     broker_url=settings.celery.broker_url,
