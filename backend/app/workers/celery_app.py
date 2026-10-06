@@ -174,6 +174,13 @@ celery_app.conf.update(
             "task": "shopify.sync_orders_all",
             "schedule": 60 * 60,
         },
+        # Track F (D-017): AliExpress tracking numbers back to the stores.
+        # Three hours: a supplier adds tracking days after placing, and each
+        # check is one AliExpress call per placed order.
+        "supplier-orders-sync-tracking": {
+            "task": "supplier_orders.sync_tracking_all",
+            "schedule": 60 * 60 * 3,
+        },
     },
 )
 

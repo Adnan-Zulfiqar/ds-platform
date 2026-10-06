@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.api.deps import BillingWrite, CurrentPrincipal, DbSession, RequireAdmin, RequireViewer
+from app.core.exceptions import NotFoundError
 from app.integrations.aliexpress.ordering import PAYMENT_URL
 from app.models.order import FulfillmentStatus, Order, OrderSource
 from app.models.supplier_order import SupplierOrder, SupplierOrderStatus
@@ -40,6 +41,7 @@ from app.schemas.order import (
 )
 from app.services.order_sync import OrderSyncService
 from app.services.supplier_ordering import SupplierOrderingService, ensure_admin_can_place
+from app.services.supplier_tracking import SupplierTrackingService
 from app.tasks.supplier_orders import place_after_commit
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -287,6 +289,24 @@ async def place_supplier_order(
     if row.status == SupplierOrderStatus.QUEUED.value:
         place_after_commit(session, row.id)
     return _supplier(row)
+
+
+@router.post(
+    "/{order_id}/supplier-order/push-tracking",
+    response_model=SupplierOrderRead,
+    summary="Send the AliExpress tracking number to the store",
+)
+async def push_supplier_tracking(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    order_id: Annotated[uuid.UUID, Path()],
+) -> SupplierOrderRead:
+    """For workspaces with auto-tracking off, or after a store refused it."""
+    service = SupplierOrderingService(session)
+    row = await service.get(order_id)
+    if row is None:
+        raise NotFoundError("This order has not been sent to AliExpress.")
+    return _supplier(await SupplierTrackingService(session).push(row))
 
 
 @router.get(

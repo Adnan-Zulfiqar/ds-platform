@@ -696,11 +696,20 @@ class ShopifySyncService(BaseService):
                 **values,
             )
             await self._replace_items(order, raw, store_id=store_id)
+            self._auto_order(order)
             return "created"
 
         await self.orders.update(existing, **values)
         await self._replace_items(existing, raw, store_id=store_id)
+        self._auto_order(existing)
         return "updated"
+
+    def _auto_order(self, order: Order) -> None:
+        if order.payment_status is PaymentStatus.PAID:
+            # Track F: the workspace's auto-order switch decides in the task.
+            from app.tasks.supplier_orders import auto_order_after_commit
+
+            auto_order_after_commit(self.session, order.id)
 
     async def _replace_items(
         self, order: Order, raw: dict[str, Any], *, store_id: uuid.UUID

@@ -27,7 +27,11 @@ from app.database.session import transaction
 from app.integrations.aliexpress.exceptions import AliExpressError
 from app.integrations.aliexpress.ordering import PLACE_METHOD, parse_place, place_params
 from app.integrations.aliexpress.service import AliExpressService
+from app.models.order import PaymentStatus
+from app.models.supplier_order import SupplierOrderStatus
+from app.repositories.supplier_order import SupplierOrderRepository
 from app.services.supplier_ordering import SupplierOrderingService
+from app.services.supplier_tracking import SupplierTrackingService
 from app.workers.base import BaseTask
 from app.workers.celery_app import celery_app
 
@@ -104,4 +108,139 @@ def place_after_commit(session: Any, supplier_order_id: uuid.UUID) -> None:
     event.listen(session.sync_session, "after_commit", on_commit, once=True)
 
 
-__all__ = ["place", "place_after_commit"]
+# --- automatic mode ----------------------------------------------------------
+
+
+async def _auto_place(tenant_id: uuid.UUID, order_ids: list[uuid.UUID]) -> int:
+    """Queue placement for paid orders that have never been sent, when the
+    workspace's auto-order switch is on. An order that already has a supplier
+    row (placed, failed, in review) is left alone: automatic mode never
+    retries what a person should look at."""
+    set_tenant_id(tenant_id)
+    queued = 0
+    try:
+        async with transaction() as session:
+            service = SupplierOrderingService(session)
+            settings = await service.settings()
+            if settings is None or not settings.auto_order:
+                return 0
+            for order_id in order_ids:
+                if await service.supplier_orders.for_order(order_id) is not None:
+                    continue
+                order = await service.orders.get_by_id(order_id)
+                if order is None or order.payment_status is not PaymentStatus.PAID:
+                    continue
+                row = await service.request(order_id, user_id=None, trigger="auto")
+                if row.status == SupplierOrderStatus.QUEUED.value:
+                    place_after_commit(session, row.id)
+                    queued += 1
+        return queued
+    finally:
+        clear_context()
+
+
+@celery_app.task(base=BaseTask, bind=True, name="supplier_orders.auto_place")
+def auto_place(self: Any, tenant_id: str, order_ids: list[str], **_: Any) -> int:
+    """Idempotent: a second run finds the supplier rows the first created."""
+    return asyncio.run(_auto_place(uuid.UUID(tenant_id), [uuid.UUID(i) for i in order_ids]))
+
+
+def auto_order_after_commit(session: Any, order_id: uuid.UUID) -> None:
+    """Called by each channel's order import for a paid order. Collects the
+    ids for the transaction and queues one task per workspace on commit; a
+    rollback drops them. Cheap when the switch is off: the task returns at
+    the first query."""
+    tenant_id = str(require_tenant_id())
+    sync = session.sync_session
+    pending: dict[str, list[str]] | None = sync.info.get("auto_order_ids")
+    if pending is None:
+        pending = {}
+        sync.info["auto_order_ids"] = pending
+
+        def on_commit(_session: object) -> None:
+            batch = sync.info.pop("auto_order_ids", {}) or {}
+            for tenant, ids in batch.items():
+                try:
+                    auto_place.delay(tenant, list(dict.fromkeys(ids)))
+                except Exception as exc:  # broker down: the order is saved
+                    logger.warning("supplier_auto_place_enqueue_failed", error=type(exc).__name__)
+
+        def on_rollback(_session: object) -> None:
+            sync.info.pop("auto_order_ids", None)
+
+        event.listen(sync, "after_commit", on_commit, once=True)
+        event.listen(sync, "after_rollback", on_rollback, once=True)
+    pending.setdefault(tenant_id, []).append(str(order_id))
+
+
+# --- tracking -----------------------------------------------------------------
+
+
+async def _sync_tracking(tenant_id: uuid.UUID, *, limit: int) -> dict[str, int]:
+    """Check every placed order for a tracking number, one transaction per
+    order so one failure never undoes another's progress."""
+    set_tenant_id(tenant_id)
+    counts = {"checked": 0, "found": 0, "pushed": 0, "failed": 0}
+    try:
+        async with transaction() as session:
+            ids = [
+                row.id
+                for row in await SupplierOrderRepository(session).awaiting_tracking(limit=limit)
+            ]
+        for row_id in ids:
+            try:
+                async with transaction() as session:
+                    service = SupplierTrackingService(session)
+                    row = await service.supplier_orders.get_locked(row_id)
+                    if row is None or row.status != SupplierOrderStatus.PLACED.value:
+                        continue
+                    counts["checked"] += 1
+                    tracking = await service.check(row)
+                    if tracking is None:
+                        continue
+                    counts["found"] += 1
+                    if not await service.auto_push_enabled():
+                        continue
+                    try:
+                        async with session.begin_nested():
+                            await service.push(row)
+                        counts["pushed"] += 1
+                    except Exception as exc:  # a store refusal is recorded, not fatal
+                        await service.record_push_failure(row, exc)
+                        counts["failed"] += 1
+            except AliExpressError as exc:
+                logger.warning(
+                    "supplier_tracking_check_failed",
+                    supplier_order_id=str(row_id),
+                    error=type(exc).__name__,
+                )
+        return counts
+    finally:
+        clear_context()
+
+
+@celery_app.task(base=BaseTask, bind=True, name="supplier_orders.sync_tracking_one")
+def sync_tracking_one(self: Any, tenant_id: str, limit: int = 200, **_: Any) -> dict[str, int]:
+    return asyncio.run(_sync_tracking(uuid.UUID(tenant_id), limit=limit))
+
+
+@celery_app.task(base=BaseTask, bind=True, name="supplier_orders.sync_tracking_all")
+def sync_tracking_all(self: Any, **_: Any) -> dict[str, int]:
+    """Fan out to every workspace with a connected AliExpress account, the
+    same set the order sync already sweeps (no new unscoped lookup)."""
+    from app.tasks.orders import _connected_tenants
+
+    tenants = asyncio.run(_connected_tenants())
+    for tenant_id in tenants:
+        sync_tracking_one.delay(str(tenant_id))
+    return {"queued": len(tenants)}
+
+
+__all__ = [
+    "auto_order_after_commit",
+    "auto_place",
+    "place",
+    "place_after_commit",
+    "sync_tracking_all",
+    "sync_tracking_one",
+]
