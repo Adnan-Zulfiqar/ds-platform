@@ -216,6 +216,11 @@ class WooCommerceOrderService:
             outcome = "updated"
         lines = [li for li in (raw.get("line_items") or []) if isinstance(li, Mapping)]
         await self._sync_items(order, lines, currency=values["currency"])
+        if order.payment_status is PaymentStatus.PAID:
+            # Track F: the workspace's auto-order switch decides in the task.
+            from app.tasks.supplier_orders import auto_order_after_commit
+
+            auto_order_after_commit(self.session, order.id)
         return outcome
 
     async def _sync_items(
