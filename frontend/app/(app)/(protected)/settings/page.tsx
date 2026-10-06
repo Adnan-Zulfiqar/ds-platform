@@ -2,6 +2,7 @@ import {
   Bell,
   ChevronRight,
   CreditCard,
+  PackageCheck,
   Plug,
   SlidersHorizontal,
   User,
@@ -50,6 +51,13 @@ const SECTIONS: readonly SettingsSection[] = [
     label: "Global Rules",
     description: "Pricing and shipping rules applied across your catalogue.",
     icon: SlidersHorizontal,
+    available: true,
+  },
+  {
+    href: "/settings/fulfilment",
+    label: "Fulfilment",
+    description: "Order from AliExpress and send tracking to your stores automatically.",
+    icon: PackageCheck,
     available: true,
   },
   {

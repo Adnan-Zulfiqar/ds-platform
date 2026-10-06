@@ -14,6 +14,7 @@ import {
 } from "@/components/orders/ebay-orders";
 import { OrderTimeline } from "@/components/orders/order-timeline";
 import { ShipmentCard } from "@/components/orders/shipment-card";
+import { SupplierOrderPanel } from "@/components/orders/supplier-order-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/error-state";
@@ -228,6 +229,7 @@ export function OrderDetailView({ orderId }: { orderId: string }) {
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-4">
           <h2 className="text-lg font-semibold">Shipments</h2>
+          <SupplierOrderPanel order={order} />
           <EbayShipOrderForm order={order} />
           <ShopifyShipOrderForm order={order} />
           <WooCommerceShipOrderForm order={order} />
