@@ -72,7 +72,9 @@ async def placed(
     source: OrderSource = OrderSource.WOOCOMMERCE,
     ae_ids: list[str] | None = None,
 ) -> tuple[uuid.UUID, SupplierOrder]:
-    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    product_id, [only] = await catalogue(
+        db_session, tenant_id, variants=["14:Only"], external_id=uuid.uuid4().hex[:12]
+    )
     order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)], source=source)
     row = await SupplierOrderRepository(db_session).create(
         order_id=order_id,

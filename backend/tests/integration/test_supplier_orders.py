@@ -81,12 +81,16 @@ async def workspace(client: AsyncClient) -> tuple[dict[str, Any], uuid.UUID]:
 
 
 async def catalogue(
-    db_session: AsyncSession, tenant_id: uuid.UUID, *, variants: list[str]
+    db_session: AsyncSession,
+    tenant_id: uuid.UUID,
+    *,
+    variants: list[str],
+    external_id: str = "1005001",
 ) -> tuple[uuid.UUID, list[uuid.UUID]]:
     product = Product(
         tenant_id=tenant_id,
         source=ProductSource.ALIEXPRESS,
-        external_id="1005001",
+        external_id=external_id,
         title="Case",
         status=ProductStatus.ACTIVE,
         sell_price=Decimal("10"),
