@@ -137,3 +137,102 @@ export function useSyncOrders() {
     },
   });
 }
+
+// --- Supplier ordering (Track F, D-017) --------------------------------------
+
+export type SupplierOrderStatus =
+  | "none"
+  | "needs_review"
+  | "queued"
+  | "placing"
+  | "placed"
+  | "failed"
+  | "shipped";
+
+export interface SupplierOrder {
+  status: SupplierOrderStatus;
+  trigger: string | null;
+  reviewReasons: string[];
+  externalOrderIds: string[];
+  errorCode: string | null;
+  errorMessage: string | null;
+  placedAt: string | null;
+  trackingNumber: string | null;
+  trackingCarrier: string | null;
+  trackingPushedAt: string | null;
+  /** Where the merchant pays the unpaid AliExpress order. */
+  paymentUrl: string | null;
+}
+
+export interface FulfilmentSettings {
+  autoOrder: boolean;
+  autoTracking: boolean;
+  fallbackShippingMethod: string | null;
+}
+
+export const supplierKeys = {
+  order: (orderId: string) => [...orderKeys.all, "supplier", orderId] as const,
+  settings: () => [...orderKeys.all, "fulfilment-settings"] as const,
+};
+
+/** Polls while the background task is placing, so the panel settles on
+ * its own instead of asking the merchant to refresh. */
+export function useSupplierOrder(orderId: string): UseQueryResult<SupplierOrder> {
+  return useQuery({
+    queryKey: supplierKeys.order(orderId),
+    queryFn: async () => {
+      const { data } = await apiClient.get<SupplierOrder>(`/orders/${orderId}/supplier-order`);
+      return data;
+    },
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "queued" || status === "placing" ? 3000 : false;
+    },
+  });
+}
+
+function useSupplierMutation(orderId: string, path: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post<SupplierOrder>(`/orders/${orderId}${path}`);
+      return data;
+    },
+    onSuccess: (row) => {
+      queryClient.setQueryData(supplierKeys.order(orderId), row);
+      void queryClient.invalidateQueries({ queryKey: orderKeys.detail(orderId) });
+    },
+  });
+}
+
+export function usePlaceSupplierOrder(orderId: string) {
+  return useSupplierMutation(orderId, "/supplier-order");
+}
+
+export function usePushSupplierTracking(orderId: string) {
+  return useSupplierMutation(orderId, "/supplier-order/push-tracking");
+}
+
+export function useFulfilmentSettings(): UseQueryResult<FulfilmentSettings> {
+  return useQuery({
+    queryKey: supplierKeys.settings(),
+    queryFn: async () => {
+      const { data } = await apiClient.get<FulfilmentSettings>("/orders/fulfilment/settings");
+      return data;
+    },
+  });
+}
+
+export function useSaveFulfilmentSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (settings: FulfilmentSettings) => {
+      const { data } = await apiClient.put<FulfilmentSettings>(
+        "/orders/fulfilment/settings",
+        settings,
+      );
+      return data;
+    },
+    onSuccess: (saved) => queryClient.setQueryData(supplierKeys.settings(), saved),
+  });
+}
