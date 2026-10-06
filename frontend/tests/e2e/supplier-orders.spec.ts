@@ -218,3 +218,42 @@ test("the fulfilment switches start off and save exactly what was chosen", async
     { autoOrder: true, autoTracking: true, fallbackShippingMethod: "CAINIAO_STANDARD" },
   ]);
 });
+
+test("an unclear answer asks the merchant to check AliExpress, then release", async ({
+  page,
+}) => {
+  await mockOrder(page);
+  let state = supplier({
+    status: "placing",
+    errorCode: "outcome_unknown",
+    errorMessage:
+      "AliExpress did not answer clearly (aliexpress_timeout). Check your AliExpress orders before trying again, so the goods are not bought twice.",
+  });
+  let released = 0;
+  await page.route(`**/api/v1/orders/${ORDER_ID}/supplier-order`, (route) => json(route, state));
+  await page.route(`**/api/v1/orders/${ORDER_ID}/supplier-order/release`, (route) => {
+    released += 1;
+    state = supplier({
+      status: "failed",
+      errorCode: "released_by_merchant",
+      errorMessage: "Released after checking AliExpress: no order had been created.",
+    });
+    return json(route, state);
+  });
+
+  await page.goto(`/orders/${ORDER_ID}`);
+  const panel = page.getByTestId("supplier-order-panel");
+  await expect(page.getByTestId("supplier-order-unknown")).toContainText(
+    "Check your AliExpress orders",
+  );
+  // No "Try again" while the outcome is unknown: that could buy twice.
+  await expect(panel.getByRole("button", { name: /Try again|Place on AliExpress/ })).toHaveCount(0);
+
+  await panel.getByRole("button", { name: /No order on AliExpress\? Release/ }).click();
+  expect(released).toBe(0); // the first click only arms
+  await panel.getByRole("button", { name: /Confirm: AliExpress has no such order/ }).click();
+
+  await expect(page.getByTestId("supplier-order-status")).toHaveText("Not placed on AliExpress");
+  await expect(panel.getByRole("button", { name: "Try again" })).toBeVisible();
+  expect(released).toBe(1);
+});

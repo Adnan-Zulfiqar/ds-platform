@@ -28,7 +28,7 @@ const STATUS: Record<SupplierOrderStatus, { label: string; tone: "secondary" | "
   queued: { label: "Sending to AliExpress…", tone: "secondary" },
   placing: { label: "Sending to AliExpress…", tone: "secondary" },
   placed: { label: "Placed, awaiting payment on AliExpress", tone: "warning" },
-  failed: { label: "AliExpress refused the order", tone: "destructive" },
+  failed: { label: "Not placed on AliExpress", tone: "destructive" },
   shipped: { label: "Tracking sent to the store", tone: "success" },
 };
 
