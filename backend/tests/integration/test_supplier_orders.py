@@ -10,6 +10,7 @@ is never placed again by a redelivered task.
 
 from __future__ import annotations
 
+import importlib
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -292,8 +293,11 @@ async def test_the_api_queues_for_admins_and_reports_to_viewers(
     product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
     order_id = await channel_order(db_session, tenant_id, [(product_id, only, 1)])
     queued: list[uuid.UUID] = []
+    # The module, not the dotted path: ``app.api.v1.orders.router`` names the
+    # package's APIRouter attribute, which has no ``place_after_commit``.
+    router_module = importlib.import_module("app.api.v1.orders.router")
     monkeypatch.setattr(
-        "app.api.v1.orders.router.place_after_commit", lambda _s, row_id: queued.append(row_id)
+        router_module, "place_after_commit", lambda _s, row_id: queued.append(row_id)
     )
 
     url = f"/api/v1/orders/{order_id}/supplier-order"
