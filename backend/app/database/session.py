@@ -55,20 +55,25 @@ def _create_engine() -> AsyncEngine:
         pool_recycle=db.pool_recycle,
         pool_pre_ping=db.pool_pre_ping,
         future=True,
-        connect_args={
-            # Statement caching is disabled because PgBouncer in transaction
-            # pooling mode reuses server connections across clients, which
-            # invalidates asyncpg's per-connection prepared-statement cache.
-            "statement_cache_size": 0,
-            # TLS. asyncpg takes a context, not libpq's `sslmode`, so the
-            # translation lives in one place — `DatabaseSettings.ssl_parameter`
-            # — and the synchronous engine Alembic uses reads the same setting.
-            # A managed database is reached over a network this application does
-            # not own; `verify-full` is what makes the connection authenticated
-            # rather than merely encrypted.
-            "ssl": db.ssl_parameter(),
-        },
+        connect_args=_connect_args(),
     )
+
+
+def _connect_args() -> dict[str, object]:
+    db = settings.database
+    return {
+        # Statement caching is disabled because PgBouncer in transaction
+        # pooling mode reuses server connections across clients, which
+        # invalidates asyncpg's per-connection prepared-statement cache.
+        "statement_cache_size": 0,
+        # TLS. asyncpg takes a context, not libpq's `sslmode`, so the
+        # translation lives in one place — `DatabaseSettings.ssl_parameter`
+        # — and the synchronous engine Alembic uses reads the same setting.
+        # A managed database is reached over a network this application does
+        # not own; `verify-full` is what makes the connection authenticated
+        # rather than merely encrypted.
+        "ssl": db.ssl_parameter(),
+    }
 
 
 engine: AsyncEngine = _create_engine()
@@ -119,6 +124,44 @@ async def check_database_health() -> bool:
         logger.warning("database_health_check_failed", error=str(exc))
         return False
     return True
+
+
+def use_null_pool_for_worker() -> None:
+    """Give a Celery worker process an engine that keeps no connections.
+
+    **Why.** Tasks are synchronous and run their async work with
+    ``asyncio.run``, which builds a new event loop every time. A pooled
+    asyncpg connection belongs to the loop that opened it, so the next
+    ``asyncio.run`` in the same process picks up a connection from a closed
+    loop and fails ("attached to a different loop", "Event loop is closed").
+    Only ``tasks/pricing.py`` worked around it, by disposing the engine after
+    each task; found again on 2026-10-06 when ``notifications.send_emails``
+    failed in a real worker. With ``NullPool`` there is nothing to carry
+    from one loop to the next, which fixes every task at once.
+
+    **Cost.** One connection per transaction in the worker. The API process
+    keeps its pool; this runs only on Celery's worker signals.
+
+    The existing ``session_factory`` is re-bound rather than replaced,
+    because modules import it by name.
+    """
+    global engine
+    if isinstance(engine.pool, NullPool):
+        return
+    previous = engine
+    db = settings.database
+    engine = create_async_engine(
+        db.async_dsn,
+        echo=db.echo_sql,
+        poolclass=NullPool,
+        future=True,
+        connect_args=_connect_args(),
+    )
+    session_factory.configure(bind=engine)
+    # Forget any connections the parent opened, without closing them: after a
+    # fork they belong to the parent process.
+    previous.sync_engine.dispose(close=False)
+    logger.info("database_engine_worker_null_pool")
 
 
 async def dispose_engine() -> None:
