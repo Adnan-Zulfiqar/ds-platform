@@ -7,7 +7,7 @@ Status: **decided 2026-10-05 (D-017).** Built in three PRs:
 | F1 | Groundwork: Shopify order lines with the exact variant (migration 0049); the AliExpress refresh no longer queries channel orders | PR #87 |
 | F2 | `supplier_orders` + `fulfilment_settings` (migration 0050); review, the "Place on AliExpress" action, placement task | PR #88 |
 | F3 | Automatic mode on import; tracking sync back to the store; manual "send tracking" | Merged (#89) |
-| F4 | Screens: order panel, settings switches | This PR |
+| F4 | Screens: order panel, settings switches | Merged (#90) |
 
 ## What the owner decided (D-017)
 

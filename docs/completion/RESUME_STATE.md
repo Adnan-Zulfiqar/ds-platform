@@ -13,14 +13,17 @@ Single continuation point after an interruption. Overwritten, not appended.
 
 ## Running resources owned by this work
 
-- Compose project **`dp-candidate`** (http://localhost:18080, API :18000):
-  containers `dp-candidate-*`, volumes `dp-candidate_postgres_data`,
-  `dp-candidate_rabbitmq_data`, images `dp-candidate-*`. Stop with the
-  commands in `docs/operations/LOCAL_CANDIDATE_STACK.md`.
-- Image `dp-e2e-clean` (harness). Renamed directories
-  `%LOCALAPPDATA%\Docker\run.stale-*` and
-  `%LOCALAPPDATA%\docker-secrets-engine.stale-*` (B-008) — safe to delete
-  once Docker has run normally for a while.
+- **Cleanup 2026-10-07.** The `dp-candidate` stack (containers, network and
+  images) was removed: the independent review it served is finished and
+  `develop` supersedes it. Its two named volumes,
+  `dp-candidate_postgres_data` and `dp-candidate_rabbitmq_data`, were kept
+  (about 100 MB). 308 unattached Docker volumes left behind by the test
+  gates (1-6 Oct, each verified to hold the `droppilot` test database,
+  Redis data or nothing) were removed. The B-008 `*.stale-*` directories
+  hold zero bytes but Windows keeps their socket files locked, so they
+  stay; they are harmless.
+- Image `dp-e2e-clean` (the Playwright harness) is kept: it is what runs the
+  browser tests locally.
 
 ## Remaining roadmap (Tracks A–D), 2026-10-03
 
