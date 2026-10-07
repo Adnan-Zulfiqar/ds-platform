@@ -34,6 +34,20 @@ yarn-error.log*
 playwright-report/
 test-results/
 blob-report/
+coverage/
+.nyc_output/
+
+# ---- Backups and stray copies ----
+# Database dumps hold customer data and belong outside the repository (the
+# owner keeps them in C:\Projects\ds-platform-backups). Editor and merge
+# leftovers are never source.
+*.dump
+*.bak
+*.backup
+*.orig
+*.rej
+*.swp
+*~
 
 # ---- Environment ----
 .env

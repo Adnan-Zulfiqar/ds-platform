@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Changed - repository hygiene
+
+- `.gitignore` also excludes coverage output, database dumps, and editor
+  or merge leftovers (`*.dump`, `*.bak`, `*.orig`, `*.rej`, ...), so a
+  local backup or a stray copy cannot be committed by accident.
+- `RESUME_STATE.md` records the 2026-10-07 disk cleanup; the Track F rows
+  in the roadmap and the Track F doc now say F4 is merged.
+
 ### Fixed - background tasks failed after the first one in each worker
 
 - **Every Celery task after the first in a worker process could fail** with
