@@ -58,20 +58,15 @@ def upgrade() -> None:
         sa.Column("reauthenticated_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["admin_id"], ["platform_admins.id"], ondelete="CASCADE"),
     )
-    op.create_index(
-        "ix_platform_admin_sessions_admin_id", "platform_admin_sessions", ["admin_id"]
-    )
+    op.create_index("ix_platform_admin_sessions_admin_id", "platform_admin_sessions", ["admin_id"])
 
-    for name, column in (
-        ("user_agent", sa.Column("user_agent", sa.String(256), nullable=True)),
-        ("request_id", sa.Column("request_id", sa.String(64), nullable=True)),
-        ("actor_role", sa.Column("actor_role", sa.String(32), nullable=True)),
-        (
-            "outcome",
-            sa.Column("outcome", sa.String(16), nullable=False, server_default="success"),
-        ),
-        ("target_type", sa.Column("target_type", sa.String(32), nullable=True)),
-        ("target_id", sa.Column("target_id", sa.String(64), nullable=True)),
+    for column in (
+        sa.Column("user_agent", sa.String(256), nullable=True),
+        sa.Column("request_id", sa.String(64), nullable=True),
+        sa.Column("actor_role", sa.String(32), nullable=True),
+        sa.Column("outcome", sa.String(16), nullable=False, server_default="success"),
+        sa.Column("target_type", sa.String(32), nullable=True),
+        sa.Column("target_id", sa.String(64), nullable=True),
     ):
         op.add_column("platform_admin_audit", column)
     op.create_index("ix_platform_admin_audit_outcome", "platform_admin_audit", ["outcome"])
