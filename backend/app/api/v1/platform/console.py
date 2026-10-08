@@ -34,7 +34,9 @@ router = APIRouter()
 DashboardRead = Annotated[
     PlatformPrincipal, Depends(require_platform_permission(PlatformPermission.DASHBOARD_READ))
 ]
-Workspace = Annotated[PlatformWorkspace, Depends(platform_workspace())]
+# scope="function", like DbSession, which it depends on: the tenant context
+# is cleared as soon as the handler returns, before the response is sent.
+Workspace = Annotated[PlatformWorkspace, Depends(platform_workspace(), scope="function")]
 
 
 @router.get(
