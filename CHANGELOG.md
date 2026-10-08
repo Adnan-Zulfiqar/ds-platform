@@ -10,6 +10,14 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - the documented command to create a platform operator failed
+
+- `docker exec ... python scripts/create_platform_admin.py` failed with
+  `No module named 'app'`: run as a file, the script's folder is on the
+  Python path, not the application. The E5 doc and the script's own help
+  now give `docker exec -it -e PYTHONPATH=/app ...`, checked against the
+  running backend container on 2026-10-08.
+
 ### Changed - repository hygiene
 
 - `.gitignore` also excludes coverage output, database dumps, and editor

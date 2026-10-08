@@ -3,8 +3,11 @@
 The only way a platform admin comes into existence. Run it on the server,
 inside the backend container:
 
-    docker exec -it droppilot-backend-1 \
+    docker exec -it -e PYTHONPATH=/app droppilot-backend-1 \
         python scripts/create_platform_admin.py --email you@example.com
+
+``PYTHONPATH=/app`` is required: run as a file, the script's own folder is on
+the path, not the application, and ``import app`` fails.
 
 The password is read from the terminal (twice) and never echoed. The TOTP
 secret is printed **once**, as an ``otpauth://`` URI to add to an
