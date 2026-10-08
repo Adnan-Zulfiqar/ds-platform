@@ -117,6 +117,23 @@ class RefreshTokenRepository:
         )
         return int((await self.session.execute(query)).scalar_one())
 
+    async def active_counts_for_users(self, user_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        """Live sessions per user for a page of users, in one query."""
+        if not user_ids:
+            return {}
+        now = datetime.now(UTC)
+        query = (
+            select(RefreshToken.user_id, func.count())
+            .where(
+                RefreshToken.user_id.in_(user_ids),
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at > now,
+            )
+            .group_by(RefreshToken.user_id)
+        )
+        counts = dict((await self.session.execute(query)).tuples().all())
+        return {uid: int(counts.get(uid, 0)) for uid in user_ids}
+
     async def purge_expired(self, *, before: datetime | None = None) -> int:
         """Delete expired token rows. Returns the number removed.
 

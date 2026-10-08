@@ -60,6 +60,24 @@ class RoleRepository(BaseRepository[Role]):
         result = await self.session.execute(query)
         return frozenset(result.scalars().all())
 
+    async def role_names_for_users(
+        self, user_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, list[str]]:
+        """Role names for a page of users in one query, for list views. The
+        ids come from a tenant-scoped query; this only resolves them."""
+        if not user_ids:
+            return {}
+        query = (
+            select(UserRole.user_id, Role.name)
+            .join(Role, UserRole.role_id == Role.id)
+            .where(UserRole.user_id.in_(list(user_ids)))
+            .order_by(Role.name)
+        )
+        found: dict[uuid.UUID, list[str]] = {uid: [] for uid in user_ids}
+        for user_id, name in (await self.session.execute(query)).all():
+            found[user_id].append(str(getattr(name, "value", name)))
+        return found
+
     async def assign(self, *, user_id: uuid.UUID, role_id: uuid.UUID) -> UserRole:
         """Assign a role to a user."""
         assignment = UserRole(user_id=user_id, role_id=role_id)

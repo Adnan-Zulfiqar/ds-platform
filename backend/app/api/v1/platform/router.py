@@ -29,6 +29,7 @@ from app.api.deps import (
     require_platform_reauth,
 )
 from app.api.v1.platform.console import router as console_router
+from app.api.v1.platform.workspace_data import router as workspace_data_router
 from app.core.platform_permissions import REAUTH_WINDOW_MINUTES, PlatformPermission
 from app.models.platform_admin import PlatformAdmin, PlatformAdminSession
 from app.schemas.common import Page
@@ -363,3 +364,4 @@ async def platform_audit(
 
 # Console data views (D-019), after the identity routes.
 router.include_router(console_router)
+router.include_router(workspace_data_router)

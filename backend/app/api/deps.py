@@ -282,6 +282,8 @@ def require_platform_reauth(
 
 def platform_workspace(
     permission: PlatformPermission = PlatformPermission.WORKSPACE_DATA_READ,
+    *,
+    reauth: bool = False,
 ) -> Callable[..., AsyncGenerator[PlatformWorkspace]]:
     """Enter one workspace as an operator (D-019).
 
@@ -291,6 +293,9 @@ def platform_workspace(
     reads goes through the ordinary tenant-scoped repositories, so the tenant
     predicate is applied exactly as for the merchant's own requests, and the
     context is cleared again when the request ends.
+
+    ``reauth=True`` also needs the operator's password and a fresh code
+    within ``REAUTH_WINDOW_MINUTES`` (bulk exports, and every change).
     """
     check = require_platform_permission(permission)
 
@@ -303,6 +308,8 @@ def platform_workspace(
     ) -> AsyncGenerator[PlatformWorkspace]:
         from app.services.platform_admin import PlatformAdminService
 
+        if reauth and not principal.reauthenticated_recently():
+            raise ReauthenticationRequiredError()
         tenant = await TenantRepository(session).get_by_id(tenant_id)
         if tenant is None:
             raise NotFoundError.for_resource("Workspace", tenant_id)
