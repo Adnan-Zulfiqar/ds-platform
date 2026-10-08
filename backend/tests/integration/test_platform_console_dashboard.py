@@ -71,7 +71,7 @@ async def test_a_workspace_overview_counts_only_that_workspace_and_is_audited(
         )
     ).all()
     assert [(str(r.target_tenant_id), r.detail["route"]) for r in rows] == [
-        (tenant_id, "/api/v1/platform/workspaces/{tenant_id}")
+        (tenant_id, "/workspaces/{tenant_id}")
     ]
     # The workspace context ends with the request.
     assert get_tenant_id() is None or str(get_tenant_id()) != tenant_id
