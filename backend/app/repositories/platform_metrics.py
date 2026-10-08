@@ -222,6 +222,7 @@ __all__ = [
     "DailyCount",
     "PlatformMetrics",
     "PlatformSnapshot",
+    "database_answers",
     "migration_revision",
 ]
 
@@ -239,3 +240,17 @@ async def migration_revision(session: AsyncSession) -> str | None:
     except DBAPIError:
         return None
     return str(row[0]) if row else None
+
+
+async def database_answers(session: AsyncSession) -> bool:
+    """On the request's own connection: the one actually serving the
+    dashboard, rather than a second connection from the pool."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    try:
+        async with session.begin_nested():
+            await session.execute(text("SELECT 1"))
+    except DBAPIError:
+        return False
+    return True

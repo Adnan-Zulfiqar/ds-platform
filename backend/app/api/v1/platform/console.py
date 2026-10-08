@@ -16,8 +16,11 @@ from fastapi import APIRouter, Depends
 from app.api.deps import DbSession, platform_workspace, require_platform_permission
 from app.core.platform_permissions import PlatformPermission
 from app.core.redis import check_redis_health
-from app.database.session import check_database_health
-from app.repositories.platform_metrics import PlatformMetrics, migration_revision
+from app.repositories.platform_metrics import (
+    PlatformMetrics,
+    database_answers,
+    migration_revision,
+)
 from app.schemas.platform_console import (
     DailyCountRead,
     PlatformDashboardRead,
@@ -69,7 +72,7 @@ async def platform_dashboard(
         signups_30d=[DailyCountRead(day=d.day, count=d.count) for d in snap.signups_30d],
         orders_14d=[DailyCountRead(day=d.day, count=d.count) for d in snap.orders_14d],
         system=SystemHealthRead(
-            database=await check_database_health(),
+            database=await database_answers(session),
             redis=await check_redis_health(),
             migration_revision=await migration_revision(session),
         ),
