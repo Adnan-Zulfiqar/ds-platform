@@ -32,13 +32,13 @@ async def test_the_dashboard_counts_real_workspaces_and_reports_system_health(
     assert after.status_code == 200, after.text
     body = after.json()
     assert sum(body["tenantsByStatus"].values()) == sum(before["tenantsByStatus"].values()) + 2
-    assert body["tenantsNew7d"] == before["tenantsNew7d"] + 2
+    assert body["tenantsNewWeek"] == before["tenantsNewWeek"] + 2
     assert body["usersActive"] == before["usersActive"] + 2
     assert body["system"]["database"] is True
     assert body["system"]["migrationRevision"]
-    assert len(body["signups30d"]) == 31 and len(body["orders14d"]) == 14
-    assert body["signups30d"][-1]["count"] >= 2
-    assert set(body["failed24h"]) >= {"orderSyncs", "inventorySyncs", "productImports"}
+    assert len(body["signupsByDay"]) == 31 and len(body["ordersByDay"]) == 14
+    assert body["signupsByDay"][-1]["count"] >= 2
+    assert set(body["failedLastDay"]) >= {"orderSyncs", "inventorySyncs", "productImports"}
 
 
 @pytest.mark.parametrize("role", ["support", "finance", "operations", "auditor"])

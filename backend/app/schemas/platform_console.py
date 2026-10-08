@@ -28,25 +28,25 @@ class SystemHealthRead(CamelCaseModel):
 class PlatformDashboardRead(CamelCaseModel):
     generated_at: datetime
     tenants_by_status: dict[str, int]
-    tenants_new_7d: int
-    tenants_new_30d: int
+    tenants_new_week: int
+    tenants_new_month: int
     users_active: int
-    users_new_7d: int
+    users_new_week: int
     stores_by_status: dict[str, int]
     stores_by_platform: dict[str, int]
     products_total: int
     listings_by_status: dict[str, int]
-    orders_24h: int
-    orders_7d: int
+    orders_last_day: int
+    orders_last_week: int
     subscriptions_by_plan: dict[str, int]
     subscriptions_by_status: dict[str, int]
-    trials_ending_7d: int
-    failed_24h: dict[str, int]
+    trials_ending_week: int
+    failed_last_day: dict[str, int]
     stuck: dict[str, int]
     operator_sessions_open: int
-    security_failures_24h: int
-    signups_30d: list[DailyCountRead]
-    orders_14d: list[DailyCountRead]
+    security_failures_last_day: int
+    signups_by_day: list[DailyCountRead]
+    orders_by_day: list[DailyCountRead]
     system: SystemHealthRead
 
 

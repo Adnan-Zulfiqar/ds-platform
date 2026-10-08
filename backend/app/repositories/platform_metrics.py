@@ -47,25 +47,25 @@ class DailyCount:
 class PlatformSnapshot:
     generated_at: datetime
     tenants_by_status: dict[str, int] = field(default_factory=dict)
-    tenants_new_7d: int = 0
-    tenants_new_30d: int = 0
+    tenants_new_week: int = 0
+    tenants_new_month: int = 0
     users_active: int = 0
-    users_new_7d: int = 0
+    users_new_week: int = 0
     stores_by_status: dict[str, int] = field(default_factory=dict)
     stores_by_platform: dict[str, int] = field(default_factory=dict)
     products_total: int = 0
     listings_by_status: dict[str, int] = field(default_factory=dict)
-    orders_24h: int = 0
-    orders_7d: int = 0
+    orders_last_day: int = 0
+    orders_last_week: int = 0
     subscriptions_by_plan: dict[str, int] = field(default_factory=dict)
     subscriptions_by_status: dict[str, int] = field(default_factory=dict)
-    trials_ending_7d: int = 0
-    failed_24h: dict[str, int] = field(default_factory=dict)
+    trials_ending_week: int = 0
+    failed_last_day: dict[str, int] = field(default_factory=dict)
     stuck: dict[str, int] = field(default_factory=dict)
     operator_sessions_open: int = 0
-    security_failures_24h: int = 0
-    signups_30d: list[DailyCount] = field(default_factory=list)
-    orders_14d: list[DailyCount] = field(default_factory=list)
+    security_failures_last_day: int = 0
+    signups_by_day: list[DailyCount] = field(default_factory=list)
+    orders_by_day: list[DailyCount] = field(default_factory=list)
 
 
 class PlatformMetrics:
@@ -105,17 +105,17 @@ class PlatformMetrics:
         snap = PlatformSnapshot(generated_at=now)
 
         snap.tenants_by_status = await self._grouped(Tenant.status, live_tenant)
-        snap.tenants_new_7d = await self._scalar(
+        snap.tenants_new_week = await self._scalar(
             select(func.count()).select_from(Tenant).where(live_tenant, Tenant.created_at >= week)
         )
-        snap.tenants_new_30d = await self._scalar(
+        snap.tenants_new_month = await self._scalar(
             select(func.count()).select_from(Tenant).where(live_tenant, Tenant.created_at >= month)
         )
         live_user = User.deleted_at.is_(None)
         snap.users_active = await self._scalar(
             select(func.count()).select_from(User).where(live_user, User.is_active.is_(True))
         )
-        snap.users_new_7d = await self._scalar(
+        snap.users_new_week = await self._scalar(
             select(func.count()).select_from(User).where(live_user, User.created_at >= week)
         )
         live_store = Store.deleted_at.is_(None)
@@ -128,16 +128,16 @@ class PlatformMetrics:
             StoreListing.status, StoreListing.deleted_at.is_(None)
         )
         live_order = Order.deleted_at.is_(None)
-        snap.orders_24h = await self._scalar(
+        snap.orders_last_day = await self._scalar(
             select(func.count()).select_from(Order).where(live_order, Order.created_at >= day)
         )
-        snap.orders_7d = await self._scalar(
+        snap.orders_last_week = await self._scalar(
             select(func.count()).select_from(Order).where(live_order, Order.created_at >= week)
         )
         live_sub = TenantSubscription.deleted_at.is_(None)
         snap.subscriptions_by_plan = await self._grouped(TenantSubscription.plan, live_sub)
         snap.subscriptions_by_status = await self._grouped(TenantSubscription.status, live_sub)
-        snap.trials_ending_7d = await self._scalar(
+        snap.trials_ending_week = await self._scalar(
             select(func.count())
             .select_from(TenantSubscription)
             .where(
@@ -148,7 +148,7 @@ class PlatformMetrics:
             )
         )
 
-        snap.failed_24h = {
+        snap.failed_last_day = {
             "order_syncs": await self._count_since(
                 OrderSyncRun, OrderSyncRun.status == SyncRunStatus.FAILED, day
             ),
@@ -201,13 +201,15 @@ class PlatformMetrics:
             .select_from(PlatformAdminSession)
             .where(PlatformAdminSession.revoked_at.is_(None), PlatformAdminSession.expires_at > now)
         )
-        snap.security_failures_24h = await self._scalar(
+        snap.security_failures_last_day = await self._scalar(
             select(func.count())
             .select_from(PlatformAdminAudit)
             .where(PlatformAdminAudit.outcome == "failure", PlatformAdminAudit.created_at >= day)
         )
-        snap.signups_30d = await self._daily(Tenant.created_at, month, live_tenant)
-        snap.orders_14d = await self._daily(Order.created_at, now - timedelta(days=13), live_order)
+        snap.signups_by_day = await self._daily(Tenant.created_at, month, live_tenant)
+        snap.orders_by_day = await self._daily(
+            Order.created_at, now - timedelta(days=13), live_order
+        )
         return snap
 
     async def _count_since(self, model: Any, condition: Any, since: datetime) -> int:
