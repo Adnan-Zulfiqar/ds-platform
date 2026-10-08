@@ -11,6 +11,9 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
+
+from pydantic import Field
 
 from app.schemas.base import CamelCaseModel
 
@@ -309,11 +312,47 @@ class WorkspaceNotificationRead(CamelCaseModel):
     created_at: datetime
 
 
+# --- Support sessions and workspace changes (phase 4) -------------------------
+
+
+class SupportSessionOpen(CamelCaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    minutes: int = Field(default=30, ge=5, le=120)
+
+
+class SupportSessionRead(CamelCaseModel):
+    id: uuid.UUID
+    reason: str
+    created_at: datetime
+    expires_at: datetime
+    ended_at: datetime | None
+
+
+class WorkspaceChangeReason(CamelCaseModel):
+    """Every change inside a workspace says why; the reason is audited."""
+
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class WorkspaceRoleChange(WorkspaceChangeReason):
+    role: Literal["admin", "member", "viewer"]
+
+
+class WorkspaceUserChanged(CamelCaseModel):
+    id: uuid.UUID
+    is_active: bool
+    roles: list[str]
+    sessions_ended: int = 0
+
+
 __all__ = [
     "DailyCountRead",
     "PlatformDashboardRead",
     "SubscriptionSummaryRead",
+    "SupportSessionOpen",
+    "SupportSessionRead",
     "SystemHealthRead",
+    "WorkspaceChangeReason",
     "WorkspaceConnectionRead",
     "WorkspaceHealthRead",
     "WorkspaceInvitationRead",
@@ -326,10 +365,12 @@ __all__ = [
     "WorkspaceOverviewRead",
     "WorkspaceProductDetailRead",
     "WorkspaceProductRead",
+    "WorkspaceRoleChange",
     "WorkspaceShipmentRead",
     "WorkspaceStoreRead",
     "WorkspaceSupplierOrderRead",
     "WorkspaceSyncRunRead",
+    "WorkspaceUserChanged",
     "WorkspaceUserRead",
     "WorkspaceVariantRead",
 ]

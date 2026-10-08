@@ -15,13 +15,17 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import Response
 
 from app.api.deps import DbSession, PlatformAudit, platform_workspace
 from app.core.platform_permissions import PlatformPermission
+from app.repositories.role import RoleRepository
 from app.schemas.common import ListQueryParams, Page, SortDirection, list_query_params
 from app.schemas.platform_console import (
+    SupportSessionOpen,
+    SupportSessionRead,
+    WorkspaceChangeReason,
     WorkspaceConnectionRead,
     WorkspaceInvitationRead,
     WorkspaceListingRead,
@@ -32,16 +36,19 @@ from app.schemas.platform_console import (
     WorkspaceOrderRead,
     WorkspaceProductDetailRead,
     WorkspaceProductRead,
+    WorkspaceRoleChange,
     WorkspaceShipmentRead,
     WorkspaceStoreRead,
     WorkspaceSupplierOrderRead,
     WorkspaceSyncRunRead,
+    WorkspaceUserChanged,
     WorkspaceUserRead,
     WorkspaceVariantRead,
 )
 from app.services.platform_admin import PlatformAdminService
 from app.services.platform_workspace import (
     PlatformWorkspace,
+    PlatformWorkspaceActions,
     PlatformWorkspaceService,
     WorkspaceUserView,
 )
@@ -444,4 +451,178 @@ async def workspace_export(
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
         },
+    )
+
+
+# --- Support session and changes (phase 4) ----------------------------------------
+
+SupportOpen = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.SUPPORT_SESSION, reauth=True), scope="function"),
+]
+UsersWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.USERS_MANAGE, write=True), scope="function"),
+]
+
+
+def _support_read(row: Any) -> SupportSessionRead:
+    return SupportSessionRead.model_validate(row, from_attributes=True)
+
+
+@router.get(
+    "/support-session",
+    response_model=SupportSessionRead | None,
+    summary="Your open support session for this workspace, if any",
+)
+async def workspace_support_session(
+    workspace: Workspace, session: DbSession
+) -> SupportSessionRead | None:
+    row = await PlatformAdminService(session).active_support_session(
+        workspace.principal, workspace.tenant.id
+    )
+    return None if row is None else _support_read(row)
+
+
+@router.post(
+    "/support-session",
+    response_model=SupportSessionRead,
+    summary="Open a support session (re-auth, reason, visible to the workspace)",
+)
+async def workspace_open_support_session(
+    payload: SupportSessionOpen, workspace: SupportOpen, session: DbSession, ctx: PlatformAudit
+) -> SupportSessionRead:
+    row = await PlatformAdminService(session).open_support_session(
+        workspace.principal,
+        workspace.tenant.id,
+        minutes=payload.minutes,
+        reason=payload.reason,
+        ctx=ctx,
+    )
+    return _support_read(row)
+
+
+@router.post(
+    "/support-session/end",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="End your support session for this workspace",
+)
+async def workspace_end_support_session(
+    workspace: Workspace, session: DbSession, ctx: PlatformAudit
+) -> None:
+    await PlatformAdminService(session).end_support_session(
+        workspace.principal, workspace.tenant.id, ctx=ctx
+    )
+
+
+async def _user_changed(
+    session: Any, user: Any, *, sessions_ended: int = 0
+) -> WorkspaceUserChanged:
+    roles = await RoleRepository(session).list_role_names_for_user(user.id)
+    return WorkspaceUserChanged(
+        id=user.id, is_active=user.is_active, roles=sorted(roles), sessions_ended=sessions_ended
+    )
+
+
+@router.post(
+    "/users/{user_id}/disable",
+    response_model=WorkspaceUserChanged,
+    summary="Disable a user and end their sessions (support session, re-auth, audited)",
+)
+async def workspace_disable_user(
+    user_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceUserChanged:
+    user = await PlatformWorkspaceActions(session, workspace, ctx).set_user_active(
+        user_id, active=False, reason=payload.reason
+    )
+    return await _user_changed(session, user)
+
+
+@router.post(
+    "/users/{user_id}/enable",
+    response_model=WorkspaceUserChanged,
+    summary="Enable a user (support session, re-auth, audited)",
+)
+async def workspace_enable_user(
+    user_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceUserChanged:
+    user = await PlatformWorkspaceActions(session, workspace, ctx).set_user_active(
+        user_id, active=True, reason=payload.reason
+    )
+    return await _user_changed(session, user)
+
+
+@router.post(
+    "/users/{user_id}/end-sessions",
+    response_model=WorkspaceUserChanged,
+    summary="Sign a user out everywhere (support session, re-auth, audited)",
+)
+async def workspace_end_user_sessions(
+    user_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceUserChanged:
+    actions = PlatformWorkspaceActions(session, workspace, ctx)
+    ended = await actions.end_user_sessions(user_id, reason=payload.reason)
+    return await _user_changed(session, await actions.user(user_id), sessions_ended=ended)
+
+
+@router.post(
+    "/users/{user_id}/require-password-reset",
+    response_model=WorkspaceUserChanged,
+    summary="Stop the current password working (support session, re-auth, audited)",
+)
+async def workspace_require_password_reset(
+    user_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceUserChanged:
+    actions = PlatformWorkspaceActions(session, workspace, ctx)
+    await actions.require_password_reset(user_id, reason=payload.reason)
+    return await _user_changed(session, await actions.user(user_id))
+
+
+@router.post(
+    "/users/{user_id}/role",
+    response_model=WorkspaceUserChanged,
+    summary="Change a member's workspace role, never an owner's (support session, re-auth)",
+)
+async def workspace_set_user_role(
+    user_id: uuid.UUID,
+    payload: WorkspaceRoleChange,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceUserChanged:
+    actions = PlatformWorkspaceActions(session, workspace, ctx)
+    await actions.set_member_role(user_id, role=payload.role, reason=payload.reason)
+    return await _user_changed(session, await actions.user(user_id))
+
+
+@router.post(
+    "/invitations/{invitation_id}/revoke",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke an open invitation (support session, re-auth, audited)",
+)
+async def workspace_revoke_invitation(
+    invitation_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: UsersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> None:
+    await PlatformWorkspaceActions(session, workspace, ctx).revoke_invitation(
+        invitation_id, reason=payload.reason
     )

@@ -45,6 +45,8 @@ from app.core.exceptions import (
 from app.core.password import hash_password, validate_password_strength, verify_password
 from app.core.platform_permissions import (
     REAUTH_WINDOW_MINUTES,
+    SUPPORT_SESSION_MAX_MINUTES,
+    SUPPORT_SESSION_MIN_MINUTES,
     PlatformPermission,
     PlatformRole,
     has_permission,
@@ -52,12 +54,20 @@ from app.core.platform_permissions import (
 )
 from app.core.tokens import IssuedToken, create_platform_token, platform_token_expiry
 from app.database.session import transaction
-from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit, PlatformAdminSession
+from app.models.notification import NotificationKind
+from app.models.platform_admin import (
+    PlatformAdmin,
+    PlatformAdminAudit,
+    PlatformAdminSession,
+    PlatformSupportSession,
+)
 from app.models.tenant import TenantStatus
+from app.repositories.notification import NotificationRepository
 from app.repositories.platform_admin import (
     PlatformAdminAuditRepository,
     PlatformAdminRepository,
     PlatformAdminSessionRepository,
+    PlatformSupportSessionRepository,
     PlatformTenantDirectory,
     TenantDirectoryRow,
     TenantHealth,
@@ -471,6 +481,103 @@ class PlatformAdminService(BaseService):
         except Exception:  # an audit outage must not turn a refusal into a 500
             self.logger.exception("platform_admin_audit_write_failed")
         self.logger.warning("platform_admin_refused", action=action, **detail)
+
+    # --- support sessions (D-019) -------------------------------------------
+
+    async def open_support_session(
+        self,
+        principal: PlatformPrincipal,
+        tenant_id: uuid.UUID,
+        *,
+        minutes: int,
+        reason: str,
+        ctx: AuditContext,
+    ) -> PlatformSupportSession:
+        """Opens (or extends, by replacing) this operator's window on one
+        workspace. The caller has re-authenticated, and is inside the
+        workspace's tenant context so the notice lands in its feed."""
+        if not SUPPORT_SESSION_MIN_MINUTES <= minutes <= SUPPORT_SESSION_MAX_MINUTES:
+            raise ValidationError(
+                f"A support session lasts {SUPPORT_SESSION_MIN_MINUTES}"
+                f"-{SUPPORT_SESSION_MAX_MINUTES} minutes."
+            )
+        repo = PlatformSupportSessionRepository(self.session)
+        current = await repo.active(admin_id=principal.admin.id, tenant_id=tenant_id)
+        if current is not None:
+            await repo.end(current, reason="replaced")
+        row = await repo.open(
+            admin_id=principal.admin.id,
+            tenant_id=tenant_id,
+            reason=reason,
+            expires_at=datetime.now(UTC) + timedelta(minutes=minutes),
+        )
+        await NotificationRepository(self.session).create(
+            kind=NotificationKind.INFO,
+            title="DropPilot support is working in your workspace",
+            body=(
+                f"A DropPilot operator opened a support session for {minutes} minutes. "
+                f"Reason: {reason[:300]}"
+            ),
+            payload={"support_session_id": str(row.id)},
+        )
+        await self._audit(
+            "support_session_opened",
+            admin=principal.admin,
+            ctx=ctx,
+            target_tenant_id=tenant_id,
+            target_type="support_session",
+            target_id=str(row.id),
+            detail={"reason": reason[:500], "minutes": minutes},
+        )
+        return row
+
+    async def end_support_session(
+        self, principal: PlatformPrincipal, tenant_id: uuid.UUID, *, ctx: AuditContext
+    ) -> None:
+        repo = PlatformSupportSessionRepository(self.session)
+        current = await repo.active(admin_id=principal.admin.id, tenant_id=tenant_id)
+        if current is None:
+            raise NotFoundError("No open support session for this workspace.")
+        await repo.end(current, reason="ended_by_operator")
+        await self._audit(
+            "support_session_ended",
+            admin=principal.admin,
+            ctx=ctx,
+            target_tenant_id=tenant_id,
+            target_type="support_session",
+            target_id=str(current.id),
+        )
+
+    async def active_support_session(
+        self, principal: PlatformPrincipal, tenant_id: uuid.UUID
+    ) -> PlatformSupportSession | None:
+        return await PlatformSupportSessionRepository(self.session).active(
+            admin_id=principal.admin.id, tenant_id=tenant_id
+        )
+
+    async def record_workspace_action(
+        self,
+        principal: PlatformPrincipal,
+        tenant_id: uuid.UUID,
+        action: str,
+        *,
+        target_type: str,
+        target_id: str,
+        reason: str,
+        ctx: AuditContext,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """A change inside a workspace (D-019). Written in the same
+        transaction as the change: either both happen or neither does."""
+        await self._audit(
+            action,
+            admin=principal.admin,
+            ctx=ctx,
+            target_tenant_id=tenant_id,
+            target_type=target_type,
+            target_id=target_id,
+            detail={"reason": reason[:500], **(detail or {})},
+        )
 
     async def record_workspace_view(
         self,

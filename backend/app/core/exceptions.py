@@ -143,6 +143,14 @@ class ReauthenticationRequiredError(PermissionDeniedError):
     message = "Confirm your password and code to continue."
 
 
+class SupportSessionRequiredError(PermissionDeniedError):
+    """A change inside a workspace needs an open support session for it
+    (D-019). A distinct code so the console can offer to open one."""
+
+    code = "support_session_required"
+    message = "Open a support session for this workspace first."
+
+
 class NotFoundError(AppError):
     """The requested resource does not exist, or is invisible to this tenant.
 

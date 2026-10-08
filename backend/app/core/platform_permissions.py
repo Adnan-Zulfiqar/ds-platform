@@ -138,6 +138,10 @@ READ_PERMISSIONS: Final = frozenset(
 #: Actions that need a fresh password + code, not just a valid session.
 REAUTH_WINDOW_MINUTES: Final = 10
 
+#: How long a support session (D-019) may be opened for.
+SUPPORT_SESSION_MIN_MINUTES: Final = 5
+SUPPORT_SESSION_MAX_MINUTES: Final = 120
+
 
 def permissions_for(role: str) -> frozenset[PlatformPermission]:
     """An unknown role (a row written by hand, a role removed in a later
@@ -156,6 +160,8 @@ __all__ = [
     "READ_PERMISSIONS",
     "REAUTH_WINDOW_MINUTES",
     "ROLE_PERMISSIONS",
+    "SUPPORT_SESSION_MAX_MINUTES",
+    "SUPPORT_SESSION_MIN_MINUTES",
     "PlatformPermission",
     "PlatformRole",
     "has_permission",
