@@ -28,6 +28,7 @@ from app.api.deps import (
     require_platform_permission,
     require_platform_reauth,
 )
+from app.api.v1.platform.console import router as console_router
 from app.core.platform_permissions import REAUTH_WINDOW_MINUTES, PlatformPermission
 from app.models.platform_admin import PlatformAdmin, PlatformAdminSession
 from app.schemas.common import Page
@@ -358,3 +359,7 @@ async def platform_audit(
 ) -> list[PlatformAuditRead]:
     rows = await PlatformAdminService(session).recent_audit(limit=limit)
     return [PlatformAuditRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+# Console data views (D-019), after the identity routes.
+router.include_router(console_router)

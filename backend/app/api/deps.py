@@ -20,6 +20,7 @@ The resolution chain:
 from __future__ import annotations
 
 import ipaddress
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Annotated
 
@@ -29,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.client_ip import client_ip_or_unknown
 from app.core.config import settings
-from app.core.context import AuthenticatedUser, set_principal
+from app.core.context import AuthenticatedUser, reset_tenant_id, set_principal, set_tenant_id
 from app.core.exceptions import (
     AuthenticationError,
     NotFoundError,
@@ -52,6 +53,7 @@ from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
 from app.services.platform_admin import AuditContext as PlatformAuditContext
 from app.services.platform_admin import PlatformPrincipal
+from app.services.platform_workspace import PlatformWorkspace
 
 logger = get_logger(__name__)
 
@@ -274,6 +276,50 @@ def require_platform_reauth(
         if not principal.reauthenticated_recently():
             raise ReauthenticationRequiredError()
         return principal
+
+    return dependency
+
+
+def platform_workspace(
+    permission: PlatformPermission = PlatformPermission.WORKSPACE_DATA_READ,
+) -> Callable[..., AsyncGenerator[PlatformWorkspace]]:
+    """Enter one workspace as an operator (D-019).
+
+    Checks the permission, confirms the workspace exists (404 otherwise, as
+    for any unknown id), audits the visit, then sets the **tenant context**
+    to that workspace for the rest of the request. Everything the handler
+    reads goes through the ordinary tenant-scoped repositories, so the tenant
+    predicate is applied exactly as for the merchant's own requests, and the
+    context is cleared again when the request ends.
+    """
+    check = require_platform_permission(permission)
+
+    async def dependency(
+        tenant_id: uuid.UUID,
+        request: Request,
+        session: DbSession,
+        ctx: PlatformAudit,
+        principal: PlatformPrincipal = Depends(check),  # noqa: B008 — FastAPI's dependency idiom
+    ) -> AsyncGenerator[PlatformWorkspace]:
+        from app.services.platform_admin import PlatformAdminService
+
+        tenant = await TenantRepository(session).get_by_id(tenant_id)
+        if tenant is None:
+            raise NotFoundError.for_resource("Workspace", tenant_id)
+        if request.method == "GET":
+            # Changes write their own, more specific audit row.
+            route = getattr(request.scope.get("route"), "path", request.url.path)
+            await PlatformAdminService(session).record_workspace_view(
+                principal, tenant.id, route=route, ctx=ctx
+            )
+        token = set_tenant_id(tenant.id)
+        try:
+            yield PlatformWorkspace(principal=principal, tenant=tenant)
+        finally:
+            try:
+                reset_tenant_id(token)
+            except ValueError:  # torn down in another context: clear it outright
+                set_tenant_id(None)
 
     return dependency
 
@@ -623,6 +669,7 @@ __all__ = [
     "get_tenant_repository",
     "get_user_repository",
     "platform_rate_limit",
+    "platform_workspace",
     "require_minimum_role",
     "require_platform_permission",
     "require_platform_reauth",

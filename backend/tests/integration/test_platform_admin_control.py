@@ -11,6 +11,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
+from app.core.platform_permissions import permissions_for
 from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit, PlatformAdminSession
 from app.services.platform_admin import AuditContext, PlatformAdminService, PlatformPrincipal
 from tests.integration.conftest import STRONG_PASSWORD
@@ -55,7 +56,7 @@ async def test_me_reports_role_permissions_and_the_current_session(
     headers = await sign_in(client, await make_admin(db_session, role="auditor"))
     body = (await client.get(ME, headers=headers)).json()
     assert body["role"] == "auditor"
-    assert body["permissions"] == ["audit.read", "operators.read", "tenants.read"]
+    assert body["permissions"] == sorted(p.value for p in permissions_for("auditor"))
     assert body["session"]["current"] is True
     assert body["reauthValidUntil"] is None
 

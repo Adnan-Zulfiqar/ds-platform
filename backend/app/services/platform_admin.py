@@ -472,6 +472,26 @@ class PlatformAdminService(BaseService):
             self.logger.exception("platform_admin_audit_write_failed")
         self.logger.warning("platform_admin_refused", action=action, **detail)
 
+    async def record_workspace_view(
+        self,
+        principal: PlatformPrincipal,
+        tenant_id: uuid.UUID,
+        *,
+        route: str,
+        ctx: AuditContext,
+    ) -> None:
+        """Every look inside a workspace leaves a row (D-019). Written in the
+        request's transaction: a view that fails is not a view."""
+        await self._audit(
+            "workspace_viewed",
+            admin=principal.admin,
+            ctx=ctx,
+            target_tenant_id=tenant_id,
+            target_type="workspace",
+            target_id=str(tenant_id),
+            detail={"route": route[:200]},
+        )
+
     async def audit_permission_denied(
         self, admin: PlatformAdmin, *, permission: str, ctx: AuditContext
     ) -> None:

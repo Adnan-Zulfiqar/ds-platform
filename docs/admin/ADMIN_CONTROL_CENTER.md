@@ -1,30 +1,42 @@
-# Admin Control Center (D-018)
+# Admin Control Center (D-018, D-019)
 
-Status: **phase 1 of 8 built.** The platform console from Track E5
-([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full operator
-console, one tested pull request per phase.
+Status: **phases 1–2 built**, phases 3–10 in progress. The platform console
+from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
+operator console, one tested pull request per phase.
 
-## Owner decisions (2026-10-08)
+## Owner decisions
 
-| Question | Decision |
+| Date | Decision |
 |---|---|
-| Can operators see inside a workspace? | **Yes, read-only and audited.** One workspace at a time; the server switches to that workspace's tenant-scoped queries; every view is audited; no secrets. Needs a CLAUDE.md §4 amendment, which lands with phase 3. |
-| What may operators change? | **Safe operational actions only:** suspend or reactivate a user, force logout, require a password reset or MFA, pause or resume sync, a safe retry, extend a trial, override a plan, feature flags. **Never:** delete customer data, transfer ownership, change roles inside a workspace. |
-| Impersonation ("log in as")? | **Kept out.** D-015 stands. |
-| Delivery | **Phase by phase**, each a tested PR. |
+| 2026-10-08 (D-018) | Roles, sessions, re-authentication, richer audit. Impersonation stays out. |
+| 2026-10-09 (D-019) | **Operators may view and manage complete workspace data**: users, stores, products, drafts, listings, orders, inventory, jobs, billing, integrations, notifications and audit records. This supersedes D-018's "read-only". Secrets stay hidden. Sensitive actions need re-authentication, a reason and an immutable audit row. No arbitrary code execution. No deletion of customer data without a protected workflow. A support session only if it is safe. |
+
+**How operators reach workspace data.** An operator request names one
+workspace. `platform_workspace` then:
+
+- checks the permission;
+- audits the visit as `workspace_viewed`, recording the route;
+- sets the tenant context to that workspace.
+
+Everything after that runs through the merchant's own tenant-scoped
+repositories. No unscoped query is added for workspace data, and one
+request cannot span two workspaces. Cross-workspace numbers come only from
+`PlatformMetrics`, which returns counts and never rows.
 
 ## Phases
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Foundation: operator roles and permission matrix, sessions with revoke, re-authentication, richer audit | Built (this PR) |
-| 2 | Live dashboard | Not started |
-| 3 | Workspace list and read-only detail | Not started |
-| 4 | User controls | Not started |
-| 5 | Stores and integrations | Not started |
-| 6 | Jobs and operations | Not started |
-| 7 | Billing, trial and feature controls | Not started |
-| 8 | Audit and security centre; system settings | Not started |
+| 1 | Operator roles and permission matrix, sessions with revoke, re-authentication, richer audit | Merged (#95) |
+| 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Built (this PR) |
+| 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Not started |
+| 4 | User controls and support sessions | Not started |
+| 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Not started |
+| 6 | Catalogue and order actions | Not started |
+| 7 | Jobs: failed and stuck detection, retry, cancel | Not started |
+| 8 | Billing: trial extension, plan override, feature flags | Not started |
+| 9 | Audit and security centre; immutable audit at the database | Not started |
+| 10 | System settings: maintenance mode, announcements, broadcasts | Not started |
 
 ## Phase 1 as built
 
@@ -37,15 +49,31 @@ unknown role grants nothing.
 
 | Permission | Super admin | Admin | Support | Finance | Operations | Auditor |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| `tenants.read`: workspace list, counts, health | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `dashboard.read`: platform-wide metrics and health | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `tenants.read`: workspace list | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tenants.suspend`: suspend or reactivate a workspace | ✓ | ✓ | | | ✓ | |
+| `workspace.data.read`: everything inside one workspace | ✓ | ✓ | ✓ | | ✓ | ✓ |
+| `support.session`: open a support session (needed for workspace changes) | ✓ | ✓ | ✓ | | ✓ | |
+| `users.manage` | ✓ | ✓ | ✓ | | | |
+| `stores.manage` | ✓ | ✓ | | | ✓ | |
+| `catalog.manage` | ✓ | ✓ | | | ✓ | |
+| `orders.manage` | ✓ | ✓ | | | ✓ | |
+| `jobs.read` | ✓ | ✓ | ✓ | | ✓ | ✓ |
+| `jobs.manage` | ✓ | ✓ | | | ✓ | |
+| `billing.read` | ✓ | ✓ | | ✓ | | ✓ |
+| `billing.manage` | ✓ | ✓ | | ✓ | | |
 | `operators.read`: operator list and their sessions | ✓ | ✓ | | | | ✓ |
 | `operators.manage`: role change, deactivate, end sessions | ✓ | | | | | |
-| `audit.read`: the operator audit trail | ✓ | ✓ | | | | ✓ |
+| `audit.read` | ✓ | ✓ | | | | ✓ |
+| `audit.export` | ✓ | ✓ | | | | ✓ |
+| `settings.manage`: maintenance mode, announcements, broadcasts | ✓ | | | | | |
 
-Later phases add permissions (users, stores, jobs, billing, settings) and
-grant them per role in the same review. Support and Finance can do little
-today because the screens they need arrive in phases 3–7.
+The matrix is code (`app/core/platform_permissions.py`); unit tests pin
+the rules that matter:
+- only the super admin manages operators and settings;
+- the auditor holds only read permissions;
+- every role that can change a workspace can also open a support session
+  and read workspace data.
 
 - **Server-side enforcement.** Each route declares its permission as a
   dependency (`require_platform_permission`). The console hides what a role
@@ -129,6 +157,56 @@ Existing rows stay valid (migration `0052`).
 
 Reads are not audited in phase 1. Phase 3 audits every view into a
 workspace, as decided.
+
+## Phase 2 as built
+
+- **Dashboard** (`GET /platform/dashboard`, `dashboard.read`). It gives
+  live counts from the database:
+  - workspaces by status and new this week or month;
+  - active and new users;
+  - stores by status and platform;
+  - products, and listings by status;
+  - orders imported in the last day and week;
+  - subscriptions by plan and status, and trials ending this week;
+  - failures in the last 24 hours, by kind;
+  - stuck jobs:
+    - order and inventory syncs `running` for over 30 minutes, which
+      block that workspace's next sync;
+    - AI pipeline runs with no heartbeat for 20 minutes;
+  - open operator sessions, and refused operator actions in 24 hours;
+  - workspace signups per day for 30 days, and orders per day for 14 days,
+    with every day present, zeros included;
+  - system: database (on the request's own connection), Redis, and the
+    schema revision.
+
+  The console refreshes it every minute.
+- **Workspace entry** (`GET /platform/workspaces/{id}`,
+  `workspace.data.read`). It shows users, stores, products, orders and
+  listings by status, the subscription summary and 24-hour health, all read
+  through tenant-scoped repositories. The Stripe customer id is reduced to
+  "has one: yes/no". Every visit writes `workspace_viewed`.
+- **Console.** It is now a routed app with a sidebar filtered by
+  permission: Dashboard, Workspaces, workspace page with tabs, Operators,
+  Audit log, My sessions. Suspend and reactivate moved onto the workspace
+  page.
+- **Redis probe.** `check_redis_health` now also reports a client error that
+  is not a `RedisError` as "down" instead of raising.
+
+### Verified (phase 2)
+
+`test_platform_console_dashboard.py` covers:
+
+- the dashboard counts two newly registered workspaces and their users;
+- the dashboard reports database and schema;
+- 31 and 14 daily points;
+- every role reads the dashboard;
+- the overview counts only its own workspace, carries no secret field, and
+  is audited with its route;
+- Finance gets 403 inside a workspace;
+- an unknown workspace is 404 and not audited as a view.
+
+Playwright covers the dashboard numbers, opening a workspace, suspension
+with re-authentication, and Finance's restricted navigation.
 
 ## Verified (phase 1)
 

@@ -110,7 +110,9 @@ async def take_once(client: Redis[str], key: str) -> str | None:
 async def check_redis_health() -> bool:
     try:
         return bool(await get_redis(RedisPurpose.CACHE).ping())
-    except RedisError as exc:
+    except (RedisError, OSError, RuntimeError) as exc:
+        # A probe reports; it never raises. RuntimeError covers a client
+        # bound to an event loop that has gone (seen under test clients).
         logger.warning("redis_health_check_failed", error=str(exc))
         return False
 

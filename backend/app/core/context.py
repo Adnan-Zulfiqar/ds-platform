@@ -74,6 +74,12 @@ def set_tenant_id(tenant_id: UUID | None) -> Token[UUID | None]:
     return _tenant_id.set(tenant_id)
 
 
+def reset_tenant_id(token: Token[UUID | None]) -> None:
+    """Undo a :func:`set_tenant_id`, for code that enters a tenant briefly
+    (the platform console's workspace view, D-019)."""
+    _tenant_id.reset(token)
+
+
 def get_tenant_id() -> UUID | None:
     """Return the bound tenant id, or ``None``.
 

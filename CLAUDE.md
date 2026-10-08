@@ -138,9 +138,19 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     and their sign-in sessions sit above every tenant; sessions added with
     D-018, 2026-10-08), and
     `PlatformTenantDirectory` (workspace list and counts, never a
-    tenant-owned row). These are the **only** request-path exception. They
-    are reachable solely behind `RequirePlatformAdmin`, which is a separate
-    token audience plus TOTP plus an IP allow-list, and is off by default.
+    tenant-owned row), and `PlatformMetrics` (platform-wide dashboard
+    counts, never a row; D-019, 2026-10-09). These are the **only**
+    request-path exception. They are reachable solely behind
+    `RequirePlatformAdmin`, which is a separate token audience plus TOTP
+    plus an IP allow-list, and is off by default.
+  - **Operators inside one workspace (D-019, owner-approved 2026-10-09)
+    are not an unscoped exception.** `app.api.deps.platform_workspace`
+    checks the operator's permission, audits the visit, then **sets the
+    tenant context** to that workspace for the request. Everything it
+    reads or changes goes through the ordinary `TenantScopedRepository`
+    classes, so the tenant predicate applies exactly as for the
+    merchant. Never add an unscoped query for workspace data; enter the
+    workspace instead.
   - one free trial per store (Track E6b, owner requirement 2026-10-04,
     D-016): `TrialFingerprintRegistry`. It holds a one-way hash of a
     store's public identity and returns a boolean, never a row. It runs only

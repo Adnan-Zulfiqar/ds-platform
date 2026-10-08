@@ -10,6 +10,25 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 2: live dashboard and workspace entry (D-019)
+
+- **Owner decision D-019:** operators may view and manage complete workspace
+  data. CLAUDE.md §4 records how: an operator request enters one workspace
+  by setting the tenant context, after a permission check and an audit row,
+  and then uses the tenant-scoped repositories.
+- **Dashboard.** `GET /platform/dashboard` returns live platform counts,
+  failure and stuck-job counts, daily signups and orders, and system health.
+  It is backed by the new count-only `PlatformMetrics`.
+- **Workspace overview.** `GET /platform/workspaces/{id}` gives a
+  workspace's counts, subscription summary and health. Every visit is
+  audited as `workspace_viewed`.
+- **Thirteen new operator permissions**, each granted per role; see the
+  matrix in `docs/admin/ADMIN_CONTROL_CENTER.md`.
+- **Console.** `/platform` is now a routed console with a sidebar, a
+  dashboard and workspace pages.
+- **Redis probe.** It no longer raises when the client fails with a
+  non-Redis error.
+
 ### Added - Admin Control Center phase 1: operator roles, sessions, re-authentication (D-018)
 
 - **Roles.** Operators have one of six roles: super admin, admin, support,

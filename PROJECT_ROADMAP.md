@@ -343,11 +343,12 @@ trigger rather than a date.
 
 Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPLIER_FULFILMENT.md).
 
-## Admin Control Center (D-018)
+## Admin Control Center (D-018, D-019)
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Operator roles and permissions, sessions with revoke, re-authentication, richer audit | Built |
-| 2–8 | Dashboard, workspaces, users, stores, jobs, billing, audit and settings | Not started |
+| 1 | Operator roles and permissions, sessions with revoke, re-authentication, richer audit | Merged (#95) |
+| 2 | Live dashboard, workspace entry (D-019), routed console | Built |
+| 3–10 | Workspace drill-down, users, stores, catalogue and orders, jobs, billing, audit centre, settings | Not started |
 
 Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

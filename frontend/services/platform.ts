@@ -38,7 +38,20 @@ export type PlatformPermission =
   | "tenants.suspend"
   | "operators.read"
   | "operators.manage"
-  | "audit.read";
+  | "audit.read"
+  | "audit.export"
+  | "dashboard.read"
+  | "workspace.data.read"
+  | "support.session"
+  | "users.manage"
+  | "stores.manage"
+  | "catalog.manage"
+  | "orders.manage"
+  | "jobs.read"
+  | "jobs.manage"
+  | "billing.read"
+  | "billing.manage"
+  | "settings.manage";
 
 export interface PlatformSession {
   id: string;
@@ -339,5 +352,101 @@ export function usePlatformOperatorSessions(
           `/operators/${operatorId}/sessions`,
         )
       ).data,
+  });
+}
+
+export interface DailyCount {
+  day: string;
+  count: number;
+}
+
+export interface PlatformDashboard {
+  generatedAt: string;
+  tenantsByStatus: Record<string, number>;
+  tenantsNewWeek: number;
+  tenantsNewMonth: number;
+  usersActive: number;
+  usersNewWeek: number;
+  storesByStatus: Record<string, number>;
+  storesByPlatform: Record<string, number>;
+  productsTotal: number;
+  listingsByStatus: Record<string, number>;
+  ordersLastDay: number;
+  ordersLastWeek: number;
+  subscriptionsByPlan: Record<string, number>;
+  subscriptionsByStatus: Record<string, number>;
+  trialsEndingWeek: number;
+  failedLastDay: Record<string, number>;
+  stuck: Record<string, number>;
+  operatorSessionsOpen: number;
+  securityFailuresLastDay: number;
+  signupsByDay: DailyCount[];
+  ordersByDay: DailyCount[];
+  system: {
+    database: boolean;
+    redis: boolean;
+    migrationRevision: string | null;
+  };
+}
+
+export function usePlatformDashboard(
+  enabled: boolean,
+): UseQueryResult<PlatformDashboard> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "dashboard"],
+    queryFn: async () =>
+      (await platformClient.get<PlatformDashboard>("/dashboard")).data,
+    enabled,
+    // Live, but not a firehose: a minute is fresh enough for counts.
+    refetchInterval: 60_000,
+  });
+}
+
+export interface PlatformWorkspaceOverview {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  isActive: boolean;
+  timezone: string | null;
+  defaultCurrency: string | null;
+  createdAt: string;
+  users: number;
+  activeUsers: number;
+  storesByStatus: Record<string, number>;
+  products: Record<string, number>;
+  ordersByStatus: Record<string, number>;
+  listingsByStatus: Record<string, number>;
+  subscription: {
+    plan: string | null;
+    status: string;
+    aiAddon: boolean;
+    trialEndsAt: string;
+    currentPeriodEnd: string | null;
+    cancelAtPeriodEnd: boolean;
+    hasStripeCustomer: boolean;
+  } | null;
+  health: {
+    windowHours: number;
+    failedOrderSyncs: number;
+    failedInventorySyncs: number;
+    listingsInError: number;
+    failedNotificationEmails: number;
+  };
+}
+
+export function usePlatformWorkspace(
+  tenantId: string,
+  enabled: boolean,
+): UseQueryResult<PlatformWorkspaceOverview> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "workspace", tenantId],
+    queryFn: async () =>
+      (
+        await platformClient.get<PlatformWorkspaceOverview>(
+          `/workspaces/${tenantId}`,
+        )
+      ).data,
+    enabled,
   });
 }
