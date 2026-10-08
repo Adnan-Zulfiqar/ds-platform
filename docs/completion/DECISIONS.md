@@ -326,3 +326,41 @@ Agent design choices in phase 1, recorded for review:
   cannot be removed.
 
 Details: `docs/admin/ADMIN_CONTROL_CENTER.md`.
+
+## D-019 — Operators may see and manage complete workspace data
+
+The owner wrote on 2026-10-09: "I explicitly approve changing the earlier
+D-015/D-018 restriction. Super Admins and authorized admin roles may view
+and manage complete workspace data, including users, stores, products,
+drafts, listings, orders, inventory, jobs, billing, integrations,
+notifications, and audit records." The owner also kept these limits:
+
+- Super Admin access must be explicit, role-based and audited.
+- Secrets, passwords, OAuth tokens, encryption keys and payment data stay
+  hidden.
+- Every sensitive action needs re-authentication, confirmation, a reason and
+  an immutable audit row.
+- Normal users keep tenant isolation.
+- No arbitrary code execution, and no deletion of customer data without a
+  protected workflow.
+
+This supersedes the "read-only" part of D-018 and the "never reading
+product, order or buyer data" part of D-015. Impersonation is still out:
+the owner allowed a support session "only if it can be implemented
+safely".
+
+How it is built (agent design, recorded for review):
+
+- **Enter, do not bypass.** An operator request names one workspace. The
+  dependency checks the permission, audits the visit (`workspace_viewed`,
+  with the route), and sets the tenant context; reads and writes then use
+  the merchant's own tenant-scoped repositories. No unscoped query is added
+  for workspace data, and one request can never span two workspaces.
+- **Counts across workspaces only.** The dashboard's `PlatformMetrics` is
+  the one new unscoped class. It returns counts and dates, never a row.
+- **Writes need more than a role** (from phase 4): a time-limited support
+  session for that workspace, opened with a reason, plus re-authentication.
+- **Roles widened, still least-privilege.** Support handles users,
+  Operations handles stores, catalogue, orders and jobs, and Finance handles
+  billing without workspace data. Auditor reads everything and changes
+  nothing. Only Super admin manages operators and platform settings.
