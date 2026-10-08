@@ -19,8 +19,9 @@ from app.models.order import Order
 from app.models.platform_admin import PlatformAdminAudit
 from app.models.product import Product, ProductSource, ProductStatus
 from app.models.store import Store, StorePlatform, StoreStatus
+from tests.integration.conftest import STRONG_PASSWORD
 from tests.integration.test_ebay_c1_api import register
-from tests.integration.test_platform_admin_auth import make_admin, sign_in
+from tests.integration.test_platform_admin_auth import REAUTH, code, make_admin, sign_in
 from tests.integration.test_platform_admin_auth import panel as panel
 
 pytestmark = pytest.mark.integration
@@ -165,12 +166,15 @@ async def test_exports_need_reauth_are_audited_and_neutralise_formulas(
     await seed(db_session, tenant_id, buyer='=HYPERLINK("http://evil")')
     secret = await make_admin(db_session)
 
-    plain = await sign_in(client, secret)
-    refused = await client.get(f"{P}/{tenant_id}/export/orders", headers=plain)
+    headers = await sign_in(client, secret)
+    refused = await client.get(f"{P}/{tenant_id}/export/orders", headers=headers)
     assert refused.status_code == 403 and refused.json()["code"] == "reauth_required"
 
-    confirmed = await sign_in(client, secret, reauth=True)
-    response = await client.get(f"{P}/{tenant_id}/export/orders", headers=confirmed)
+    confirmed = await client.post(
+        REAUTH, json={"password": STRONG_PASSWORD, "code": code(secret, ahead=1)}, headers=headers
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    response = await client.get(f"{P}/{tenant_id}/export/orders", headers=headers)
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/csv")
     assert "attachment" in response.headers["content-disposition"]
