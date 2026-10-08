@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–2 built**, phases 3–10 in progress. The platform console
+Status: **phases 1–3 built**, phases 4–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -28,8 +28,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Operator roles and permission matrix, sessions with revoke, re-authentication, richer audit | Merged (#95) |
-| 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Built (this PR) |
-| 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Not started |
+| 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Merged (#96) |
+| 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Built (this PR) |
 | 4 | User controls and support sessions | Not started |
 | 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Not started |
 | 6 | Catalogue and order actions | Not started |
@@ -207,6 +207,68 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 3 as built
+
+Every route is `GET /platform/workspaces/{id}/…`, entered through
+`platform_workspace`. Each request checks `workspace.data.read`, is audited
+as `workspace_viewed` with its route, and reads through tenant-scoped
+repositories.
+
+| View | Route | Filters |
+|---|---|---|
+| Users | `/users`. Shows roles and live session counts (batched, no N+1). | `active`, search |
+| Invitations | `/invitations` | — |
+| Stores | `/stores`. Shows sync switches, last sync, last error and health. | `platform`, `status`, search |
+| Connections | `/connections`. Covers AliExpress, Shopify (with webhook registration) and eBay. Shows status, expiry and last error, **never a credential**. | — |
+| Products and drafts | `/products?publication=published\|draft` | search |
+| Product detail | `/products/{id}`: variants, images, listings | — |
+| Listings | `/listings` | `status`, `store_id` |
+| Orders | `/orders` | `fulfillment_status`, `source`, search |
+| Order detail | `/orders/{id}`: buyer and address, items, shipments, history, supplier order | — |
+| Sync runs | `/sync-runs?kind=orders\|inventory` | `status` |
+| Notifications | `/notifications` | `kind`, search |
+| **Export** | `/export/{users\|stores\|products\|drafts\|listings\|orders}` | — |
+
+- **Unknown filter values.** A filter value outside the enum is a 422, not a
+  500.
+- **Another workspace's id** under this workspace's path is a 404, because
+  the tenant predicate never finds it.
+- **Exports** need re-authentication.
+  - At most 5000 rows each, newest first.
+  - They are audited as `workspace_data_exported` with the dataset and the
+    row count.
+  - Every text cell starting with `= + - @`, a tab or a carriage return is
+    prefixed with `'`. Merchant data such as product titles and buyer names
+    then cannot run as a spreadsheet formula.
+  - Responses carry `Cache-Control: no-store`.
+- **Console.** The workspace page gets tabs for Users, Stores, Products,
+  Listings, Orders, Sync runs, Notifications and Export.
+  - One shared table component provides search, filters, paging, totals,
+    and loading, empty and error states.
+  - Orders and products open in a side panel.
+  - The export reads an error body that arrives as a file, so the re-auth
+    prompt works there too.
+
+### Verified (phase 3)
+
+`test_platform_workspace_data.py` (8 tests) covers:
+
+- the users list carries roles and sessions and no password or token hash;
+- two workspaces with orders and stores, where each view shows only its own;
+- another workspace's order or product id under this workspace's path is a
+  404;
+- the store's encrypted credentials never appear;
+- all 11 list views answer and are audited with their route;
+- unknown filter values are a 422;
+- an export is refused without re-authentication;
+- after re-authentication an export is a CSV whose formula-looking buyer
+  name is neutralised, with an audit row recording 1 row;
+- Auditor and Support read, Finance is refused.
+
+Playwright (`platform-workspace-data.spec.ts`) covers the users, stores and
+connections tabs, an order's detail panel, and an export through
+re-authentication to the download.
 
 ## Verified (phase 1)
 
