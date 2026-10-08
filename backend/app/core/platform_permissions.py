@@ -38,28 +38,102 @@ class PlatformPermission(StrEnum):
     OPERATORS_MANAGE = "operators.manage"
     #: The operator audit trail and security events.
     AUDIT_READ = "audit.read"
+    #: Download the audit trail as CSV.
+    AUDIT_EXPORT = "audit.export"
+    #: Platform-wide metrics and system health.
+    DASHBOARD_READ = "dashboard.read"
+    #: Everything inside one workspace, read-only (D-019): users, stores,
+    #: products, listings, orders, inventory, jobs, notifications.
+    WORKSPACE_DATA_READ = "workspace.data.read"
+    #: Open a time-limited support session, which every workspace change
+    #: needs (D-019).
+    SUPPORT_SESSION = "support.session"
+    #: Disable or enable a user, end their sessions, require a password
+    #: reset, revoke invitations, change a member's workspace role.
+    USERS_MANAGE = "users.manage"
+    #: Pause or resume store sync, trigger syncs, re-register webhooks.
+    STORES_MANAGE = "stores.manage"
+    #: Retry imports and listing syncs.
+    CATALOG_MANAGE = "catalog.manage"
+    #: Refresh orders, release supplier orders.
+    ORDERS_MANAGE = "orders.manage"
+    #: Failed and stuck background work, across workspaces.
+    JOBS_READ = "jobs.read"
+    #: Retry, cancel, or close a stuck job.
+    JOBS_MANAGE = "jobs.manage"
+    #: Subscriptions, trials and plans.
+    BILLING_READ = "billing.read"
+    #: Extend a trial, override a plan, set feature flags.
+    BILLING_MANAGE = "billing.manage"
+    #: Maintenance mode, announcements, broadcast notifications.
+    SETTINGS_MANAGE = "settings.manage"
 
 
+P = PlatformPermission
 _ALL: Final = frozenset(PlatformPermission)
 
-#: What each role may do. Later phases add permissions here (users, stores,
-#: jobs, billing, settings) and grant them per role in the same review.
+#: What each role may do. A grant here is a security change and is reviewed
+#: like one (D-018, widened by D-019).
 ROLE_PERMISSIONS: Final[dict[PlatformRole, frozenset[PlatformPermission]]] = {
     PlatformRole.SUPER_ADMIN: _ALL,
-    PlatformRole.ADMIN: _ALL - {PlatformPermission.OPERATORS_MANAGE},
-    PlatformRole.SUPPORT: frozenset({PlatformPermission.TENANTS_READ}),
-    PlatformRole.FINANCE: frozenset({PlatformPermission.TENANTS_READ}),
-    PlatformRole.OPERATIONS: frozenset(
-        {PlatformPermission.TENANTS_READ, PlatformPermission.TENANTS_SUSPEND}
+    # Everything except changing who the operators are and the
+    # platform-wide switches.
+    PlatformRole.ADMIN: _ALL - {P.OPERATORS_MANAGE, P.SETTINGS_MANAGE},
+    PlatformRole.SUPPORT: frozenset(
+        {
+            P.TENANTS_READ,
+            P.DASHBOARD_READ,
+            P.WORKSPACE_DATA_READ,
+            P.SUPPORT_SESSION,
+            P.USERS_MANAGE,
+            P.JOBS_READ,
+        }
     ),
+    PlatformRole.FINANCE: frozenset(
+        {P.TENANTS_READ, P.DASHBOARD_READ, P.BILLING_READ, P.BILLING_MANAGE}
+    ),
+    PlatformRole.OPERATIONS: frozenset(
+        {
+            P.TENANTS_READ,
+            P.TENANTS_SUSPEND,
+            P.DASHBOARD_READ,
+            P.WORKSPACE_DATA_READ,
+            P.SUPPORT_SESSION,
+            P.STORES_MANAGE,
+            P.CATALOG_MANAGE,
+            P.ORDERS_MANAGE,
+            P.JOBS_READ,
+            P.JOBS_MANAGE,
+        }
+    ),
+    # Sees everything, changes nothing.
     PlatformRole.AUDITOR: frozenset(
         {
-            PlatformPermission.TENANTS_READ,
-            PlatformPermission.OPERATORS_READ,
-            PlatformPermission.AUDIT_READ,
+            P.TENANTS_READ,
+            P.OPERATORS_READ,
+            P.AUDIT_READ,
+            P.AUDIT_EXPORT,
+            P.DASHBOARD_READ,
+            P.WORKSPACE_DATA_READ,
+            P.JOBS_READ,
+            P.BILLING_READ,
         }
     ),
 }
+
+#: Read-only permissions. Everything else changes state.
+READ_PERMISSIONS: Final = frozenset(
+    {
+        P.TENANTS_READ,
+        P.OPERATORS_READ,
+        P.AUDIT_READ,
+        P.AUDIT_EXPORT,
+        P.DASHBOARD_READ,
+        P.WORKSPACE_DATA_READ,
+        P.JOBS_READ,
+        P.BILLING_READ,
+    }
+)
 
 #: Actions that need a fresh password + code, not just a valid session.
 REAUTH_WINDOW_MINUTES: Final = 10
@@ -79,6 +153,7 @@ def has_permission(role: str, permission: PlatformPermission) -> bool:
 
 
 __all__ = [
+    "READ_PERMISSIONS",
     "REAUTH_WINDOW_MINUTES",
     "ROLE_PERMISSIONS",
     "PlatformPermission",
