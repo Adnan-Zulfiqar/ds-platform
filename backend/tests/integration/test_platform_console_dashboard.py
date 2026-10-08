@@ -38,7 +38,7 @@ async def test_the_dashboard_counts_real_workspaces_and_reports_system_health(
     assert body["system"]["migrationRevision"]
     assert len(body["signupsByDay"]) == 31 and len(body["ordersByDay"]) == 14
     assert body["signupsByDay"][-1]["count"] >= 2
-    assert set(body["failedLastDay"]) >= {"orderSyncs", "inventorySyncs", "productImports"}
+    assert set(body["failedLastDay"]) >= {"order_syncs", "inventory_syncs", "product_imports"}
 
 
 @pytest.mark.parametrize("role", ["support", "finance", "operations", "auditor"])
