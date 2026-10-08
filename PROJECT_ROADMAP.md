@@ -342,3 +342,12 @@ trigger rather than a date.
 | F4 | Order panel and settings screens | Merged (#90); review fixes #91, worker fix #92 |
 
 Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPLIER_FULFILMENT.md).
+
+## Admin Control Center (D-018)
+
+| Phase | Scope | State |
+|---|---|---|
+| 1 | Operator roles and permissions, sessions with revoke, re-authentication, richer audit | Built |
+| 2–8 | Dashboard, workspaces, users, stores, jobs, billing, audit and settings | Not started |
+
+Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

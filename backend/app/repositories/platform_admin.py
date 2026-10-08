@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.inventory import InventorySyncRun
 from app.models.notification import Notification
 from app.models.order import OrderSyncRun, SyncRunStatus
-from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit
+from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit, PlatformAdminSession
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StoreStatus
 from app.models.tenant import Tenant
@@ -42,6 +42,98 @@ class PlatformAdminRepository(BaseRepository[PlatformAdmin]):
         query = self._base_query().where(PlatformAdmin.id == admin_id).with_for_update()
         return (await self.session.execute(query)).scalar_one_or_none()
 
+    async def all_operators(self) -> list[PlatformAdmin]:
+        """Every operator, active first. A short list by nature (a handful
+        of staff), so no pagination."""
+        query = self._base_query().order_by(
+            PlatformAdmin.is_active.desc(), PlatformAdmin.email.asc()
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def lock_active_with_role(self, role: str) -> int:
+        """Count the active operators holding ``role``, locking their rows.
+
+        The lock is the point: two super admins demoting each other at the
+        same moment would each count two and both succeed, leaving none. With
+        the rows locked the second waits and then counts one.
+        """
+        query = (
+            self._base_query()
+            .with_only_columns(PlatformAdmin.id)
+            .where(PlatformAdmin.role == role, PlatformAdmin.is_active.is_(True))
+            .order_by(PlatformAdmin.id)
+            .with_for_update()
+        )
+        return len((await self.session.execute(query)).scalars().all())
+
+
+class PlatformAdminSessionRepository:
+    """Operator sign-in sessions. Above the tenancy boundary like the
+    operators themselves (CLAUDE.md §4, D-015/D-018)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def open(
+        self,
+        *,
+        admin_id: uuid.UUID,
+        expires_at: datetime,
+        client_ip: str | None,
+        user_agent: str | None,
+    ) -> PlatformAdminSession:
+        row = PlatformAdminSession(
+            admin_id=admin_id,
+            expires_at=expires_at,
+            client_ip=(client_ip or "")[:64] or None,
+            user_agent=(user_agent or "")[:256] or None,
+            last_seen_at=datetime.now(UTC),
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def get(self, session_id: uuid.UUID) -> PlatformAdminSession | None:
+        query = select(PlatformAdminSession).where(PlatformAdminSession.id == session_id)
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def open_for(self, admin_id: uuid.UUID) -> list[PlatformAdminSession]:
+        now = datetime.now(UTC)
+        query = (
+            select(PlatformAdminSession)
+            .where(
+                PlatformAdminSession.admin_id == admin_id,
+                PlatformAdminSession.revoked_at.is_(None),
+                PlatformAdminSession.expires_at > now,
+            )
+            .order_by(PlatformAdminSession.created_at.desc())
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def open_counts(self) -> dict[uuid.UUID, int]:
+        """Open sessions per operator, in one query for the operator list."""
+        query = (
+            select(PlatformAdminSession.admin_id, func.count())
+            .where(
+                PlatformAdminSession.revoked_at.is_(None),
+                PlatformAdminSession.expires_at > datetime.now(UTC),
+            )
+            .group_by(PlatformAdminSession.admin_id)
+        )
+        return dict((await self.session.execute(query)).tuples().all())
+
+    async def revoke(self, row: PlatformAdminSession, *, reason: str) -> None:
+        if row.revoked_at is None:
+            row.revoked_at = datetime.now(UTC)
+            row.revoked_reason = reason[:64]
+            await self.session.flush()
+
+    async def revoke_all_for(self, admin_id: uuid.UUID, *, reason: str) -> int:
+        rows = await self.open_for(admin_id)
+        for row in rows:
+            await self.revoke(row, reason=reason)
+        return len(rows)
+
 
 class PlatformAdminAuditRepository:
     """Append and read only. There is deliberately no update or delete."""
@@ -57,6 +149,12 @@ class PlatformAdminAuditRepository:
         client_ip: str | None,
         target_tenant_id: uuid.UUID | None = None,
         detail: dict[str, Any] | None = None,
+        user_agent: str | None = None,
+        request_id: str | None = None,
+        actor_role: str | None = None,
+        outcome: str = "success",
+        target_type: str | None = None,
+        target_id: str | None = None,
     ) -> PlatformAdminAudit:
         row = PlatformAdminAudit(
             action=action,
@@ -64,6 +162,12 @@ class PlatformAdminAuditRepository:
             client_ip=(client_ip or "")[:64] or None,
             target_tenant_id=target_tenant_id,
             detail=detail or {},
+            user_agent=(user_agent or "")[:256] or None,
+            request_id=(request_id or "")[:64] or None,
+            actor_role=actor_role,
+            outcome=outcome,
+            target_type=target_type,
+            target_id=(target_id or "")[:64] or None,
         )
         self.session.add(row)
         await self.session.flush()

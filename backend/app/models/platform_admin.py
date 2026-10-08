@@ -33,6 +33,38 @@ class PlatformAdmin(IdentifiedBase, SoftDeleteMixin):
         Boolean, nullable=False, default=True, server_default="true"
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: A ``PlatformRole`` value; what it may do is the matrix in
+    #: ``app.core.platform_permissions``. Accounts that existed before roles
+    #: (D-018) became ``super_admin``, which is what they could do already.
+    role: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="super_admin", server_default="super_admin"
+    )
+
+
+class PlatformAdminSession(IdentifiedBase):
+    """One sign-in. A platform token carries its id (``sid``), and every
+    request checks the session is still open, so revoking it ends the token
+    at once rather than at expiry."""
+
+    __tablename__ = "platform_admin_sessions"
+
+    admin_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("platform_admins.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: When the operator last re-entered password + code in this session;
+    #: sensitive actions need it within ``REAUTH_WINDOW_MINUTES``.
+    reauthenticated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class PlatformAdminAudit(IdentifiedBase):
@@ -57,6 +89,18 @@ class PlatformAdminAudit(IdentifiedBase):
     )
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Added by D-018. Null on rows written before it.
+    user_agent: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: ``success`` or ``failure`` (a refused sign-in, a denied permission).
+    outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="success", server_default="success"
+    )
+    #: What the action was about, beyond a workspace: ``operator``,
+    #: ``session`` ...; with the id as text.
+    target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
-__all__ = ["PlatformAdmin", "PlatformAdminAudit"]
+__all__ = ["PlatformAdmin", "PlatformAdminAudit", "PlatformAdminSession"]

@@ -10,6 +10,31 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 1: operator roles, sessions, re-authentication (D-018)
+
+- **Roles.** Operators have one of six roles: super admin, admin, support,
+  finance, operations or auditor. The permission matrix lives in code.
+  Every platform route checks its permission as a dependency, and a refusal
+  is audited as `permission_denied`.
+- **Sessions.** Each sign-in opens a session that every request checks.
+  Sign-out, ending your own other sessions, and a super admin ending an
+  operator's sessions all take effect at once. A role change or a
+  deactivation ends the target's sessions.
+- **Re-authentication.** Suspending a workspace and managing operators need
+  the password and a new code within ten minutes. The console asks for both
+  and retries.
+- **Protections.** Nobody can change their own role or deactivate
+  themselves, and the last active super admin cannot be removed.
+- **Richer audit.** Rows now record the user agent, request id, the actor's
+  role, the outcome and the target.
+- **Console.** Tabs follow the operator's role; new Operators, Audit log and
+  My sessions views.
+- **Migration `0052`** adds the role column, the sessions table and the
+  audit columns. `downgrade()` removes them.
+- **Breaking for operators.** Existing operator tokens are refused, so
+  everyone signs in again once. Existing operators become super admins.
+- `create_platform_admin.py` takes `--role`.
+
 ### Fixed - the documented command to create a platform operator failed
 
 - `docker exec ... python scripts/create_platform_admin.py` failed with

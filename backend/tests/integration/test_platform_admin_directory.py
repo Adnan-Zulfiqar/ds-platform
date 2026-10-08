@@ -11,9 +11,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.platform_admin import PlatformAdminAudit
-from tests.integration.conftest import STRONG_PASSWORD, registration_payload
+from tests.integration.conftest import registration_payload
 from tests.integration.test_ebay_c1_api import auth_header, register
-from tests.integration.test_platform_admin_auth import EMAIL, LOGIN, code, make_admin
+from tests.integration.test_platform_admin_auth import make_admin, sign_in
 from tests.integration.test_platform_admin_auth import panel as panel
 
 pytestmark = pytest.mark.integration
@@ -22,12 +22,8 @@ TENANTS = "/api/v1/platform/tenants"
 
 
 async def operator(client: AsyncClient, db_session: AsyncSession) -> dict[str, str]:
-    secret = await make_admin(db_session)
-    response = await client.post(
-        LOGIN, json={"email": EMAIL, "password": STRONG_PASSWORD, "code": code(secret)}
-    )
-    assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['accessToken']}"}
+    """A super admin who has just re-authenticated, as suspension needs."""
+    return await sign_in(client, await make_admin(db_session), reauth=True)
 
 
 async def test_the_directory_lists_workspaces_with_counts_and_nothing_else(

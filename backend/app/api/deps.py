@@ -35,13 +35,14 @@ from app.core.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitExceededError,
+    ReauthenticationRequiredError,
 )
 from app.core.logging import get_logger
+from app.core.platform_permissions import PlatformPermission
 from app.core.rate_limit import limiter
 from app.core.redis import CacheClient
 from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
-from app.models.platform_admin import PlatformAdmin
 from app.models.role import RoleName
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -49,6 +50,8 @@ from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.role import RoleRepository
 from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
+from app.services.platform_admin import AuditContext as PlatformAuditContext
+from app.services.platform_admin import PlatformPrincipal
 
 logger = get_logger(__name__)
 
@@ -196,11 +199,13 @@ def require_platform_network(request: Request) -> None:
         raise NotFoundError()
 
 
-async def get_platform_admin(
+async def get_platform_principal(
     request: Request, credentials: BearerCredentials, session: DbSession
-) -> PlatformAdmin:
-    """The signed-in platform operator. A tenant token, even an owner's, is
-    refused: it carries the tenant audience, which platform tokens never do."""
+) -> PlatformPrincipal:
+    """The signed-in platform operator and their open session. A tenant
+    token, even an owner's, is refused: it carries the tenant audience, which
+    platform tokens never do. A revoked or expired session is refused even
+    while its token is still within ``exp`` (D-018)."""
     from app.core.tokens import decode_platform_token
     from app.services.platform_admin import PlatformAdminService
 
@@ -208,11 +213,69 @@ async def get_platform_admin(
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("An access token is required to use this endpoint.")
     claims = decode_platform_token(credentials.credentials)
-    return await PlatformAdminService(session).active_admin(claims.admin_id)
+    return await PlatformAdminService(session).principal(
+        admin_id=claims.admin_id, session_id=claims.session_id
+    )
 
 
 PlatformNetwork = Depends(require_platform_network)
-RequirePlatformAdmin = Annotated[PlatformAdmin, Depends(get_platform_admin)]
+RequirePlatformAdmin = Annotated[PlatformPrincipal, Depends(get_platform_principal)]
+
+
+def platform_audit_context(request: Request) -> PlatformAuditContext:
+    from app.core.client_ip import resolve_client_ip
+    from app.core.context import get_request_id
+
+    agent = request.headers.get("user-agent")
+    return PlatformAuditContext(
+        client_ip=resolve_client_ip(request),
+        user_agent=agent[:256] if agent else None,
+        request_id=get_request_id(),
+    )
+
+
+PlatformAudit = Annotated[PlatformAuditContext, Depends(platform_audit_context)]
+
+
+def require_platform_permission(
+    permission: PlatformPermission,
+) -> Callable[..., Awaitable[PlatformPrincipal]]:
+    """Authorization as a dependency (CLAUDE.md §7.8), on the server for every
+    platform route. A refusal is a security event and is audited."""
+
+    async def dependency(
+        principal: RequirePlatformAdmin, session: DbSession, ctx: PlatformAudit
+    ) -> PlatformPrincipal:
+        from app.services.platform_admin import PlatformAdminService
+
+        if not principal.can(permission):
+            await PlatformAdminService(session).audit_permission_denied(
+                principal.admin, permission=permission.value, ctx=ctx
+            )
+            raise PermissionDeniedError()
+        return principal
+
+    return dependency
+
+
+def require_platform_reauth(
+    permission: PlatformPermission,
+) -> Callable[..., Awaitable[PlatformPrincipal]]:
+    """The permission, plus password and code re-entered in this session
+    within ``REAUTH_WINDOW_MINUTES``. For actions that change access."""
+    check = require_platform_permission(permission)
+
+    # A default, not ``Annotated[..., Depends(check)]``: under postponed
+    # annotations FastAPI resolves annotation strings in module globals, where
+    # the local ``check`` does not exist, and would read it as a query field.
+    async def dependency(
+        principal: PlatformPrincipal = Depends(check),  # noqa: B008 — FastAPI's dependency idiom
+    ) -> PlatformPrincipal:
+        if not principal.reauthenticated_recently():
+            raise ReauthenticationRequiredError()
+        return principal
+
+    return dependency
 
 
 async def get_optional_principal(
@@ -500,6 +563,34 @@ def endpoint_rate_limit(
     return dependency
 
 
+def platform_rate_limit(
+    name: str, *, limit: int, window_seconds: int
+) -> Callable[[Request], Awaitable[None]]:
+    """A named quota for a platform route, counted per client address.
+
+    Not :func:`endpoint_rate_limit`: that one resolves the *tenant*
+    principal, which refuses a platform token outright. Operators sit
+    behind an IP allow-list already, so the address is the natural key.
+    """
+
+    async def dependency(request: Request) -> None:
+        if not settings.security.rate_limit_enabled:
+            return
+        decision = await limiter.consume(
+            f"ratelimit:{name}:ip:{client_ip_or_unknown(request)}",
+            limit=limit,
+            window=window_seconds,
+        )
+        if not decision.allowed:
+            logger.warning("platform_rate_limit_exceeded", endpoint=name, limit=limit)
+            raise RateLimitExceededError(
+                "Too many attempts. Please wait and try again.",
+                retry_after_seconds=decision.retry_after,
+            )
+
+    return dependency
+
+
 __all__ = [
     "BearerCredentials",
     "BillingWrite",
@@ -509,6 +600,7 @@ __all__ = [
     "CurrentUser",
     "DbSession",
     "OptionalPrincipal",
+    "PlatformAudit",
     "PlatformNetwork",
     "RefreshTokenRepo",
     "RequireAdmin",
@@ -530,6 +622,9 @@ __all__ = [
     "get_role_repository",
     "get_tenant_repository",
     "get_user_repository",
+    "platform_rate_limit",
     "require_minimum_role",
+    "require_platform_permission",
+    "require_platform_reauth",
     "require_roles",
 ]
