@@ -298,3 +298,31 @@ Agent design choices, recorded for review:
   DropPilot does not store).
 
 Details and what remains unverified: `docs/track-f/F_SUPPLIER_FULFILMENT.md`.
+
+## D-018 — Admin Control Center
+
+The owner made these choices on 2026-10-08:
+
+- **Read-only, audited views inside a workspace.** One workspace at a time,
+  through that workspace's tenant-scoped queries; every view audited; no
+  secrets. The CLAUDE.md §4 amendment lands with the phase that needs it
+  (phase 3).
+- **Safe operational actions only.** Suspend or reactivate a user, force
+  logout, require a password reset or MFA, pause or resume sync, safe retry,
+  extend a trial, plan override, feature flags. Never delete customer data,
+  transfer ownership or change roles inside a workspace.
+- **No impersonation.** D-015 stands.
+- **Phase by phase**, eight phases, each a tested PR.
+
+Agent design choices in phase 1, recorded for review:
+
+- The permission matrix is code, not data, so a change to it is reviewed.
+- Existing operators become `super_admin`, which is what they could do
+  before roles existed.
+- Every sign-in is a server-side session that each request checks, so
+  revocation is immediate; tokens without a session are refused.
+- Access-changing actions need password plus a new TOTP code within ten
+  minutes; nobody changes their own access; the last active super admin
+  cannot be removed.
+
+Details: `docs/admin/ADMIN_CONTROL_CENTER.md`.

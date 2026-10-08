@@ -10,6 +10,8 @@ approved, impersonation out. Built in stages:
 | E5c | Health counts per workspace (failed syncs/publishes, email outbox) | Done |
 | E5d | Frontend `/platform` pages | Done |
 
+Continued by the [Admin Control Center](../admin/ADMIN_CONTROL_CENTER.md) (D-018): roles, sessions, re-authentication and more.
+
 ## E5a as built
 
 - **Tables (migration `0046`).** `platform_admins` holds the email, the
