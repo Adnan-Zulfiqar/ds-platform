@@ -238,15 +238,25 @@ class PlatformClaims:
     admin_id: uuid.UUID
     jti: str
     expires_at: datetime
+    #: The ``platform_admin_sessions`` row this token belongs to (D-018).
+    session_id: uuid.UUID
 
 
-def create_platform_token(*, admin_id: uuid.UUID) -> IssuedToken:
+def platform_token_expiry(now: datetime | None = None) -> datetime:
+    return (now or datetime.now(UTC)) + timedelta(minutes=settings.platform_admin.token_ttl_minutes)
+
+
+def create_platform_token(
+    *, admin_id: uuid.UUID, session_id: uuid.UUID, expires_at: datetime
+) -> IssuedToken:
+    """``expires_at`` is the session's, so the token and its session end
+    together."""
     now = datetime.now(UTC)
-    expires_at = now + timedelta(minutes=settings.platform_admin.token_ttl_minutes)
     jti = uuid.uuid4().hex
     token = jwt.encode(
         {
             "sub": str(admin_id),
+            "sid": str(session_id),
             "typ": PLATFORM_TOKEN_TYPE,
             "jti": jti,
             "iat": int(now.timestamp()),
@@ -271,7 +281,10 @@ def decode_platform_token(token: str) -> PlatformClaims:
             audience=platform_audience(),
             issuer=settings.security.jwt_issuer,
             leeway=settings.security.jwt_leeway_seconds,
-            options={"require": ["sub", "exp", "iat", "jti", "typ", "iss", "aud"]},
+            # ``sid`` is required: a token from before sessions existed (D-018)
+            # cannot be revoked, so it is refused and the operator signs in
+            # again.
+            options={"require": ["sub", "sid", "exp", "iat", "jti", "typ", "iss", "aud"]},
         )
     except jwt.ExpiredSignatureError as exc:
         raise TokenExpiredError() from exc
@@ -285,6 +298,7 @@ def decode_platform_token(token: str) -> PlatformClaims:
             admin_id=uuid.UUID(payload["sub"]),
             jti=str(payload["jti"]),
             expires_at=datetime.fromtimestamp(payload["exp"], tz=UTC),
+            session_id=uuid.UUID(payload["sid"]),
         )
     except (KeyError, ValueError, TypeError) as exc:
         raise refused from exc
@@ -301,4 +315,5 @@ __all__ = [
     "create_refresh_token",
     "decode_platform_token",
     "decode_token",
+    "platform_token_expiry",
 ]

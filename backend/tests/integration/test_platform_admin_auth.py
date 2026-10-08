@@ -26,6 +26,7 @@ pytestmark = pytest.mark.integration
 
 LOGIN = "/api/v1/platform/auth/login"
 ME = "/api/v1/platform/me"
+REAUTH = "/api/v1/platform/auth/reauth"
 EMAIL = "ops@droppilot.example"
 
 
@@ -43,15 +44,37 @@ def panel(monkeypatch: pytest.MonkeyPatch, db_session: AsyncSession) -> None:
     monkeypatch.setattr(platform_service, "transaction", shared)
 
 
-async def make_admin(db_session: AsyncSession) -> str:
+async def make_admin(
+    db_session: AsyncSession, *, email: str = EMAIL, role: str = "super_admin"
+) -> str:
     created = await PlatformAdminService(db_session).create_admin(
-        email=EMAIL, password=STRONG_PASSWORD
+        email=email, password=STRONG_PASSWORD, role=role
     )
     return created.totp_secret
 
 
-def code(secret: str) -> str:
-    return totp.code_at(secret, totp.current_step())
+def code(secret: str, *, ahead: int = 0) -> str:
+    """``ahead`` steps into the future, inside the ±1 drift window: a second
+    code for the same account in one test (a code is good once)."""
+    return totp.code_at(secret, totp.current_step() + ahead)
+
+
+async def sign_in(
+    client: AsyncClient, secret: str, *, email: str = EMAIL, reauth: bool = False
+) -> dict[str, str]:
+    response = await client.post(
+        LOGIN, json={"email": email, "password": STRONG_PASSWORD, "code": code(secret)}
+    )
+    assert response.status_code == 200, response.text
+    headers = {"Authorization": f"Bearer {response.json()['accessToken']}"}
+    if reauth:
+        confirmed = await client.post(
+            REAUTH,
+            json={"password": STRONG_PASSWORD, "code": code(secret, ahead=1)},
+            headers=headers,
+        )
+        assert confirmed.status_code == 200, confirmed.text
+    return headers
 
 
 async def actions(db_session: AsyncSession) -> list[str]:

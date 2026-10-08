@@ -134,6 +134,15 @@ class PermissionDeniedError(AppError):
     message = "You do not have permission to perform this action."
 
 
+class ReauthenticationRequiredError(PermissionDeniedError):
+    """A sensitive platform action needs the operator's password and a fresh
+    code again (D-018). A distinct code so the console can prompt for them
+    instead of showing a dead end."""
+
+    code = "reauth_required"
+    message = "Confirm your password and code to continue."
+
+
 class NotFoundError(AppError):
     """The requested resource does not exist, or is invisible to this tenant.
 

@@ -35,13 +35,14 @@ from app.core.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitExceededError,
+    ReauthenticationRequiredError,
 )
 from app.core.logging import get_logger
+from app.core.platform_permissions import PlatformPermission
 from app.core.rate_limit import limiter
 from app.core.redis import CacheClient
 from app.core.tokens import TokenType, decode_token
 from app.database.session import session_factory
-from app.models.platform_admin import PlatformAdmin
 from app.models.role import RoleName
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -49,6 +50,8 @@ from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.role import RoleRepository
 from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
+from app.services.platform_admin import AuditContext as PlatformAuditContext
+from app.services.platform_admin import PlatformPrincipal
 
 logger = get_logger(__name__)
 
@@ -196,11 +199,13 @@ def require_platform_network(request: Request) -> None:
         raise NotFoundError()
 
 
-async def get_platform_admin(
+async def get_platform_principal(
     request: Request, credentials: BearerCredentials, session: DbSession
-) -> PlatformAdmin:
-    """The signed-in platform operator. A tenant token, even an owner's, is
-    refused: it carries the tenant audience, which platform tokens never do."""
+) -> PlatformPrincipal:
+    """The signed-in platform operator and their open session. A tenant
+    token, even an owner's, is refused: it carries the tenant audience, which
+    platform tokens never do. A revoked or expired session is refused even
+    while its token is still within ``exp`` (D-018)."""
     from app.core.tokens import decode_platform_token
     from app.services.platform_admin import PlatformAdminService
 
@@ -208,11 +213,66 @@ async def get_platform_admin(
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("An access token is required to use this endpoint.")
     claims = decode_platform_token(credentials.credentials)
-    return await PlatformAdminService(session).active_admin(claims.admin_id)
+    return await PlatformAdminService(session).principal(
+        admin_id=claims.admin_id, session_id=claims.session_id
+    )
 
 
 PlatformNetwork = Depends(require_platform_network)
-RequirePlatformAdmin = Annotated[PlatformAdmin, Depends(get_platform_admin)]
+RequirePlatformAdmin = Annotated[PlatformPrincipal, Depends(get_platform_principal)]
+
+
+def platform_audit_context(request: Request) -> PlatformAuditContext:
+    from app.core.client_ip import resolve_client_ip
+    from app.core.context import get_request_id
+
+    agent = request.headers.get("user-agent")
+    return PlatformAuditContext(
+        client_ip=resolve_client_ip(request),
+        user_agent=agent[:256] if agent else None,
+        request_id=get_request_id(),
+    )
+
+
+PlatformAudit = Annotated[PlatformAuditContext, Depends(platform_audit_context)]
+
+
+def require_platform_permission(
+    permission: PlatformPermission,
+) -> Callable[..., Awaitable[PlatformPrincipal]]:
+    """Authorization as a dependency (CLAUDE.md §7.8), on the server for every
+    platform route. A refusal is a security event and is audited."""
+
+    async def dependency(
+        principal: RequirePlatformAdmin, session: DbSession, ctx: PlatformAudit
+    ) -> PlatformPrincipal:
+        from app.services.platform_admin import PlatformAdminService
+
+        if not principal.can(permission):
+            await PlatformAdminService(session).audit_permission_denied(
+                principal.admin, permission=permission.value, ctx=ctx
+            )
+            raise PermissionDeniedError()
+        return principal
+
+    return dependency
+
+
+def require_platform_reauth(
+    permission: PlatformPermission,
+) -> Callable[..., Awaitable[PlatformPrincipal]]:
+    """The permission, plus password and code re-entered in this session
+    within ``REAUTH_WINDOW_MINUTES``. For actions that change access."""
+    check = require_platform_permission(permission)
+
+    async def dependency(
+        principal: Annotated[PlatformPrincipal, Depends(check)],
+    ) -> PlatformPrincipal:
+        if not principal.reauthenticated_recently():
+            raise ReauthenticationRequiredError()
+        return principal
+
+    return dependency
 
 
 async def get_optional_principal(
@@ -509,6 +569,7 @@ __all__ = [
     "CurrentUser",
     "DbSession",
     "OptionalPrincipal",
+    "PlatformAudit",
     "PlatformNetwork",
     "RefreshTokenRepo",
     "RequireAdmin",
@@ -531,5 +592,7 @@ __all__ = [
     "get_tenant_repository",
     "get_user_repository",
     "require_minimum_role",
+    "require_platform_permission",
+    "require_platform_reauth",
     "require_roles",
 ]
