@@ -265,8 +265,11 @@ def require_platform_reauth(
     within ``REAUTH_WINDOW_MINUTES``. For actions that change access."""
     check = require_platform_permission(permission)
 
+    # A default, not ``Annotated[..., Depends(check)]``: under postponed
+    # annotations FastAPI resolves annotation strings in module globals, where
+    # the local ``check`` does not exist, and would read it as a query field.
     async def dependency(
-        principal: Annotated[PlatformPrincipal, Depends(check)],
+        principal: PlatformPrincipal = Depends(check),  # noqa: B008 — FastAPI's dependency idiom
     ) -> PlatformPrincipal:
         if not principal.reauthenticated_recently():
             raise ReauthenticationRequiredError()
@@ -560,6 +563,34 @@ def endpoint_rate_limit(
     return dependency
 
 
+def platform_rate_limit(
+    name: str, *, limit: int, window_seconds: int
+) -> Callable[[Request], Awaitable[None]]:
+    """A named quota for a platform route, counted per client address.
+
+    Not :func:`endpoint_rate_limit`: that one resolves the *tenant*
+    principal, which refuses a platform token outright. Operators sit
+    behind an IP allow-list already, so the address is the natural key.
+    """
+
+    async def dependency(request: Request) -> None:
+        if not settings.security.rate_limit_enabled:
+            return
+        decision = await limiter.consume(
+            f"ratelimit:{name}:ip:{client_ip_or_unknown(request)}",
+            limit=limit,
+            window=window_seconds,
+        )
+        if not decision.allowed:
+            logger.warning("platform_rate_limit_exceeded", endpoint=name, limit=limit)
+            raise RateLimitExceededError(
+                "Too many attempts. Please wait and try again.",
+                retry_after_seconds=decision.retry_after,
+            )
+
+    return dependency
+
+
 __all__ = [
     "BearerCredentials",
     "BillingWrite",
@@ -591,6 +622,7 @@ __all__ = [
     "get_role_repository",
     "get_tenant_repository",
     "get_user_repository",
+    "platform_rate_limit",
     "require_minimum_role",
     "require_platform_permission",
     "require_platform_reauth",

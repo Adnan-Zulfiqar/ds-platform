@@ -24,7 +24,7 @@ from app.api.deps import (
     PlatformAudit,
     PlatformNetwork,
     RequirePlatformAdmin,
-    endpoint_rate_limit,
+    platform_rate_limit,
     require_platform_permission,
     require_platform_reauth,
 )
@@ -53,9 +53,9 @@ router = APIRouter(prefix="/platform", tags=["platform"], dependencies=[Platform
 
 #: Counted per client address (there is no principal yet). Tight: a real
 #: operator signs in a few times a day.
-_login_limit = endpoint_rate_limit("platform-login", limit=10, window_seconds=900)
+_login_limit = platform_rate_limit("platform-login", limit=10, window_seconds=900)
 #: Re-authentication guesses the same secrets as sign-in, so it is as tight.
-_reauth_limit = endpoint_rate_limit("platform-reauth", limit=10, window_seconds=900)
+_reauth_limit = platform_rate_limit("platform-reauth", limit=10, window_seconds=900)
 
 TenantsRead = Annotated[
     PlatformPrincipal, Depends(require_platform_permission(PlatformPermission.TENANTS_READ))
