@@ -32,8 +32,9 @@ approved, impersonation out. Built in stages:
 - **Off by default.** The `PLATFORM_ADMIN_ALLOWED_CIDRS` allow-list is empty
   by default, and then every `/api/v1/platform/*` route answers 404.
 - **Creating an operator** happens on the server only:
-  `docker exec -it droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`.
-  The script reads the password twice and prints the `otpauth://` URI
+  `docker exec -it -e PYTHONPATH=/app droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`
+  (`PYTHONPATH=/app` is required; without it the script fails with
+  `No module named 'app'`). The script reads the password twice and prints the `otpauth://` URI
   **once**, to add to an authenticator app.
 - **Closed-list guard.** `tests/unit/test_unscoped_repositories_are_a_closed_list.py`
   now fails if any repository escapes tenant scoping without being on
@@ -127,7 +128,7 @@ tenant navigation, and `noindex`.
 ### Turning it on (owner)
 
 1. On the server, create an operator:
-   `docker exec -it droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`.
+   `docker exec -it -e PYTHONPATH=/app droppilot-backend-1 python scripts/create_platform_admin.py --email you@example.com`.
    Type the password twice, then add the printed `otpauth://` URI to your
    authenticator app. It is shown only once.
 2. Set `PLATFORM_ADMIN_ALLOWED_CIDRS` to your own network, e.g.
