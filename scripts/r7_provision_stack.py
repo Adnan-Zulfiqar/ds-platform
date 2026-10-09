@@ -96,7 +96,7 @@ def main() -> None:
         with scoped.cursor() as cur:
             cur.execute("SELECT version_num FROM alembic_version")
             version = cur.fetchone()[0]
-            if version != "0053":
+            if version != "0054":
                 raise SystemExit(f"expected alembic 0034, got {version}")
             if role_name:
                 grant_reviewer_scoped_write(cur, role_name)
@@ -116,7 +116,7 @@ def main() -> None:
         "redis_rate_limit_db": redis_rate,
         "backend_port": backend_port,
         "frontend_port": frontend_port,
-        "alembic_version": "0053",
+        "alembic_version": "0054",
     }
 
     secrets_dir = Path(args.secrets_dir)

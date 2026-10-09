@@ -620,6 +620,37 @@ class PlatformAdminService(BaseService):
             detail={"dataset": dataset, "rows": rows},
         )
 
+    async def record_workspace_failure(
+        self,
+        principal: PlatformPrincipal,
+        tenant_id: uuid.UUID,
+        action: str,
+        *,
+        reason: str,
+        error: str,
+        ctx: AuditContext,
+    ) -> None:
+        """An operator's change that failed part-way. The request rolls back,
+        so this is written in its own transaction: an attempt on a workspace
+        leaves a trace even when it changed nothing."""
+        try:
+            async with transaction() as session:
+                await PlatformAdminAuditRepository(session).append(
+                    action=action,
+                    admin_id=principal.admin.id,
+                    actor_role=principal.admin.role,
+                    client_ip=ctx.client_ip,
+                    user_agent=ctx.user_agent,
+                    request_id=ctx.request_id,
+                    outcome="failure",
+                    target_tenant_id=tenant_id,
+                    target_type="workspace",
+                    target_id=str(tenant_id),
+                    detail={"reason": reason[:500], "error": error[:300]},
+                )
+        except Exception:  # an audit outage must not mask the original error
+            self.logger.exception("platform_admin_audit_write_failed")
+
     async def audit_permission_denied(
         self, admin: PlatformAdmin, *, permission: str, ctx: AuditContext
     ) -> None:

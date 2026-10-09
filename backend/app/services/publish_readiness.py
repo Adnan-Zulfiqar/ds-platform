@@ -54,6 +54,8 @@ _CHANNEL_PLATFORM = {
 CODE_STORE_REQUIRED = "store_required"
 CODE_UNSUPPORTED_CHANNEL = "unsupported_channel"
 CODE_STORE_DISCONNECTED = "store_disconnected"
+#: An operator paused writes to the store (D-019).
+CODE_STORE_PAUSED = "store_paused"
 CODE_DESTINATION_MISMATCH = "destination_mismatch"
 CODE_SELLING_CURRENCY_MISMATCH = "selling_currency_mismatch"
 CODE_DRAFT_VERSION_STALE = "draft_version_stale"
@@ -558,6 +560,18 @@ class PublishReadinessService(BaseService):
             )
 
         store = await self.stores.get_by_id_or_raise(store_id)
+        if store.sync_paused_at is not None:
+            blockers.append(
+                PublishCheckItem(
+                    code=CODE_STORE_PAUSED,
+                    message=(
+                        "DropPilot support has paused updates to this store. "
+                        "Publishing resumes when the pause is lifted."
+                    ),
+                    field="storeId",
+                    section="publishing",
+                )
+            )
         if store.platform is not _CHANNEL_PLATFORM[normalised_channel]:
             blockers.append(
                 PublishCheckItem(

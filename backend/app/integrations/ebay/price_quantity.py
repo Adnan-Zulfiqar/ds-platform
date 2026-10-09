@@ -80,6 +80,8 @@ class EbayPriceQuantitySync:
         requests: list[dict[str, Any]] = []
         by_sku: dict[str, StoreListing] = {}
         for listing, store in targets:
+            if store.sync_paused_at is not None:  # an operator paused it (D-019)
+                continue
             reason = self._local_reason(terms=terms, store=store)
             if reason is not None:
                 await self._fail(listing, reason, outcome)

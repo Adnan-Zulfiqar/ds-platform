@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import require_tenant_id
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.integrations.shopify.service import ShopifyService
 from app.models.inventory import InventorySyncRun
 from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationKind
@@ -37,6 +38,7 @@ from app.models.order import (
     OrderSyncRun,
     Shipment,
     SyncRunStatus,
+    SyncTrigger,
 )
 from app.models.product import Product, ProductVariant
 from app.models.role import RoleName
@@ -72,6 +74,8 @@ from app.repositories.supplier_order import SupplierOrderRepository
 from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
 from app.services.base import BaseService
+from app.services.inventory_sync import InventorySyncService
+from app.services.order_sync import OrderSyncService
 from app.services.platform_admin import AuditContext, PlatformAdminService, PlatformPrincipal
 from app.services.team_invitations import TeamInvitationService
 
@@ -507,10 +511,122 @@ class PlatformWorkspaceActions(BaseService):
         )
 
 
+class PlatformStoreActions(PlatformWorkspaceActions):
+    """Store and integration changes (phase 5, ``stores.manage``). Each one
+    reuses the merchant's own service, so there is one implementation of a
+    sync or a webhook registration, not a second "admin" copy."""
+
+    async def _store(self, store_id: uuid.UUID) -> Store:
+        store = await StoreRepository(self.session).get_by_id(store_id)
+        if store is None:
+            raise NotFoundError.for_resource("Store", store_id)
+        return store
+
+    async def set_store_paused(self, store_id: uuid.UUID, *, paused: bool, reason: str) -> Store:
+        store = await self._store(store_id)
+        if (store.sync_paused_at is not None) == paused:
+            return store
+        await StoreRepository(self.session).update(
+            store,
+            sync_paused_at=datetime.now(UTC) if paused else None,
+            sync_paused_reason=reason[:500] if paused else None,
+        )
+        await NotificationRepository(self.session).create(
+            kind=NotificationKind.INFO,
+            title=(
+                f"DropPilot support paused updates to {store.name}"
+                if paused
+                else f"DropPilot support resumed updates to {store.name}"
+            ),
+            body=(
+                f"Prices, stock and new listings are not sent to this store until the "
+                f"pause is lifted. Orders keep arriving. Reason: {reason[:300]}"
+                if paused
+                else "Prices, stock and new listings are sent to this store again."
+            ),
+            payload={"store_id": str(store.id)},
+        )
+        await self._audit(
+            "workspace_store_paused" if paused else "workspace_store_resumed",
+            target_type="store",
+            target_id=store.id,
+            reason=reason,
+        )
+        return store
+
+    async def _failed(self, action: str, reason: str, exc: Exception) -> None:
+        await PlatformAdminService(self.session).record_workspace_failure(
+            self.workspace.principal,
+            self.workspace.tenant.id,
+            action,
+            reason=reason,
+            error=f"{type(exc).__name__}: {exc}",
+            ctx=self.ctx,
+        )
+
+    async def sync_orders_now(self, *, reason: str) -> OrderSyncRun:
+        """The supplier order sync the merchant's own "Sync now" runs.
+        A run already in flight is a 409, as for them."""
+        try:
+            run = await OrderSyncService(self.session).sync_orders(trigger=SyncTrigger.MANUAL)
+        except Exception as exc:
+            await self._failed("workspace_order_sync_started", reason, exc)
+            raise
+        await self._audit(
+            "workspace_order_sync_started",
+            target_type="sync_run",
+            target_id=run.id,
+            reason=reason,
+            status=str(run.status),
+        )
+        return run
+
+    async def sync_inventory_now(
+        self, *, store_id: uuid.UUID | None, reason: str
+    ) -> tuple[InventorySyncRun, list[uuid.UUID]]:
+        if store_id is not None:
+            await self._store(store_id)
+        service = InventorySyncService(self.session)
+        try:
+            run = await service.sync(store_id=store_id, trigger=SyncTrigger.MANUAL)
+        except Exception as exc:
+            await self._failed("workspace_inventory_sync_started", reason, exc)
+            raise
+        await self._audit(
+            "workspace_inventory_sync_started",
+            target_type="sync_run",
+            target_id=run.id,
+            reason=reason,
+            status=str(run.status),
+            store_id=str(store_id) if store_id else None,
+        )
+        return run, list(service.changed_product_ids)
+
+    async def register_shopify_webhooks(self, store_id: uuid.UUID, *, reason: str) -> bool:
+        """The reconciler OAuth and the merchant's "retry" both use. Returns
+        whether every required webhook is now registered."""
+        await self._store(store_id)
+        try:
+            report = await ShopifyService(self.session).register_webhooks(store_id)
+        except Exception as exc:
+            await self._failed("workspace_shopify_webhooks_reconciled", reason, exc)
+            raise
+        await self._audit(
+            "workspace_shopify_webhooks_reconciled",
+            target_type="store",
+            target_id=store_id,
+            reason=reason,
+            healthy=report.healthy,
+            created=report.created_count,
+        )
+        return report.healthy
+
+
 __all__ = [
     "ASSIGNABLE_ROLES",
     "ConnectionView",
     "OrderDetailView",
+    "PlatformStoreActions",
     "PlatformWorkspace",
     "PlatformWorkspaceActions",
     "PlatformWorkspaceService",

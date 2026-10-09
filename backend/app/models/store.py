@@ -122,6 +122,11 @@ class Store(TenantScopedBase):
         DateTime(timezone=True), nullable=True
     )
     last_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    #: Set by a platform operator (D-019): DropPilot stops writing to this
+    #: store (price and stock pushes, new publishes) until it is cleared.
+    #: Orders keep flowing in, so nothing is lost while it is paused.
+    sync_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sync_paused_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     health_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
 
     connected_by_user_id: Mapped[uuid.UUID | None] = mapped_column(

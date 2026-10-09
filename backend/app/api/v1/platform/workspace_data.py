@@ -23,8 +23,10 @@ from app.core.platform_permissions import PlatformPermission
 from app.repositories.role import RoleRepository
 from app.schemas.common import ListQueryParams, Page, SortDirection, list_query_params
 from app.schemas.platform_console import (
+    InventorySyncNow,
     SupportSessionOpen,
     SupportSessionRead,
+    WebhookReconcileResult,
     WorkspaceChangeReason,
     WorkspaceConnectionRead,
     WorkspaceInvitationRead,
@@ -47,11 +49,13 @@ from app.schemas.platform_console import (
 )
 from app.services.platform_admin import PlatformAdminService
 from app.services.platform_workspace import (
+    PlatformStoreActions,
     PlatformWorkspace,
     PlatformWorkspaceActions,
     PlatformWorkspaceService,
     WorkspaceUserView,
 )
+from app.tasks.integrations.channels import push_price_quantity_after_commit
 
 router = APIRouter(prefix="/workspaces/{tenant_id}")
 
@@ -626,3 +630,94 @@ async def workspace_revoke_invitation(
     await PlatformWorkspaceActions(session, workspace, ctx).revoke_invitation(
         invitation_id, reason=payload.reason
     )
+
+
+# --- Stores and integrations (phase 5) -------------------------------------------
+
+StoresWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.STORES_MANAGE, write=True), scope="function"),
+]
+
+
+@router.post(
+    "/stores/{store_id}/pause",
+    response_model=WorkspaceStoreRead,
+    summary="Stop DropPilot writing to a store (support session, re-auth, audited)",
+)
+async def workspace_pause_store(
+    store_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: StoresWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceStoreRead:
+    store = await PlatformStoreActions(session, workspace, ctx).set_store_paused(
+        store_id, paused=True, reason=payload.reason
+    )
+    return WorkspaceStoreRead.model_validate(store, from_attributes=True)
+
+
+@router.post(
+    "/stores/{store_id}/resume",
+    response_model=WorkspaceStoreRead,
+    summary="Let DropPilot write to a store again (support session, re-auth, audited)",
+)
+async def workspace_resume_store(
+    store_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: StoresWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceStoreRead:
+    store = await PlatformStoreActions(session, workspace, ctx).set_store_paused(
+        store_id, paused=False, reason=payload.reason
+    )
+    return WorkspaceStoreRead.model_validate(store, from_attributes=True)
+
+
+@router.post(
+    "/sync/orders",
+    response_model=WorkspaceSyncRunRead,
+    summary="Run the supplier order sync now (support session, re-auth, audited)",
+)
+async def workspace_sync_orders_now(
+    payload: WorkspaceChangeReason, workspace: StoresWrite, session: DbSession, ctx: PlatformAudit
+) -> WorkspaceSyncRunRead:
+    run = await PlatformStoreActions(session, workspace, ctx).sync_orders_now(reason=payload.reason)
+    return _run_read("orders", run)
+
+
+@router.post(
+    "/sync/inventory",
+    response_model=WorkspaceSyncRunRead,
+    summary="Run the inventory sync now, for one store or all (support session, re-auth)",
+)
+async def workspace_sync_inventory_now(
+    payload: InventorySyncNow, workspace: StoresWrite, session: DbSession, ctx: PlatformAudit
+) -> WorkspaceSyncRunRead:
+    run, changed = await PlatformStoreActions(session, workspace, ctx).sync_inventory_now(
+        store_id=payload.store_id, reason=payload.reason
+    )
+    # As for the merchant's own sync: changed stock reaches the channels once
+    # this request has committed (and never to a paused store).
+    push_price_quantity_after_commit(session, changed)
+    return _run_read("inventory", run)
+
+
+@router.post(
+    "/stores/{store_id}/shopify/webhooks",
+    response_model=WebhookReconcileResult,
+    summary="Re-register a Shopify store's webhooks (support session, re-auth, audited)",
+)
+async def workspace_register_shopify_webhooks(
+    store_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: StoresWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WebhookReconcileResult:
+    healthy = await PlatformStoreActions(session, workspace, ctx).register_shopify_webhooks(
+        store_id, reason=payload.reason
+    )
+    return WebhookReconcileResult(store_id=store_id, healthy=healthy)
