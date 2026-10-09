@@ -272,6 +272,7 @@ function FlagRow({
                 : "Switch off for this workspace"
           }
           destructive={next === false}
+          id={`flag-reason-${flag.key}`}
           onRun={(reason) =>
             change.mutateAsync({
               reason,
