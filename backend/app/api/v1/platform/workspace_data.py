@@ -24,11 +24,13 @@ from app.repositories.role import RoleRepository
 from app.schemas.common import ListQueryParams, Page, SortDirection, list_query_params
 from app.schemas.platform_console import (
     InventorySyncNow,
+    ListingsResyncQueued,
     SupportSessionOpen,
     SupportSessionRead,
     WebhookReconcileResult,
     WorkspaceChangeReason,
     WorkspaceConnectionRead,
+    WorkspaceImportRead,
     WorkspaceInvitationRead,
     WorkspaceListingRead,
     WorkspaceNotificationRead,
@@ -49,6 +51,7 @@ from app.schemas.platform_console import (
 )
 from app.services.platform_admin import PlatformAdminService
 from app.services.platform_workspace import (
+    PlatformCatalogActions,
     PlatformStoreActions,
     PlatformWorkspace,
     PlatformWorkspaceActions,
@@ -721,3 +724,104 @@ async def workspace_register_shopify_webhooks(
         store_id, reason=payload.reason
     )
     return WebhookReconcileResult(store_id=store_id, healthy=healthy)
+
+
+# --- Catalogue and orders (phase 6) -------------------------------------------------
+
+CatalogWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.CATALOG_MANAGE, write=True), scope="function"),
+]
+OrdersWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.ORDERS_MANAGE, write=True), scope="function"),
+]
+
+
+@router.get("/imports", response_model=Page[WorkspaceImportRead], summary="Product import attempts")
+async def workspace_imports(
+    workspace: Workspace,
+    session: DbSession,
+    params: Params,
+    status: Annotated[str | None, Query(max_length=16)] = None,
+) -> Page[WorkspaceImportRead]:
+    rows, total = await PlatformWorkspaceService(session).imports(params, status=status)
+    return Page[WorkspaceImportRead].build(
+        items=[WorkspaceImportRead.model_validate(r, from_attributes=True) for r in rows],
+        page=params.page,
+        size=params.size,
+        total_items=total,
+    )
+
+
+@router.post(
+    "/imports/{import_id}/retry",
+    response_model=WorkspaceProductRead,
+    summary="Retry a failed product import (support session, re-auth, audited)",
+)
+async def workspace_retry_import(
+    import_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: CatalogWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceProductRead:
+    product = await PlatformCatalogActions(session, workspace, ctx).retry_import(
+        import_id, reason=payload.reason
+    )
+    return _product_read(product, 0)
+
+
+@router.post(
+    "/products/{product_id}/resync-listings",
+    response_model=ListingsResyncQueued,
+    summary="Push one product's price and stock to its channels again (audited)",
+)
+async def workspace_resync_listings(
+    product_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: CatalogWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> ListingsResyncQueued:
+    count = await PlatformCatalogActions(session, workspace, ctx).resync_listings(
+        product_id, reason=payload.reason
+    )
+    push_price_quantity_after_commit(session, [product_id])
+    return ListingsResyncQueued(product_id=product_id, listings=count)
+
+
+@router.post(
+    "/orders/{order_id}/refresh",
+    response_model=WorkspaceOrderRead,
+    summary="Re-read one order from the supplier (support session, re-auth, audited)",
+)
+async def workspace_refresh_order(
+    order_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: OrdersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceOrderRead:
+    order = await PlatformCatalogActions(session, workspace, ctx).refresh_order(
+        order_id, reason=payload.reason
+    )
+    return _order_read(order)
+
+
+@router.post(
+    "/orders/{order_id}/supplier-order/release",
+    response_model=WorkspaceSupplierOrderRead,
+    summary="Release a supplier order stuck while being sent (support session, re-auth)",
+)
+async def workspace_release_supplier_order(
+    order_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: OrdersWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceSupplierOrderRead:
+    row = await PlatformCatalogActions(session, workspace, ctx).release_supplier_order(
+        order_id, reason=payload.reason
+    )
+    return WorkspaceSupplierOrderRead.model_validate(row, from_attributes=True)
