@@ -59,7 +59,9 @@ test("enable all and disable all switch every variant in one request", async ({ 
     await expect(row.getByRole("checkbox")).toBeChecked();
   }
 
-  await page.getByTestId("draft-variants-select-all").uncheck();
+  // The box follows the server, so it changes once the request answers.
+  await page.getByTestId("draft-variants-select-all").click();
   await expect(panel).toContainText("0/3 enabled");
+  await expect(page.getByTestId("draft-variants-select-all")).not.toBeChecked();
   expect(bodies).toEqual([{ enabled: true }, { enabled: false }]);
 });
