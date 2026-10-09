@@ -116,12 +116,9 @@ async def test_refreshing_an_order_without_a_supplier_connection_is_audited_as_a
         json={"reason": "status looks stale"},
         headers=headers,
     )
-    if response.status_code == 200:
-        assert len(await audit(db_session, "workspace_order_refreshed")) == 1
-    else:
-        assert [r.outcome for r in await audit(db_session, "workspace_order_refreshed")] == [
-            "failure"
-        ]
+    assert response.status_code >= 400, response.text
+    rows = await audit(db_session, "workspace_order_refreshed")
+    assert [r.outcome for r in rows] == ["failure"]
 
 
 async def test_catalogue_and_order_actions_follow_the_role(
