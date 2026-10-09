@@ -9,6 +9,7 @@ import {
   RequirePermission,
   usePlatformAccess,
 } from "@/components/platform/platform-shell";
+import { SupportSessionBanner } from "@/components/platform/platform-workspace-actions";
 import { useReauthGuard } from "@/components/platform/reauth-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -219,6 +220,7 @@ export function PlatformWorkspaceDetail({
               </Badge>
             }
           />
+          <SupportSessionBanner tenantId={tenantId} />
           <nav
             aria-label="Workspace sections"
             className="flex flex-wrap gap-1 border-b"

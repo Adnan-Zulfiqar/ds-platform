@@ -103,4 +103,35 @@ class PlatformAdminAudit(IdentifiedBase):
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
-__all__ = ["PlatformAdmin", "PlatformAdminAudit", "PlatformAdminSession"]
+class PlatformSupportSession(IdentifiedBase):
+    """A time-limited window in which one operator may change one workspace
+    (D-019). Opened with a reason and a re-authentication, visible to the
+    workspace as a notification, and closed by expiry or by the operator.
+    Every workspace change checks for an open one."""
+
+    __tablename__ = "platform_support_sessions"
+
+    admin_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("platform_admins.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: Not a foreign key to a tenant-owned row: ``tenants`` sits above the
+    #: boundary, and the session belongs to the operator, not the workspace.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+__all__ = [
+    "PlatformAdmin",
+    "PlatformAdminAudit",
+    "PlatformAdminSession",
+    "PlatformSupportSession",
+]

@@ -65,7 +65,12 @@ from app.models.pipeline_bulk import (
     PipelineBulkRunItem,
     PipelineBulkRunStatus,
 )
-from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit, PlatformAdminSession
+from app.models.platform_admin import (
+    PlatformAdmin,
+    PlatformAdminAudit,
+    PlatformAdminSession,
+    PlatformSupportSession,
+)
 from app.models.pricing import (
     PriceChange,
     PricingRule,
@@ -149,6 +154,7 @@ __all__ = [
     "PlatformAdmin",
     "PlatformAdminAudit",
     "PlatformAdminSession",
+    "PlatformSupportSession",
     "PriceChange",
     "PricingRule",
     "PricingScope",

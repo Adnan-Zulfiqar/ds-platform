@@ -6,6 +6,11 @@ import {
   type Column,
   PlatformDataTable,
 } from "@/components/platform/platform-data-table";
+import { usePlatformAccess } from "@/components/platform/platform-shell";
+import {
+  ReasonedAction,
+  describeError,
+} from "@/components/platform/platform-workspace-actions";
 import { useReauthGuard } from "@/components/platform/reauth-dialog";
 import { Facts } from "@/components/platform/platform-workspaces";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -27,14 +32,18 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/utils";
 import {
   EXPORT_DATASETS,
+  type WorkspaceUserAction,
   downloadWorkspaceExport,
   usePlatformWorkspaceConnections,
   usePlatformWorkspaceRecord,
+  useRevokeWorkspaceInvitation,
+  useWorkspaceUserAction,
 } from "@/services/platform";
 
 /** Admin Control Center phase 3 (D-019): everything inside one workspace,
@@ -154,6 +163,9 @@ interface NotificationRow {
 }
 
 export function UsersTab({ tenantId }: { tenantId: string }) {
+  const { can } = usePlatformAccess();
+  const [open, setOpen] = useState<UserRow | null>(null);
+  const revoke = useRevokeWorkspaceInvitation(tenantId);
   const columns: Column<UserRow>[] = [
     {
       header: "User",
@@ -195,6 +207,21 @@ export function UsersTab({ tenantId }: { tenantId: string }) {
             : `expires ${when(i.expiresAt)}`,
     },
     { header: "Sent", cell: (i) => when(i.createdAt) },
+    ...(can("users.manage")
+      ? [
+          {
+            header: "",
+            cell: (i: InvitationRow) =>
+              i.acceptedAt || i.revokedAt ? null : (
+                <InvitationRevoke
+                  onRevoke={(reason) =>
+                    revoke.mutateAsync({ invitationId: i.id, reason })
+                  }
+                />
+              ),
+          },
+        ]
+      : []),
   ];
   return (
     <div className="space-y-6">
@@ -212,6 +239,7 @@ export function UsersTab({ tenantId }: { tenantId: string }) {
             ],
           },
         ]}
+        onRowClick={setOpen}
         emptyText="No users match."
         testId="platform-workspace-users"
       />
@@ -225,7 +253,134 @@ export function UsersTab({ tenantId }: { tenantId: string }) {
           emptyText="No invitations."
         />
       </div>
+      <UserSheet
+        tenantId={tenantId}
+        user={open}
+        onClose={() => setOpen(null)}
+      />
     </div>
+  );
+}
+
+function InvitationRevoke({
+  onRevoke,
+}: {
+  onRevoke: (reason: string) => Promise<unknown>;
+}) {
+  const guard = useReauthGuard();
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => {
+          const reason =
+            window.prompt("Reason for revoking this invitation (audited):") ??
+            "";
+          if (reason.trim().length < 3) return;
+          setError(null);
+          guard(() => onRevoke(reason.trim())).catch((e: unknown) =>
+            setError(describeError(e)),
+          );
+        }}
+      >
+        Revoke
+      </Button>
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
+  );
+}
+
+function UserSheet({
+  tenantId,
+  user,
+  onClose,
+}: {
+  tenantId: string;
+  user: UserRow | null;
+  onClose: () => void;
+}) {
+  const { can } = usePlatformAccess();
+  const act = useWorkspaceUserAction(tenantId);
+  const [role, setRole] = useState<"admin" | "member" | "viewer">("member");
+  const isOwner = user?.roles.includes("owner") ?? false;
+  const run = (action: WorkspaceUserAction) => (reason: string) =>
+    act.mutateAsync({ userId: user?.id ?? "", reason, action });
+
+  return (
+    <Sheet open={user !== null} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>{user?.email}</SheetTitle>
+          <SheetDescription>
+            {user?.roles.join(", ")} · {user?.isActive ? "active" : "disabled"}{" "}
+            · {user?.activeSessions} session(s)
+          </SheetDescription>
+        </SheetHeader>
+        {user && (
+          <div className="mt-4 space-y-3" data-testid="platform-user-actions">
+            {!can("users.manage") ? (
+              <p className="text-sm text-muted-foreground">
+                Your role cannot change users.
+              </p>
+            ) : (
+              <>
+                <ReasonedAction
+                  label={user.isActive ? "Disable user" : "Enable user"}
+                  description={
+                    user.isActive
+                      ? "They are signed out and cannot sign in. The only active owner cannot be disabled."
+                      : "They can sign in again."
+                  }
+                  destructive={user.isActive}
+                  onRun={run({ kind: user.isActive ? "disable" : "enable" })}
+                />
+                <ReasonedAction
+                  label="End all sessions"
+                  description="Signs them out on every device."
+                  onRun={run({ kind: "end-sessions" })}
+                />
+                <ReasonedAction
+                  label="Require password reset"
+                  description='The current password stops working and they are signed out. They set a new one with "Forgot password".'
+                  destructive
+                  onRun={run({ kind: "require-password-reset" })}
+                />
+                {isOwner ? (
+                  <p className="text-sm text-muted-foreground">
+                    An owner&apos;s role is not changed from the console.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="platform-member-role">
+                      New workspace role
+                    </Label>
+                    <select
+                      id="platform-member-role"
+                      className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                      value={role}
+                      onChange={(e) =>
+                        setRole(e.target.value as "admin" | "member" | "viewer")
+                      }
+                    >
+                      <option value="admin">admin</option>
+                      <option value="member">member</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                    <ReasonedAction
+                      label="Change role"
+                      description="Takes effect now: their sessions end."
+                      onRun={run({ kind: "role", role })}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 

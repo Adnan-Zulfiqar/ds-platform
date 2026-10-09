@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–3 built**, phases 4–10 in progress. The platform console
+Status: **phases 1–4 built**, phases 5–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -29,8 +29,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 |---|---|---|
 | 1 | Operator roles and permission matrix, sessions with revoke, re-authentication, richer audit | Merged (#95) |
 | 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Merged (#96) |
-| 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Built (this PR) |
-| 4 | User controls and support sessions | Not started |
+| 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Merged (#97) |
+| 4 | User controls and support sessions | Built (this PR) |
 | 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Not started |
 | 6 | Catalogue and order actions | Not started |
 | 7 | Jobs: failed and stuck detection, retry, cancel | Not started |
@@ -207,6 +207,77 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 4 as built
+
+### Support sessions: the gate for every workspace change
+
+- **What a change needs.** A change inside a workspace passes
+  `platform_workspace(permission, write=True)`, which requires all three
+  of:
+  1. the permission;
+  2. a re-authentication within 10 minutes;
+  3. an **open support session for that workspace, held by this operator**.
+
+  Without the session the server answers 403 `support_session_required`,
+  and the console says so.
+- **Opening one.** `POST /platform/workspaces/{id}/support-session
+  {reason, minutes}` needs `support.session` and re-authentication.
+  - It lasts 5–120 minutes.
+  - It is stored in `platform_support_sessions` (migration `0053`).
+  - Opening a new one closes the previous one.
+- **Who can see it.** Opening one posts a notification **inside the
+  workspace** ("DropPilot support is working in your workspace", with the
+  reason), so the merchant sees it. It is audited as
+  `support_session_opened`.
+- **Ending one.** `POST …/support-session/end`, audited as
+  `support_session_ended`. Expiry also ends it, without an action.
+- **Why not impersonation.** The operator never acts as the merchant. Each
+  change is a named console action, with its own permission, reason and
+  audit row. This is the "support session only if it can be implemented
+  safely" the owner allowed. No tenant token is ever minted.
+
+### User controls (`users.manage`)
+
+| Action | Route | What it does | Audited as |
+|---|---|---|---|
+| Disable | `POST …/users/{uid}/disable` | `is_active=false` and every refresh token revoked. **The only active owner cannot be disabled (409)**; suspend the workspace instead. | `workspace_user_disabled` |
+| Enable | `POST …/users/{uid}/enable` | `is_active=true` | `workspace_user_enabled` |
+| End sessions | `POST …/users/{uid}/end-sessions` | Revokes every refresh token; access tokens end within 15 minutes | `workspace_user_sessions_ended` |
+| Require password reset | `POST …/users/{uid}/require-password-reset` | Clears the password hash and ends sessions. Sign-in then fails **exactly like a wrong password**, so no new state leaks. The user sets a new password with "Forgot password", and a linked Google sign-in keeps working | `workspace_user_password_reset_required` |
+| Change role | `POST …/users/{uid}/role {role}` | Only `admin`, `member` or `viewer`. **An owner's role is never changed, and nobody is made owner (no ownership transfer).** Their sessions end, so the role applies now | `workspace_user_role_changed`, with before and after |
+| Revoke invitation | `POST …/invitations/{iid}/revoke` | Reuses `TeamInvitationService.revoke` | `workspace_invitation_revoked` |
+
+Every action takes a reason (3–500 characters). It is written in the same
+transaction as the change, with the target user and the workspace. A user
+id from another workspace is a 404, because the tenant-scoped repository
+never finds it.
+
+### Verified (phase 4)
+
+`test_platform_workspace_users.py` (11 tests) checks:
+
+- a change is refused first for re-authentication, then for a missing
+  support session;
+- opening a session is visible in the workspace's notifications and is
+  audited;
+- ending the session stops further changes;
+- a disabled member cannot sign in and an enabled one can;
+- the last active owner is protected;
+- a role change is audited with before and after, an owner is refused, and
+  "owner" is a 422;
+- after a required reset the old password fails with the same status and
+  message as a wrong one;
+- another workspace's user is a 404;
+- Finance and Auditor cannot open sessions;
+- Operations can open a session but cannot manage users.
+
+Playwright (`platform-workspace-users.spec.ts`) covers:
+
+- the refusal message when no session is open;
+- opening a session through re-authentication, with its exact body;
+- a two-click destructive disable with its exact reason;
+- no role control for an owner.
 
 ## Phase 3 as built
 

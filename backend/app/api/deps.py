@@ -37,6 +37,7 @@ from app.core.exceptions import (
     PermissionDeniedError,
     RateLimitExceededError,
     ReauthenticationRequiredError,
+    SupportSessionRequiredError,
 )
 from app.core.logging import get_logger
 from app.core.platform_permissions import PlatformPermission
@@ -284,6 +285,7 @@ def platform_workspace(
     permission: PlatformPermission = PlatformPermission.WORKSPACE_DATA_READ,
     *,
     reauth: bool = False,
+    write: bool = False,
 ) -> Callable[..., AsyncGenerator[PlatformWorkspace]]:
     """Enter one workspace as an operator (D-019).
 
@@ -295,8 +297,12 @@ def platform_workspace(
     context is cleared again when the request ends.
 
     ``reauth=True`` also needs the operator's password and a fresh code
-    within ``REAUTH_WINDOW_MINUTES`` (bulk exports, and every change).
+    within ``REAUTH_WINDOW_MINUTES`` (bulk exports).
+
+    ``write=True`` is for changes: re-authentication **and** an open support
+    session by this operator for this workspace (D-019).
     """
+    reauth = reauth or write
     check = require_platform_permission(permission)
 
     async def dependency(
@@ -313,6 +319,12 @@ def platform_workspace(
         tenant = await TenantRepository(session).get_by_id(tenant_id)
         if tenant is None:
             raise NotFoundError.for_resource("Workspace", tenant_id)
+        if (
+            write
+            and await PlatformAdminService(session).active_support_session(principal, tenant.id)
+            is None
+        ):
+            raise SupportSessionRequiredError()
         if request.method == "GET":
             # Changes write their own, more specific audit row.
             route = getattr(request.scope.get("route"), "path", request.url.path)

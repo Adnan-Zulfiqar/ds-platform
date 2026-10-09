@@ -133,10 +133,11 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     owner 2026-10-03, B-011: tenant ids of connected eBay workspaces for the
     scheduled eBay jobs).
   - platform operators (Track E5, owner-approved 2026-10-04, D-015):
-    `PlatformAdminRepository`, `PlatformAdminAuditRepository` and
-    `PlatformAdminSessionRepository` (operator accounts, their audit trail
-    and their sign-in sessions sit above every tenant; sessions added with
-    D-018, 2026-10-08), and
+    `PlatformAdminRepository`, `PlatformAdminAuditRepository`,
+    `PlatformAdminSessionRepository` and `PlatformSupportSessionRepository`
+    (operator accounts, their audit trail, their sign-in sessions and
+    their time-limited support sessions sit above every tenant; sessions
+    added with D-018, support sessions with D-019), and
     `PlatformTenantDirectory` (workspace list and counts, never a
     tenant-owned row), and `PlatformMetrics` (platform-wide dashboard
     counts, never a row; D-019, 2026-10-09). These are the **only**

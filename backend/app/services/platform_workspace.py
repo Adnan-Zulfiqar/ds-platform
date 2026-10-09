@@ -21,8 +21,10 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.context import require_tenant_id
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.inventory import InventorySyncRun
 from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationKind
@@ -37,6 +39,7 @@ from app.models.order import (
     SyncRunStatus,
 )
 from app.models.product import Product, ProductVariant
+from app.models.role import RoleName
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform, StoreStatus
 from app.models.supplier_order import SupplierOrder
@@ -69,7 +72,8 @@ from app.repositories.supplier_order import SupplierOrderRepository
 from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
 from app.services.base import BaseService
-from app.services.platform_admin import PlatformPrincipal
+from app.services.platform_admin import AuditContext, PlatformAdminService, PlatformPrincipal
+from app.services.team_invitations import TeamInvitationService
 
 
 def _parse[E: StrEnum](enum: type[E], value: str) -> E:
@@ -365,10 +369,150 @@ class PlatformWorkspace:
     tenant: Tenant
 
 
+#: Roles an operator may give a member (D-019). ``owner`` is never given or
+#: taken here: ownership transfer stays a merchant decision.
+ASSIGNABLE_ROLES: frozenset[str] = frozenset({"admin", "member", "viewer"})
+
+
+class PlatformWorkspaceActions(BaseService):
+    """Changes an operator makes inside one workspace (phase 4 onwards).
+
+    Every method runs inside the workspace's tenant context, behind
+    ``platform_workspace(..., write=True)`` (permission, re-authentication,
+    open support session), and writes its audit row in the same transaction
+    as the change.
+    """
+
+    def __init__(
+        self, session: AsyncSession, workspace: PlatformWorkspace, ctx: AuditContext
+    ) -> None:
+        super().__init__(session)
+        self.workspace = workspace
+        self.ctx = ctx
+        self.users = UserRepository(session)
+
+    async def _audit(
+        self, action: str, *, target_type: str, target_id: uuid.UUID, reason: str, **detail: Any
+    ) -> None:
+        await PlatformAdminService(self.session).record_workspace_action(
+            self.workspace.principal,
+            self.workspace.tenant.id,
+            action,
+            target_type=target_type,
+            target_id=str(target_id),
+            reason=reason,
+            ctx=self.ctx,
+            detail=detail or None,
+        )
+
+    async def user(self, user_id: uuid.UUID) -> User:
+        # Tenant-scoped: another workspace's user is simply not found.
+        user = await self.users.get_by_id(user_id)
+        if user is None:
+            raise NotFoundError.for_resource("User", user_id)
+        return user
+
+    async def _is_last_active_owner(self, user: User) -> bool:
+        owners = await self.users.active_with_roles(("owner",))
+        return [o.id for o in owners] == [user.id]
+
+    async def set_user_active(self, user_id: uuid.UUID, *, active: bool, reason: str) -> User:
+        user = await self.user(user_id)
+        if user.is_active == active:
+            return user
+        if not active and await self._is_last_active_owner(user):
+            raise ConflictError(
+                "This is the workspace's only active owner; disabling them would lock "
+                "the workspace. Suspend the workspace instead."
+            )
+        await self.users.update(user, is_active=active)
+        ended = (
+            0 if active else await RefreshTokenRepository(self.session).revoke_all_for_user(user.id)
+        )
+        await self._audit(
+            "workspace_user_enabled" if active else "workspace_user_disabled",
+            target_type="user",
+            target_id=user.id,
+            reason=reason,
+            sessions_ended=ended,
+        )
+        return user
+
+    async def end_user_sessions(self, user_id: uuid.UUID, *, reason: str) -> int:
+        user = await self.user(user_id)
+        ended = await RefreshTokenRepository(self.session).revoke_all_for_user(user.id)
+        await self._audit(
+            "workspace_user_sessions_ended",
+            target_type="user",
+            target_id=user.id,
+            reason=reason,
+            sessions_ended=ended,
+        )
+        return ended
+
+    async def require_password_reset(self, user_id: uuid.UUID, *, reason: str) -> None:
+        """The password stops working and every session ends. Sign-in then
+        fails exactly like a wrong password (no new state an attacker could
+        detect); the user sets a new one with "Forgot password", and a
+        Google sign-in, if linked, keeps working."""
+        user = await self.user(user_id)
+        had_password = user.password_hash is not None
+        await self.users.update(user, password_hash=None)
+        ended = await RefreshTokenRepository(self.session).revoke_all_for_user(user.id)
+        await self._audit(
+            "workspace_user_password_reset_required",
+            target_type="user",
+            target_id=user.id,
+            reason=reason,
+            had_password=had_password,
+            sessions_ended=ended,
+        )
+
+    async def set_member_role(self, user_id: uuid.UUID, *, role: str, reason: str) -> list[str]:
+        if role not in ASSIGNABLE_ROLES:
+            raise ValidationError("An operator can give only admin, member or viewer.")
+        user = await self.user(user_id)
+        roles = RoleRepository(self.session)
+        before = sorted(await roles.list_role_names_for_user(user.id))
+        if "owner" in before:
+            raise ConflictError("An owner's role is not changed from the console.")
+        if before == [role]:
+            return before
+        for name in before:
+            existing = await roles.get_by_name(name)
+            if existing is not None:
+                await roles.revoke(user_id=user.id, role_id=existing.id)
+        await roles.assign_by_name(user_id=user.id, name=RoleName(role))
+        # The new role applies at the next token refresh; ending the sessions
+        # makes it apply now, as a role change should.
+        ended = await RefreshTokenRepository(self.session).revoke_all_for_user(user.id)
+        await self._audit(
+            "workspace_user_role_changed",
+            target_type="user",
+            target_id=user.id,
+            reason=reason,
+            before={"roles": before},
+            after={"roles": [role]},
+            sessions_ended=ended,
+        )
+        return [role]
+
+    async def revoke_invitation(self, invitation_id: uuid.UUID, *, reason: str) -> None:
+        await TeamInvitationService(self.session).revoke(invitation_id)
+        await self._audit(
+            "workspace_invitation_revoked",
+            target_type="invitation",
+            target_id=invitation_id,
+            reason=reason,
+        )
+
+
 __all__ = [
+    "ASSIGNABLE_ROLES",
     "ConnectionView",
     "OrderDetailView",
     "PlatformWorkspace",
+    "PlatformWorkspaceActions",
     "PlatformWorkspaceService",
     "ProductDetailView",
     "SubscriptionSummary",

@@ -585,3 +585,112 @@ export async function downloadWorkspaceExport(
   link.click();
   URL.revokeObjectURL(url);
 }
+
+// --- Support sessions and workspace changes (phase 4) -------------------------
+
+export interface SupportSession {
+  id: string;
+  reason: string;
+  createdAt: string;
+  expiresAt: string;
+  endedAt: string | null;
+}
+
+const supportKey = (tenantId: string) =>
+  [...platformKeys.all, "workspace", tenantId, "support-session"] as const;
+
+/** This operator's open support session for the workspace, or null. */
+export function useSupportSession(
+  tenantId: string,
+): UseQueryResult<SupportSession | null> {
+  return useQuery({
+    queryKey: supportKey(tenantId),
+    queryFn: async () =>
+      (
+        await platformClient.get<SupportSession | null>(
+          `/workspaces/${tenantId}/support-session`,
+        )
+      ).data,
+    // Expiry is server time; re-ask often enough that the banner is honest.
+    refetchInterval: 60_000,
+  });
+}
+
+export function useOpenSupportSession(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { reason: string; minutes: number }) =>
+      (
+        await platformClient.post<SupportSession>(
+          `/workspaces/${tenantId}/support-session`,
+          input,
+        )
+      ).data,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: supportKey(tenantId) });
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "workspace", tenantId, "notifications"],
+      });
+    },
+  });
+}
+
+export function useEndSupportSession(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await platformClient.post(`/workspaces/${tenantId}/support-session/end`);
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: supportKey(tenantId) }),
+  });
+}
+
+export type WorkspaceUserAction =
+  | { kind: "disable" | "enable" | "end-sessions" | "require-password-reset" }
+  | { kind: "role"; role: "admin" | "member" | "viewer" };
+
+/** A change to one workspace user (needs a support session and re-auth). */
+export function useWorkspaceUserAction(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      userId: string;
+      reason: string;
+      action: WorkspaceUserAction;
+    }) => {
+      const base = `/workspaces/${tenantId}/users/${input.userId}`;
+      const { action } = input;
+      if (action.kind === "role") {
+        await platformClient.post(`${base}/role`, {
+          role: action.role,
+          reason: input.reason,
+        });
+      } else {
+        await platformClient.post(`${base}/${action.kind}`, {
+          reason: input.reason,
+        });
+      }
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "workspace", tenantId],
+      }),
+  });
+}
+
+export function useRevokeWorkspaceInvitation(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { invitationId: string; reason: string }) => {
+      await platformClient.post(
+        `/workspaces/${tenantId}/invitations/${input.invitationId}/revoke`,
+        { reason: input.reason },
+      );
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "workspace", tenantId, "invitations"],
+      }),
+  });
+}

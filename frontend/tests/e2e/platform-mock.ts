@@ -176,6 +176,7 @@ export async function mockPlatform(
     "GET /tenants": () => page1([TENANT]),
     [`GET /workspaces/${TENANT_ID}`]: () => overview(),
     "GET /audit": () => [],
+    [`GET /workspaces/${TENANT_ID}/support-session`]: () => null,
     "GET /auth/sessions": () => [SESSION],
   };
   const table = { ...base, ...handlers };

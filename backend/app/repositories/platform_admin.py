@@ -20,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.inventory import InventorySyncRun
 from app.models.notification import Notification
 from app.models.order import OrderSyncRun, SyncRunStatus
-from app.models.platform_admin import PlatformAdmin, PlatformAdminAudit, PlatformAdminSession
+from app.models.platform_admin import (
+    PlatformAdmin,
+    PlatformAdminAudit,
+    PlatformAdminSession,
+    PlatformSupportSession,
+)
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StoreStatus
 from app.models.tenant import Tenant
@@ -133,6 +138,59 @@ class PlatformAdminSessionRepository:
         for row in rows:
             await self.revoke(row, reason=reason)
         return len(rows)
+
+
+class PlatformSupportSessionRepository:
+    """Support sessions (D-019). Above the tenancy boundary like the
+    operators who open them: a row says "this operator may change this
+    workspace until then", and is read only to answer that question."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def open(
+        self, *, admin_id: uuid.UUID, tenant_id: uuid.UUID, reason: str, expires_at: datetime
+    ) -> PlatformSupportSession:
+        row = PlatformSupportSession(
+            admin_id=admin_id, tenant_id=tenant_id, reason=reason[:500], expires_at=expires_at
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def active(
+        self, *, admin_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> PlatformSupportSession | None:
+        query = (
+            select(PlatformSupportSession)
+            .where(
+                PlatformSupportSession.admin_id == admin_id,
+                PlatformSupportSession.tenant_id == tenant_id,
+                PlatformSupportSession.ended_at.is_(None),
+                PlatformSupportSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(PlatformSupportSession.expires_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def active_for_tenant(self, tenant_id: uuid.UUID) -> list[PlatformSupportSession]:
+        query = (
+            select(PlatformSupportSession)
+            .where(
+                PlatformSupportSession.tenant_id == tenant_id,
+                PlatformSupportSession.ended_at.is_(None),
+                PlatformSupportSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(PlatformSupportSession.created_at.desc())
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def end(self, row: PlatformSupportSession, *, reason: str) -> None:
+        if row.ended_at is None:
+            row.ended_at = datetime.now(UTC)
+            row.ended_reason = reason[:64]
+            await self.session.flush()
 
 
 class PlatformAdminAuditRepository:
