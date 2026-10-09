@@ -176,6 +176,8 @@ export async function mockPlatform(
     "GET /tenants": () => page1([TENANT]),
     [`GET /workspaces/${TENANT_ID}`]: () => overview(),
     "GET /audit": () => [],
+    "GET /audit/search": () => page1([]),
+    "GET /security": () => ({ windowHours: 24, byAction: {}, topIps: [] }),
     [`GET /workspaces/${TENANT_ID}/support-session`]: () => null,
     "GET /auth/sessions": () => [SESSION],
   };

@@ -981,3 +981,97 @@ export function useSetGlobalFlag() {
       queryClient.setQueryData([...platformKeys.all, "feature-flags"], data),
   });
 }
+
+// --- Audit and security centre (phase 9) --------------------------------------
+
+export interface AuditEntry extends PlatformAuditEntry {
+  adminEmail: string | null;
+}
+
+export interface AuditFilters {
+  action?: string;
+  outcome?: "success" | "failure";
+  tenantId?: string;
+  since?: string;
+  until?: string;
+}
+
+function auditParams(filters: AuditFilters): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(filters).filter(([, v]) => v !== undefined && v !== ""),
+  ) as Record<string, string>;
+}
+
+export function useAuditSearch(
+  filters: AuditFilters,
+  page: number,
+  enabled: boolean,
+): UseQueryResult<Page<AuditEntry>> {
+  return useQuery({
+    queryKey: [...platformKeys.audit(), "search", filters, page],
+    queryFn: async () =>
+      (
+        await platformClient.get<Page<AuditEntry>>("/audit/search", {
+          params: { ...auditParams(filters), page, size: 50 },
+        })
+      ).data,
+    enabled,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export interface SecuritySummary {
+  windowHours: number;
+  byAction: Record<string, number>;
+  topIps: { client_ip: string; failures: number }[];
+}
+
+export function useSecuritySummary(
+  hours: number,
+  enabled: boolean,
+): UseQueryResult<SecuritySummary> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "security", hours],
+    queryFn: async () =>
+      (
+        await platformClient.get<SecuritySummary>("/security", {
+          params: { hours },
+        })
+      ).data,
+    enabled,
+  });
+}
+
+/** Downloads the filtered audit as CSV (re-auth, audited). */
+export async function downloadAuditExport(
+  filters: AuditFilters,
+): Promise<void> {
+  const response = await platformClient.get<Blob>("/audit/export", {
+    params: auditParams(filters),
+    responseType: "blob",
+    validateStatus: () => true,
+  });
+  if (response.status !== 200) {
+    if (response.status === 401) setPlatformToken(null);
+    let body: { code?: string; message?: string } = {};
+    try {
+      body = JSON.parse(await response.data.text()) as typeof body;
+    } catch {
+      // not JSON
+    }
+    throw new ApiError({
+      code: body.code ?? "export_failed",
+      message: body.message ?? "The export failed.",
+      status: response.status,
+    });
+  }
+  const disposition = String(response.headers["content-disposition"] ?? "");
+  const name =
+    /filename="([^"]+)"/.exec(disposition)?.[1] ?? "platform-audit.csv";
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
