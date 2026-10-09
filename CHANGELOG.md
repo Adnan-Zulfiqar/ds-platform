@@ -10,6 +10,28 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 4: support sessions and user controls (D-019)
+
+- **Support sessions.** Every change inside a workspace now needs an open
+  support session, held by the operator for that workspace, plus
+  re-authentication.
+  - A session lasts 5–120 minutes and records its reason.
+  - The workspace sees it as a notification.
+  - Opening and ending are audited.
+  - **Migration `0053`** adds `platform_support_sessions`.
+- **User controls:**
+  - disable or enable a user (the only active owner is protected);
+  - sign a user out everywhere;
+  - require a password reset (the old password then fails like a wrong one);
+  - change a member's role between admin, member and viewer (owners are
+    never changed, and nobody is made owner);
+  - revoke an invitation.
+
+  Each needs a reason and writes an audit row in the same transaction.
+- **Console:** a support-session banner on every workspace, user action
+  panels with a second click to confirm destructive changes, and invitation
+  revoke.
+
 ### Added - Admin Control Center phase 3: workspace drill-down and exports (D-019)
 
 - **Read-only views inside one workspace:** users (roles and live sessions),
