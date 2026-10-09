@@ -31,6 +31,7 @@ from app.schemas.product import (
     ProductRead,
     ProductUpdateRequest,
     ProductVariantRead,
+    ProductVariantsEnabledRequest,
     ProductVariantUpdateRequest,
     ProductVersionRead,
 )
@@ -257,6 +258,23 @@ async def restore_draft_image(
     image_id: Annotated[uuid.UUID, Path()],
 ) -> ProductDetailRead:
     product = await ProductService(session).restore_image(product_id, image_id)
+    return _to_detail(product)
+
+
+@router.patch(
+    "/{product_id}/variants",
+    response_model=ProductDetailRead,
+    summary="Enable or disable many draft variants at once",
+)
+async def set_draft_variants_enabled(
+    session: DbSession,
+    _authorized: RequireAdmin,
+    product_id: Annotated[uuid.UUID, Path()],
+    payload: ProductVariantsEnabledRequest,
+) -> ProductDetailRead:
+    product = await ProductService(session).set_variants_enabled(
+        product_id, enabled=payload.enabled, variant_ids=payload.variant_ids
+    )
     return _to_detail(product)
 
 

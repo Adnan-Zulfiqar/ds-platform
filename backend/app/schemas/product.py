@@ -116,6 +116,17 @@ class ProductVariantUpdateRequest(CamelCaseModel):
     is_enabled: bool | None = None
 
 
+class ProductVariantsEnabledRequest(CamelCaseModel):
+    """Switch many variants of one draft on or off at once.
+
+    Without ``variant_ids`` every variant of the draft changes; with them,
+    only those (each must belong to the draft).
+    """
+
+    enabled: bool
+    variant_ids: list[uuid.UUID] | None = Field(default=None, max_length=2000)
+
+
 class ProductRead(CamelCaseModel):
     """A product in list form.
 

@@ -311,6 +311,32 @@ class ProductService(BaseService):
         await self.flush()
         return await self._reload_product(product_id)
 
+    async def set_variants_enabled(
+        self,
+        product_id: uuid.UUID,
+        *,
+        enabled: bool,
+        variant_ids: list[uuid.UUID] | None,
+    ) -> Product:
+        """One request for "select all / deselect all" instead of one per
+        variant: a draft can carry hundreds. Variants are read through the
+        tenant-scoped repository, so an id from another product or workspace
+        is not found, and nothing changes unless every id is valid."""
+        await self.products.get_by_id_or_raise(product_id)
+        variants = await self.variants.list_for_product(product_id)
+        if variant_ids is not None:
+            wanted = set(variant_ids)
+            known = {v.id for v in variants}
+            missing = wanted - known
+            if missing:
+                raise NotFoundError.for_resource("ProductVariant", sorted(missing)[0])
+            variants = [v for v in variants if v.id in wanted]
+        for variant in variants:
+            if variant.is_enabled != enabled:
+                variant.is_enabled = enabled
+        await self.flush()
+        return await self._reload_product(product_id)
+
     async def _reload_product(self, product_id: uuid.UUID) -> Product:
         """Drop cached collections so nested images/variants reflect writes."""
         product = await self.products.get_by_id_or_raise(product_id)
