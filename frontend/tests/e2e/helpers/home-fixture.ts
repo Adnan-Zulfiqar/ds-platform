@@ -342,6 +342,7 @@ export async function mockHomeApi(page: Page, scenario: HomeScenario): Promise<R
       return answer(route, scenario, "orderStatistics", () => scenario.orderStatistics);
     if (path === "/notifications/unread-count")
       return json({ unread: scenario.notifications.filter((n) => !n.isRead).length });
+    if (path === "/system/status") return json({ maintenance: false, maintenanceMessage: null, announcements: [] });
     if (path === "/notifications")
       return answer(route, scenario, "notifications", () => paged(scenario.notifications));
     if (path === "/products/import/check") return json({ matches: [] });

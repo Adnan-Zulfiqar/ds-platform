@@ -251,6 +251,11 @@ export async function mockStudio(
         : undefined,
     (r) =>
       r.path.endsWith("/notifications/unread-count") ? { status: 200, body: { unread: 0 } } : undefined,
+    // The shell's platform banner (D-019): nothing to announce.
+    (r) =>
+      r.path.endsWith("/system/status")
+        ? { status: 200, body: { maintenance: false, maintenanceMessage: null, announcements: [] } }
+        : undefined,
     (r) => (r.path.endsWith("/notifications") ? { status: 200, body: page_([], 1, 8) } : undefined),
     (r) => (r.path.endsWith("/stores") ? { status: 200, body: storesBody } : undefined),
     (r) =>

@@ -1075,3 +1075,87 @@ export async function downloadAuditExport(
   link.click();
   URL.revokeObjectURL(url);
 }
+
+// --- Platform settings (phase 10) ------------------------------------------------
+
+export interface PlatformAnnouncement {
+  id: string;
+  title: string;
+  body: string;
+  level: "info" | "warning" | "critical";
+  startsAt: string;
+  endsAt: string | null;
+  createdAt: string;
+}
+
+export interface PlatformSettings {
+  maintenance: {
+    enabled: boolean;
+    message: string | null;
+    updatedAt: string | null;
+  };
+  announcements: PlatformAnnouncement[];
+}
+
+const settingsKey = [...platformKeys.all, "settings"] as const;
+
+export function usePlatformSettings(): UseQueryResult<PlatformSettings> {
+  return useQuery({
+    queryKey: settingsKey,
+    queryFn: async () =>
+      (await platformClient.get<PlatformSettings>("/settings")).data,
+  });
+}
+
+export type SettingsChange =
+  | { kind: "maintenance"; enabled: boolean; message: string | null }
+  | {
+      kind: "announce";
+      title: string;
+      body: string;
+      level: "info" | "warning" | "critical";
+      endsAt: string | null;
+    }
+  | { kind: "end-announcement"; id: string };
+
+/** A platform-wide setting change (super admin, re-auth, audited). */
+export function usePlatformSettingsChange() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { reason: string; change: SettingsChange }) => {
+      const { change, reason } = input;
+      const [path, body] =
+        change.kind === "maintenance"
+          ? [
+              "/settings/maintenance",
+              { enabled: change.enabled, message: change.message, reason },
+            ]
+          : change.kind === "announce"
+            ? [
+                "/announcements",
+                {
+                  title: change.title,
+                  body: change.body,
+                  level: change.level,
+                  endsAt: change.endsAt,
+                  reason,
+                },
+              ]
+            : [`/announcements/${change.id}/end`, { reason }];
+      return (await platformClient.post<PlatformSettings>(path, body)).data;
+    },
+    onSuccess: (data) => queryClient.setQueryData(settingsKey, data),
+  });
+}
+
+export function usePlatformBroadcast() {
+  return useMutation({
+    mutationFn: async (input: {
+      title: string;
+      body: string;
+      reason: string;
+    }) =>
+      (await platformClient.post<{ broadcastId: string }>("/broadcasts", input))
+        .data,
+  });
+}

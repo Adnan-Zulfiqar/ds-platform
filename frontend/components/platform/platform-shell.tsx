@@ -7,6 +7,7 @@ import {
   KeyRound,
   LayoutDashboard,
   ScrollText,
+  Settings2,
   ShieldCheck,
   ToggleRight,
   type LucideIcon,
@@ -129,6 +130,12 @@ const NAV: NavItem[] = [
     label: "Audit log",
     icon: ScrollText,
     needs: "audit.read",
+  },
+  {
+    href: "/platform/settings",
+    label: "Settings",
+    icon: Settings2,
+    needs: "dashboard.read",
   },
   {
     href: "/platform/sessions",

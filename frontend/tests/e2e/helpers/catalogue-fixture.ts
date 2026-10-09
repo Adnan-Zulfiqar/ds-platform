@@ -225,6 +225,7 @@ export async function mockCatalogueApi(page: Page, world: CatalogueWorld): Promi
     if (path === "/products/workspace-counts")
       return json({ drafts: world.drafts.length, products: world.products.length });
     if (path === "/notifications/unread-count") return json({ unread: 0 });
+    if (path === "/system/status") return json({ maintenance: false, maintenanceMessage: null, announcements: [] });
     if (path === "/notifications")
       return json({ items: [], meta: { page: 1, size: 8, totalItems: 0, totalPages: 0, hasNext: false, hasPrevious: false } });
     if (path === "/stores")

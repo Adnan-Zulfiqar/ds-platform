@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { Sidebar } from "@/components/navigation/sidebar";
+import { SystemBanner } from "@/components/navigation/system-banner";
 import { TopNav } from "@/components/navigation/top-nav";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -37,6 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <TopNav />
+          <SystemBanner />
 
           {/* `id` is the skip-link target from the root layout; `tabIndex={-1}`
               lets the link actually move focus here in every browser, not only
