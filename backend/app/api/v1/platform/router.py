@@ -410,8 +410,8 @@ async def platform_audit_search(
     size: Annotated[int, Query(ge=1, le=100)] = 50,
     action: Annotated[str | None, Query(max_length=64)] = None,
     outcome: AuditOutcome | None = None,
-    admin_id: uuid.UUID | None = None,
-    tenant_id: uuid.UUID | None = None,
+    admin_id: Annotated[uuid.UUID | None, Query(alias="adminId")] = None,
+    tenant_id: Annotated[uuid.UUID | None, Query(alias="tenantId")] = None,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> Page[PlatformAuditEntryRead]:
@@ -455,8 +455,8 @@ async def platform_audit_export(
     ctx: PlatformAudit,
     action: Annotated[str | None, Query(max_length=64)] = None,
     outcome: AuditOutcome | None = None,
-    admin_id: uuid.UUID | None = None,
-    tenant_id: uuid.UUID | None = None,
+    admin_id: Annotated[uuid.UUID | None, Query(alias="adminId")] = None,
+    tenant_id: Annotated[uuid.UUID | None, Query(alias="tenantId")] = None,
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> Response:
