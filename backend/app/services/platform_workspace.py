@@ -40,7 +40,7 @@ from app.models.order import (
     SyncRunStatus,
     SyncTrigger,
 )
-from app.models.product import Product, ProductVariant
+from app.models.product import ImportStatus, Product, ProductImport, ProductVariant
 from app.models.role import RoleName
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store, StorePlatform, StoreStatus
@@ -63,6 +63,7 @@ from app.repositories.order import (
 from app.repositories.platform_admin import PlatformTenantDirectory, TenantHealth
 from app.repositories.product import (
     ProductImageRepository,
+    ProductImportRepository,
     ProductRepository,
     ProductVariantRepository,
 )
@@ -77,6 +78,8 @@ from app.services.base import BaseService
 from app.services.inventory_sync import InventorySyncService
 from app.services.order_sync import OrderSyncService
 from app.services.platform_admin import AuditContext, PlatformAdminService, PlatformPrincipal
+from app.services.product_import import ProductImportService
+from app.services.supplier_ordering import SupplierOrderingService
 from app.services.team_invitations import TeamInvitationService
 
 
@@ -358,6 +361,12 @@ class PlatformWorkspaceService(BaseService):
         filters = {"status": _parse(SyncRunStatus, status)} if status else None
         return await InventorySyncRunRepository(self.session).list(params, filters=filters)
 
+    async def imports(
+        self, params: ListQueryParams, *, status: str | None
+    ) -> tuple[Sequence[ProductImport], int]:
+        filters = {"status": _parse(ImportStatus, status)} if status else None
+        return await ProductImportRepository(self.session).list(params, filters=filters)
+
     async def notifications(
         self, params: ListQueryParams, *, kind: str | None
     ) -> tuple[Sequence[Notification], int]:
@@ -407,6 +416,16 @@ class PlatformWorkspaceActions(BaseService):
             reason=reason,
             ctx=self.ctx,
             detail=detail or None,
+        )
+
+    async def _failed(self, action: str, reason: str, exc: Exception) -> None:
+        await PlatformAdminService(self.session).record_workspace_failure(
+            self.workspace.principal,
+            self.workspace.tenant.id,
+            action,
+            reason=reason,
+            error=f"{type(exc).__name__}: {exc}",
+            ctx=self.ctx,
         )
 
     async def user(self, user_id: uuid.UUID) -> User:
@@ -554,16 +573,6 @@ class PlatformStoreActions(PlatformWorkspaceActions):
         )
         return store
 
-    async def _failed(self, action: str, reason: str, exc: Exception) -> None:
-        await PlatformAdminService(self.session).record_workspace_failure(
-            self.workspace.principal,
-            self.workspace.tenant.id,
-            action,
-            reason=reason,
-            error=f"{type(exc).__name__}: {exc}",
-            ctx=self.ctx,
-        )
-
     async def sync_orders_now(self, *, reason: str) -> OrderSyncRun:
         """The supplier order sync the merchant's own "Sync now" runs.
         A run already in flight is a 409, as for them."""
@@ -622,10 +631,84 @@ class PlatformStoreActions(PlatformWorkspaceActions):
         return report.healthy
 
 
+class PlatformCatalogActions(PlatformWorkspaceActions):
+    """Catalogue and order changes (phase 6). Each reuses the merchant's own
+    service and its guards."""
+
+    async def retry_import(self, import_id: uuid.UUID, *, reason: str) -> Product:
+        """Only a failed import can be retried, exactly as for the merchant."""
+        try:
+            product = await ProductImportService(self.session).retry_import(import_id)
+        except Exception as exc:
+            await self._failed("workspace_import_retried", reason, exc)
+            raise
+        await self._audit(
+            "workspace_import_retried",
+            target_type="product_import",
+            target_id=import_id,
+            reason=reason,
+            product_id=str(product.id),
+        )
+        return product
+
+    async def resync_listings(self, product_id: uuid.UUID, *, reason: str) -> int:
+        """Queue the price and stock push to every channel listing of one
+        product (after this request commits; paused stores are skipped by the
+        push itself). Returns the number of listings that will be tried."""
+        product = await ProductRepository(self.session).get_by_id(product_id)
+        if product is None:
+            raise NotFoundError.for_resource("Product", product_id)
+        listings = await StoreListingRepository(self.session).list_for_product(product.id)
+        await self._audit(
+            "workspace_listings_resync_queued",
+            target_type="product",
+            target_id=product.id,
+            reason=reason,
+            listings=len(listings),
+        )
+        return len(listings)
+
+    async def refresh_order(self, order_id: uuid.UUID, *, reason: str) -> Order:
+        order = await OrderRepository(self.session).get_by_id(order_id)
+        if order is None:
+            raise NotFoundError.for_resource("Order", order_id)
+        try:
+            order = await OrderSyncService(self.session).refresh_order(order)
+        except Exception as exc:
+            await self._failed("workspace_order_refreshed", reason, exc)
+            raise
+        await self._audit(
+            "workspace_order_refreshed", target_type="order", target_id=order.id, reason=reason
+        )
+        return order
+
+    async def release_supplier_order(self, order_id: uuid.UUID, *, reason: str) -> SupplierOrder:
+        """The merchant's own release (D-017): only from ``placing``, after
+        someone has checked AliExpress and found no order. Recorded as done by
+        support, not by the merchant."""
+        row = await SupplierOrderingService(self.session).release(order_id)
+        row = await SupplierOrderRepository(self.session).update(
+            row,
+            error_code="released_by_support",
+            error_message=(
+                "Released by DropPilot support after checking AliExpress: "
+                "no order had been created."
+            ),
+        )
+        await self._audit(
+            "workspace_supplier_order_released",
+            target_type="order",
+            target_id=order_id,
+            reason=reason,
+        )
+        return row
+
+
 __all__ = [
     "ASSIGNABLE_ROLES",
     "ConnectionView",
     "OrderDetailView",
+    "PlatformCatalogActions",
     "PlatformStoreActions",
     "PlatformWorkspace",
     "PlatformWorkspaceActions",

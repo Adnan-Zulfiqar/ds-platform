@@ -462,6 +462,7 @@ export type WorkspaceResource =
   | "listings"
   | "orders"
   | "sync-runs"
+  | "imports"
   | "notifications";
 
 /** Query parameters for one workspace list. Empty values are dropped. */
@@ -740,6 +741,41 @@ export function useWorkspaceStoreAction(tenantId: string) {
             })
           ).data as unknown;
       }
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "workspace", tenantId],
+      }),
+  });
+}
+
+// --- Catalogue and orders (phase 6) -------------------------------------------
+
+export type WorkspaceCatalogAction =
+  | { kind: "retry-import"; importId: string }
+  | { kind: "resync-listings"; productId: string }
+  | { kind: "refresh-order"; orderId: string }
+  | { kind: "release-supplier-order"; orderId: string };
+
+/** A catalogue or order change (support session, re-auth, audited). */
+export function useWorkspaceCatalogAction(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      reason: string;
+      action: WorkspaceCatalogAction;
+    }) => {
+      const base = `/workspaces/${tenantId}`;
+      const { action, reason } = input;
+      const path =
+        action.kind === "retry-import"
+          ? `${base}/imports/${action.importId}/retry`
+          : action.kind === "resync-listings"
+            ? `${base}/products/${action.productId}/resync-listings`
+            : action.kind === "refresh-order"
+              ? `${base}/orders/${action.orderId}/refresh`
+              : `${base}/orders/${action.orderId}/supplier-order/release`;
+      return (await platformClient.post(path, { reason })).data as unknown;
     },
     onSuccess: () =>
       void queryClient.invalidateQueries({

@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–5 built**, phases 6–10 in progress. The platform console
+Status: **phases 1–6 built**, phases 7–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -31,8 +31,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Merged (#96) |
 | 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Merged (#97) |
 | 4 | User controls and support sessions | Merged (#98) |
-| 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Built (this PR) |
-| 6 | Catalogue and order actions | Not started |
+| 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Merged (#99) |
+| 6 | Catalogue and order actions | Built (this PR) |
 | 7 | Jobs: failed and stuck detection, retry, cancel | Not started |
 | 8 | Billing: trial extension, plan override, feature flags | Not started |
 | 9 | Audit and security centre; immutable audit at the database | Not started |
@@ -207,6 +207,43 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 6 as built
+
+All actions need a support session and re-authentication. Each reuses the
+merchant's own service, with its guards.
+
+| Action | Route | Permission | Reuses / guard | Audited as |
+|---|---|---|---|---|
+| Import attempts (view) | `GET …/imports?status=` | `workspace.data.read` | tenant-scoped list | `workspace_viewed` |
+| Retry a failed import | `POST …/imports/{iid}/retry` | `catalog.manage` | `ProductImportService.retry_import` (only `failed`) | `workspace_import_retried` |
+| Push price and stock again | `POST …/products/{pid}/resync-listings` | `catalog.manage` | the merchant's after-commit channel push; paused stores are skipped | `workspace_listings_resync_queued` (with listing count) |
+| Refresh an order | `POST …/orders/{oid}/refresh` | `orders.manage` | `OrderSyncService.refresh_order` | `workspace_order_refreshed` |
+| Release a stuck supplier order | `POST …/orders/{oid}/supplier-order/release` | `orders.manage` | `SupplierOrderingService.release` (only from `placing`, D-017) | `workspace_supplier_order_released` |
+
+- **Releasing a stuck supplier order** is recorded on the row as
+  `released_by_support`, not as the merchant's own release.
+- **The console warns**, and asks for a second click, before a release:
+  if AliExpress did create the order, releasing it lets it be bought
+  twice.
+- **Failed attempts** (no supplier connection, a non-failed import) are
+  audited as `failure` in their own transaction, as in phase 5.
+
+### Verified (phase 6)
+
+`test_platform_workspace_catalog.py` covers:
+
+- failed imports are listed by status, and a retry that cannot run is
+  audited as a failure;
+- a re-push is queued and audited with its listing count;
+- a stuck supplier order is released as support, and a second release is a
+  409;
+- an order refresh without a supplier connection is audited as a failure;
+- Support gets `permission_denied`;
+- another workspace's order is a 404 and untouched.
+
+Playwright (`platform-workspace-catalog.spec.ts`) covers the release with
+a two-click confirm and the exact reason.
 
 ## Phase 5 as built
 

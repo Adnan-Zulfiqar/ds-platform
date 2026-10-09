@@ -359,9 +359,32 @@ class WebhookReconcileResult(CamelCaseModel):
     healthy: bool
 
 
+# --- Catalogue and orders (phase 6) -------------------------------------------
+
+
+class WorkspaceImportRead(CamelCaseModel):
+    id: uuid.UUID
+    source: str
+    external_id: str
+    status: str
+    product_id: uuid.UUID | None
+    error_code: str | None
+    error_message: str | None
+    ship_to_country: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+
+
+class ListingsResyncQueued(CamelCaseModel):
+    product_id: uuid.UUID
+    listings: int
+
+
 __all__ = [
     "DailyCountRead",
     "InventorySyncNow",
+    "ListingsResyncQueued",
     "PlatformDashboardRead",
     "SubscriptionSummaryRead",
     "SupportSessionOpen",
@@ -371,6 +394,7 @@ __all__ = [
     "WorkspaceChangeReason",
     "WorkspaceConnectionRead",
     "WorkspaceHealthRead",
+    "WorkspaceImportRead",
     "WorkspaceInvitationRead",
     "WorkspaceListingRead",
     "WorkspaceNotificationRead",
