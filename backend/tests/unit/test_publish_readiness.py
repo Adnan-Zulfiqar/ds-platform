@@ -19,8 +19,10 @@ from app.services.publish_readiness import (
     CODE_DESTINATION_MISMATCH,
     CODE_DRAFT_VERSION_STALE,
     CODE_IMAGES_MISSING,
+    CODE_PUBLISHING_DISABLED,
     CODE_SELLING_CURRENCY_MISMATCH,
     CODE_STORE_DISCONNECTED,
+    CODE_STORE_PAUSED,
     CODE_STORE_REQUIRED,
     CODE_TITLE_THIN,
     CODE_UNSUPPORTED_CHANNEL,
@@ -71,6 +73,7 @@ class _Store:
         self.settings = overrides.get("settings", {"countryCode": "US"})
         self.currency = overrides.get("currency", "USD")
         self.currency_last_synced_at = overrides.get("currency_last_synced_at", datetime.now(UTC))
+        self.sync_paused_at = overrides.get("sync_paused_at")
 
 
 class _Connection:
@@ -88,6 +91,8 @@ def _service(
     service.session = MagicMock()
     service.products = MagicMock()
     service.stores = MagicMock()
+    service.flags = MagicMock()
+    service.flags.is_enabled = AsyncMock(return_value=True)
     service.shopify = MagicMock()
     service._sync = MagicMock()
     service._load_product = AsyncMock(return_value=product)  # type: ignore[method-assign]
@@ -153,6 +158,34 @@ async def test_disconnected_store_is_a_blocker() -> None:
     )
     assert result.can_publish is False
     assert any(item.code == CODE_STORE_DISCONNECTED for item in result.blockers)
+
+
+@pytest.mark.asyncio
+async def test_a_store_paused_by_an_operator_is_a_blocker() -> None:
+    """D-019: an operator's pause stops new publishes to the store."""
+    product = _Product()
+    store = _Store(sync_paused_at=datetime.now(UTC))
+    result = await _service(product=product, store=store, connection=_Connection()).evaluate(
+        channel=CHANNEL_SHOPIFY,
+        product_id=product.id,
+        store_id=store.id,
+    )
+    assert result.can_publish is False
+    assert any(item.code == CODE_STORE_PAUSED for item in result.blockers)
+
+
+@pytest.mark.asyncio
+async def test_publishing_switched_off_for_the_workspace_is_a_blocker() -> None:
+    """D-019: the ``channel_publishing`` switch stops every channel publish."""
+    product = _Product()
+    store = _Store()
+    service = _service(product=product, store=store, connection=_Connection())
+    service.flags.is_enabled = AsyncMock(return_value=False)
+    result = await service.evaluate(
+        channel=CHANNEL_SHOPIFY, product_id=product.id, store_id=store.id
+    )
+    assert result.can_publish is False
+    assert any(item.code == CODE_PUBLISHING_DISABLED for item in result.blockers)
 
 
 @pytest.mark.asyncio
