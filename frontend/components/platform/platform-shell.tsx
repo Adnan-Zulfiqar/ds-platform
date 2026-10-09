@@ -3,6 +3,7 @@
 import {
   Activity,
   Building2,
+  Cog,
   KeyRound,
   LayoutDashboard,
   ScrollText,
@@ -109,6 +110,7 @@ const NAV: NavItem[] = [
     icon: Building2,
     needs: "tenants.read",
   },
+  { href: "/platform/jobs", label: "Jobs", icon: Cog, needs: "jobs.read" },
   {
     href: "/platform/operators",
     label: "Operators",
