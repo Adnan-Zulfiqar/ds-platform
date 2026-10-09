@@ -132,6 +132,8 @@ class PublishReadinessService(BaseService):
         super().__init__(session)
         self.products = ProductRepository(session)
         self.stores = StoreRepository(session)
+        #: The feature switches (D-019); an attribute so a test can replace it.
+        self.flags = FeatureFlagService(session)
         self.shopify = ShopifyService(session)
         # Reuse the proven assert helpers; do not maintain a second rule list.
         self._sync = ShopifySyncService(session)
@@ -563,7 +565,7 @@ class PublishReadinessService(BaseService):
             )
 
         store = await self.stores.get_by_id_or_raise(store_id)
-        if not await FeatureFlagService(self.session).is_enabled(CHANNEL_PUBLISHING):
+        if not await self.flags.is_enabled(CHANNEL_PUBLISHING):
             blockers.append(
                 PublishCheckItem(
                     code=CODE_PUBLISHING_DISABLED,
