@@ -352,7 +352,8 @@ Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPL
 | 3 | Workspace drill-down and CSV exports | Merged (#97) |
 | 4 | Support sessions and user controls | Merged (#98) |
 | 5 | Store pause, syncs and Shopify webhooks | Merged (#99) |
-| 6 | Catalogue and order actions | Built |
-| 7–10 | Jobs, billing, audit centre, settings | Not started |
+| 6 | Catalogue and order actions | Merged (#100) |
+| 7 | Jobs centre | Built |
+| 8–10 | Billing, audit centre, settings | Not started |
 
 Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–6 built**, phases 7–10 in progress. The platform console
+Status: **phases 1–7 built**, phases 8–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -32,8 +32,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Merged (#97) |
 | 4 | User controls and support sessions | Merged (#98) |
 | 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Merged (#99) |
-| 6 | Catalogue and order actions | Built (this PR) |
-| 7 | Jobs: failed and stuck detection, retry, cancel | Not started |
+| 6 | Catalogue and order actions | Merged (#100) |
+| 7 | Jobs: failed and stuck detection, retry, cancel | Built (this PR) |
 | 8 | Billing: trial extension, plan override, feature flags | Not started |
 | 9 | Audit and security centre; immutable audit at the database | Not started |
 | 10 | System settings: maintenance mode, announcements, broadcasts | Not started |
@@ -207,6 +207,69 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 7 as built
+
+### Where job state comes from
+
+Celery keeps no job table; a permanently failed task is a log line
+(`task_failed_permanently`). The jobs page reads the run tables the
+application already writes, and says so on the page.
+
+| Kind | Table | Failed (last 7 days) | Stuck (now) |
+|---|---|---|---|
+| Order sync | `order_sync_runs` | `failed` | `running` for 30+ min |
+| Inventory sync | `inventory_sync_runs` | `failed` | `running` for 30+ min |
+| Product import | `product_imports` | `failed` | `running` for 30+ min |
+| AI pipeline run | `pipeline_bulk_runs` | `failed`, `partial` | `running`, no heartbeat for 20 min |
+| Pricing rule run | `rule_applications` | `failed`, `partial` | `running`, no heartbeat for 15 min |
+| Supplier order | `supplier_orders` | `failed` | `placing` or `queued` unchanged for 10 min |
+| Automation run | `automation_runs` | `failed` | `running` for 30+ min |
+
+The thresholds match the application's own stale sweeps where one exists.
+
+### Cross-workspace reads (`jobs.read`)
+
+- `GET /platform/jobs/summary`: failed and stuck counts per kind.
+- `GET /platform/jobs?kind&state&tenantId&page&size`: rows with workspace,
+  status, timings and the job's own error text.
+
+Both come from `PlatformJobsMonitor`, the one new unscoped class in this
+phase. It is on the CLAUDE.md §4 list under D-019 and returns job fields
+only.
+
+### Actions (`jobs.manage`, in the job's workspace: support session and re-authentication)
+
+| Action | Route | Rule | Audited as |
+|---|---|---|---|
+| Close a stuck sync | `POST /platform/workspaces/{tid}/jobs/{order_sync\|inventory_sync}/{id}/close` | Only `running` for 30+ minutes; marked `failed` with `closed_by_support`. This clears the conflict that otherwise blocks every later sync of the workspace. | `workspace_sync_run_closed` |
+| Cancel an AI pipeline run | `…/jobs/pipeline_run/{id}/cancel` | `PipelineBulkRunService.cancel` (never waits on a worker's lock) | `workspace_pipeline_run_cancelled` |
+| Cancel a pricing rule run | `…/jobs/rule_application/{id}/cancel` | `RuleApplicationService.cancel` (cooperative; written batches keep their prices) | `workspace_rule_application_cancelled` |
+| Run an automation again | `…/jobs/automation_run/{id}/retry` | `AutomationService.run_rule` | `workspace_automation_retried` |
+
+- **Retrying the other kinds.** A failed sync is retried with "sync now"
+  (phase 5) and a failed import with "Retry" (phase 6); the jobs page links
+  to the workspace.
+- **Supplier orders** are released from the order (phase 6), never
+  replayed: a replay could buy the goods twice.
+
+### Verified (phase 7)
+
+`test_platform_jobs.py` covers:
+
+- failed runs from two workspaces are listed with their workspace and error,
+  with exactly the job fields, filterable by workspace, and counted in the
+  summary;
+- a 2-hour-old `running` sync is listed as stuck and a 2-minute-old one is
+  not;
+- closing the stuck one marks it `closed_by_support` and is audited, while
+  closing the live one is a 409;
+- Finance cannot read jobs;
+- Support can read jobs but not close them;
+- unknown jobs are 404.
+
+Playwright (`platform-jobs.spec.ts`) covers the summary, the stuck list,
+and closing a stuck run through re-authentication with the typed reason.
 
 ## Phase 6 as built
 

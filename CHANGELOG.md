@@ -10,6 +10,23 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 7: jobs centre (D-019)
+
+- **Jobs page.** Failed (7 days) and stuck jobs across workspaces for order
+  and inventory syncs, product imports, AI pipeline runs, pricing rule runs,
+  supplier orders and automation runs.
+  - It reads the application's run tables; Celery keeps none.
+  - It is backed by the new `PlatformJobsMonitor`, which is on the
+    CLAUDE.md §4 list and returns job fields only.
+- **Actions:**
+  - close a sync stuck in `running`, which otherwise blocks every later sync
+    of the workspace;
+  - cancel an AI pipeline or pricing rule run;
+  - run an automation again.
+
+  Each runs in the job's workspace with a support session, re-authentication
+  and an audit row.
+
 ### Added - Admin Control Center phase 6: catalogue and order actions (D-019)
 
 - **Import attempts view** with a retry for failed imports.

@@ -140,8 +140,10 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     added with D-018, support sessions with D-019), and
     `PlatformTenantDirectory` (workspace list and counts, never a
     tenant-owned row), and `PlatformMetrics` (platform-wide dashboard
-    counts, never a row; D-019, 2026-10-09). These are the **only**
-    request-path exception. They are reachable solely behind
+    counts, never a row; D-019, 2026-10-09), and `PlatformJobsMonitor`
+    (failed and stuck background-job rows across workspaces: job fields and
+    the job's own error text only, never a product, order, buyer or
+    credential; D-019). These are the **only** request-path exception. They are reachable solely behind
     `RequirePlatformAdmin`, which is a separate token audience plus TOTP
     plus an IP allow-list, and is off by default.
   - **Operators inside one workspace (D-019, owner-approved 2026-10-09)
