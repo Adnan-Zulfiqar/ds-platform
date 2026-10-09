@@ -8,8 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.billing import TenantSubscription, TrialFingerprint
-from app.repositories.base import TenantScopedRepository
+from app.models.billing import (
+    FeatureFlag,
+    TenantFeatureFlag,
+    TenantSubscription,
+    TrialFingerprint,
+)
+from app.repositories.base import BaseRepository, TenantScopedRepository
 
 
 class TenantSubscriptionRepository(TenantScopedRepository[TenantSubscription]):
@@ -54,3 +59,37 @@ class TrialFingerprintRegistry:
 
 
 __all__ = ["TenantSubscriptionRepository", "TrialFingerprintRegistry"]
+
+
+class FeatureFlagRepository(BaseRepository[FeatureFlag]):
+    """Platform reference data, like roles (CLAUDE.md §4): the switches and
+    their platform-wide defaults. No tenant owns a row."""
+
+    sortable_fields = frozenset({"created_at", "key"})
+    default_sort_field = "key"
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, FeatureFlag)
+
+    async def by_key(self, key: str) -> FeatureFlag | None:
+        query = select(FeatureFlag).where(FeatureFlag.key == key)
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def all_flags(self) -> list[FeatureFlag]:
+        query = select(FeatureFlag).order_by(FeatureFlag.key)
+        return list((await self.session.execute(query)).scalars().all())
+
+
+class TenantFeatureFlagRepository(TenantScopedRepository[TenantFeatureFlag]):
+    """One workspace's overrides."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, TenantFeatureFlag)
+
+    async def by_key(self, key: str) -> TenantFeatureFlag | None:
+        query = self._base_query().where(TenantFeatureFlag.key == key)
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def all_overrides(self) -> list[TenantFeatureFlag]:
+        query = self._base_query().order_by(TenantFeatureFlag.key)
+        return list((await self.session.execute(query)).scalars().all())

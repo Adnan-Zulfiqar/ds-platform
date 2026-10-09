@@ -22,6 +22,7 @@ from app.integrations.woocommerce.price_quantity import (
 from app.models.product import Product
 from app.models.shopify import ListingSyncStatus, StoreListing
 from app.models.store import Store
+from app.repositories.billing import TenantFeatureFlagRepository
 from tests.integration.test_ebay_c1_api import auth_header
 from tests.integration.test_woocommerce_publish import (
     PUBLISH,
@@ -203,3 +204,23 @@ async def test_a_paused_store_refuses_new_publishes_with_its_own_reason(
     )
     assert response.status_code != 200
     assert "store_paused" in response.text
+
+
+async def test_publishing_switched_off_for_the_workspace_is_refused(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shop: FakeWoo,  # noqa: F811
+) -> None:
+    owner, store_id = await connected(client)
+    set_tenant_id(uuid.UUID(str(owner["identity"]["tenant"]["id"])))
+    await TenantFeatureFlagRepository(db_session).create(
+        key="channel_publishing", enabled=False, reason="test"
+    )
+    product_id = await draft(db_session, owner)
+    response = await client.post(
+        PUBLISH,
+        json={"productId": str(product_id), "storeId": store_id},
+        headers=auth_header(owner),
+    )
+    assert response.status_code != 200
+    assert "publishing_disabled" in response.text

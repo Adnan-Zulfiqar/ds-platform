@@ -14,9 +14,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import DbSession, platform_workspace, require_platform_permission
+from app.api.deps import (
+    DbSession,
+    PlatformAudit,
+    platform_workspace,
+    require_platform_permission,
+    require_platform_reauth,
+)
 from app.core.platform_permissions import PlatformPermission
 from app.core.redis import check_redis_health
+from app.repositories.billing import FeatureFlagRepository
 from app.repositories.platform_jobs import JobKind, JobState, PlatformJobsMonitor
 from app.repositories.platform_metrics import (
     PlatformMetrics,
@@ -26,6 +33,8 @@ from app.repositories.platform_metrics import (
 from app.schemas.common import Page
 from app.schemas.platform_console import (
     DailyCountRead,
+    GlobalFlagChange,
+    GlobalFlagRead,
     PlatformDashboardRead,
     PlatformJobRead,
     SubscriptionSummaryRead,
@@ -33,7 +42,7 @@ from app.schemas.platform_console import (
     WorkspaceHealthRead,
     WorkspaceOverviewRead,
 )
-from app.services.platform_admin import PlatformPrincipal
+from app.services.platform_admin import PlatformAdminService, PlatformPrincipal
 from app.services.platform_workspace import PlatformWorkspace, PlatformWorkspaceService
 
 router = APIRouter()
@@ -170,3 +179,44 @@ async def platform_jobs(
         size=size,
         total_items=total,
     )
+
+
+# --- Feature switch defaults (phase 8) --------------------------------------------------
+
+SettingsWrite = Annotated[
+    PlatformPrincipal, Depends(require_platform_reauth(PlatformPermission.SETTINGS_MANAGE))
+]
+BillingReader = Annotated[
+    PlatformPrincipal, Depends(require_platform_permission(PlatformPermission.BILLING_READ))
+]
+
+
+@router.get(
+    "/feature-flags",
+    response_model=list[GlobalFlagRead],
+    summary="Platform-wide defaults of the feature switches",
+)
+async def platform_feature_flags(
+    session: DbSession, _principal: BillingReader
+) -> list[GlobalFlagRead]:
+    rows = await FeatureFlagRepository(session).all_flags()
+    return [GlobalFlagRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.post(
+    "/feature-flags/{key}",
+    response_model=list[GlobalFlagRead],
+    summary="Change a switch's platform-wide default (super admin, re-auth, audited)",
+)
+async def platform_set_feature_flag(
+    key: str,
+    payload: GlobalFlagChange,
+    session: DbSession,
+    principal: SettingsWrite,
+    ctx: PlatformAudit,
+) -> list[GlobalFlagRead]:
+    await PlatformAdminService(session).set_global_flag(
+        principal, key, enabled=payload.enabled, reason=payload.reason, ctx=ctx
+    )
+    rows = await FeatureFlagRepository(session).all_flags()
+    return [GlobalFlagRead.model_validate(r, from_attributes=True) for r in rows]

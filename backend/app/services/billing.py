@@ -97,6 +97,8 @@ class Entitlement:
     cancel_at_period_end: bool
     current_period_end: datetime | None
     has_customer: bool
+    #: Set while an operator's plan override applies (D-019).
+    plan_override_until: datetime | None = None
 
 
 def _ts(value: Any) -> datetime | None:
@@ -124,9 +126,19 @@ class BillingService(BaseService):
     async def entitlement(self) -> Entitlement:
         row = await self._row()
         now = datetime.now(UTC)
-        paid = row.status in _PAID and row.plan in PLANS
+        # An operator's override (D-019) decides while it lasts, whatever
+        # Stripe says: it exists to grant or correct access by hand.
+        overridden = (
+            row.plan_override in PLANS
+            and row.plan_override_until is not None
+            and row.plan_override_until > now
+        )
+        paid = overridden or (row.status in _PAID and row.plan in PLANS)
         on_trial = not paid and row.trial_ends_at > now
-        if paid:
+        if overridden:
+            plan = PLANS[str(row.plan_override)]
+            limit, ai = plan.listing_limit, row.plan_override_ai
+        elif paid:
             plan = PLANS[str(row.plan)]
             limit, ai = plan.listing_limit, row.ai_addon
         elif on_trial:
@@ -134,7 +146,7 @@ class BillingService(BaseService):
         else:
             limit, ai = 0, False
         return Entitlement(
-            plan=row.plan if paid else None,
+            plan=(row.plan_override if overridden else row.plan) if paid else None,
             status=row.status,
             ai_addon=row.ai_addon,
             trial_ends_at=row.trial_ends_at,
@@ -147,6 +159,7 @@ class BillingService(BaseService):
             cancel_at_period_end=row.cancel_at_period_end,
             current_period_end=row.current_period_end,
             has_customer=row.stripe_customer_id is not None,
+            plan_override_until=row.plan_override_until if overridden else None,
         )
 
     # --- checkout, changes, portal ------------------------------------------------

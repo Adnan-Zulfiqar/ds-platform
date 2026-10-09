@@ -25,6 +25,7 @@ from app.core.exceptions import ValidationError
 from app.integrations.shopify.sync import ShopifySyncService
 from app.models.order import OrderSource, PaymentStatus
 from app.models.supplier_order import SupplierOrder, SupplierOrderStatus
+from app.repositories.billing import TenantFeatureFlagRepository
 from app.repositories.supplier_order import SupplierOrderRepository
 from app.services.supplier_ordering import SupplierOrderingService
 from app.services.supplier_tracking import SupplierTrackingService
@@ -434,3 +435,24 @@ async def test_the_manual_push_endpoint_needs_a_supplier_order_and_a_number(
     url = f"/api/v1/orders/{order_id}/supplier-order/push-tracking"
     response = await client.post(url, headers=auth_header(owner))
     assert response.status_code == 422
+
+
+async def test_auto_mode_places_nothing_while_the_feature_switch_is_off(
+    client: AsyncClient, db_session: AsyncSession, shared: FakeAliExpress
+) -> None:
+    """D-019: an operator's per-workspace switch stops automatic ordering
+    even with the merchant's own switch on."""
+    _, tenant_id = await workspace(client)
+    await switches(db_session, auto_order=True, auto_tracking=False)
+    product_id, [only] = await catalogue(db_session, tenant_id, variants=["14:Only"])
+    after = datetime.now(UTC) + timedelta(seconds=1)
+    fresh = await channel_order(
+        db_session, tenant_id, [(product_id, only, 1)], external_created_at=after
+    )
+    set_tenant_id(tenant_id)
+    await TenantFeatureFlagRepository(db_session).create(
+        key="supplier_auto_ordering", enabled=False, reason="test"
+    )
+    assert await tasks._auto_place(tenant_id, [fresh]) == 0
+    set_tenant_id(tenant_id)
+    assert await SupplierOrderRepository(db_session).for_order(fresh) is None

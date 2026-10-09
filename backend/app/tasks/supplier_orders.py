@@ -36,6 +36,7 @@ from app.models.order import PaymentStatus
 from app.models.supplier_order import SupplierOrderStatus
 from app.repositories.supplier_order import SupplierOrderRepository
 from app.services.entitlements import BillingGate
+from app.services.feature_flags import SUPPLIER_AUTO_ORDERING, FeatureFlagService
 from app.services.supplier_ordering import SupplierOrderingService
 from app.services.supplier_tracking import SupplierTrackingService
 from app.workers.base import BaseTask
@@ -174,6 +175,9 @@ async def _auto_place(tenant_id: uuid.UUID, order_ids: list[uuid.UUID]) -> int:
             service = SupplierOrderingService(session)
             settings = await service.settings()
             if settings is None or not settings.auto_order:
+                return 0
+            if not await FeatureFlagService(session).is_enabled(SUPPLIER_AUTO_ORDERING):
+                logger.info("supplier_auto_place_feature_disabled")
                 return 0
             try:
                 # The manual button is billing-gated; auto mode must be too.
