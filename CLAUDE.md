@@ -123,7 +123,8 @@ cross-tenant data leak, which is the worst failure mode this platform has.
     boundary) and `AuthenticationUserRepository` (login must find a user
     before a tenant is known);
   - platform reference data, not tenant-owned: `RoleRepository`,
-    `PromptRepository`;
+    `PromptRepository`, `FeatureFlagRepository` (the feature switches'
+    platform-wide defaults; D-019);
   - cross-tenant maintenance that runs before any tenant context:
     `ShopifyMaintenanceRepository`, `IntegrationMaintenanceRepository`,
     `EbayComplianceLedgerRepository`;

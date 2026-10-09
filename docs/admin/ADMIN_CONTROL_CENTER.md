@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–7 built**, phases 8–10 in progress. The platform console
+Status: **phases 1–8 built**, phases 9–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -33,8 +33,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 4 | User controls and support sessions | Merged (#98) |
 | 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Merged (#99) |
 | 6 | Catalogue and order actions | Merged (#100) |
-| 7 | Jobs: failed and stuck detection, retry, cancel | Built (this PR) |
-| 8 | Billing: trial extension, plan override, feature flags | Not started |
+| 7 | Jobs: failed and stuck detection, retry, cancel | Merged (#101) |
+| 8 | Billing: trial extension, plan override, feature flags | Built (this PR) |
 | 9 | Audit and security centre; immutable audit at the database | Not started |
 | 10 | System settings: maintenance mode, announcements, broadcasts | Not started |
 
@@ -207,6 +207,66 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 8 as built
+
+### Migration `0055`
+
+- **`tenant_subscriptions`** gains `plan_override`, `plan_override_ai`,
+  `plan_override_until` and `plan_override_reason`.
+- **`feature_flags`** holds platform reference data, seeded **on**.
+- **`tenant_feature_flags`** holds one workspace's overrides.
+
+### Billing actions (`billing.manage`, re-authentication, reason; **no support session**)
+
+Billing is account-level, not the workspace's data. Finance handles it
+without being able to operate inside a workspace (Finance has neither
+`workspace.data.read` nor `support.session`). This is the one deliberate
+exception to "every workspace change needs a support session".
+
+| Action | Route | Effect | Audited as |
+|---|---|---|---|
+| View | `GET …/billing` (`billing.read`) | Entitlement as the merchant's own billing page computes it, the override, the switches, and whether Stripe enforcement is on | `workspace_viewed` |
+| Extend the trial | `POST …/billing/trial {days 1–90}` | From today or the current end, whichever is later; the workspace is notified | `workspace_trial_extended` (before/after) |
+| Plan override | `POST …/billing/plan-override {plan, ai, days 1–365}` | While it lasts, `BillingService.entitlement()` uses it **whatever Stripe says**; it always ends on its own; the workspace is notified | `workspace_plan_override_set` (before/after) |
+| Remove override | `POST …/billing/plan-override/clear` | Stripe decides again | `workspace_plan_override_cleared` |
+| Feature switch | `POST …/feature-flags/{key} {enabled: true\|false\|null}` | `null` removes the override | `workspace_feature_flag_set` (before/after) |
+| Platform default | `POST /platform/feature-flags/{key}` (`settings.manage`: super admin only) | Applies to every workspace without an override | `feature_flag_default_set` |
+
+The plan override changes what limits apply. Limits are enforced only where
+billing is (`BillingGate`, i.e. when Stripe is configured), and the console
+says when it is not.
+
+### Feature switches, each with a real reader
+
+| Key | Where it is enforced |
+|---|---|
+| `ai_bulk_pipeline` | `PipelineBulkRunService.create`, which refuses with `feature_disabled` (403) |
+| `supplier_auto_ordering` | the `supplier_orders.auto_place` task, which places nothing |
+| `channel_publishing` | `PublishReadinessService`, which adds the blocker `publishing_disabled`, so no channel publishes |
+
+`tests/unit/test_feature_flags_are_wired.py` fails if a known switch is not
+seeded by the migration or has no reader outside the flag service.
+
+### Verified (phase 8)
+
+- `test_platform_billing.py` covers:
+  - Finance extends a trial by exactly 10 days without a support session,
+    audited with before/after, and the workspace is notified;
+  - a Pro override makes the **merchant's own** `GET /billing` report Pro,
+    and clearing it reverts;
+  - switching `ai_bulk_pipeline` off makes the pipeline service refuse,
+    and clearing the override restores the default;
+  - an Admin cannot change a platform default but a super admin can, and
+    it then applies to a workspace without an override;
+  - billing changes need re-authentication;
+  - Support cannot see billing.
+- `test_supplier_auto_and_tracking.py`: auto mode places nothing while
+  `supplier_auto_ordering` is off for the workspace.
+- `test_woocommerce_price_quantity.py`: publishing is refused with
+  `publishing_disabled`.
+- Playwright (`platform-billing.spec.ts`): extend a trial through
+  re-authentication, and switch a feature off with a two-click confirm.
 
 ## Phase 7 as built
 

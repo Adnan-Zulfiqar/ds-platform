@@ -10,6 +10,19 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 8: trials, plan overrides, feature switches (D-019)
+
+- **Migration `0055`:** plan-override columns on `tenant_subscriptions`,
+  plus `feature_flags` (seeded on) and `tenant_feature_flags`.
+- **Trial extension and time-limited plan override.** The override decides
+  the entitlement whatever Stripe says. Both need re-authentication and a
+  reason, are audited with before/after, and notify the workspace.
+- **Three feature switches**, each enforced where its feature starts:
+  `ai_bulk_pipeline`, `supplier_auto_ordering` and `channel_publishing`.
+  Each has a per-workspace override and a platform default that only a
+  super admin changes.
+- **Console:** a Billing tab on every workspace and a Feature switches page.
+
 ### Added - Admin Control Center phase 7: jobs centre (D-019)
 
 - **Jobs page.** Failed (7 days) and stuck jobs across workspaces for order
