@@ -10,6 +10,17 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 6: catalogue and order actions (D-019)
+
+- **Import attempts view** with a retry for failed imports.
+- **Re-push** of one product's price and stock to its channels.
+- **Order refresh** from the supplier.
+- **Release of a supplier order stuck in `placing`**, recorded as
+  `released_by_support`; the console warns about double purchase and asks
+  for a second click.
+- All of these reuse the merchant's services and guards, need a support
+  session and re-authentication, and are audited, failures included.
+
 ### Added - Admin Control Center phase 5: store and integration controls (D-019)
 
 - **An operator pause on a store** (migration `0054`: `stores.sync_paused_at`,
