@@ -694,3 +694,56 @@ export function useRevokeWorkspaceInvitation(tenantId: string) {
       }),
   });
 }
+
+// --- Store and integration changes (phase 5) ----------------------------------
+
+export type WorkspaceStoreAction =
+  | { kind: "pause" | "resume"; storeId: string }
+  | { kind: "shopify-webhooks"; storeId: string }
+  | { kind: "sync-orders" }
+  | { kind: "sync-inventory"; storeId: string | null };
+
+/** A store or integration change (support session, re-auth, audited). */
+export function useWorkspaceStoreAction(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      reason: string;
+      action: WorkspaceStoreAction;
+    }) => {
+      const base = `/workspaces/${tenantId}`;
+      const { action, reason } = input;
+      switch (action.kind) {
+        case "pause":
+        case "resume":
+          return (
+            await platformClient.post(
+              `${base}/stores/${action.storeId}/${action.kind}`,
+              { reason },
+            )
+          ).data as unknown;
+        case "shopify-webhooks":
+          return (
+            await platformClient.post(
+              `${base}/stores/${action.storeId}/shopify/webhooks`,
+              { reason },
+            )
+          ).data as unknown;
+        case "sync-orders":
+          return (await platformClient.post(`${base}/sync/orders`, { reason }))
+            .data as unknown;
+        case "sync-inventory":
+          return (
+            await platformClient.post(`${base}/sync/inventory`, {
+              reason,
+              storeId: action.storeId ?? undefined,
+            })
+          ).data as unknown;
+      }
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "workspace", tenantId],
+      }),
+  });
+}

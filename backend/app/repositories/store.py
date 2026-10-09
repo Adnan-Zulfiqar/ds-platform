@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +35,13 @@ class StoreRepository(TenantScopedRepository[Store]):
         query = self._base_query().where(Store.slug == slug)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def paused_ids(self, store_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+        """Which of these stores an operator has paused (D-019)."""
+        if not store_ids:
+            return set()
+        query = self._base_query().where(Store.id.in_(store_ids), Store.sync_paused_at.is_not(None))
+        return {s.id for s in (await self.session.execute(query)).scalars().all()}
 
     async def count_by_status(self) -> dict[str, int]:
         where_clause = self._base_query().whereclause

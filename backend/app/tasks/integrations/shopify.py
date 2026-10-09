@@ -13,6 +13,7 @@ from app.database.session import transaction
 from app.integrations.shopify.sync import ShopifySyncService
 from app.models.store import StorePlatform
 from app.repositories.shopify import ShopifyMaintenanceRepository, StoreListingRepository
+from app.repositories.store import StoreRepository
 from app.workers.base import BaseTask
 from app.workers.celery_app import celery_app
 
@@ -104,8 +105,13 @@ def push_price_quantity(self: Any, tenant_id: str, product_id: str, **_: Any) ->
                     uuid.UUID(product_id), StorePlatform.SHOPIFY
                 )
                 service = ShopifySyncService(session)
+                paused = await StoreRepository(session).paused_ids(
+                    [listing.store_id for listing in listings]
+                )
                 pushed = 0
                 for listing in listings:
+                    if listing.store_id in paused:  # an operator paused it (D-019)
+                        continue
                     await service.push_price(
                         store_id=listing.store_id, product_id=listing.product_id
                     )
@@ -113,7 +119,7 @@ def push_price_quantity(self: Any, tenant_id: str, product_id: str, **_: Any) ->
                         store_id=listing.store_id, product_id=listing.product_id
                     )
                     pushed += 1
-                return {"listings": len(listings), "pushed": pushed}
+                return {"listings": len(listings), "pushed": pushed, "paused": len(paused)}
 
         return asyncio.run(_run())
     finally:

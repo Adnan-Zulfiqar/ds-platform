@@ -132,6 +132,8 @@ class WorkspaceStoreRead(CamelCaseModel):
     last_activity_at: datetime | None
     last_error: str | None
     health_score: int
+    sync_paused_at: datetime | None
+    sync_paused_reason: str | None
     created_at: datetime
 
 
@@ -345,13 +347,27 @@ class WorkspaceUserChanged(CamelCaseModel):
     sessions_ended: int = 0
 
 
+# --- Store and integration changes (phase 5) ----------------------------------
+
+
+class InventorySyncNow(WorkspaceChangeReason):
+    store_id: uuid.UUID | None = None
+
+
+class WebhookReconcileResult(CamelCaseModel):
+    store_id: uuid.UUID
+    healthy: bool
+
+
 __all__ = [
     "DailyCountRead",
+    "InventorySyncNow",
     "PlatformDashboardRead",
     "SubscriptionSummaryRead",
     "SupportSessionOpen",
     "SupportSessionRead",
     "SystemHealthRead",
+    "WebhookReconcileResult",
     "WorkspaceChangeReason",
     "WorkspaceConnectionRead",
     "WorkspaceHealthRead",

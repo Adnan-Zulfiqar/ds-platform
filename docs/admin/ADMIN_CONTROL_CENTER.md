@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–4 built**, phases 5–10 in progress. The platform console
+Status: **phases 1–5 built**, phases 6–10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -30,8 +30,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 1 | Operator roles and permission matrix, sessions with revoke, re-authentication, richer audit | Merged (#95) |
 | 2 | Live dashboard; workspace entry (D-019); routed console with sidebar | Merged (#96) |
 | 3 | Workspace drill-down: users, stores, products, drafts, listings, orders, inventory, notifications; filters, pagination, CSV export | Merged (#97) |
-| 4 | User controls and support sessions | Built (this PR) |
-| 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Not started |
+| 4 | User controls and support sessions | Merged (#98) |
+| 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Built (this PR) |
 | 6 | Catalogue and order actions | Not started |
 | 7 | Jobs: failed and stuck detection, retry, cancel | Not started |
 | 8 | Billing: trial extension, plan override, feature flags | Not started |
@@ -207,6 +207,71 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 5 as built
+
+### An operator pause on a store (migration `0054`)
+
+`stores.sync_paused_at` and `sync_paused_reason`. While they are set,
+**DropPilot stops writing to that store**:
+
+- **Price and stock pushes.** The listing is skipped silently, not marked
+  as an error the merchant must fix, for:
+  - Shopify (`shopify.push_price_quantity`);
+  - eBay (`EbayPriceQuantitySync.push`);
+  - WooCommerce (`WooCommercePriceQuantitySync.push`).
+
+  This covers automatic and merchant-triggered pushes alike.
+- **New publishes** to any channel are refused by the shared
+  `PublishReadinessService` with the blocker `store_paused` and a message
+  saying support paused it.
+- **Orders keep flowing in.** Imports and webhooks still record them, so
+  nothing is lost while a store is paused.
+
+The merchant gets a notification on pause and on resume.
+
+**Decision recorded:** the earlier per-store switches
+(`order_sync_enabled`, `inventory_sync_enabled`, `pricing_sync_enabled`)
+are written by the merchant's settings but are **not enforced anywhere**.
+That was found during this phase and is left unchanged.
+
+- **Why not enforce them here.** Their exact semantics are a merchant
+  product decision, and each channel combines price and stock differently.
+- **What the operator gets instead.** One explicit pause, enforced at every
+  write.
+
+The unenforced switches are a known limitation.
+
+### Actions (`stores.manage`, support session, re-authentication)
+
+| Action | Route | Reuses | Audited as |
+|---|---|---|---|
+| Pause / resume | `POST …/stores/{sid}/pause`, `…/resume` | — | `workspace_store_paused` / `workspace_store_resumed` |
+| Supplier order sync now | `POST …/sync/orders` | `OrderSyncService.sync_orders` (a running sync is a 409) | `workspace_order_sync_started` |
+| Inventory sync now | `POST …/sync/inventory {storeId?}` | `InventorySyncService.sync`, then the same after-commit channel push as the merchant's button | `workspace_inventory_sync_started` |
+| Re-register Shopify webhooks | `POST …/stores/{sid}/shopify/webhooks` | `ShopifyService.register_webhooks` (creates only what is missing) | `workspace_shopify_webhooks_reconciled` |
+
+- **Failed actions are audited too.** A sync or registration that fails
+  rolls the request back, so its attempt is written as `outcome=failure`
+  in its own transaction, with the error.
+- **Disconnecting a store is not offered.** Reconnecting needs the
+  merchant's own OAuth consent, so a disconnect by an operator could not be
+  undone by an operator. The pause covers the "stop it now" need.
+
+### Verified (phase 5)
+
+- `test_platform_workspace_stores.py` covers:
+  - pause and resume are visible on the list and in workspace
+    notifications, and audited with the reason;
+  - Support is refused (`permission_denied`);
+  - another workspace's store is a 404;
+  - a sync that cannot start leaves a `failure` audit row.
+- `test_woocommerce_price_quantity.py`, against the in-memory store fake:
+  - a paused store receives no PUT and its listing status is untouched;
+  - publishing to a paused store is refused with `store_paused`.
+- Playwright (`platform-workspace-stores.spec.ts`) covers pause with a
+  two-click confirm and the exact reason, the paused badge, and an
+  inventory sync.
 
 ## Phase 4 as built
 

@@ -10,6 +10,22 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 5: store and integration controls (D-019)
+
+- **An operator pause on a store** (migration `0054`: `stores.sync_paused_at`,
+  `sync_paused_reason`).
+  - While paused, no price or stock push reaches the store on Shopify, eBay
+    or WooCommerce, and publishing to it is refused (`store_paused`).
+  - Orders keep arriving.
+  - The merchant is notified on pause and resume.
+- **Operator actions:** run the supplier order sync or the inventory sync
+  now, and re-register a Shopify store's webhooks. Each reuses the
+  merchant's own service and is audited; a failed attempt is audited as a
+  failure.
+- **Known limitation, recorded:** the merchant's per-store
+  `order_sync_enabled`, `inventory_sync_enabled` and `pricing_sync_enabled`
+  switches are still not enforced.
+
 ### Added - Admin Control Center phase 4: support sessions and user controls (D-019)
 
 - **Support sessions.** Every change inside a workspace now needs an open

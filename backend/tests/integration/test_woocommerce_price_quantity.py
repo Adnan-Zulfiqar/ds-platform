@@ -158,3 +158,48 @@ async def test_a_product_without_a_woocommerce_listing_makes_no_call(
     outcome = await WooCommercePriceQuantitySync(db_session).push(product_id)
     assert outcome.listings == 0 and shop.calls == []
     assert await db_session.scalar(sa.select(sa.func.count()).select_from(Store)) >= 1
+
+
+async def test_a_paused_store_receives_nothing_and_its_listing_is_not_marked_failed(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shop: FakeWoo,  # noqa: F811
+) -> None:
+    """D-019: an operator's pause stops DropPilot writing to the store. The
+    listing is left as it was, not recorded as an error the merchant must fix."""
+    _, product_id, store_id = await published(client, db_session)
+    await db_session.execute(
+        sa.update(Store)
+        .where(Store.id == uuid.UUID(store_id))
+        .values(sync_paused_at=sa.func.now(), sync_paused_reason="incident 12")
+    )
+    await db_session.execute(
+        sa.update(Product).where(Product.id == product_id).values(sell_price=Decimal("99.00"))
+    )
+    before = (await listing_for(db_session, product_id)).status
+    shop.calls.clear()
+    outcome = await WooCommercePriceQuantitySync(db_session).push(product_id)
+    assert (outcome.synced, outcome.failed) == (0, 0)
+    assert [c for c in shop.calls if c[0] == "PUT"] == []
+    assert (await listing_for(db_session, product_id)).status is before
+
+
+async def test_a_paused_store_refuses_new_publishes_with_its_own_reason(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    shop: FakeWoo,  # noqa: F811
+) -> None:
+    owner, store_id = await connected(client)
+    await db_session.execute(
+        sa.update(Store)
+        .where(Store.id == uuid.UUID(store_id))
+        .values(sync_paused_at=sa.func.now(), sync_paused_reason="incident 12")
+    )
+    product_id = await draft(db_session, owner)
+    response = await client.post(
+        PUBLISH,
+        json={"productId": str(product_id), "storeId": store_id},
+        headers=auth_header(owner),
+    )
+    assert response.status_code != 200
+    assert "store_paused" in response.text
