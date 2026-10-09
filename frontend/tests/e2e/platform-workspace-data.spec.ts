@@ -201,6 +201,7 @@ test("an export asks for re-authentication, then downloads the CSV", async ({
           contentType: "text/csv",
           headers: {
             "Content-Disposition": 'attachment; filename="acme-orders.csv"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
           },
           body: "id,buyer_name\no1,Jane\n",
         })

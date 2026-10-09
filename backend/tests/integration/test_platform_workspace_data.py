@@ -15,6 +15,7 @@ import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.order import Order
 from app.models.platform_admin import PlatformAdminAudit
 from app.models.product import Product, ProductSource, ProductStatus
@@ -195,3 +196,20 @@ async def test_workspace_data_follows_the_role(
     headers = await sign_in(client, await make_admin(db_session, role=role))
     response = await client.get(f"{P}/{tenant_id}/orders", headers=headers)
     assert response.status_code == allowed
+
+
+async def test_a_cross_origin_export_exposes_its_file_name(
+    client: AsyncClient, db_session: AsyncSession, panel: None
+) -> None:
+    """The console runs on another origin than the API; without the header
+    exposed, the browser hides the file name from it."""
+    tenant_id = await workspace(client, "Cors Co")
+    secret = await make_admin(db_session)
+    headers = await sign_in(client, secret, reauth=True)
+    origin = settings.cors_origins[0]
+    response = await client.get(
+        f"{P}/{tenant_id}/export/users", headers={**headers, "Origin": origin}
+    )
+    assert response.status_code == 200, response.text
+    exposed = response.headers["access-control-expose-headers"].lower()
+    assert "content-disposition" in exposed
