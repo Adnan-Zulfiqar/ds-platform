@@ -17,7 +17,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import IdentifiedBase, TenantScopedBase
+from app.models.base import IdentifiedBase, ReferenceBase, TenantScopedBase
 
 
 class TenantSubscription(TenantScopedBase):
@@ -48,9 +48,46 @@ class TenantSubscription(TenantScopedBase):
     cancel_at_period_end: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    #: An operator's complimentary or corrective plan (D-019). While
+    #: ``plan_override_until`` is in the future it decides the entitlement,
+    #: whatever Stripe says; it is always time-limited.
+    plan_override: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    plan_override_ai: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    plan_override_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    plan_override_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     stripe_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class FeatureFlag(ReferenceBase):
+    """A platform-wide switch (D-019). ``enabled`` is the default for every
+    workspace; a ``TenantFeatureFlag`` row overrides it for one. Platform
+    reference data: readable by every tenant, written only by a super admin
+    in the console."""
+
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
+
+class TenantFeatureFlag(TenantScopedBase):
+    """One workspace's override of a feature flag, set by an operator."""
+
+    __tablename__ = "tenant_feature_flags"
+    __table_args__ = (UniqueConstraint("tenant_id", "key", name="uq_tenant_feature_flags_key"),)
+
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class TrialFingerprint(IdentifiedBase):
@@ -71,4 +108,4 @@ class TrialFingerprint(IdentifiedBase):
     )
 
 
-__all__ = ["TenantSubscription", "TrialFingerprint"]
+__all__ = ["FeatureFlag", "TenantFeatureFlag", "TenantSubscription", "TrialFingerprint"]

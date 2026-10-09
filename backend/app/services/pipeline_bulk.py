@@ -49,6 +49,7 @@ from app.repositories.pipeline_bulk import (
 from app.repositories.product import ProductRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
+from app.services.feature_flags import AI_BULK_PIPELINE, FeatureFlagService
 from app.services.product_pipeline import ProductPipelineService
 
 MAX_PIPELINE_BULK_PRODUCTS = 50
@@ -171,6 +172,7 @@ class PipelineBulkRunService(BaseService):
         store_id: uuid.UUID | None,
         actor_id: uuid.UUID | None,
     ) -> PipelineBulkRun:
+        await FeatureFlagService(self.session).require(AI_BULK_PIPELINE)
         key = idempotency_key.strip()
         if not key:
             raise ValidationError("An idempotency key is required.")

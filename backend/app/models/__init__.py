@@ -24,7 +24,12 @@ from app.models.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
-from app.models.billing import TenantSubscription, TrialFingerprint
+from app.models.billing import (
+    FeatureFlag,
+    TenantFeatureFlag,
+    TenantSubscription,
+    TrialFingerprint,
+)
 from app.models.ebay import (
     EbayComplianceNotification,
     EbayConnection,
@@ -124,6 +129,7 @@ __all__ = [
     "EbayConnectionStatus",
     "EbayListingDefaults",
     "EmailVerificationToken",
+    "FeatureFlag",
     "FulfillmentStatus",
     "FulfilmentSettings",
     "IdentifiedBase",
@@ -188,6 +194,7 @@ __all__ = [
     "SyncRunStatus",
     "SyncTrigger",
     "Tenant",
+    "TenantFeatureFlag",
     "TenantMixin",
     "TenantScopedBase",
     "TenantStatus",

@@ -27,6 +27,8 @@ APPROVED_UNSCOPED = frozenset(
         # Platform reference data.
         "RoleRepository",
         "PromptRepository",
+        # D-019: the feature switches and their platform-wide defaults.
+        "FeatureFlagRepository",
         # Cross-tenant maintenance before any tenant context.
         "ShopifyMaintenanceRepository",
         "IntegrationMaintenanceRepository",

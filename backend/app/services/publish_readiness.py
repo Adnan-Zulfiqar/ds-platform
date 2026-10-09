@@ -39,6 +39,7 @@ from app.repositories.ebay import EbayListingDefaultsRepository
 from app.repositories.product import ProductRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
+from app.services.feature_flags import CHANNEL_PUBLISHING, FeatureFlagService
 from app.services.import_destination import country_from_store_settings
 
 CHANNEL_SHOPIFY = "shopify"
@@ -56,6 +57,8 @@ CODE_UNSUPPORTED_CHANNEL = "unsupported_channel"
 CODE_STORE_DISCONNECTED = "store_disconnected"
 #: An operator paused writes to the store (D-019).
 CODE_STORE_PAUSED = "store_paused"
+#: An operator switched publishing off for the workspace (D-019).
+CODE_PUBLISHING_DISABLED = "publishing_disabled"
 CODE_DESTINATION_MISMATCH = "destination_mismatch"
 CODE_SELLING_CURRENCY_MISMATCH = "selling_currency_mismatch"
 CODE_DRAFT_VERSION_STALE = "draft_version_stale"
@@ -129,6 +132,8 @@ class PublishReadinessService(BaseService):
         super().__init__(session)
         self.products = ProductRepository(session)
         self.stores = StoreRepository(session)
+        #: The feature switches (D-019); an attribute so a test can replace it.
+        self.flags = FeatureFlagService(session)
         self.shopify = ShopifyService(session)
         # Reuse the proven assert helpers; do not maintain a second rule list.
         self._sync = ShopifySyncService(session)
@@ -560,6 +565,14 @@ class PublishReadinessService(BaseService):
             )
 
         store = await self.stores.get_by_id_or_raise(store_id)
+        if not await self.flags.is_enabled(CHANNEL_PUBLISHING):
+            blockers.append(
+                PublishCheckItem(
+                    code=CODE_PUBLISHING_DISABLED,
+                    message="Publishing is switched off for this workspace. Contact support.",
+                    section="publishing",
+                )
+            )
         if store.sync_paused_at is not None:
             blockers.append(
                 PublishCheckItem(

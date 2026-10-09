@@ -62,6 +62,7 @@ from app.models.platform_admin import (
     PlatformSupportSession,
 )
 from app.models.tenant import TenantStatus
+from app.repositories.billing import FeatureFlagRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.platform_admin import (
     PlatformAdminAuditRepository,
@@ -650,6 +651,32 @@ class PlatformAdminService(BaseService):
                 )
         except Exception:  # an audit outage must not mask the original error
             self.logger.exception("platform_admin_audit_write_failed")
+
+    async def set_global_flag(
+        self,
+        principal: PlatformPrincipal,
+        key: str,
+        *,
+        enabled: bool,
+        reason: str,
+        ctx: AuditContext,
+    ) -> None:
+        """The platform-wide default of a feature switch (super admin)."""
+        repo = FeatureFlagRepository(self.session)
+        flag = await repo.by_key(key)
+        if flag is None:
+            raise NotFoundError.for_resource("Feature flag", key)
+        before = flag.enabled
+        flag.enabled = enabled
+        await self.session.flush()
+        await self._audit(
+            "feature_flag_default_set",
+            admin=principal.admin,
+            ctx=ctx,
+            target_type="feature_flag",
+            target_id=key,
+            detail={"reason": reason[:500], "before": before, "after": enabled},
+        )
 
     async def audit_permission_denied(
         self, admin: PlatformAdmin, *, permission: str, ctx: AuditContext

@@ -20,15 +20,21 @@ from fastapi.responses import Response
 
 from app.api.deps import DbSession, PlatformAudit, platform_workspace
 from app.core.platform_permissions import PlatformPermission
+from app.repositories.billing import TenantSubscriptionRepository
 from app.repositories.role import RoleRepository
 from app.schemas.common import ListQueryParams, Page, SortDirection, list_query_params
 from app.schemas.platform_console import (
+    FeatureFlagStateRead,
+    FlagOverride,
     InventorySyncNow,
     JobActionResult,
     ListingsResyncQueued,
+    PlanOverride,
     SupportSessionOpen,
     SupportSessionRead,
+    TrialExtension,
     WebhookReconcileResult,
+    WorkspaceBillingRead,
     WorkspaceChangeReason,
     WorkspaceConnectionRead,
     WorkspaceImportRead,
@@ -50,8 +56,11 @@ from app.schemas.platform_console import (
     WorkspaceUserRead,
     WorkspaceVariantRead,
 )
+from app.services.billing import BillingService
+from app.services.entitlements import BillingGate
 from app.services.platform_admin import PlatformAdminService
 from app.services.platform_workspace import (
+    PlatformBillingActions,
     PlatformCatalogActions,
     PlatformJobActions,
     PlatformStoreActions,
@@ -908,3 +917,115 @@ async def workspace_retry_automation(
         run_id, reason=payload.reason
     )
     return JobActionResult(kind="automation_run", id=run.id, outcome=str(run.status))
+
+
+# --- Billing and feature switches (phase 8) -------------------------------------------
+
+BillingView = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.BILLING_READ), scope="function"),
+]
+BillingWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.BILLING_MANAGE, reauth=True), scope="function"),
+]
+
+
+async def _billing_read(
+    session: Any, workspace: PlatformWorkspace, ctx: Any
+) -> WorkspaceBillingRead:
+    entitlement = await BillingService(session).entitlement()
+    row = await TenantSubscriptionRepository(session).current()
+    flags = await PlatformBillingActions(session, workspace, ctx).flags()
+    return WorkspaceBillingRead(
+        plan=entitlement.plan,
+        status=entitlement.status,
+        on_trial=entitlement.on_trial,
+        paid=entitlement.paid,
+        trial_ends_at=entitlement.trial_ends_at,
+        current_period_end=entitlement.current_period_end,
+        cancel_at_period_end=entitlement.cancel_at_period_end,
+        listing_limit=entitlement.listing_limit,
+        listings_used=entitlement.listings_used,
+        can_write=entitlement.can_write,
+        can_use_ai=entitlement.can_use_ai,
+        has_stripe_customer=entitlement.has_customer,
+        plan_override=row.plan_override if row else None,
+        plan_override_ai=row.plan_override_ai if row else False,
+        plan_override_until=row.plan_override_until if row else None,
+        plan_override_reason=row.plan_override_reason if row else None,
+        billing_enforced=BillingGate.enforced(),
+        flags=[FeatureFlagStateRead.model_validate(f, from_attributes=True) for f in flags],
+    )
+
+
+@router.get(
+    "/billing",
+    response_model=WorkspaceBillingRead,
+    summary="Subscription, entitlement, override and feature switches (audited view)",
+)
+async def workspace_billing(
+    workspace: BillingView, session: DbSession, ctx: PlatformAudit
+) -> WorkspaceBillingRead:
+    return await _billing_read(session, workspace, ctx)
+
+
+@router.post(
+    "/billing/trial",
+    response_model=WorkspaceBillingRead,
+    summary="Extend the free trial (re-auth, reason, audited, workspace notified)",
+)
+async def workspace_extend_trial(
+    payload: TrialExtension, workspace: BillingWrite, session: DbSession, ctx: PlatformAudit
+) -> WorkspaceBillingRead:
+    await PlatformBillingActions(session, workspace, ctx).extend_trial(
+        days=payload.days, reason=payload.reason
+    )
+    return await _billing_read(session, workspace, ctx)
+
+
+@router.post(
+    "/billing/plan-override",
+    response_model=WorkspaceBillingRead,
+    summary="Grant a plan for a limited time, whatever Stripe says (re-auth, audited)",
+)
+async def workspace_set_plan_override(
+    payload: PlanOverride, workspace: BillingWrite, session: DbSession, ctx: PlatformAudit
+) -> WorkspaceBillingRead:
+    await PlatformBillingActions(session, workspace, ctx).set_plan_override(
+        plan=payload.plan, ai=payload.ai, days=payload.days, reason=payload.reason
+    )
+    return await _billing_read(session, workspace, ctx)
+
+
+@router.post(
+    "/billing/plan-override/clear",
+    response_model=WorkspaceBillingRead,
+    summary="Remove the plan override (re-auth, audited)",
+)
+async def workspace_clear_plan_override(
+    payload: WorkspaceChangeReason,
+    workspace: BillingWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceBillingRead:
+    await PlatformBillingActions(session, workspace, ctx).clear_plan_override(reason=payload.reason)
+    return await _billing_read(session, workspace, ctx)
+
+
+@router.post(
+    "/feature-flags/{key}",
+    response_model=WorkspaceBillingRead,
+    summary="Switch a feature on or off for this workspace, or clear the override",
+)
+async def workspace_set_flag(
+    key: str,
+    payload: FlagOverride,
+    workspace: BillingWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> WorkspaceBillingRead:
+    await PlatformBillingActions(session, workspace, ctx).set_flag_override(
+        key, enabled=payload.enabled, reason=payload.reason
+    )
+    return await _billing_read(session, workspace, ctx)

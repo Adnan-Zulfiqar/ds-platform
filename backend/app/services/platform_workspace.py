@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -27,6 +27,7 @@ from app.core.context import require_tenant_id
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.integrations.shopify.service import ShopifyService
 from app.models.automation import AutomationRun
+from app.models.billing import TenantSubscription
 from app.models.inventory import InventorySyncRun
 from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationKind
@@ -49,7 +50,11 @@ from app.models.supplier_order import SupplierOrder
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.repositories.automation import AutomationRunRepository
-from app.repositories.billing import TenantSubscriptionRepository
+from app.repositories.billing import (
+    FeatureFlagRepository,
+    TenantFeatureFlagRepository,
+    TenantSubscriptionRepository,
+)
 from app.repositories.ebay import EbayConnectionRepository
 from app.repositories.integration import AliExpressConnectionRepository
 from app.repositories.inventory import InventorySyncRunRepository
@@ -79,6 +84,8 @@ from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
 from app.services.automation_service import AutomationService
 from app.services.base import BaseService
+from app.services.billing import PLANS, BillingService
+from app.services.feature_flags import KNOWN_FLAGS
 from app.services.inventory_sync import InventorySyncService
 from app.services.order_sync import OrderSyncService
 from app.services.pipeline_bulk import PipelineBulkRunService
@@ -798,10 +805,168 @@ class PlatformJobActions(PlatformWorkspaceActions):
         return run
 
 
+#: The longest an operator may extend a trial or override a plan at once.
+MAX_TRIAL_EXTENSION_DAYS = 90
+MAX_PLAN_OVERRIDE_DAYS = 365
+
+
+@dataclass(frozen=True, slots=True)
+class FlagState:
+    key: str
+    description: str
+    platform_default: bool
+    override: bool | None
+    effective: bool
+
+
+class PlatformBillingActions(PlatformWorkspaceActions):
+    """Subscription, trial and feature switches for one workspace (phase 8,
+    ``billing.manage``). Billing is account-level, not the workspace's data,
+    so these need re-authentication and a reason but no support session:
+    Finance handles them without operating inside the workspace."""
+
+    async def _subscription(self) -> TenantSubscription:
+        # ``entitlement`` creates the row on first use, exactly as for the
+        # merchant; then lock it for the change.
+        await BillingService(self.session).entitlement()
+        row = await TenantSubscriptionRepository(self.session).current(lock=True)
+        assert row is not None
+        return row
+
+    async def _notify(self, title: str, body: str) -> None:
+        await NotificationRepository(self.session).create(
+            kind=NotificationKind.INFO, title=title, body=body, payload={}
+        )
+
+    async def extend_trial(self, *, days: int, reason: str) -> TenantSubscription:
+        if not 1 <= days <= MAX_TRIAL_EXTENSION_DAYS:
+            raise ValidationError(f"Extend by 1-{MAX_TRIAL_EXTENSION_DAYS} days.")
+        row = await self._subscription()
+        before = row.trial_ends_at
+        row.trial_ends_at = max(before, datetime.now(UTC)) + timedelta(days=days)
+        await self.session.flush()
+        await self._notify(
+            "Your free trial was extended",
+            f"DropPilot support extended your trial to {row.trial_ends_at:%d %B %Y}.",
+        )
+        await self._audit(
+            "workspace_trial_extended",
+            target_type="subscription",
+            target_id=row.id,
+            reason=reason,
+            before={"trial_ends_at": before.isoformat()},
+            after={"trial_ends_at": row.trial_ends_at.isoformat()},
+        )
+        return row
+
+    async def set_plan_override(
+        self, *, plan: str, ai: bool, days: int, reason: str
+    ) -> TenantSubscription:
+        if plan not in PLANS:
+            raise ValidationError(f"Unknown plan: {plan}.")
+        if not 1 <= days <= MAX_PLAN_OVERRIDE_DAYS:
+            raise ValidationError(f"An override lasts 1-{MAX_PLAN_OVERRIDE_DAYS} days.")
+        row = await self._subscription()
+        before = {
+            "plan": row.plan_override,
+            "ai": row.plan_override_ai,
+            "until": row.plan_override_until.isoformat() if row.plan_override_until else None,
+        }
+        row.plan_override = plan
+        row.plan_override_ai = ai
+        row.plan_override_until = datetime.now(UTC) + timedelta(days=days)
+        row.plan_override_reason = reason[:500]
+        await self.session.flush()
+        await self._notify(
+            "DropPilot support changed your plan",
+            f"Your workspace has the {plan} plan"
+            f"{' with the AI add-on' if ai else ''} until "
+            f"{row.plan_override_until:%d %B %Y}.",
+        )
+        await self._audit(
+            "workspace_plan_override_set",
+            target_type="subscription",
+            target_id=row.id,
+            reason=reason,
+            before=before,
+            after={"plan": plan, "ai": ai, "until": row.plan_override_until.isoformat()},
+        )
+        return row
+
+    async def clear_plan_override(self, *, reason: str) -> TenantSubscription:
+        row = await self._subscription()
+        if row.plan_override is None:
+            return row
+        before = {"plan": row.plan_override, "ai": row.plan_override_ai}
+        row.plan_override = None
+        row.plan_override_ai = False
+        row.plan_override_until = None
+        row.plan_override_reason = None
+        await self.session.flush()
+        await self._audit(
+            "workspace_plan_override_cleared",
+            target_type="subscription",
+            target_id=row.id,
+            reason=reason,
+            before=before,
+        )
+        return row
+
+    async def flags(self) -> list[FlagState]:
+        defaults = {f.key: f for f in await FeatureFlagRepository(self.session).all_flags()}
+        overrides = {
+            o.key: o.enabled
+            for o in await TenantFeatureFlagRepository(self.session).all_overrides()
+        }
+        out = []
+        for key in sorted(KNOWN_FLAGS):
+            flag = defaults.get(key)
+            default = True if flag is None else flag.enabled
+            override = overrides.get(key)
+            out.append(
+                FlagState(
+                    key=key,
+                    description=flag.description if flag else "",
+                    platform_default=default,
+                    override=override,
+                    effective=default if override is None else override,
+                )
+            )
+        return out
+
+    async def set_flag_override(self, key: str, *, enabled: bool | None, reason: str) -> None:
+        """``enabled=None`` removes the override, so the platform default
+        applies again."""
+        if key not in KNOWN_FLAGS:
+            raise NotFoundError.for_resource("Feature flag", key)
+        repo = TenantFeatureFlagRepository(self.session)
+        current = await repo.by_key(key)
+        before = None if current is None else current.enabled
+        if enabled is None:
+            if current is not None:
+                await self.session.delete(current)  # an override, not customer data
+                await self.session.flush()
+        elif current is None:
+            await repo.create(key=key, enabled=enabled, reason=reason[:500])
+        else:
+            await repo.update(current, enabled=enabled, reason=reason[:500])
+        await self._audit(
+            "workspace_feature_flag_set",
+            target_type="feature_flag",
+            target_id=self.workspace.tenant.id,
+            reason=reason,
+            key=key,
+            before={"override": before},
+            after={"override": enabled},
+        )
+
+
 __all__ = [
     "ASSIGNABLE_ROLES",
     "ConnectionView",
+    "FlagState",
     "OrderDetailView",
+    "PlatformBillingActions",
     "PlatformCatalogActions",
     "PlatformJobActions",
     "PlatformStoreActions",

@@ -58,6 +58,7 @@ export function ReasonedAction({
   disabled = false,
   onRun,
   testId,
+  id: idProp,
 }: {
   label: string;
   description?: ReactNode;
@@ -65,6 +66,8 @@ export function ReasonedAction({
   disabled?: boolean;
   onRun: (reason: string) => Promise<unknown>;
   testId?: string;
+  /** Unique per page when the same label appears more than once. */
+  id?: string;
 }) {
   const guard = useReauthGuard();
   const [reason, setReason] = useState("");
@@ -72,7 +75,7 @@ export function ReasonedAction({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
-  const id = `reason-${label.toLowerCase().replaceAll(/\W+/g, "-")}`;
+  const id = idProp ?? `reason-${label.toLowerCase().replaceAll(/\W+/g, "-")}`;
   const ready = reason.trim().length >= 3 && !busy && !disabled;
 
   function run() {

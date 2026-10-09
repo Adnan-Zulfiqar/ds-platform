@@ -402,18 +402,83 @@ class JobActionResult(CamelCaseModel):
     outcome: str
 
 
+# --- Billing and feature switches (phase 8) --------------------------------------
+
+
+class FeatureFlagStateRead(CamelCaseModel):
+    key: str
+    description: str
+    platform_default: bool
+    override: bool | None
+    effective: bool
+
+
+class WorkspaceBillingRead(CamelCaseModel):
+    plan: str | None
+    status: str
+    on_trial: bool
+    paid: bool
+    trial_ends_at: datetime
+    current_period_end: datetime | None
+    cancel_at_period_end: bool
+    listing_limit: int
+    listings_used: int
+    can_write: bool
+    can_use_ai: bool
+    has_stripe_customer: bool
+    plan_override: str | None
+    plan_override_ai: bool
+    plan_override_until: datetime | None
+    plan_override_reason: str | None
+    billing_enforced: bool
+    flags: list[FeatureFlagStateRead]
+
+
+class TrialExtension(WorkspaceChangeReason):
+    days: int = Field(ge=1, le=90)
+
+
+class PlanOverride(WorkspaceChangeReason):
+    plan: Literal["starter", "growth", "pro"]
+    ai: bool = False
+    days: int = Field(ge=1, le=365)
+
+
+class FlagOverride(WorkspaceChangeReason):
+    #: ``null`` removes the workspace's override.
+    enabled: bool | None
+
+
+class GlobalFlagRead(CamelCaseModel):
+    key: str
+    description: str
+    enabled: bool
+    updated_at: datetime
+
+
+class GlobalFlagChange(WorkspaceChangeReason):
+    enabled: bool
+
+
 __all__ = [
     "DailyCountRead",
+    "FeatureFlagStateRead",
+    "FlagOverride",
+    "GlobalFlagChange",
+    "GlobalFlagRead",
     "InventorySyncNow",
     "JobActionResult",
     "ListingsResyncQueued",
+    "PlanOverride",
     "PlatformDashboardRead",
     "PlatformJobRead",
     "SubscriptionSummaryRead",
     "SupportSessionOpen",
     "SupportSessionRead",
     "SystemHealthRead",
+    "TrialExtension",
     "WebhookReconcileResult",
+    "WorkspaceBillingRead",
     "WorkspaceChangeReason",
     "WorkspaceConnectionRead",
     "WorkspaceHealthRead",

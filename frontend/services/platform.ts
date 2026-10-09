@@ -861,3 +861,123 @@ export function useJobAction() {
       }),
   });
 }
+
+// --- Billing and feature switches (phase 8) ------------------------------------
+
+export interface FlagState {
+  key: string;
+  description: string;
+  platformDefault: boolean;
+  override: boolean | null;
+  effective: boolean;
+}
+
+export interface WorkspaceBilling {
+  plan: string | null;
+  status: string;
+  onTrial: boolean;
+  paid: boolean;
+  trialEndsAt: string;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  listingLimit: number;
+  listingsUsed: number;
+  canWrite: boolean;
+  canUseAi: boolean;
+  hasStripeCustomer: boolean;
+  planOverride: string | null;
+  planOverrideAi: boolean;
+  planOverrideUntil: string | null;
+  planOverrideReason: string | null;
+  billingEnforced: boolean;
+  flags: FlagState[];
+}
+
+const billingKey = (tenantId: string) =>
+  [...platformKeys.all, "workspace", tenantId, "billing"] as const;
+
+export function useWorkspaceBilling(
+  tenantId: string,
+): UseQueryResult<WorkspaceBilling> {
+  return useQuery({
+    queryKey: billingKey(tenantId),
+    queryFn: async () =>
+      (
+        await platformClient.get<WorkspaceBilling>(
+          `/workspaces/${tenantId}/billing`,
+        )
+      ).data,
+  });
+}
+
+export type BillingChange =
+  | { kind: "trial"; days: number }
+  | {
+      kind: "plan-override";
+      plan: "starter" | "growth" | "pro";
+      ai: boolean;
+      days: number;
+    }
+  | { kind: "clear-override" }
+  | { kind: "flag"; key: string; enabled: boolean | null };
+
+/** A billing change (re-auth, reason, audited; no support session). */
+export function useWorkspaceBillingChange(tenantId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { reason: string; change: BillingChange }) => {
+      const base = `/workspaces/${tenantId}`;
+      const { change, reason } = input;
+      const [path, body] =
+        change.kind === "trial"
+          ? [`${base}/billing/trial`, { days: change.days, reason }]
+          : change.kind === "plan-override"
+            ? [
+                `${base}/billing/plan-override`,
+                { plan: change.plan, ai: change.ai, days: change.days, reason },
+              ]
+            : change.kind === "clear-override"
+              ? [`${base}/billing/plan-override/clear`, { reason }]
+              : [
+                  `${base}/feature-flags/${change.key}`,
+                  { enabled: change.enabled, reason },
+                ];
+      return (await platformClient.post<WorkspaceBilling>(path, body)).data;
+    },
+    onSuccess: (data) => queryClient.setQueryData(billingKey(tenantId), data),
+  });
+}
+
+export interface GlobalFlag {
+  key: string;
+  description: string;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+export function useGlobalFlags(): UseQueryResult<GlobalFlag[]> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "feature-flags"],
+    queryFn: async () =>
+      (await platformClient.get<GlobalFlag[]>("/feature-flags")).data,
+  });
+}
+
+export function useSetGlobalFlag() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      key: string;
+      enabled: boolean;
+      reason: string;
+    }) =>
+      (
+        await platformClient.post<GlobalFlag[]>(`/feature-flags/${input.key}`, {
+          enabled: input.enabled,
+          reason: input.reason,
+        })
+      ).data,
+    onSuccess: (data) =>
+      queryClient.setQueryData([...platformKeys.all, "feature-flags"], data),
+  });
+}

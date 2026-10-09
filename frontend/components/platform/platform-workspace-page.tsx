@@ -11,6 +11,7 @@ import {
   SyncRunsTab,
   UsersTab,
 } from "@/components/platform/platform-workspace-tabs";
+import { BillingTab } from "@/components/platform/platform-billing";
 import { PlatformWorkspaceDetail } from "@/components/platform/platform-workspaces";
 
 /** The workspace page and its tabs (D-019). Each tab loads only when
@@ -59,6 +60,11 @@ export function PlatformWorkspacePage({ tenantId }: { tenantId: string }) {
           id: "notifications",
           label: "Notifications",
           content: <NotificationsTab tenantId={tenantId} />,
+        },
+        {
+          id: "billing",
+          label: "Billing",
+          content: <BillingTab tenantId={tenantId} />,
         },
         {
           id: "export",
