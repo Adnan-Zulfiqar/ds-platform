@@ -231,6 +231,84 @@ class PlatformAdminAuditRepository:
         await self.session.flush()
         return row
 
+    async def search(
+        self,
+        *,
+        page: int,
+        size: int,
+        action: str | None = None,
+        outcome: str | None = None,
+        admin_id: uuid.UUID | None = None,
+        tenant_id: uuid.UUID | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> tuple[list[tuple[PlatformAdminAudit, str | None]], int]:
+        """A filtered page, newest first, with the operator's email."""
+        where: list[ColumnElement[bool]] = []
+        if action:
+            # Exact, or a prefix ending in "_" ("workspace_" matches every
+            # workspace action). Matched literally: no user wildcards.
+            if action.endswith("_"):
+                where.append(PlatformAdminAudit.action.startswith(action, autoescape=True))
+            else:
+                where.append(PlatformAdminAudit.action == action)
+        if outcome:
+            where.append(PlatformAdminAudit.outcome == outcome)
+        if admin_id:
+            where.append(PlatformAdminAudit.admin_id == admin_id)
+        if tenant_id:
+            where.append(PlatformAdminAudit.target_tenant_id == tenant_id)
+        if since:
+            where.append(PlatformAdminAudit.created_at >= since)
+        if until:
+            where.append(PlatformAdminAudit.created_at < until)
+        total = int(
+            (
+                await self.session.execute(
+                    select(func.count()).select_from(PlatformAdminAudit).where(*where)
+                )
+            ).scalar_one()
+        )
+        query = (
+            select(PlatformAdminAudit, PlatformAdmin.email)
+            .outerjoin(PlatformAdmin, PlatformAdmin.id == PlatformAdminAudit.admin_id)
+            .where(*where)
+            .order_by(PlatformAdminAudit.created_at.desc(), PlatformAdminAudit.id.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        rows = [(a, e) for a, e in (await self.session.execute(query)).all()]
+        return rows, total
+
+    async def security_summary(self, *, since: datetime) -> dict[str, Any]:
+        """Refusals since ``since``: counts per action, and the addresses
+        they came from most."""
+        failures = PlatformAdminAudit.outcome == "failure"
+        recent = PlatformAdminAudit.created_at >= since
+        by_action = {
+            str(action): int(n)
+            for action, n in (
+                await self.session.execute(
+                    select(PlatformAdminAudit.action, func.count())
+                    .where(failures, recent)
+                    .group_by(PlatformAdminAudit.action)
+                )
+            ).all()
+        }
+        top_ips = [
+            {"client_ip": ip, "failures": int(n)}
+            for ip, n in (
+                await self.session.execute(
+                    select(PlatformAdminAudit.client_ip, func.count())
+                    .where(failures, recent, PlatformAdminAudit.client_ip.is_not(None))
+                    .group_by(PlatformAdminAudit.client_ip)
+                    .order_by(func.count().desc())
+                    .limit(10)
+                )
+            ).all()
+        ]
+        return {"by_action": by_action, "top_ips": top_ips}
+
     async def recent(self, *, limit: int = 100) -> list[PlatformAdminAudit]:
         query = (
             select(PlatformAdminAudit)

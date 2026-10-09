@@ -109,6 +109,31 @@ class PlatformTenantHealthRead(CamelCaseModel):
     failed_notification_emails: int
 
 
+class PlatformAuditEntryRead(CamelCaseModel):
+    """One audit row with the operator's email, for the audit centre."""
+
+    id: uuid.UUID
+    created_at: datetime
+    admin_id: uuid.UUID | None
+    admin_email: str | None
+    actor_role: str | None
+    action: str
+    outcome: str
+    target_tenant_id: uuid.UUID | None
+    target_type: str | None
+    target_id: str | None
+    detail: dict[str, Any]
+    client_ip: str | None
+    user_agent: str | None
+    request_id: str | None
+
+
+class SecuritySummaryRead(CamelCaseModel):
+    window_hours: int
+    by_action: dict[str, int]
+    top_ips: list[dict[str, Any]]
+
+
 class PlatformAuditRead(CamelCaseModel):
     id: uuid.UUID
     created_at: datetime
@@ -128,6 +153,7 @@ class PlatformAuditRead(CamelCaseModel):
 __all__ = [
     "PlatformActionReason",
     "PlatformAdminRead",
+    "PlatformAuditEntryRead",
     "PlatformAuditRead",
     "PlatformLoginRequest",
     "PlatformLoginResponse",
@@ -140,4 +166,5 @@ __all__ = [
     "PlatformTenantHealthRead",
     "PlatformTenantRead",
     "PlatformTenantStateChange",
+    "SecuritySummaryRead",
 ]

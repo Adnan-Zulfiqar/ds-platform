@@ -354,7 +354,8 @@ Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPL
 | 5 | Store pause, syncs and Shopify webhooks | Merged (#99) |
 | 6 | Catalogue and order actions | Merged (#100) |
 | 7 | Jobs centre | Merged (#101) |
-| 8 | Trials, plan overrides, feature switches | Built |
-| 9–10 | Audit centre, settings | Not started |
+| 8 | Trials, plan overrides, feature switches | Merged (#102) |
+| 9 | Audit and security centre, immutable audit | Built |
+| 10 | System settings | Not started |
 
 Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

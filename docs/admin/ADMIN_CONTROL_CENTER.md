@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–8 built**, phases 9–10 in progress. The platform console
+Status: **phases 1–9 built**, phase 10 in progress. The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -34,8 +34,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 5 | Stores and integrations: pause/resume (enforced), syncs, webhooks | Merged (#99) |
 | 6 | Catalogue and order actions | Merged (#100) |
 | 7 | Jobs: failed and stuck detection, retry, cancel | Merged (#101) |
-| 8 | Billing: trial extension, plan override, feature flags | Built (this PR) |
-| 9 | Audit and security centre; immutable audit at the database | Not started |
+| 8 | Billing: trial extension, plan override, feature flags | Merged (#102) |
+| 9 | Audit and security centre; immutable audit at the database | Built (this PR) |
 | 10 | System settings: maintenance mode, announcements, broadcasts | Not started |
 
 ## Phase 1 as built
@@ -207,6 +207,59 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 9 as built
+
+### The audit trail cannot be changed (migration `0056`)
+
+- **The trigger.** A trigger on `platform_admin_audit` refuses `UPDATE`,
+  `DELETE` and `TRUNCATE` with "append-only". This holds for any code
+  path and any statement run through the application's database role.
+- **The one allowed change.** The foreign keys `admin_id` and
+  `target_tenant_id` are `ON DELETE SET NULL`, so the trigger accepts an
+  update in which every other column is unchanged and those two stay the
+  same or become NULL.
+- **Known limitation.** A database superuser can disable a trigger. Making
+  the trail tamper-evident against the database owner would need hash
+  chaining or an external write-once store, which is out of this phase's
+  scope.
+
+### Centre (`audit.read`; export needs `audit.export` and re-authentication)
+
+| Route | What |
+|---|---|
+| `GET /platform/audit/search?action&outcome&adminId&tenantId&since&until&page&size` | Filtered, paged trail with the operator's email. `action` ending in `_` is a literal prefix (e.g. `workspace_`). |
+| `GET /platform/security?hours=` | Refusals by kind (`login_failed`, `reauth_failed`, `permission_denied`, failed workspace actions) and the 10 addresses with the most |
+| `GET /platform/audit/export?…same filters` | CSV, at most 10 000 rows, formula-safe, `no-store`. The export is itself audited as `audit_exported`, with its row count and filters. |
+
+The earlier `GET /platform/audit?limit` stays for compatibility.
+
+The console's Audit log page has the security summary (24 hours, 7 or 30
+days), filters, paging, a detail panel per row with the full `detail`,
+user agent and request id, and the export.
+
+### Verified (phase 9)
+
+`test_platform_audit_centre.py` covers:
+
+- **In the database:** `UPDATE`, `DELETE` and `TRUNCATE` on an audit row
+  are refused and the row is unchanged.
+- **The allowed change:** deleting an operator still clears their
+  `admin_id` on audit rows.
+- **Search:**
+  - a prefix finds 4 of 5 rows and pages them 2 at a time;
+  - outcome and exact action filter correctly;
+  - an unknown workspace returns nothing;
+  - the operator's email is joined in.
+- **Security summary:** two failed sign-ins are counted, with their
+  address.
+- **Export:** refused without re-authentication; after it, a CSV of the
+  filtered rows, itself audited with rows 1 and the filter.
+- **Roles:** Support cannot search, export or see security.
+
+Playwright (`platform-audit.spec.ts`) covers the security summary, filters
+reaching the search as parameters, the row detail, and an export through
+re-authentication.
 
 ## Phase 8 as built
 

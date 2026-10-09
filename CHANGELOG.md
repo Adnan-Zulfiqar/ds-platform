@@ -10,6 +10,19 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 9: audit and security centre (D-019)
+
+- **Migration `0056`:** a trigger makes `platform_admin_audit` immutable in
+  the database. It refuses `UPDATE`, `DELETE` and `TRUNCATE`, and allows
+  only the foreign keys' `ON DELETE SET NULL`.
+- **Audit search** with filters (action or prefix, outcome, operator,
+  workspace, time) and paging; a **security summary** of refusals by kind
+  and address.
+- **CSV export** of the trail: needs re-authentication, is formula-safe, and
+  is audited itself.
+- **Console:** the Audit log page gets filters, paging, a row detail panel,
+  the security summary and the export.
+
 ### Added - Admin Control Center phase 8: trials, plan overrides, feature switches (D-019)
 
 - **Migration `0055`:** plan-override columns on `tenant_subscriptions`,

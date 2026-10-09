@@ -13,11 +13,15 @@ dependencies, never handler code (CLAUDE.md §7.8).
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import uuid
-from datetime import timedelta
-from typing import Annotated
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import Response
 
 from app.api.deps import (
     DbSession,
@@ -36,6 +40,7 @@ from app.schemas.common import Page
 from app.schemas.platform_admin import (
     PlatformActionReason,
     PlatformAdminRead,
+    PlatformAuditEntryRead,
     PlatformAuditRead,
     PlatformLoginRequest,
     PlatformLoginResponse,
@@ -48,6 +53,7 @@ from app.schemas.platform_admin import (
     PlatformTenantHealthRead,
     PlatformTenantRead,
     PlatformTenantStateChange,
+    SecuritySummaryRead,
 )
 from app.services.platform_admin import PlatformAdminService, PlatformPrincipal
 
@@ -360,6 +366,176 @@ async def platform_audit(
 ) -> list[PlatformAuditRead]:
     rows = await PlatformAdminService(session).recent_audit(limit=limit)
     return [PlatformAuditRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+# --- Audit and security centre (phase 9) ------------------------------------------
+
+AuditExport = Annotated[
+    PlatformPrincipal, Depends(require_platform_reauth(PlatformPermission.AUDIT_EXPORT))
+]
+AuditOutcome = Literal["success", "failure"]
+#: The most rows one audit export returns.
+AUDIT_EXPORT_LIMIT = 10_000
+
+
+def _audit_entry(row: Any, email: str | None) -> PlatformAuditEntryRead:
+    return PlatformAuditEntryRead(
+        id=row.id,
+        created_at=row.created_at,
+        admin_id=row.admin_id,
+        admin_email=email,
+        actor_role=row.actor_role,
+        action=row.action,
+        outcome=row.outcome,
+        target_tenant_id=row.target_tenant_id,
+        target_type=row.target_type,
+        target_id=row.target_id,
+        detail=row.detail,
+        client_ip=row.client_ip,
+        user_agent=row.user_agent,
+        request_id=row.request_id,
+    )
+
+
+@router.get(
+    "/audit/search",
+    response_model=Page[PlatformAuditEntryRead],
+    summary="The audit trail, filtered and paged",
+)
+async def platform_audit_search(
+    session: DbSession,
+    _principal: AuditRead,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 50,
+    action: Annotated[str | None, Query(max_length=64)] = None,
+    outcome: AuditOutcome | None = None,
+    admin_id: Annotated[uuid.UUID | None, Query(alias="adminId")] = None,
+    tenant_id: Annotated[uuid.UUID | None, Query(alias="tenantId")] = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> Page[PlatformAuditEntryRead]:
+    rows, total = await PlatformAdminService(session).search_audit(
+        page=page,
+        size=size,
+        action=action,
+        outcome=outcome,
+        admin_id=admin_id,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+    )
+    return Page[PlatformAuditEntryRead].build(
+        items=[_audit_entry(r, e) for r, e in rows], page=page, size=size, total_items=total
+    )
+
+
+@router.get(
+    "/security",
+    response_model=SecuritySummaryRead,
+    summary="Refused sign-ins, re-authentications and permissions, and where from",
+)
+async def platform_security(
+    session: DbSession,
+    _principal: AuditRead,
+    hours: Annotated[int, Query(ge=1, le=24 * 30)] = 24,
+) -> SecuritySummaryRead:
+    summary = await PlatformAdminService(session).security_summary(hours=hours)
+    return SecuritySummaryRead(window_hours=hours, **summary)
+
+
+@router.get(
+    "/audit/export",
+    summary="Download the filtered audit trail as CSV (re-auth, audited)",
+    response_class=Response,
+)
+async def platform_audit_export(
+    session: DbSession,
+    principal: AuditExport,
+    ctx: PlatformAudit,
+    action: Annotated[str | None, Query(max_length=64)] = None,
+    outcome: AuditOutcome | None = None,
+    admin_id: Annotated[uuid.UUID | None, Query(alias="adminId")] = None,
+    tenant_id: Annotated[uuid.UUID | None, Query(alias="tenantId")] = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> Response:
+    service = PlatformAdminService(session)
+    filters = {
+        "action": action,
+        "outcome": outcome,
+        "admin_id": admin_id,
+        "tenant_id": tenant_id,
+        "since": since,
+        "until": until,
+    }
+    entries: list[PlatformAuditEntryRead] = []
+    page = 1
+    while len(entries) < AUDIT_EXPORT_LIMIT:
+        rows, total = await service.search_audit(page=page, size=100, **filters)
+        entries.extend(_audit_entry(r, e) for r, e in rows)
+        if not rows or page * 100 >= total:
+            break
+        page += 1
+    entries = entries[:AUDIT_EXPORT_LIMIT]
+    await service.record_audit_export(
+        principal,
+        rows=len(entries),
+        filters={k: str(v) for k, v in filters.items() if v is not None},
+        ctx=ctx,
+    )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "created_at",
+            "admin_email",
+            "actor_role",
+            "action",
+            "outcome",
+            "target_tenant_id",
+            "target_type",
+            "target_id",
+            "client_ip",
+            "request_id",
+            "detail",
+        ]
+    )
+    for e in entries:
+        writer.writerow(
+            [
+                _cell(v)
+                for v in (
+                    e.created_at.isoformat(),
+                    e.admin_email,
+                    e.actor_role,
+                    e.action,
+                    e.outcome,
+                    e.target_tenant_id,
+                    e.target_type,
+                    e.target_id,
+                    e.client_ip,
+                    e.request_id,
+                    json.dumps(e.detail, sort_keys=True),
+                )
+            ]
+        )
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="platform-audit-{stamp}.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _cell(value: Any) -> Any:
+    """Formula-looking text is prefixed with ' (the audit holds reasons
+    operators typed)."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 # Console data views (D-019), after the identity routes.

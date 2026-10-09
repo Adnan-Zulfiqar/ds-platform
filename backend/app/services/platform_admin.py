@@ -746,6 +746,27 @@ class PlatformAdminService(BaseService):
             raise NotFoundError.for_resource("Workspace", tenant_id)
         return await PlatformTenantDirectory(self.session).health(tenant_id)
 
+    async def search_audit(
+        self, **filters: Any
+    ) -> tuple[list[tuple[PlatformAdminAudit, str | None]], int]:
+        return await self.audit.search(**filters)
+
+    async def security_summary(self, *, hours: int) -> dict[str, Any]:
+        return await self.audit.security_summary(since=datetime.now(UTC) - timedelta(hours=hours))
+
+    async def record_audit_export(
+        self, principal: PlatformPrincipal, *, rows: int, filters: dict[str, Any], ctx: AuditContext
+    ) -> None:
+        """Copying the audit trail out is itself audited."""
+        await self._audit(
+            "audit_exported",
+            admin=principal.admin,
+            ctx=ctx,
+            target_type="audit",
+            target_id="export",
+            detail={"rows": rows, "filters": filters},
+        )
+
     async def recent_audit(self, *, limit: int) -> list[PlatformAdminAudit]:
         return await self.audit.recent(limit=limit)
 
