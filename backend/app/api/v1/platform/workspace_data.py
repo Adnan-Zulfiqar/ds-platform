@@ -24,6 +24,7 @@ from app.repositories.role import RoleRepository
 from app.schemas.common import ListQueryParams, Page, SortDirection, list_query_params
 from app.schemas.platform_console import (
     InventorySyncNow,
+    JobActionResult,
     ListingsResyncQueued,
     SupportSessionOpen,
     SupportSessionRead,
@@ -52,6 +53,7 @@ from app.schemas.platform_console import (
 from app.services.platform_admin import PlatformAdminService
 from app.services.platform_workspace import (
     PlatformCatalogActions,
+    PlatformJobActions,
     PlatformStoreActions,
     PlatformWorkspace,
     PlatformWorkspaceActions,
@@ -825,3 +827,84 @@ async def workspace_release_supplier_order(
         order_id, reason=payload.reason
     )
     return WorkspaceSupplierOrderRead.model_validate(row, from_attributes=True)
+
+
+# --- Job actions (phase 7) ------------------------------------------------------------
+
+JobsWrite = Annotated[
+    PlatformWorkspace,
+    Depends(platform_workspace(PlatformPermission.JOBS_MANAGE, write=True), scope="function"),
+]
+
+
+@router.post(
+    "/jobs/{kind}/{run_id}/close",
+    response_model=JobActionResult,
+    summary="Close a sync run stuck in running (support session, re-auth, audited)",
+)
+async def workspace_close_stuck_sync(
+    kind: Literal["order_sync", "inventory_sync"],
+    run_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: JobsWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> JobActionResult:
+    run = await PlatformJobActions(session, workspace, ctx).close_stuck_sync(
+        kind, run_id, reason=payload.reason
+    )
+    return JobActionResult(kind=kind, id=run.id, outcome=str(run.status))
+
+
+@router.post(
+    "/jobs/pipeline_run/{run_id}/cancel",
+    response_model=JobActionResult,
+    summary="Cancel an AI pipeline run (support session, re-auth, audited)",
+)
+async def workspace_cancel_pipeline_run(
+    run_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: JobsWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> JobActionResult:
+    outcome = await PlatformJobActions(session, workspace, ctx).cancel_pipeline_run(
+        run_id, reason=payload.reason
+    )
+    return JobActionResult(kind="pipeline_run", id=run_id, outcome=outcome)
+
+
+@router.post(
+    "/jobs/rule_application/{application_id}/cancel",
+    response_model=JobActionResult,
+    summary="Cancel a pricing rule application (support session, re-auth, audited)",
+)
+async def workspace_cancel_rule_application(
+    application_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: JobsWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> JobActionResult:
+    outcome = await PlatformJobActions(session, workspace, ctx).cancel_rule_application(
+        application_id, reason=payload.reason
+    )
+    return JobActionResult(kind="rule_application", id=application_id, outcome=outcome)
+
+
+@router.post(
+    "/jobs/automation_run/{run_id}/retry",
+    response_model=JobActionResult,
+    summary="Run a failed automation's rule again (support session, re-auth, audited)",
+)
+async def workspace_retry_automation(
+    run_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    workspace: JobsWrite,
+    session: DbSession,
+    ctx: PlatformAudit,
+) -> JobActionResult:
+    run = await PlatformJobActions(session, workspace, ctx).retry_automation(
+        run_id, reason=payload.reason
+    )
+    return JobActionResult(kind="automation_run", id=run.id, outcome=str(run.status))

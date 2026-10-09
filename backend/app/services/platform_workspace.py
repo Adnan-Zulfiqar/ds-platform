@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import require_tenant_id
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.integrations.shopify.service import ShopifyService
+from app.models.automation import AutomationRun
 from app.models.inventory import InventorySyncRun
 from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationKind
@@ -47,6 +48,7 @@ from app.models.store import Store, StorePlatform, StoreStatus
 from app.models.supplier_order import SupplierOrder
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.repositories.automation import AutomationRunRepository
 from app.repositories.billing import TenantSubscriptionRepository
 from app.repositories.ebay import EbayConnectionRepository
 from app.repositories.integration import AliExpressConnectionRepository
@@ -61,6 +63,7 @@ from app.repositories.order import (
     ShipmentRepository,
 )
 from app.repositories.platform_admin import PlatformTenantDirectory, TenantHealth
+from app.repositories.platform_jobs import RUN_STUCK_AFTER
 from app.repositories.product import (
     ProductImageRepository,
     ProductImportRepository,
@@ -74,11 +77,14 @@ from app.repositories.store import StoreRepository
 from app.repositories.supplier_order import SupplierOrderRepository
 from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
+from app.services.automation_service import AutomationService
 from app.services.base import BaseService
 from app.services.inventory_sync import InventorySyncService
 from app.services.order_sync import OrderSyncService
+from app.services.pipeline_bulk import PipelineBulkRunService
 from app.services.platform_admin import AuditContext, PlatformAdminService, PlatformPrincipal
 from app.services.product_import import ProductImportService
+from app.services.rule_application import RuleApplicationService
 from app.services.supplier_ordering import SupplierOrderingService
 from app.services.team_invitations import TeamInvitationService
 
@@ -704,11 +710,100 @@ class PlatformCatalogActions(PlatformWorkspaceActions):
         return row
 
 
+class PlatformJobActions(PlatformWorkspaceActions):
+    """Background work in one workspace (phase 7, ``jobs.manage``)."""
+
+    async def close_stuck_sync(
+        self, kind: Literal["order_sync", "inventory_sync"], run_id: uuid.UUID, *, reason: str
+    ) -> OrderSyncRun | InventorySyncRun:
+        """A sync run left ``running`` blocks every later sync of the
+        workspace (``ConflictError`` on start) and nothing else ever clears
+        it. Closing one marks it failed; it does not touch what the run had
+        already written. Only a run past the stuck threshold can be closed,
+        so a live run is never cut off."""
+        repo: OrderSyncRunRepository | InventorySyncRunRepository = (
+            OrderSyncRunRepository(self.session)
+            if kind == "order_sync"
+            else InventorySyncRunRepository(self.session)
+        )
+        run = await repo.get_by_id(run_id)
+        if run is None:
+            raise NotFoundError.for_resource("Sync run", run_id)
+        now = datetime.now(UTC)
+        if run.status != SyncRunStatus.RUNNING or (
+            run.started_at is not None and run.started_at > now - RUN_STUCK_AFTER
+        ):
+            raise ConflictError(
+                "Only a run still running after "
+                f"{int(RUN_STUCK_AFTER.total_seconds() // 60)} minutes can be closed."
+            )
+        run.status = SyncRunStatus.FAILED
+        run.finished_at = now
+        run.error_code = "closed_by_support"
+        run.error_message = "Closed by DropPilot support: the run had stopped responding."
+        await self.session.flush()
+        await self._audit(
+            "workspace_sync_run_closed",
+            target_type=kind,
+            target_id=run.id,
+            reason=reason,
+        )
+        return run
+
+    async def cancel_pipeline_run(self, run_id: uuid.UUID, *, reason: str) -> str:
+        """The merchant's own cancel, which never waits on a worker's lock:
+        returns ``cancelled`` or ``requested`` (the worker stops at its next
+        item)."""
+        outcome = await PipelineBulkRunService(self.session).cancel(run_id)
+        state = "requested" if outcome.cancel_requested_at else "cancelled"
+        await self._audit(
+            "workspace_pipeline_run_cancelled",
+            target_type="pipeline_run",
+            target_id=run_id,
+            reason=reason,
+            outcome=state,
+        )
+        return state
+
+    async def cancel_rule_application(self, application_id: uuid.UUID, *, reason: str) -> str:
+        """The merchant's own cancel: total if pending, cooperative if
+        running; batches already written keep their prices."""
+        application = await RuleApplicationService(self.session).cancel(application_id)
+        await self._audit(
+            "workspace_rule_application_cancelled",
+            target_type="rule_application",
+            target_id=application_id,
+            reason=reason,
+        )
+        return str(application.status)
+
+    async def retry_automation(self, run_id: uuid.UUID, *, reason: str) -> AutomationRun:
+        """Run the rule behind a failed automation run once more."""
+        previous = await AutomationRunRepository(self.session).get_by_id(run_id)
+        if previous is None:
+            raise NotFoundError.for_resource("Automation run", run_id)
+        try:
+            run = await AutomationService(self.session).run_rule(previous.rule_id, trigger="manual")
+        except Exception as exc:
+            await self._failed("workspace_automation_retried", reason, exc)
+            raise
+        await self._audit(
+            "workspace_automation_retried",
+            target_type="automation_run",
+            target_id=run.id,
+            reason=reason,
+            previous_run_id=str(previous.id),
+            status=str(run.status),
+        )
+        return run
+
+
 __all__ = [
     "ASSIGNABLE_ROLES",
     "ConnectionView",
     "OrderDetailView",
     "PlatformCatalogActions",
+    "PlatformJobActions",
     "PlatformStoreActions",
     "PlatformWorkspace",
     "PlatformWorkspaceActions",

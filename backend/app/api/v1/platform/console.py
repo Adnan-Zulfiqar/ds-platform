@@ -9,21 +9,25 @@ tenant context for the tenant-scoped repositories.
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import DbSession, platform_workspace, require_platform_permission
 from app.core.platform_permissions import PlatformPermission
 from app.core.redis import check_redis_health
+from app.repositories.platform_jobs import JobKind, JobState, PlatformJobsMonitor
 from app.repositories.platform_metrics import (
     PlatformMetrics,
     database_answers,
     migration_revision,
 )
+from app.schemas.common import Page
 from app.schemas.platform_console import (
     DailyCountRead,
     PlatformDashboardRead,
+    PlatformJobRead,
     SubscriptionSummaryRead,
     SystemHealthRead,
     WorkspaceHealthRead,
@@ -122,4 +126,47 @@ async def platform_workspace_overview(
             listings_in_error=health.listings_in_error,
             failed_notification_emails=health.failed_notification_emails,
         ),
+    )
+
+
+# --- Jobs across workspaces (phase 7) ------------------------------------------------
+
+JobsRead = Annotated[
+    PlatformPrincipal, Depends(require_platform_permission(PlatformPermission.JOBS_READ))
+]
+
+
+@router.get(
+    "/jobs/summary",
+    response_model=dict[str, dict[str, int]],
+    summary="Failed (7 days) and stuck jobs per kind, across workspaces",
+)
+async def platform_jobs_summary(
+    session: DbSession, _principal: JobsRead
+) -> dict[str, dict[str, int]]:
+    return await PlatformJobsMonitor(session).summary()
+
+
+@router.get(
+    "/jobs",
+    response_model=Page[PlatformJobRead],
+    summary="Failed or stuck jobs of one kind, across workspaces",
+)
+async def platform_jobs(
+    session: DbSession,
+    _principal: JobsRead,
+    kind: JobKind = "order_sync",
+    state: JobState = "failed",
+    tenant_id: uuid.UUID | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> Page[PlatformJobRead]:
+    rows, total = await PlatformJobsMonitor(session).page(
+        kind=kind, state=state, page=page, size=size, tenant_id=tenant_id
+    )
+    return Page[PlatformJobRead].build(
+        items=[PlatformJobRead.model_validate(r, from_attributes=True) for r in rows],
+        page=page,
+        size=size,
+        total_items=total,
     )

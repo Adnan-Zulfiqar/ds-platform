@@ -381,11 +381,34 @@ class ListingsResyncQueued(CamelCaseModel):
     listings: int
 
 
+# --- Jobs (phase 7) ---------------------------------------------------------------
+
+
+class PlatformJobRead(CamelCaseModel):
+    kind: str
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    tenant_name: str
+    status: str
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+
+
+class JobActionResult(CamelCaseModel):
+    kind: str
+    id: uuid.UUID
+    outcome: str
+
+
 __all__ = [
     "DailyCountRead",
     "InventorySyncNow",
+    "JobActionResult",
     "ListingsResyncQueued",
     "PlatformDashboardRead",
+    "PlatformJobRead",
     "SubscriptionSummaryRead",
     "SupportSessionOpen",
     "SupportSessionRead",
