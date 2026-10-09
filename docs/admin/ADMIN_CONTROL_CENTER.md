@@ -1,6 +1,6 @@
 # Admin Control Center (D-018, D-019)
 
-Status: **phases 1–9 built**, phase 10 in progress. The platform console
+Status: **all 10 phases built.** The platform console
 from Track E5 ([E5 doc](../track-e/E5_PLATFORM_ADMIN.md)) grows into a full
 operator console, one tested pull request per phase.
 
@@ -35,8 +35,8 @@ request cannot span two workspaces. Cross-workspace numbers come only from
 | 6 | Catalogue and order actions | Merged (#100) |
 | 7 | Jobs: failed and stuck detection, retry, cancel | Merged (#101) |
 | 8 | Billing: trial extension, plan override, feature flags | Merged (#102) |
-| 9 | Audit and security centre; immutable audit at the database | Built (this PR) |
-| 10 | System settings: maintenance mode, announcements, broadcasts | Not started |
+| 9 | Audit and security centre; immutable audit at the database | Merged (#103) |
+| 10 | System settings: maintenance mode, announcements, broadcasts | Built (this PR) |
 
 ## Phase 1 as built
 
@@ -207,6 +207,77 @@ workspace, as decided.
 
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
+
+## Phase 10 as built
+
+### Migration `0057`
+
+- `platform_settings` (one row per key, JSON value).
+- `platform_announcements` (title, body, level, start and end).
+
+Both sit above every tenant (`PlatformSettingsRepository`, on the
+CLAUDE.md §4 list).
+
+### Maintenance mode
+
+While it is on, **the merchant API is read-only**: every non-GET request
+to a tenant router answers 503 `maintenance`.
+
+- **Sign-in still works**, and so does the operator console.
+- **Inbound provider traffic** (Stripe, AliExpress and Shopify webhooks,
+  eBay account deletion, OAuth callbacks, the Shopify install claim) is
+  exempt, because a refused webhook can be a lost order or a missed
+  compliance request. A unit test pins the exempt and non-exempt paths.
+- **Background jobs keep running.** Maintenance means "no new changes from
+  the app", not a full stop.
+- **How it is enforced.** A dependency (`MaintenanceGuard`) on every tenant
+  router reads the flag through the request's own session, cached
+  in-process for 5 seconds, so a change reaches every worker within 5
+  seconds. The test suite clears that cache around every test.
+
+### Announcements and broadcasts
+
+- **Announcements** are banners across the merchant app. They have a
+  level (info, warning or critical), start now, and end optionally or by
+  "End now".
+  - The merchant app reads them, and the maintenance state, from the
+    public `GET /api/v1/system/status`, which carries no tenant data.
+  - The banner is silent when there is nothing to show, or when the status
+    cannot be read.
+- **Broadcasts** put one notification in every active workspace through the
+  Celery task `notifications.broadcast`.
+  - The task is queued **after the request commits** its audit row.
+  - Each workspace commits on its own.
+  - It is idempotent: a re-run finds the first copy by its broadcast id.
+
+### Routes (writes need `settings.manage`, i.e. super admin, and re-authentication)
+
+| Route | Audited as |
+|---|---|
+| `GET /platform/settings` (`dashboard.read`) | — |
+| `POST /platform/settings/maintenance {enabled, message}` | `maintenance_enabled` / `maintenance_disabled` |
+| `POST /platform/announcements {title, body, level, startsAt?, endsAt?}` | `announcement_created` |
+| `POST /platform/announcements/{id}/end` | `announcement_ended` |
+| `POST /platform/broadcasts {title, body}` → 202 | `broadcast_sent` (with its id) |
+
+### Verified (phase 10)
+
+- `test_platform_settings.py` covers:
+  - with maintenance on, a merchant write is 503 `maintenance`, while reads
+    and sign-in work and the public status shows the message; off restores
+    writes; both changes are audited;
+  - an Admin is refused all three settings writes but can read;
+  - an announcement is public while live and gone once ended;
+  - a broadcast is audited with its id, and its task creates exactly one
+    copy per active workspace even when run twice.
+- `test_maintenance_exemptions.py`: provider traffic is exempt, merchant
+  changes are not.
+- Playwright (`platform-settings.spec.ts`):
+  - starting maintenance through re-authentication sends the message;
+  - the merchant shell shows the maintenance and announcement banners.
+- The shared e2e fixtures (`ai-studio`, `catalogue`, `channels`, `home`,
+  `shell`) answer `/system/status` with nothing to show, so existing specs
+  that fail on unmocked calls or console errors are unaffected.
 
 ## Phase 9 as built
 

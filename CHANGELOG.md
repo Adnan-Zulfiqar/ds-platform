@@ -10,6 +10,19 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 10: maintenance, announcements, broadcasts (D-019)
+
+- **Migration `0057`:** `platform_settings` and `platform_announcements`.
+- **Maintenance mode** makes the merchant API read-only (503
+  `maintenance`). Sign-in, the console, webhooks and OAuth callbacks are
+  unaffected.
+- **Announcements** show as banners in the merchant app, read from the new
+  public `GET /api/v1/system/status`.
+- **Broadcasts** send one notification per active workspace through an
+  idempotent Celery task, queued after commit.
+- All writes need a super admin, re-authentication and a reason, and are
+  audited.
+
 ### Added - Admin Control Center phase 9: audit and security centre (D-019)
 
 - **Migration `0056`:** a trigger makes `platform_admin_audit` immutable in
