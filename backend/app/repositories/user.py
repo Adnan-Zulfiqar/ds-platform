@@ -55,6 +55,25 @@ class UserRepository(TenantScopedRepository[User]):
     async def email_taken(self, email: str) -> bool:
         return await self.get_by_email(email) is not None
 
+    async def lock_active_with_roles(self, role_names: tuple[str, ...]) -> list[User]:
+        """``active_with_roles``, locking the rows (in id order, so two
+        callers queue instead of deadlocking): for a "would this remove the
+        last owner" check that must hold until the change commits."""
+        query = (
+            self._base_query()
+            .where(User.is_active.is_(True))
+            .where(
+                User.id.in_(
+                    select(UserRole.user_id)
+                    .join(Role, Role.id == UserRole.role_id)
+                    .where(Role.name.in_(role_names))
+                )
+            )
+            .order_by(User.id)
+            .with_for_update()
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
     async def active_with_roles(self, role_names: tuple[str, ...]) -> list[User]:
         """This tenant's active users holding any of ``role_names`` (Track E3:
         who hears about workspace-wide notifications)."""

@@ -343,6 +343,28 @@ def platform_workspace(
     return dependency
 
 
+async def maintenance_guard(request: Request, session: DbSession) -> None:
+    """While an operator has the platform in maintenance (D-019), the
+    merchant API is read-only: every change answers 503 ``maintenance``.
+    Mounted on the tenant routers only; sign-in and the operator console are
+    not behind it, and inbound webhooks and OAuth callbacks are exempt."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    from app.services.platform_settings import (
+        MaintenanceModeError,
+        PlatformSettingsService,
+        maintenance_exempt,
+    )
+
+    if maintenance_exempt(request.url.path):
+        return
+    if (await PlatformSettingsService(session).maintenance()).enabled:
+        raise MaintenanceModeError()
+
+
+MaintenanceGuard = Depends(maintenance_guard)
+
+
 async def get_optional_principal(
     request: Request, credentials: BearerCredentials
 ) -> AuthenticatedUser | None:
@@ -664,6 +686,7 @@ __all__ = [
     "CurrentTenant",
     "CurrentUser",
     "DbSession",
+    "MaintenanceGuard",
     "OptionalPrincipal",
     "PlatformAudit",
     "PlatformNetwork",

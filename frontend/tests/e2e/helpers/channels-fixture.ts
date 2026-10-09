@@ -209,6 +209,7 @@ export async function mockChannelsApi(page: Page, world: ChannelsWorld): Promise
     if (path === "/auth/google/nonce") return json({ nonce: "n", expiresInSeconds: 300 });
     if (path === "/products/workspace-counts") return json({ drafts: 1, products: 0 });
     if (path === "/notifications/unread-count") return json({ unread: 0 });
+    if (path === "/system/status") return json({ maintenance: false, maintenanceMessage: null, announcements: [] });
     if (path === "/notifications") return json(paged([]));
 
     if (path === "/integrations/shopify/status") return world.fail.has("shopify") ? fail() : json(world.shopify);

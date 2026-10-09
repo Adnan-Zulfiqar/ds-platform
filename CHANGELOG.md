@@ -10,6 +10,34 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - Admin Control Center security review
+
+- **WooCommerce order webhooks** were not exempt from maintenance mode, so
+  orders placed during maintenance were refused. They are exempt now.
+- **The last-owner check** now locks the owner rows, so two concurrent
+  disables cannot leave a workspace without an active owner.
+- **Every workspace change that fails** now leaves an `outcome=failure`
+  audit row.
+- **Maintenance cache:** a change is no longer cached before it commits.
+- **Announcement dates** must carry a timezone; a naive date is a 422
+  instead of a 500.
+- **Broadcasts:** one failing workspace no longer stops the rest, and a
+  dismissed copy is not sent again.
+- **CSV exports** keep the sign of negative numbers.
+
+### Added - Admin Control Center phase 10: maintenance, announcements, broadcasts (D-019)
+
+- **Migration `0057`:** `platform_settings` and `platform_announcements`.
+- **Maintenance mode** makes the merchant API read-only (503
+  `maintenance`). Sign-in, the console, webhooks and OAuth callbacks are
+  unaffected.
+- **Announcements** show as banners in the merchant app, read from the new
+  public `GET /api/v1/system/status`.
+- **Broadcasts** send one notification per active workspace through an
+  idempotent Celery task, queued after commit.
+- All writes need a super admin, re-authentication and a reason, and are
+  audited.
+
 ### Added - Admin Control Center phase 9: audit and security centre (D-019)
 
 - **Migration `0056`:** a trigger makes `platform_admin_audit` immutable in

@@ -10,7 +10,7 @@ tenant context for the tenant-scoped repositories.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
@@ -32,18 +32,28 @@ from app.repositories.platform_metrics import (
 )
 from app.schemas.common import Page
 from app.schemas.platform_console import (
+    AnnouncementCreate,
+    BroadcastCreate,
+    BroadcastQueued,
     DailyCountRead,
     GlobalFlagChange,
     GlobalFlagRead,
+    MaintenanceChange,
+    MaintenanceRead,
+    PlatformAnnouncementRead,
     PlatformDashboardRead,
     PlatformJobRead,
+    PlatformSettingsRead,
     SubscriptionSummaryRead,
     SystemHealthRead,
+    WorkspaceChangeReason,
     WorkspaceHealthRead,
     WorkspaceOverviewRead,
 )
 from app.services.platform_admin import PlatformAdminService, PlatformPrincipal
+from app.services.platform_settings import PlatformSettingsService
 from app.services.platform_workspace import PlatformWorkspace, PlatformWorkspaceService
+from app.tasks.notifications import queue_broadcast_after_commit
 
 router = APIRouter()
 
@@ -222,3 +232,135 @@ async def platform_set_feature_flag(
     )
     rows = await FeatureFlagRepository(session).all_flags()
     return [GlobalFlagRead.model_validate(r, from_attributes=True) for r in rows]
+
+
+# --- Platform settings (phase 10) ----------------------------------------------------
+
+DashboardReader = Annotated[
+    PlatformPrincipal, Depends(require_platform_permission(PlatformPermission.DASHBOARD_READ))
+]
+
+
+async def _settings_read(session: Any) -> PlatformSettingsRead:
+    service = PlatformSettingsService(session)
+    maintenance = await service.maintenance(cached=False)
+    return PlatformSettingsRead(
+        maintenance=MaintenanceRead(
+            enabled=maintenance.enabled,
+            message=maintenance.message,
+            updated_at=maintenance.updated_at,
+        ),
+        announcements=[
+            PlatformAnnouncementRead.model_validate(a, from_attributes=True)
+            for a in await service.announcements()
+        ],
+    )
+
+
+@router.get(
+    "/settings",
+    response_model=PlatformSettingsRead,
+    summary="Maintenance mode and announcements",
+)
+async def platform_settings(
+    session: DbSession, _principal: DashboardReader
+) -> PlatformSettingsRead:
+    return await _settings_read(session)
+
+
+@router.post(
+    "/settings/maintenance",
+    response_model=PlatformSettingsRead,
+    summary="Turn maintenance mode on or off (super admin, re-auth, audited)",
+)
+async def platform_set_maintenance(
+    payload: MaintenanceChange, session: DbSession, principal: SettingsWrite, ctx: PlatformAudit
+) -> PlatformSettingsRead:
+    state = await PlatformSettingsService(session).set_maintenance(
+        enabled=payload.enabled, message=payload.message, admin_id=principal.admin.id
+    )
+    await PlatformAdminService(session).record_settings_change(
+        principal,
+        "maintenance_enabled" if state.enabled else "maintenance_disabled",
+        target_type="setting",
+        target_id="maintenance",
+        reason=payload.reason,
+        ctx=ctx,
+        detail={"message": state.message},
+    )
+    return await _settings_read(session)
+
+
+@router.post(
+    "/announcements",
+    response_model=PlatformSettingsRead,
+    summary="Show a banner to every merchant (super admin, re-auth, audited)",
+)
+async def platform_announce(
+    payload: AnnouncementCreate, session: DbSession, principal: SettingsWrite, ctx: PlatformAudit
+) -> PlatformSettingsRead:
+    row = await PlatformSettingsService(session).announce(
+        title=payload.title,
+        body=payload.body,
+        level=payload.level,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        admin_id=principal.admin.id,
+    )
+    await PlatformAdminService(session).record_settings_change(
+        principal,
+        "announcement_created",
+        target_type="announcement",
+        target_id=str(row.id),
+        reason=payload.reason,
+        ctx=ctx,
+        detail={"title": row.title, "level": row.level},
+    )
+    return await _settings_read(session)
+
+
+@router.post(
+    "/announcements/{announcement_id}/end",
+    response_model=PlatformSettingsRead,
+    summary="End an announcement now (super admin, re-auth, audited)",
+)
+async def platform_end_announcement(
+    announcement_id: uuid.UUID,
+    payload: WorkspaceChangeReason,
+    session: DbSession,
+    principal: SettingsWrite,
+    ctx: PlatformAudit,
+) -> PlatformSettingsRead:
+    await PlatformSettingsService(session).end_announcement(announcement_id)
+    await PlatformAdminService(session).record_settings_change(
+        principal,
+        "announcement_ended",
+        target_type="announcement",
+        target_id=str(announcement_id),
+        reason=payload.reason,
+        ctx=ctx,
+    )
+    return await _settings_read(session)
+
+
+@router.post(
+    "/broadcasts",
+    response_model=BroadcastQueued,
+    status_code=202,
+    summary="Send a notification to every active workspace (super admin, re-auth, audited)",
+)
+async def platform_broadcast(
+    payload: BroadcastCreate, session: DbSession, principal: SettingsWrite, ctx: PlatformAudit
+) -> BroadcastQueued:
+    broadcast_id = uuid.uuid4()
+    await PlatformAdminService(session).record_settings_change(
+        principal,
+        "broadcast_sent",
+        target_type="broadcast",
+        target_id=str(broadcast_id),
+        reason=payload.reason,
+        ctx=ctx,
+        detail={"title": payload.title},
+    )
+    queue_broadcast_after_commit(session, str(broadcast_id), payload.title, payload.body)
+    return BroadcastQueued(broadcast_id=broadcast_id)

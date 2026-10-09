@@ -678,6 +678,28 @@ class PlatformAdminService(BaseService):
             detail={"reason": reason[:500], "before": before, "after": enabled},
         )
 
+    async def record_settings_change(
+        self,
+        principal: PlatformPrincipal,
+        action: str,
+        *,
+        target_type: str,
+        target_id: str,
+        reason: str,
+        ctx: AuditContext,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """A platform-wide setting changed (maintenance, announcement,
+        broadcast): super admin only, same transaction as the change."""
+        await self._audit(
+            action,
+            admin=principal.admin,
+            ctx=ctx,
+            target_type=target_type,
+            target_id=target_id,
+            detail={"reason": reason[:500], **(detail or {})},
+        )
+
     async def audit_permission_denied(
         self, admin: PlatformAdmin, *, permission: str, ctx: AuditContext
     ) -> None:

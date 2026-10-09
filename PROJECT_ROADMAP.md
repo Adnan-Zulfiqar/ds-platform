@@ -355,7 +355,7 @@ Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPL
 | 6 | Catalogue and order actions | Merged (#100) |
 | 7 | Jobs centre | Merged (#101) |
 | 8 | Trials, plan overrides, feature switches | Merged (#102) |
-| 9 | Audit and security centre, immutable audit | Built |
-| 10 | System settings | Not started |
+| 9 | Audit and security centre, immutable audit | Merged (#103) |
+| 10 | Maintenance mode, announcements, broadcasts | Built |
 
 Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

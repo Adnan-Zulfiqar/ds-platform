@@ -170,6 +170,7 @@ export async function mockShellApi(page: Page): Promise<void> {
       return json(route, { drafts: drafts.length, products: products.length });
     if (path === "/notifications/unread-count")
       return json(route, { unread: notifications.filter((n) => !n.isRead).length });
+    if (path === "/system/status") return json(route, { maintenance: false, maintenanceMessage: null, announcements: [] });
     if (path === "/notifications") return json(route, paged(notifications));
     if (path === "/analytics/dashboard") return json(route, analytics);
     if (path === "/orders/statistics") return json(route, orderStatistics);

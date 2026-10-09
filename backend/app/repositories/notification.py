@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.context import require_tenant_id
 from app.models.notification import Notification, NotificationEmailPreference
 from app.repositories.base import TenantScopedRepository
 
@@ -18,6 +19,21 @@ class NotificationRepository(TenantScopedRepository[Notification]):
 
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, Notification)
+
+    async def has_payload(self, key: str, value: str) -> bool:
+        """Whether this workspace already has a notification carrying
+        ``payload[key] == value``: how a re-run broadcast stays idempotent."""
+        # Deleted copies count too: a merchant who dismissed a broadcast
+        # must not get it again from a re-run. Still this tenant only.
+        query = (
+            select(Notification.id)
+            .where(
+                Notification.tenant_id == require_tenant_id(),
+                Notification.payload[key].astext == value,
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(query)).first() is not None
 
     async def unread_count(self, *, user_id: uuid.UUID | None = None) -> int:
         where_clause = self._base_query().whereclause

@@ -159,6 +159,11 @@ async def test_the_last_active_owner_cannot_be_disabled(
         f"{P}/{tenant_id}/users/{owner['id']}/disable", json={"reason": "test"}, headers=headers
     )
     assert response.status_code == 409
+    # A refused change still leaves a trace (review fix): outcome failure,
+    # with the reason and the error.
+    [row] = await actions(db_session, "workspace_user_active_changed")
+    assert row.outcome == "failure" and row.detail["reason"] == "test"
+    assert "ConflictError" in row.detail["error"]
 
 
 async def test_role_changes_are_limited_and_audited(

@@ -74,6 +74,8 @@ from app.models.platform_admin import (
     PlatformAdmin,
     PlatformAdminAudit,
     PlatformAdminSession,
+    PlatformAnnouncement,
+    PlatformSetting,
     PlatformSupportSession,
 )
 from app.models.pricing import (
@@ -160,6 +162,8 @@ __all__ = [
     "PlatformAdmin",
     "PlatformAdminAudit",
     "PlatformAdminSession",
+    "PlatformAnnouncement",
+    "PlatformSetting",
     "PlatformSupportSession",
     "PriceChange",
     "PricingRule",

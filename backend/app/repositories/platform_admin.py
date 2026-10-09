@@ -24,6 +24,8 @@ from app.models.platform_admin import (
     PlatformAdmin,
     PlatformAdminAudit,
     PlatformAdminSession,
+    PlatformAnnouncement,
+    PlatformSetting,
     PlatformSupportSession,
 )
 from app.models.shopify import ListingSyncStatus, StoreListing
@@ -191,6 +193,61 @@ class PlatformSupportSessionRepository:
             row.ended_at = datetime.now(UTC)
             row.ended_reason = reason[:64]
             await self.session.flush()
+
+
+class PlatformSettingsRepository:
+    """Platform-wide settings and announcements (D-019). Above every tenant;
+    read on the request path only to answer "is the platform in
+    maintenance" and "what banners are live" (CLAUDE.md §4)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get(self, key: str) -> PlatformSetting | None:
+        query = select(PlatformSetting).where(PlatformSetting.key == key)
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def put(
+        self, key: str, value: dict[str, Any], *, admin_id: uuid.UUID | None
+    ) -> PlatformSetting:
+        row = await self.get(key)
+        if row is None:
+            row = PlatformSetting(key=key, value=value, updated_by_admin_id=admin_id)
+            self.session.add(row)
+        else:
+            row.value = value
+            row.updated_by_admin_id = admin_id
+        await self.session.flush()
+        return row
+
+    async def active_announcements(self, now: datetime) -> list[PlatformAnnouncement]:
+        query = (
+            select(PlatformAnnouncement)
+            .where(
+                PlatformAnnouncement.starts_at <= now,
+                or_(PlatformAnnouncement.ends_at.is_(None), PlatformAnnouncement.ends_at > now),
+            )
+            .order_by(PlatformAnnouncement.starts_at.desc())
+            .limit(5)
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def recent_announcements(self, *, limit: int = 50) -> list[PlatformAnnouncement]:
+        query = (
+            select(PlatformAnnouncement)
+            .order_by(PlatformAnnouncement.created_at.desc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(query)).scalars().all())
+
+    async def add_announcement(self, **values: Any) -> PlatformAnnouncement:
+        row = PlatformAnnouncement(**values)
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def get_announcement(self, announcement_id: uuid.UUID) -> PlatformAnnouncement | None:
+        return await self.session.get(PlatformAnnouncement, announcement_id)
 
 
 class PlatformAdminAuditRepository:
