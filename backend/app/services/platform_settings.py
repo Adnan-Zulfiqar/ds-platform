@@ -59,7 +59,8 @@ class PlatformSettingsService(BaseService):
             message=value.get("message") or None,
             updated_at=row.updated_at if row else None,
         )
-        _cache[MAINTENANCE_KEY] = (now, state)
+        if cached:
+            _cache[MAINTENANCE_KEY] = (now, state)
         return state
 
     async def set_maintenance(
@@ -70,8 +71,16 @@ class PlatformSettingsService(BaseService):
             {"enabled": enabled, "message": (message or "")[:500] or None},
             admin_id=admin_id,
         )
+        # Not cached here: the change is not committed yet, and a failed
+        # commit must not leave this worker believing it.
         _cache.pop(MAINTENANCE_KEY, None)
-        return await self.maintenance(cached=False)
+        row = await PlatformSettingsRepository(self.session).get(MAINTENANCE_KEY)
+        value = row.value if row else {}
+        return Maintenance(
+            enabled=bool(value.get("enabled", False)),
+            message=value.get("message") or None,
+            updated_at=row.updated_at if row else None,
+        )
 
     async def active_announcements(self) -> list[PlatformAnnouncement]:
         return await PlatformSettingsRepository(self.session).active_announcements(
@@ -125,6 +134,7 @@ def maintenance_exempt(path: str) -> bool:
         tail.endswith(("/callback", "/webhook", "/marketplace-account-deletion", "/claim-install"))
         or tail.endswith("/webhooks/stripe")
         or ("/shopify/webhooks/" in tail and not tail.endswith("/reconcile"))
+        or "/woocommerce/webhooks/" in tail
     )
 
 

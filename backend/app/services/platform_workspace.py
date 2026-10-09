@@ -14,12 +14,13 @@ name encrypted columns, password hashes or token hashes.
 
 from __future__ import annotations
 
+import functools
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -395,9 +396,30 @@ class PlatformWorkspace:
     tenant: Tenant
 
 
+F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
 #: Roles an operator may give a member (D-019). ``owner`` is never given or
 #: taken here: ownership transfer stays a merchant decision.
 ASSIGNABLE_ROLES: frozenset[str] = frozenset({"admin", "member", "viewer"})
+
+
+def _audited_failure(action: str) -> Callable[[F], F]:
+    """A workspace change that raises leaves a ``failure`` audit row, written
+    in its own transaction (the request rolls back). The method must take
+    ``reason`` as a keyword."""
+
+    def wrap(method: F) -> F:
+        @functools.wraps(method)
+        async def inner(self: PlatformWorkspaceActions, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return await method(self, *args, **kwargs)
+            except Exception as exc:
+                await self._failed(action, str(kwargs.get("reason", "")), exc)
+                raise
+
+        return cast("F", inner)
+
+    return wrap
 
 
 class PlatformWorkspaceActions(BaseService):
@@ -449,9 +471,10 @@ class PlatformWorkspaceActions(BaseService):
         return user
 
     async def _is_last_active_owner(self, user: User) -> bool:
-        owners = await self.users.active_with_roles(("owner",))
+        owners = await self.users.lock_active_with_roles(("owner",))
         return [o.id for o in owners] == [user.id]
 
+    @_audited_failure("workspace_user_active_changed")
     async def set_user_active(self, user_id: uuid.UUID, *, active: bool, reason: str) -> User:
         user = await self.user(user_id)
         if user.is_active == active:
@@ -474,6 +497,7 @@ class PlatformWorkspaceActions(BaseService):
         )
         return user
 
+    @_audited_failure("workspace_user_sessions_ended")
     async def end_user_sessions(self, user_id: uuid.UUID, *, reason: str) -> int:
         user = await self.user(user_id)
         ended = await RefreshTokenRepository(self.session).revoke_all_for_user(user.id)
@@ -486,6 +510,7 @@ class PlatformWorkspaceActions(BaseService):
         )
         return ended
 
+    @_audited_failure("workspace_user_password_reset_required")
     async def require_password_reset(self, user_id: uuid.UUID, *, reason: str) -> None:
         """The password stops working and every session ends. Sign-in then
         fails exactly like a wrong password (no new state an attacker could
@@ -504,6 +529,7 @@ class PlatformWorkspaceActions(BaseService):
             sessions_ended=ended,
         )
 
+    @_audited_failure("workspace_user_role_changed")
     async def set_member_role(self, user_id: uuid.UUID, *, role: str, reason: str) -> list[str]:
         if role not in ASSIGNABLE_ROLES:
             raise ValidationError("An operator can give only admin, member or viewer.")
@@ -533,6 +559,7 @@ class PlatformWorkspaceActions(BaseService):
         )
         return [role]
 
+    @_audited_failure("workspace_invitation_revoked")
     async def revoke_invitation(self, invitation_id: uuid.UUID, *, reason: str) -> None:
         await TeamInvitationService(self.session).revoke(invitation_id)
         await self._audit(
@@ -554,6 +581,7 @@ class PlatformStoreActions(PlatformWorkspaceActions):
             raise NotFoundError.for_resource("Store", store_id)
         return store
 
+    @_audited_failure("workspace_store_pause_changed")
     async def set_store_paused(self, store_id: uuid.UUID, *, paused: bool, reason: str) -> Store:
         store = await self._store(store_id)
         if (store.sync_paused_at is not None) == paused:
@@ -664,6 +692,7 @@ class PlatformCatalogActions(PlatformWorkspaceActions):
         )
         return product
 
+    @_audited_failure("workspace_listings_resync_queued")
     async def resync_listings(self, product_id: uuid.UUID, *, reason: str) -> int:
         """Queue the price and stock push to every channel listing of one
         product (after this request commits; paused stores are skipped by the
@@ -695,6 +724,7 @@ class PlatformCatalogActions(PlatformWorkspaceActions):
         )
         return order
 
+    @_audited_failure("workspace_supplier_order_released")
     async def release_supplier_order(self, order_id: uuid.UUID, *, reason: str) -> SupplierOrder:
         """The merchant's own release (D-017): only from ``placing``, after
         someone has checked AliExpress and found no order. Recorded as done by
@@ -720,6 +750,7 @@ class PlatformCatalogActions(PlatformWorkspaceActions):
 class PlatformJobActions(PlatformWorkspaceActions):
     """Background work in one workspace (phase 7, ``jobs.manage``)."""
 
+    @_audited_failure("workspace_sync_run_closed")
     async def close_stuck_sync(
         self, kind: Literal["order_sync", "inventory_sync"], run_id: uuid.UUID, *, reason: str
     ) -> OrderSyncRun | InventorySyncRun:
@@ -757,6 +788,7 @@ class PlatformJobActions(PlatformWorkspaceActions):
         )
         return run
 
+    @_audited_failure("workspace_pipeline_run_cancelled")
     async def cancel_pipeline_run(self, run_id: uuid.UUID, *, reason: str) -> str:
         """The merchant's own cancel, which never waits on a worker's lock:
         returns ``cancelled`` or ``requested`` (the worker stops at its next
@@ -772,6 +804,7 @@ class PlatformJobActions(PlatformWorkspaceActions):
         )
         return state
 
+    @_audited_failure("workspace_rule_application_cancelled")
     async def cancel_rule_application(self, application_id: uuid.UUID, *, reason: str) -> str:
         """The merchant's own cancel: total if pending, cooperative if
         running; batches already written keep their prices."""
@@ -838,6 +871,7 @@ class PlatformBillingActions(PlatformWorkspaceActions):
             kind=NotificationKind.INFO, title=title, body=body, payload={}
         )
 
+    @_audited_failure("workspace_trial_extended")
     async def extend_trial(self, *, days: int, reason: str) -> TenantSubscription:
         if not 1 <= days <= MAX_TRIAL_EXTENSION_DAYS:
             raise ValidationError(f"Extend by 1-{MAX_TRIAL_EXTENSION_DAYS} days.")
@@ -859,6 +893,7 @@ class PlatformBillingActions(PlatformWorkspaceActions):
         )
         return row
 
+    @_audited_failure("workspace_plan_override_set")
     async def set_plan_override(
         self, *, plan: str, ai: bool, days: int, reason: str
     ) -> TenantSubscription:
@@ -893,6 +928,7 @@ class PlatformBillingActions(PlatformWorkspaceActions):
         )
         return row
 
+    @_audited_failure("workspace_plan_override_cleared")
     async def clear_plan_override(self, *, reason: str) -> TenantSubscription:
         row = await self._subscription()
         if row.plan_override is None:
@@ -934,6 +970,7 @@ class PlatformBillingActions(PlatformWorkspaceActions):
             )
         return out
 
+    @_audited_failure("workspace_feature_flag_set")
     async def set_flag_override(self, key: str, *, enabled: bool | None, reason: str) -> None:
         """``enabled=None`` removes the override, so the platform default
         applies again."""

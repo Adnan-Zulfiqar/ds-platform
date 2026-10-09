@@ -112,7 +112,9 @@ async def test_a_stuck_sync_is_detected_and_can_be_closed_but_a_live_one_cannot(
             PlatformAdminAudit.action == "workspace_sync_run_closed"
         )
     )
-    assert [r.target_id for r in rows] == [str(stuck.id)]
+    by_outcome = {(r.outcome, r.target_id) for r in rows}
+    # The refused close of the live run is recorded as a failure (review fix).
+    assert by_outcome == {("success", str(stuck.id)), ("failure", str(tenant_id))}
 
 
 async def test_jobs_follow_the_role(

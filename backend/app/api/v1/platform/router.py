@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -530,10 +531,18 @@ async def platform_audit_export(
     )
 
 
+#: A plain number ("-5.00") is data, not a formula; it keeps its sign.
+_NUMBER = re.compile(r"-?\d+(\.\d+)?")
+
+
 def _cell(value: Any) -> Any:
     """Formula-looking text is prefixed with ' (the audit holds reasons
     operators typed)."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if (
+        isinstance(value, str)
+        and value[:1] in ("=", "+", "-", "@", "\t", "\r")
+        and not _NUMBER.fullmatch(value)
+    ):
         return "'" + value
     return value
 

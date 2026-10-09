@@ -13,7 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 
 from app.schemas.base import CamelCaseModel
 
@@ -488,8 +488,8 @@ class AnnouncementCreate(WorkspaceChangeReason):
     title: str = Field(min_length=3, max_length=160)
     body: str = Field(default="", max_length=2000)
     level: Literal["info", "warning", "critical"] = "info"
-    starts_at: datetime | None = None
-    ends_at: datetime | None = None
+    starts_at: AwareDatetime | None = None
+    ends_at: AwareDatetime | None = None
 
 
 class BroadcastCreate(WorkspaceChangeReason):

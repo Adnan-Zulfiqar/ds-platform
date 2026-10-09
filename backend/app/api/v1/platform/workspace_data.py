@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -379,13 +380,21 @@ async def workspace_notifications(
 ExportDataset = Literal["users", "stores", "products", "drafts", "listings", "orders"]
 
 
+#: A plain number ("-5.00") is data, not a formula; it keeps its sign.
+_NUMBER = re.compile(r"-?\d+(\.\d+)?")
+
+
 def _cell(value: Any) -> Any:
     """One CSV cell. A text cell starting with ``=``, ``+``, ``-``, ``@`` or a
     tab is prefixed with ``'`` so a spreadsheet shows it rather than running
     it as a formula: product titles and buyer names are merchant input."""
     if isinstance(value, list):
         value = ";".join(map(str, value))
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if (
+        isinstance(value, str)
+        and value[:1] in ("=", "+", "-", "@", "\t", "\r")
+        and not _NUMBER.fullmatch(value)
+    ):
         return "'" + value
     return value
 

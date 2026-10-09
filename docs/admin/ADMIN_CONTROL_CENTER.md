@@ -208,6 +208,29 @@ workspace, as decided.
 Playwright covers the dashboard numbers, opening a workspace, suspension
 with re-authentication, and Finance's restricted navigation.
 
+## Security review (after phase 10)
+
+An independent read-only review of the whole operator diff found:
+
+- no missing authorization dependency;
+- no cross-workspace read path;
+- no secret in any response schema;
+- no problem with the immutable-audit trigger or migrations 0053–0057.
+
+Its findings, and what was done:
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 (high) | **WooCommerce order webhooks were not exempt from maintenance mode.** Orders placed during maintenance were refused; WooCommerce disables a webhook after repeated failures. | `/woocommerce/webhooks/` is exempt, and the unit test covers it. |
+| 2 | **The last-owner check was not locked.** Two concurrent disables could leave no active owner. | The owner rows are locked (`FOR UPDATE`, in id order) before counting. |
+| 3 | **Turning maintenance on or off filled the in-process cache before commit.** | The change is no longer cached; the next read after commit fills the cache. |
+| 4 | **Timezone-naive announcement dates gave a 500.** | `AwareDatetime`: a naive date is a 422. |
+| 5 | **Broadcasts:** one workspace failing stopped the rest, and a dismissed (soft-deleted) copy counted as unsent. | Each workspace is isolated (`try`/log/continue), and the idempotency check includes deleted copies. |
+| 6 | **Clearing a feature override physically deletes the row.** | Kept, and recorded as an exception to CLAUDE.md §5's soft-delete rule. An override is operator configuration, not customer data; its whole history is in the audit trail (before/after). |
+| 7 | **Several workspace changes left no trace when they failed.** | Every workspace change now writes an `outcome=failure` audit row, in its own transaction, with the reason and the error. |
+| 8 | **Registration and invitation acceptance still work during maintenance**, because the auth router is outside the guard. | Documented as intended: maintenance pauses changes to existing workspaces, not sign-up. |
+| 9 | **A negative number in a CSV export was prefixed with `'` as if it were a formula.** | Plain numbers keep their sign; only text is prefixed. |
+
 ## Phase 10 as built
 
 ### Migration `0057`

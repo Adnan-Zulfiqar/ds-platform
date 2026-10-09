@@ -96,10 +96,17 @@ def broadcast(self: Any, broadcast_id: str, title: str, body: str, **_: Any) -> 
     workspace commits on its own, so one failing does not stop the rest."""
     tenant_ids = asyncio.run(_active_tenants())
     created = 0
+    failed = 0
     for tenant_id in tenant_ids:
-        if asyncio.run(_broadcast_one(tenant_id, broadcast_id, title, body)):
-            created += 1
-    return {"tenants": len(tenant_ids), "created": created}
+        try:
+            if asyncio.run(_broadcast_one(tenant_id, broadcast_id, title, body)):
+                created += 1
+        except Exception as exc:  # one workspace failing must not stop the rest
+            failed += 1
+            logger.warning(
+                "broadcast_workspace_failed", tenant_id=str(tenant_id), error=type(exc).__name__
+            )
+    return {"tenants": len(tenant_ids), "created": created, "failed": failed}
 
 
 def queue_broadcast_after_commit(session: Any, broadcast_id: str, title: str, body: str) -> None:

@@ -23,6 +23,8 @@ pytestmark = pytest.mark.unit
         "/api/v1/integrations/shopify/claim-install",
         "/api/v1/integrations/ebay/callback",
         "/api/v1/integrations/ebay/marketplace-account-deletion",
+        "/api/v1/integrations/woocommerce/webhooks/2b6f0c1e-0000-4000-8000-000000000001/"
+        "3c7a1d2f-0000-4000-8000-000000000002",
     ],
 )
 def test_provider_traffic_is_exempt(path: str) -> None:
