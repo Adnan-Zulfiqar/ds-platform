@@ -348,7 +348,8 @@ Not verified against a real AliExpress order: [Track F doc](docs/track-f/F_SUPPL
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Operator roles and permissions, sessions with revoke, re-authentication, richer audit | Merged (#95) |
-| 2 | Live dashboard, workspace entry (D-019), routed console | Built |
-| 3–10 | Workspace drill-down, users, stores, catalogue and orders, jobs, billing, audit centre, settings | Not started |
+| 2 | Live dashboard, workspace entry (D-019), routed console | Merged (#96) |
+| 3 | Workspace drill-down and CSV exports | Built |
+| 4–10 | Users and support sessions, stores, catalogue and orders, jobs, billing, audit centre, settings | Not started |
 
 Details and what is not verified: [Admin Control Center](docs/admin/ADMIN_CONTROL_CENTER.md).

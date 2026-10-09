@@ -128,7 +128,13 @@ def _register_middleware(app: FastAPI) -> None:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Tenant-ID"],
-        expose_headers=["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+        # Content-Disposition: the console names a CSV export from it (D-019).
+        expose_headers=[
+            "X-Request-ID",
+            "X-RateLimit-Limit",
+            "X-RateLimit-Remaining",
+            "Content-Disposition",
+        ],
         max_age=600,
     )
 

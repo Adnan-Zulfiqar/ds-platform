@@ -10,6 +10,20 @@ production release.
 
 ## [Unreleased]
 
+### Added - Admin Control Center phase 3: workspace drill-down and exports (D-019)
+
+- **Read-only views inside one workspace:** users (roles and live sessions),
+  invitations, stores, supplier and channel connections (never
+  credentials), products and drafts with detail, listings, orders with
+  detail (buyer, items, shipments, history, supplier order), sync runs and
+  notifications.
+- **Every view** is a tenant-scoped query and is audited.
+- **CSV exports** need re-authentication, are capped at 5000 rows, are
+  audited with their row count, and neutralise spreadsheet formulas.
+- Batched role and session lookups for user lists:
+  `RoleRepository.role_names_for_users` and
+  `RefreshTokenRepository.active_counts_for_users`.
+
 ### Added - Admin Control Center phase 2: live dashboard and workspace entry (D-019)
 
 - **Owner decision D-019:** operators may view and manage complete workspace

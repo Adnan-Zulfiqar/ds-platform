@@ -492,6 +492,27 @@ class PlatformAdminService(BaseService):
             detail={"route": route[:200]},
         )
 
+    async def record_workspace_export(
+        self,
+        principal: PlatformPrincipal,
+        tenant_id: uuid.UUID,
+        *,
+        dataset: str,
+        rows: int,
+        ctx: AuditContext,
+    ) -> None:
+        """A bulk copy of customer data leaving the platform: its own row,
+        with what and how much."""
+        await self._audit(
+            "workspace_data_exported",
+            admin=principal.admin,
+            ctx=ctx,
+            target_tenant_id=tenant_id,
+            target_type="workspace",
+            target_id=str(tenant_id),
+            detail={"dataset": dataset, "rows": rows},
+        )
+
     async def audit_permission_denied(
         self, admin: PlatformAdmin, *, permission: str, ctx: AuditContext
     ) -> None:

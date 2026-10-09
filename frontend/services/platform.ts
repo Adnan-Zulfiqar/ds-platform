@@ -12,6 +12,7 @@ import {
   setPlatformToken,
   subscribePlatformToken,
 } from "@/lib/platform/client";
+import { ApiError } from "@/lib/api-client";
 import type { Page } from "@/types/api";
 
 /** Track E5d / D-018: platform-operator data access. Never uses the tenant client. */
@@ -449,4 +450,138 @@ export function usePlatformWorkspace(
       ).data,
     enabled,
   });
+}
+
+// --- Workspace drill-down (phase 3) ------------------------------------------
+
+export type WorkspaceResource =
+  | "users"
+  | "invitations"
+  | "stores"
+  | "products"
+  | "listings"
+  | "orders"
+  | "sync-runs"
+  | "notifications";
+
+/** Query parameters for one workspace list. Empty values are dropped. */
+export type WorkspaceListParams = Record<
+  string,
+  string | number | boolean | undefined
+>;
+
+/** One page of any workspace list. Each view is audited on the server. */
+export function usePlatformWorkspaceList<T>(
+  tenantId: string,
+  resource: WorkspaceResource,
+  params: WorkspaceListParams,
+): UseQueryResult<Page<T>> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "workspace", tenantId, resource, params],
+    queryFn: async () => {
+      const clean = Object.fromEntries(
+        Object.entries(params).filter(([, v]) => v !== undefined && v !== ""),
+      );
+      return (
+        await platformClient.get<Page<T>>(
+          `/workspaces/${tenantId}/${resource}`,
+          { params: clean },
+        )
+      ).data;
+    },
+    placeholderData: (previous) => previous,
+  });
+}
+
+export interface WorkspaceConnection {
+  kind: string;
+  id: string;
+  status: string;
+  label: string | null;
+  storeId: string | null;
+  lastSyncAt: string | null;
+  tokenExpiresAt: string | null;
+  webhooksRegisteredAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+}
+
+export function usePlatformWorkspaceConnections(
+  tenantId: string,
+): UseQueryResult<WorkspaceConnection[]> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "workspace", tenantId, "connections"],
+    queryFn: async () =>
+      (
+        await platformClient.get<WorkspaceConnection[]>(
+          `/workspaces/${tenantId}/connections`,
+        )
+      ).data,
+  });
+}
+
+/** A record in a workspace, by kind and id. */
+export function usePlatformWorkspaceRecord<T>(
+  tenantId: string,
+  kind: "orders" | "products",
+  id: string | null,
+): UseQueryResult<T> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "workspace", tenantId, kind, "detail", id],
+    queryFn: async () =>
+      (await platformClient.get<T>(`/workspaces/${tenantId}/${kind}/${id}`))
+        .data,
+    enabled: id !== null,
+  });
+}
+
+export const EXPORT_DATASETS = [
+  { value: "users", label: "Users" },
+  { value: "stores", label: "Stores" },
+  { value: "products", label: "Products" },
+  { value: "drafts", label: "Drafts" },
+  { value: "listings", label: "Listings" },
+  { value: "orders", label: "Orders" },
+] as const;
+
+/**
+ * Downloads one dataset as CSV (re-auth, audited, at most 5000 rows).
+ *
+ * The body is a file, so an error body arrives as a Blob too; it is read and
+ * rethrown as the usual `ApiError`, which is what lets the re-auth prompt see
+ * `reauth_required` here as everywhere else.
+ */
+export async function downloadWorkspaceExport(
+  tenantId: string,
+  dataset: string,
+): Promise<void> {
+  const response = await platformClient.get<Blob>(
+    `/workspaces/${tenantId}/export/${dataset}`,
+    {
+      responseType: "blob",
+      validateStatus: () => true,
+    },
+  );
+  if (response.status !== 200) {
+    if (response.status === 401) setPlatformToken(null);
+    let body: { code?: string; message?: string } = {};
+    try {
+      body = JSON.parse(await response.data.text()) as typeof body;
+    } catch {
+      // not JSON: fall through to the generic error
+    }
+    throw new ApiError({
+      code: body.code ?? "export_failed",
+      message: body.message ?? "The export failed.",
+      status: response.status,
+    });
+  }
+  const disposition = String(response.headers["content-disposition"] ?? "");
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${dataset}.csv`;
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
 }
