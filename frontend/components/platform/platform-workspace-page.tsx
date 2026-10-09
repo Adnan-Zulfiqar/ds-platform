@@ -2,6 +2,7 @@
 
 import {
   ExportTab,
+  ImportsTab,
   ListingsTab,
   NotificationsTab,
   OrdersTab,
@@ -33,6 +34,11 @@ export function PlatformWorkspacePage({ tenantId }: { tenantId: string }) {
           id: "products",
           label: "Products",
           content: <ProductsTab tenantId={tenantId} />,
+        },
+        {
+          id: "imports",
+          label: "Imports",
+          content: <ImportsTab tenantId={tenantId} />,
         },
         {
           id: "listings",

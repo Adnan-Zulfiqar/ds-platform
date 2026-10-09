@@ -43,6 +43,7 @@ import {
   usePlatformWorkspaceConnections,
   usePlatformWorkspaceRecord,
   useRevokeWorkspaceInvitation,
+  useWorkspaceCatalogAction,
   useWorkspaceStoreAction,
   useWorkspaceUserAction,
 } from "@/services/platform";
@@ -828,6 +829,7 @@ function ProductSheet({
                 ))}
               </ul>
             </div>
+            <ProductActions tenantId={tenantId} productId={detail.data.id} />
             {detail.data.description && (
               <div>
                 <p className="mb-1 font-medium">Description</p>
@@ -840,6 +842,166 @@ function ProductSheet({
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function ProductActions({
+  tenantId,
+  productId,
+}: {
+  tenantId: string;
+  productId: string;
+}) {
+  const { can } = usePlatformAccess();
+  const act = useWorkspaceCatalogAction(tenantId);
+  if (!can("catalog.manage")) return null;
+  return (
+    <ReasonedAction
+      label="Push price and stock again"
+      description="Queues the push to every channel listing of this product. Paused stores are skipped."
+      onRun={(reason) =>
+        act.mutateAsync({
+          reason,
+          action: { kind: "resync-listings", productId },
+        })
+      }
+    />
+  );
+}
+
+function OrderActions({
+  tenantId,
+  orderId,
+  stuck,
+}: {
+  tenantId: string;
+  orderId: string;
+  stuck: boolean;
+}) {
+  const { can } = usePlatformAccess();
+  const act = useWorkspaceCatalogAction(tenantId);
+  if (!can("orders.manage")) return null;
+  return (
+    <div className="space-y-2" data-testid="platform-order-actions">
+      <ReasonedAction
+        label="Refresh from supplier"
+        onRun={(reason) =>
+          act.mutateAsync({
+            reason,
+            action: { kind: "refresh-order", orderId },
+          })
+        }
+      />
+      {stuck && (
+        <ReasonedAction
+          label="Release stuck supplier order"
+          description="Only after checking AliExpress and finding no order. Releasing lets it be placed again; if an order does exist, it would be bought twice."
+          destructive
+          onRun={(reason) =>
+            act.mutateAsync({
+              reason,
+              action: { kind: "release-supplier-order", orderId },
+            })
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+interface ImportRow {
+  id: string;
+  source: string;
+  externalId: string;
+  status: string;
+  productId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export function ImportsTab({ tenantId }: { tenantId: string }) {
+  const { can } = usePlatformAccess();
+  const act = useWorkspaceCatalogAction(tenantId);
+  const guard = useReauthGuard();
+  const [error, setError] = useState<string | null>(null);
+  const columns: Column<ImportRow>[] = [
+    { header: "When", cell: (i) => when(i.createdAt) },
+    { header: "Source", cell: (i) => i.source },
+    { header: "Supplier id", cell: (i) => i.externalId },
+    {
+      header: "Status",
+      cell: (i) => <StatusBadge value={i.status} bad={["failed"]} />,
+    },
+    {
+      header: "Error",
+      cell: (i) => (
+        <span className="line-clamp-2 text-xs text-muted-foreground">
+          {i.errorCode ? `${i.errorCode}: ${i.errorMessage ?? ""}` : "—"}
+        </span>
+      ),
+    },
+    ...(can("catalog.manage")
+      ? [
+          {
+            header: "",
+            cell: (i: ImportRow) =>
+              i.status !== "failed" ? null : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const reason =
+                      window.prompt(
+                        "Reason for retrying this import (audited):",
+                      ) ?? "";
+                    if (reason.trim().length < 3) return;
+                    setError(null);
+                    guard(() =>
+                      act.mutateAsync({
+                        reason: reason.trim(),
+                        action: { kind: "retry-import", importId: i.id },
+                      }),
+                    ).catch((err: unknown) => setError(describeError(err)));
+                  }}
+                >
+                  Retry
+                </Button>
+              ),
+          },
+        ]
+      : []),
+  ];
+  return (
+    <div className="space-y-3">
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+      <PlatformDataTable<ImportRow>
+        tenantId={tenantId}
+        resource="imports"
+        columns={columns}
+        filters={[
+          {
+            param: "status",
+            label: "Status",
+            options: opts(
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "skipped",
+            ),
+          },
+        ]}
+        emptyText="No import attempts."
+        testId="platform-workspace-imports"
+      />
+    </div>
   );
 }
 
@@ -1095,6 +1257,11 @@ function OrderSheet({
                 ))
               )}
             </div>
+            <OrderActions
+              tenantId={tenantId}
+              orderId={d.id}
+              stuck={d.supplierOrders.some((s) => s.status === "placing")}
+            />
             <div>
               <p className="mb-1 font-medium">Shipments</p>
               {d.shipments.length === 0 ? (
