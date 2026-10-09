@@ -783,3 +783,81 @@ export function useWorkspaceCatalogAction(tenantId: string) {
       }),
   });
 }
+
+// --- Jobs (phase 7) -------------------------------------------------------------
+
+export type JobKind =
+  | "order_sync"
+  | "inventory_sync"
+  | "product_import"
+  | "pipeline_run"
+  | "rule_application"
+  | "supplier_order"
+  | "automation_run";
+
+export interface PlatformJob {
+  kind: JobKind;
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  status: string;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export function usePlatformJobsSummary(): UseQueryResult<
+  Record<string, Record<string, number>>
+> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "jobs", "summary"],
+    queryFn: async () =>
+      (
+        await platformClient.get<Record<string, Record<string, number>>>(
+          "/jobs/summary",
+        )
+      ).data,
+    refetchInterval: 60_000,
+  });
+}
+
+export function usePlatformJobs(
+  kind: JobKind,
+  state: "failed" | "stuck",
+  page: number,
+): UseQueryResult<Page<PlatformJob>> {
+  return useQuery({
+    queryKey: [...platformKeys.all, "jobs", kind, state, page],
+    queryFn: async () =>
+      (
+        await platformClient.get<Page<PlatformJob>>("/jobs", {
+          params: { kind, state, page, size: 25 },
+        })
+      ).data,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/** One action on one job, in that job's workspace (support session, re-auth). */
+export function useJobAction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { job: PlatformJob; reason: string }) => {
+      const { job, reason } = input;
+      const base = `/workspaces/${job.tenantId}/jobs/${job.kind}/${job.id}`;
+      const verb =
+        job.kind === "order_sync" || job.kind === "inventory_sync"
+          ? "close"
+          : job.kind === "automation_run"
+            ? "retry"
+            : "cancel";
+      return (await platformClient.post(`${base}/${verb}`, { reason }))
+        .data as unknown;
+    },
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: [...platformKeys.all, "jobs"],
+      }),
+  });
+}

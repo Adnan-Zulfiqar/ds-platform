@@ -89,7 +89,7 @@ test("an operator opens a support session, then disables a member with a reason"
   await signIn(page);
   await goTo(page, "Workspaces");
   await page.getByRole("link", { name: /Acme Trading/ }).click();
-  await page.getByRole("button", { name: "Users" }).click();
+  await page.getByRole("button", { name: "Users", exact: true }).click();
   await page
     .getByTestId("platform-workspace-users")
     .getByText("member@acme.test")
@@ -144,7 +144,7 @@ test("an owner's role is not offered for change", async ({ page }) => {
   await signIn(page);
   await goTo(page, "Workspaces");
   await page.getByRole("link", { name: /Acme Trading/ }).click();
-  await page.getByRole("button", { name: "Users" }).click();
+  await page.getByRole("button", { name: "Users", exact: true }).click();
   await page
     .getByTestId("platform-workspace-users")
     .getByText("owner@acme.test")

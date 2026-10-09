@@ -82,7 +82,7 @@ test("a stuck supplier order is released with a confirmed reason", async ({
   await signIn(page);
   await goTo(page, "Workspaces");
   await page.getByRole("link", { name: /Acme Trading/ }).click();
-  await page.getByRole("button", { name: "Orders" }).click();
+  await page.getByRole("button", { name: "Orders", exact: true }).click();
   await page
     .getByTestId("platform-workspace-orders")
     .getByText("#1001")

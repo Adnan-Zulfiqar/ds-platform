@@ -72,7 +72,7 @@ test("an operator pauses a store and runs an inventory sync", async ({
   await signIn(page);
   await goTo(page, "Workspaces");
   await page.getByRole("link", { name: /Acme Trading/ }).click();
-  await page.getByRole("button", { name: "Stores" }).click();
+  await page.getByRole("button", { name: "Stores", exact: true }).click();
 
   await page
     .getByTestId("platform-workspace-stores")
