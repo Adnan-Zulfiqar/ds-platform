@@ -166,7 +166,9 @@ async def platform_jobs(
     _principal: JobsRead,
     kind: JobKind = "order_sync",
     state: JobState = "failed",
-    tenant_id: uuid.UUID | None = None,
+    # camelCase like every other API field; without the alias FastAPI reads
+    # "tenant_id" and silently ignores the filter the console sends.
+    tenant_id: Annotated[uuid.UUID | None, Query(alias="tenantId")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 25,
 ) -> Page[PlatformJobRead]:
