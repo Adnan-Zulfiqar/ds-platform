@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney } from "@/lib/utils";
-import { useUpdateDraftVariant } from "@/services/drafts";
+import { useSetDraftVariantsEnabled, useUpdateDraftVariant } from "@/services/drafts";
 import type { ProductDetail, ProductVariant } from "@/types/api";
 
 interface DraftVariantsPanelProps {
@@ -56,6 +56,15 @@ function VariantEditorRow({
   const [compareAt, setCompareAt] = useState(variant.compareAtPrice ?? "");
   const [enabled, setEnabled] = useState(variant.isEnabled);
   const options = parseOptions(variant.label);
+
+  // "Enable all" / "Disable all" change every row on the server; follow it.
+  // Adjusted during render (React's pattern for a prop change), so other
+  // unsaved edits in the row are kept.
+  const [serverEnabled, setServerEnabled] = useState(variant.isEnabled);
+  if (serverEnabled !== variant.isEnabled) {
+    setServerEnabled(variant.isEnabled);
+    setEnabled(variant.isEnabled);
+  }
 
   async function save() {
     await update.mutateAsync({
@@ -157,6 +166,19 @@ export function DraftVariantsPanel({
   product,
 }: DraftVariantsPanelProps) {
   const enabledCount = product.variants.filter((variant) => variant.isEnabled).length;
+  const total = product.variants.length;
+  const bulk = useSetDraftVariantsEnabled(productId);
+  const allOn = total > 0 && enabledCount === total;
+  const someOn = enabledCount > 0 && enabledCount < total;
+  const selectAll = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (selectAll.current) selectAll.current.indeterminate = someOn;
+  }, [someOn]);
+
+  function setAll(enabled: boolean) {
+    bulk.mutate({ enabled });
+  }
 
   return (
     <section className="space-y-4" data-testid="draft-variants-panel">
@@ -168,10 +190,38 @@ export function DraftVariantsPanel({
             merchant SKU are yours — sync will not overwrite them.
           </p>
         </div>
-        <Badge variant="outline">
-          {enabledCount}/{product.variants.length} enabled
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">
+            {enabledCount}/{total} enabled
+          </Badge>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={total === 0 || allOn || bulk.isPending}
+            onClick={() => setAll(true)}
+          >
+            Enable all
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={total === 0 || enabledCount === 0 || bulk.isPending}
+            onClick={() => setAll(false)}
+          >
+            Disable all
+          </Button>
+          {bulk.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-label="Saving" />
+          ) : null}
+        </div>
       </div>
+      {bulk.isError ? (
+        <p className="text-sm text-destructive" role="alert">
+          The variants could not be updated. Try again.
+        </p>
+      ) : null}
 
       <div className="overflow-x-auto rounded-lg border">
         <Table>
@@ -183,7 +233,20 @@ export function DraftVariantsPanel({
               <TableHead>Sell price</TableHead>
               <TableHead>Compare-at</TableHead>
               <TableHead>Stock</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>
+                <label className="flex items-center gap-2">
+                  <input
+                    ref={selectAll}
+                    type="checkbox"
+                    aria-label="Enable or disable all variants"
+                    checked={allOn}
+                    disabled={total === 0 || bulk.isPending}
+                    onChange={(event) => setAll(event.target.checked)}
+                    data-testid="draft-variants-select-all"
+                  />
+                  Status
+                </label>
+              </TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>

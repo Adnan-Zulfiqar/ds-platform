@@ -235,6 +235,22 @@ export function useUpdateDraftVariant(productId: string) {
   });
 }
 
+/** Switch every variant of a draft (or the listed ones) on or off in one
+ * request: a draft can carry hundreds of variants. */
+export function useSetDraftVariantsEnabled(productId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { enabled: boolean; variantIds?: string[] }) => {
+      const { data } = await apiClient.patch<ProductDetail>(
+        `/drafts/${productId}/variants`,
+        input,
+      );
+      return data;
+    },
+    onSuccess: () => invalidateDraftWorkspace(queryClient, productId),
+  });
+}
+
 export function useDraftPricing(
   productId: string,
 ): UseQueryResult<DraftPricingWorkspace> {
