@@ -336,6 +336,7 @@ function FlagDefaults() {
                     : "Switch on everywhere"
                 }
                 destructive={flag.enabled}
+                id={`global-flag-reason-${flag.key}`}
                 onRun={(reason) =>
                   set.mutateAsync({
                     key: flag.key,
