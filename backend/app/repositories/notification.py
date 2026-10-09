@@ -19,6 +19,12 @@ class NotificationRepository(TenantScopedRepository[Notification]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, Notification)
 
+    async def has_payload(self, key: str, value: str) -> bool:
+        """Whether this workspace already has a notification carrying
+        ``payload[key] == value``: how a re-run broadcast stays idempotent."""
+        query = self._base_query().where(Notification.payload[key].astext == value).limit(1)
+        return (await self.session.execute(query)).first() is not None
+
     async def unread_count(self, *, user_id: uuid.UUID | None = None) -> int:
         where_clause = self._base_query().whereclause
         query = (

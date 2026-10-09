@@ -460,7 +460,56 @@ class GlobalFlagChange(WorkspaceChangeReason):
     enabled: bool
 
 
+# --- Platform settings (phase 10) ----------------------------------------------
+
+
+class MaintenanceRead(CamelCaseModel):
+    enabled: bool
+    message: str | None
+    updated_at: datetime | None
+
+
+class MaintenanceChange(WorkspaceChangeReason):
+    enabled: bool
+    message: str | None = Field(default=None, max_length=500)
+
+
+class PlatformAnnouncementRead(CamelCaseModel):
+    id: uuid.UUID
+    title: str
+    body: str
+    level: str
+    starts_at: datetime
+    ends_at: datetime | None
+    created_at: datetime
+
+
+class AnnouncementCreate(WorkspaceChangeReason):
+    title: str = Field(min_length=3, max_length=160)
+    body: str = Field(default="", max_length=2000)
+    level: Literal["info", "warning", "critical"] = "info"
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+
+class BroadcastCreate(WorkspaceChangeReason):
+    title: str = Field(min_length=3, max_length=255)
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class BroadcastQueued(CamelCaseModel):
+    broadcast_id: uuid.UUID
+
+
+class PlatformSettingsRead(CamelCaseModel):
+    maintenance: MaintenanceRead
+    announcements: list[PlatformAnnouncementRead]
+
+
 __all__ = [
+    "AnnouncementCreate",
+    "BroadcastCreate",
+    "BroadcastQueued",
     "DailyCountRead",
     "FeatureFlagStateRead",
     "FlagOverride",
@@ -469,9 +518,13 @@ __all__ = [
     "InventorySyncNow",
     "JobActionResult",
     "ListingsResyncQueued",
+    "MaintenanceChange",
+    "MaintenanceRead",
     "PlanOverride",
+    "PlatformAnnouncementRead",
     "PlatformDashboardRead",
     "PlatformJobRead",
+    "PlatformSettingsRead",
     "SubscriptionSummaryRead",
     "SupportSessionOpen",
     "SupportSessionRead",

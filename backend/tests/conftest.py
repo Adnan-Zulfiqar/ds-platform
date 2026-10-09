@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 
 import pytest
 
@@ -143,3 +143,15 @@ def _clear_context_between_tests() -> Generator[None]:
     """
     yield
     ctx.clear_context()
+
+
+@pytest.fixture(autouse=True)
+def _forget_cached_maintenance_flag() -> Iterator[None]:
+    """The maintenance flag is cached in-process for a few seconds (D-019).
+    Tests roll their data back, so a cached "on" from one test would make
+    the next one's writes answer 503. Each test starts and ends uncached."""
+    from app.services import platform_settings
+
+    platform_settings._cache.clear()
+    yield
+    platform_settings._cache.clear()

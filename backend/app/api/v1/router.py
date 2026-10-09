@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.deps import MaintenanceGuard
 from app.api.v1 import (
     ai,
     analytics,
@@ -33,6 +34,7 @@ from app.api.v1 import (
     pricing,
     products,
     stores,
+    system,
     users,
 )
 
@@ -40,25 +42,29 @@ api_router = APIRouter()
 
 # Domain routers. Each declares its own prefix and OpenAPI tag, so this file
 # stays a manifest rather than a place where routing rules accumulate.
+# MaintenanceGuard (D-019) makes the merchant routers read-only while the
+# platform is in maintenance; auth, the platform console and the public
+# system status stay outside it.
 api_router.include_router(auth.router)
-api_router.include_router(users.router)
-api_router.include_router(integrations.router)
-api_router.include_router(products.router)
-api_router.include_router(drafts.router)
-api_router.include_router(ai.router)
-api_router.include_router(stores.router)
-api_router.include_router(orders.router)
-api_router.include_router(inventory.router)
-api_router.include_router(global_rules.router)
+api_router.include_router(users.router, dependencies=[MaintenanceGuard])
+api_router.include_router(integrations.router, dependencies=[MaintenanceGuard])
+api_router.include_router(products.router, dependencies=[MaintenanceGuard])
+api_router.include_router(drafts.router, dependencies=[MaintenanceGuard])
+api_router.include_router(ai.router, dependencies=[MaintenanceGuard])
+api_router.include_router(stores.router, dependencies=[MaintenanceGuard])
+api_router.include_router(orders.router, dependencies=[MaintenanceGuard])
+api_router.include_router(inventory.router, dependencies=[MaintenanceGuard])
+api_router.include_router(global_rules.router, dependencies=[MaintenanceGuard])
 # Preview/apply share the `/global-rules` prefix; a second module keeps
 # rule CRUD and the bulk workflow separately reviewable.
-api_router.include_router(global_rules.applications_router)
-api_router.include_router(global_rules.targets_router)
-api_router.include_router(pricing.router)
-api_router.include_router(automation.router)
-api_router.include_router(notifications.router)
-api_router.include_router(analytics.router)
+api_router.include_router(global_rules.applications_router, dependencies=[MaintenanceGuard])
+api_router.include_router(global_rules.targets_router, dependencies=[MaintenanceGuard])
+api_router.include_router(pricing.router, dependencies=[MaintenanceGuard])
+api_router.include_router(automation.router, dependencies=[MaintenanceGuard])
+api_router.include_router(notifications.router, dependencies=[MaintenanceGuard])
+api_router.include_router(analytics.router, dependencies=[MaintenanceGuard])
 api_router.include_router(platform.router)
-api_router.include_router(billing.router)
+api_router.include_router(billing.router, dependencies=[MaintenanceGuard])
+api_router.include_router(system.router)
 
 __all__ = ["api_router"]

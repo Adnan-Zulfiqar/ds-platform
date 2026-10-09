@@ -129,9 +129,40 @@ class PlatformSupportSession(IdentifiedBase):
     ended_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class PlatformSetting(IdentifiedBase):
+    """One platform-wide setting (D-019), e.g. ``maintenance``. A row per
+    key; the value is a small JSON document the code that reads it owns."""
+
+    __tablename__ = "platform_settings"
+
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("platform_admins.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class PlatformAnnouncement(IdentifiedBase):
+    """A banner shown to every signed-in merchant while it is active."""
+
+    __tablename__ = "platform_announcements"
+
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    body: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    #: ``info``, ``warning`` or ``critical``.
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("platform_admins.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 __all__ = [
     "PlatformAdmin",
     "PlatformAdminAudit",
     "PlatformAdminSession",
+    "PlatformAnnouncement",
+    "PlatformSetting",
     "PlatformSupportSession",
 ]
