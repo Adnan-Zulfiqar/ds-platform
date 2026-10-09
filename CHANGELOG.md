@@ -10,6 +10,19 @@ production release.
 
 ## [Unreleased]
 
+### Added - Enable or disable all variants of a draft at once
+
+- **Options & variants tab:** "Enable all" and "Disable all" buttons, plus a
+  select-all box in the Status column, which shows a partial state when only
+  some variants are on.
+- **One request for the whole draft.** It goes to the new
+  `PATCH /api/v1/drafts/{id}/variants {enabled, variantIds?}`, not one call
+  per variant (a draft can carry hundreds).
+- **Safety.** It is tenant-scoped. An unknown or foreign variant id is a 404
+  and nothing changes.
+- **Unsaved edits are kept.** Rows follow the new state without losing
+  unsaved edits in their other fields.
+
 ### Fixed - Admin Control Center security review
 
 - **WooCommerce order webhooks** were not exempt from maintenance mode, so
