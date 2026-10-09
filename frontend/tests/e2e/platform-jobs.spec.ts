@@ -57,7 +57,7 @@ test("an operator closes a stuck order sync from the jobs page", async ({
     "0 failed · 1 stuck",
   );
 
-  await page.getByRole("button", { name: "Stuck" }).click();
+  await page.getByRole("button", { name: "Stuck", exact: true }).click();
   const table = page.getByTestId("platform-jobs");
   await expect(table).toContainText("Acme Trading");
   page.once(

@@ -97,7 +97,7 @@ test("users, stores and connections render from the workspace's endpoints", asyn
   });
   await openWorkspace(page);
 
-  await page.getByRole("button", { name: "Users" }).click();
+  await page.getByRole("button", { name: "Users", exact: true }).click();
   await expect(page.getByTestId("platform-workspace-users")).toContainText(
     "owner@acme.test",
   );
@@ -105,7 +105,7 @@ test("users, stores and connections render from the workspace's endpoints", asyn
     "owner",
   );
 
-  await page.getByRole("button", { name: "Stores" }).click();
+  await page.getByRole("button", { name: "Stores", exact: true }).click();
   await expect(page.getByTestId("platform-workspace-stores")).toContainText(
     "orders, inventory",
   );
@@ -170,7 +170,7 @@ test("an order opens with buyer, items and supplier order", async ({
     },
   });
   await openWorkspace(page);
-  await page.getByRole("button", { name: "Orders" }).click();
+  await page.getByRole("button", { name: "Orders", exact: true }).click();
   await page
     .getByTestId("platform-workspace-orders")
     .getByText("#1001")
@@ -217,12 +217,12 @@ test("an export asks for re-authentication, then downloads the CSV", async ({
         }),
   );
   await openWorkspace(page);
-  await page.getByRole("button", { name: "Export" }).click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
 
   const download = page.waitForEvent("download");
   await page
     .getByTestId("platform-workspace-export")
-    .getByRole("button", { name: "Orders" })
+    .getByRole("button", { name: "Orders", exact: true })
     .click();
   await confirmReauth(page);
   expect((await download).suggestedFilename()).toBe("acme-orders.csv");
