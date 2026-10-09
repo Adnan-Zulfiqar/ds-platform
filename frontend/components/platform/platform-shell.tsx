@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   ScrollText,
   ShieldCheck,
+  ToggleRight,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -111,6 +112,12 @@ const NAV: NavItem[] = [
     needs: "tenants.read",
   },
   { href: "/platform/jobs", label: "Jobs", icon: Cog, needs: "jobs.read" },
+  {
+    href: "/platform/feature-flags",
+    label: "Feature switches",
+    icon: ToggleRight,
+    needs: "billing.read",
+  },
   {
     href: "/platform/operators",
     label: "Operators",
