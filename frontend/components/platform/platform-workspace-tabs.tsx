@@ -43,6 +43,7 @@ import {
   usePlatformWorkspaceConnections,
   usePlatformWorkspaceRecord,
   useRevokeWorkspaceInvitation,
+  useWorkspaceStoreAction,
   useWorkspaceUserAction,
 } from "@/services/platform";
 
@@ -98,6 +99,8 @@ interface StoreRow {
   lastSyncAt: string | null;
   lastError: string | null;
   healthScore: number;
+  syncPausedAt: string | null;
+  syncPausedReason: string | null;
 }
 
 interface ProductRow {
@@ -385,6 +388,8 @@ function UserSheet({
 }
 
 export function StoresTab({ tenantId }: { tenantId: string }) {
+  const { can } = usePlatformAccess();
+  const [open, setOpen] = useState<StoreRow | null>(null);
   const connections = usePlatformWorkspaceConnections(tenantId);
   const columns: Column<StoreRow>[] = [
     {
@@ -395,7 +400,10 @@ export function StoresTab({ tenantId }: { tenantId: string }) {
     {
       header: "Status",
       cell: (s) => (
-        <StatusBadge value={s.status} bad={["error", "disconnected"]} />
+        <div className="flex gap-1">
+          <StatusBadge value={s.status} bad={["error", "disconnected"]} />
+          {s.syncPausedAt && <Badge variant="destructive">paused</Badge>}
+        </div>
       ),
     },
     {
@@ -451,8 +459,15 @@ export function StoresTab({ tenantId }: { tenantId: string }) {
             ),
           },
         ]}
+        onRowClick={setOpen}
         emptyText="No stores."
         testId="platform-workspace-stores"
+      />
+      {can("stores.manage") && <SyncNow tenantId={tenantId} />}
+      <StoreSheet
+        tenantId={tenantId}
+        store={open}
+        onClose={() => setOpen(null)}
       />
       <Card>
         <CardHeader>
@@ -517,6 +532,131 @@ export function StoresTab({ tenantId }: { tenantId: string }) {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function SyncNow({ tenantId }: { tenantId: string }) {
+  const act = useWorkspaceStoreAction(tenantId);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Run a sync now</CardTitle>
+        <CardDescription>
+          The same syncs the merchant can start. A sync already running is
+          refused, as for them.
+        </CardDescription>
+      </CardHeader>
+      <CardContent
+        className="grid gap-3 md:grid-cols-2"
+        data-testid="platform-sync-now"
+      >
+        <ReasonedAction
+          label="Sync supplier orders"
+          onRun={(reason) =>
+            act.mutateAsync({ reason, action: { kind: "sync-orders" } })
+          }
+        />
+        <ReasonedAction
+          label="Sync inventory"
+          description="All stores. Changed stock is pushed to every store that is not paused."
+          onRun={(reason) =>
+            act.mutateAsync({
+              reason,
+              action: { kind: "sync-inventory", storeId: null },
+            })
+          }
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function StoreSheet({
+  tenantId,
+  store,
+  onClose,
+}: {
+  tenantId: string;
+  store: StoreRow | null;
+  onClose: () => void;
+}) {
+  const { can } = usePlatformAccess();
+  const act = useWorkspaceStoreAction(tenantId);
+  return (
+    <Sheet open={store !== null} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>{store?.name}</SheetTitle>
+          <SheetDescription>
+            {store?.platform} · {store?.status}
+            {store?.syncPausedAt
+              ? ` · paused since ${when(store.syncPausedAt)}`
+              : ""}
+          </SheetDescription>
+        </SheetHeader>
+        {store && (
+          <div className="mt-4 space-y-3" data-testid="platform-store-actions">
+            <Facts
+              rows={[
+                ["Last sync", when(store.lastSyncAt)],
+                ["Health", store.healthScore],
+                ["Last error", store.lastError ?? "—"],
+                ["Pause reason", store.syncPausedReason ?? "—"],
+              ]}
+            />
+            {!can("stores.manage") ? (
+              <p className="text-sm text-muted-foreground">
+                Your role cannot change stores.
+              </p>
+            ) : (
+              <>
+                <ReasonedAction
+                  label={
+                    store.syncPausedAt ? "Resume updates" : "Pause updates"
+                  }
+                  description={
+                    store.syncPausedAt
+                      ? "Prices, stock and new listings are sent again."
+                      : "DropPilot stops sending prices, stock and new listings. Orders keep arriving. The merchant is notified."
+                  }
+                  destructive={!store.syncPausedAt}
+                  onRun={(reason) =>
+                    act.mutateAsync({
+                      reason,
+                      action: {
+                        kind: store.syncPausedAt ? "resume" : "pause",
+                        storeId: store.id,
+                      },
+                    })
+                  }
+                />
+                <ReasonedAction
+                  label="Sync this store's inventory"
+                  onRun={(reason) =>
+                    act.mutateAsync({
+                      reason,
+                      action: { kind: "sync-inventory", storeId: store.id },
+                    })
+                  }
+                />
+                {store.platform === "shopify" && (
+                  <ReasonedAction
+                    label="Re-register Shopify webhooks"
+                    description="Creates only what is missing, as on connect."
+                    onRun={(reason) =>
+                      act.mutateAsync({
+                        reason,
+                        action: { kind: "shopify-webhooks", storeId: store.id },
+                      })
+                    }
+                  />
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
