@@ -94,4 +94,9 @@ USER droppilot
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD find /tmp -maxdepth 1 -name celery-worker-heartbeat -mmin -3 | grep -q .
 
-CMD ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]
+# `--queues` names every queue `task_routes` sends to. Without it Celery
+# consumes only the default queue, and every `integrations.*` / `shopify.*`
+# task (hourly Shopify order sync, price and stock pushes, AliExpress health
+# sweeps) sat unconsumed: 568 messages on a local stack on 2026-10-10.
+# `tests/unit/test_worker_consumes_every_queue.py` holds the two in step.
+CMD ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=default,integrations"]
