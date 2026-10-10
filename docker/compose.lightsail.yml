@@ -225,10 +225,14 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      # The worker touches /tmp/celery-worker-heartbeat on start and after every
+      # task, and beat schedules workers.health every minute, so the file is
+      # fresh while the worker consumes. Cheaper than `celery inspect ping`,
+      # which imported the whole application (11s, a full core) every 30s.
+      test: ["CMD-SHELL", "find /tmp -maxdepth 1 -name celery-worker-heartbeat -mmin -3 | grep -q ."]
       interval: 30s
-      timeout: 10s
-      start_period: 45s
+      timeout: 5s
+      start_period: 60s
       retries: 3
     read_only: true
     tmpfs:

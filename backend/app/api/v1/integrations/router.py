@@ -272,8 +272,9 @@ async def aliexpress_webhook(request: Request) -> AliExpressWebhookAckResponse:
     is no browser and no redirect. The handler logs the payload and returns
     immediately so upstream retries stop.
 
-    **No authentication header is expected.** Signature verification is not
-    implemented yet — see ``app.integrations.aliexpress.webhook``.
+    **No authentication header is expected.** Signature verification is
+    opt-in HMAC, configured per ``app.integrations.aliexpress.webhook``;
+    with no secret configured the payload is only logged.
     """
     return await receive_webhook(request)
 

@@ -37,6 +37,13 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def verification_link(raw_token: str) -> str:
+    """The app page that consumes the token. The token travels in the URL
+    fragment, as the invitation link's does: fragments are not sent to the
+    server, so the raw token never lands in a request log."""
+    return f"{settings.email.app_base_url.rstrip('/')}/verify-email#token={raw_token}"
+
+
 class EmailVerificationService(BaseService):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -67,8 +74,8 @@ class EmailVerificationService(BaseService):
                 to=user.email,
                 subject="Verify your DropPilot account",
                 body_text=(
-                    "Use this verification token in the app to confirm your email:\n\n"
-                    f"{raw}\n\n"
+                    "Open this link to confirm your email address:\n\n"
+                    f"{verification_link(raw)}\n\n"
                     "If you did not create an account, ignore this message."
                 ),
             )

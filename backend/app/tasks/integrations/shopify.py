@@ -67,25 +67,6 @@ def publish_product(
         clear_context()
 
 
-@celery_app.task(base=BaseTask, bind=True, name="shopify.push_inventory")
-def push_inventory(
-    self: Any, tenant_id: str, store_id: str, product_id: str, **_: Any
-) -> dict[str, Any]:
-    set_tenant_id(uuid.UUID(tenant_id))
-    try:
-
-        async def _run() -> dict[str, Any]:
-            async with transaction() as session:
-                return await ShopifySyncService(session).push_inventory(
-                    store_id=uuid.UUID(store_id),
-                    product_id=uuid.UUID(product_id),
-                )
-
-        return asyncio.run(_run())
-    finally:
-        clear_context()
-
-
 @celery_app.task(base=BaseTask, bind=True, name="shopify.push_price_quantity")
 def push_price_quantity(self: Any, tenant_id: str, product_id: str, **_: Any) -> dict[str, Any]:
     """Send one product's current price and stock to each of its Shopify
@@ -141,22 +122,3 @@ def enqueue_price_quantity(tenant_id: uuid.UUID, product_ids: Iterable[uuid.UUID
                 error=type(exc).__name__,
             )
     return queued
-
-
-@celery_app.task(base=BaseTask, bind=True, name="shopify.push_price")
-def push_price(
-    self: Any, tenant_id: str, store_id: str, product_id: str, **_: Any
-) -> dict[str, Any]:
-    set_tenant_id(uuid.UUID(tenant_id))
-    try:
-
-        async def _run() -> dict[str, Any]:
-            async with transaction() as session:
-                return await ShopifySyncService(session).push_price(
-                    store_id=uuid.UUID(store_id),
-                    product_id=uuid.UUID(product_id),
-                )
-
-        return asyncio.run(_run())
-    finally:
-        clear_context()

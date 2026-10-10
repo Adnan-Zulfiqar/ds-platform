@@ -25,7 +25,9 @@ export const authKeys = {
   session: () => [...authKeys.all, "session"] as const,
 };
 
-export async function register(payload: RegisterPayload): Promise<AuthResponse> {
+export async function register(
+  payload: RegisterPayload,
+): Promise<AuthResponse> {
   // Acceptance travels with every signup, as the value the person actually
   // gave. The backend refuses a false or mismatched one, so a caller that
   // forgets gets a clear failure rather than a silent bypass.
@@ -67,13 +69,30 @@ export async function logout(): Promise<void> {
  * clear this tab's own state.
  */
 export async function logoutAll(): Promise<string> {
-  const { data } = await apiClient.post<{ message: string }>("/auth/logout-all", {});
+  const { data } = await apiClient.post<{ message: string }>(
+    "/auth/logout-all",
+    {},
+  );
   return data.message;
 }
 
 /** Ask the server to (re)send the email verification link. */
+/** Consumes the token from the verification email for the signed-in user. */
+export async function confirmEmailVerification(token: string): Promise<string> {
+  const { data } = await apiClient.post<{ message: string }>(
+    "/auth/verify-email/confirm",
+    {
+      token,
+    },
+  );
+  return data.message;
+}
+
 export async function requestEmailVerification(): Promise<string> {
-  const { data } = await apiClient.post<{ message: string }>("/auth/verify-email/request", {});
+  const { data } = await apiClient.post<{ message: string }>(
+    "/auth/verify-email/request",
+    {},
+  );
   return data.message;
 }
 
@@ -125,8 +144,12 @@ export type GoogleIntent = "login" | "signup";
  * so a nonce obtained for signing in cannot later be presented to signup or
  * link.
  */
-export async function requestGoogleNonce(intent: GoogleIntent): Promise<GoogleNonce> {
-  const { data } = await apiClient.post<GoogleNonce>("/auth/google/nonce", { intent });
+export async function requestGoogleNonce(
+  intent: GoogleIntent,
+): Promise<GoogleNonce> {
+  const { data } = await apiClient.post<GoogleNonce>("/auth/google/nonce", {
+    intent,
+  });
   return data;
 }
 
@@ -144,7 +167,10 @@ export async function loginWithGoogle(payload: {
   credential: string;
   nonce: string;
 }): Promise<AuthResponse> {
-  const { data } = await apiClient.post<AuthResponse>("/auth/google/login", payload);
+  const { data } = await apiClient.post<AuthResponse>(
+    "/auth/google/login",
+    payload,
+  );
   setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
   return data;
 }
@@ -179,7 +205,10 @@ export async function linkGoogle(payload: {
 
 /** A link nonce, bound server-side to the signed-in user. */
 export async function requestGoogleLinkNonce(): Promise<GoogleNonce> {
-  const { data } = await apiClient.post<GoogleNonce>("/auth/google/link/nonce", {});
+  const { data } = await apiClient.post<GoogleNonce>(
+    "/auth/google/link/nonce",
+    {},
+  );
   return data;
 }
 
@@ -195,7 +224,9 @@ export interface PasswordResetChallenge {
  * The response is identical whether or not the address has an account, so
  * nothing the caller does with it may imply otherwise.
  */
-export async function requestPasswordReset(email: string): Promise<PasswordResetChallenge> {
+export async function requestPasswordReset(
+  email: string,
+): Promise<PasswordResetChallenge> {
   const { data } = await apiClient.post<PasswordResetChallenge>(
     "/auth/password-reset/request",
     { email },
@@ -238,10 +269,15 @@ export interface InvitationPreview {
   expiresAt: string;
 }
 
-export async function previewInvitation(token: string): Promise<InvitationPreview> {
-  const { data } = await apiClient.post<InvitationPreview>("/auth/invitations/preview", {
-    token,
-  });
+export async function previewInvitation(
+  token: string,
+): Promise<InvitationPreview> {
+  const { data } = await apiClient.post<InvitationPreview>(
+    "/auth/invitations/preview",
+    {
+      token,
+    },
+  );
   return data;
 }
 
@@ -253,12 +289,17 @@ export interface AcceptInvitationPayload {
   acceptedLegal: boolean;
 }
 
-export async function acceptInvitation(payload: AcceptInvitationPayload): Promise<AuthResponse> {
+export async function acceptInvitation(
+  payload: AcceptInvitationPayload,
+): Promise<AuthResponse> {
   const { acceptedLegal, ...rest } = payload;
-  const { data } = await apiClient.post<AuthResponse>("/auth/invitations/accept", {
-    ...rest,
-    ...legalAcceptance(acceptedLegal),
-  });
+  const { data } = await apiClient.post<AuthResponse>(
+    "/auth/invitations/accept",
+    {
+      ...rest,
+      ...legalAcceptance(acceptedLegal),
+    },
+  );
   setAccessToken(data.tokens.accessToken, data.tokens.expiresIn);
   return data;
 }

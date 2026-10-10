@@ -10,6 +10,45 @@ production release.
 
 ## [Unreleased]
 
+### Fixed - full project audit (2026-10-10)
+
+- **Shopify and AliExpress background jobs never ran in Docker.** `task_routes`
+  sends every `integrations.*` and `shopify.*` task to the `integrations`
+  queue, but the worker image consumed only `default`: 568 unconsumed
+  messages on a local stack. The worker now starts with
+  `--queues=default,integrations`, and a unit test keeps the Dockerfile and
+  the routes in step.
+- **Worker retries failed with "Event loop is closed".** The shared Redis
+  client kept a connection bound to a task's first event loop; a retry's
+  second `asyncio.run` reused it. `get_redis` now rebuilds the client when a
+  different loop asks (the Postgres side was fixed in #92; this was the
+  remaining half).
+- **Worker health check.** `celery inspect ping` imported the whole
+  application on every check (11s, a full CPU core, every 30s) and its 10s
+  limit marked a working worker unhealthy. The worker now touches
+  `/tmp/celery-worker-heartbeat` on start, every 30s from a timer thread
+  and after every task; beat schedules the broker-only `workers.health` task
+  every minute; the check reads the file's age.
+- **A failed manual automation run left no record.** It is now returned as
+  a run with `status=failed` and committed with its notification and the
+  rule's failure count.
+- **No way to confirm an email address.** The verification email now links
+  to `/verify-email#token=…`, a page that consumes the token. With
+  `SECURITY_REQUIRE_EMAIL_VERIFICATION=true`, new accounts were locked out.
+- **Stale caches.** Editing a global rule refreshes the Impact and resolve
+  views; applying pricing refreshes product, draft and inventory lists.
+- Removed the unused `shopify.push_inventory` and `shopify.push_price`
+  tasks (`shopify.push_price_quantity` replaced them); corrected the
+  AliExpress webhook docstring.
+
+### Known limitations recorded by the audit
+
+- The merchant's per-store sync switches are still not enforced (follow-up
+  task suggested).
+- `/customers` is a placeholder page, reachable by URL only.
+- Endpoints with no screen yet: Google unlink, AI prompt management, product
+  feeds, eBay health, manual Shopify order sync.
+
 ### Added - Enable or disable all variants of a draft at once
 
 - **Options & variants tab:** "Enable all" and "Disable all" buttons, plus a

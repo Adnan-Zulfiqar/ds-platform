@@ -35,18 +35,12 @@ import type { ListQuery, Page } from "@/types/api";
 export type RuleScope = "global" | "store" | "category" | "product" | "variant";
 
 export type PricingStrategy =
-  | "percentage_markup"
-  | "fixed_markup"
-  | "target_margin"
-  | "hybrid"
-  | "tiered";
+  "percentage_markup" | "fixed_markup" | "target_margin" | "hybrid" | "tiered";
 
 export type PriceRounding = "none" | "ninety_nine" | "ninety_five" | "whole";
 
 export type ShippingCostHandling =
-  | "include_in_price"
-  | "charge_separately"
-  | "absorb_from_profit";
+  "include_in_price" | "charge_separately" | "absorb_from_profit";
 
 /**
  * There is deliberately no `preferred_carrier` member.
@@ -58,20 +52,18 @@ export type ShippingCostHandling =
  * then behaves as something else.
  */
 export type ShippingSelectionStrategy =
-  | "cheapest"
-  | "cheapest_tracked"
-  | "fastest"
-  | "fastest_under_cost";
+  "cheapest" | "cheapest_tracked" | "fastest" | "fastest_under_cost";
 
 export type ShippingNoMatchBehaviour =
-  | "needs_review"
-  | "cheapest_available"
-  | "block_publish";
+  "needs_review" | "cheapest_available" | "block_publish";
 
 export type RuleKind = "pricing" | "shipping";
 
 /** The identifier a scope needs. `global` deliberately has none. */
-export const SCOPE_IDENTIFIER: Record<RuleScope, keyof ScopeIdentifiers | null> = {
+export const SCOPE_IDENTIFIER: Record<
+  RuleScope,
+  keyof ScopeIdentifiers | null
+> = {
   global: null,
   store: "storeId",
   category: "categoryId",
@@ -150,8 +142,12 @@ export type ShippingRuleCreate = Omit<
  * the token the later save silently wins and the earlier editor's change
  * disappears with no trace that it ever existed.
  */
-export type PricingRuleUpdate = PricingRuleCreate & { expectedUpdatedAt: string };
-export type ShippingRuleUpdate = ShippingRuleCreate & { expectedUpdatedAt: string };
+export type PricingRuleUpdate = PricingRuleCreate & {
+  expectedUpdatedAt: string;
+};
+export type ShippingRuleUpdate = ShippingRuleCreate & {
+  expectedUpdatedAt: string;
+};
 
 export interface RuleActivation {
   isActive: boolean;
@@ -248,21 +244,24 @@ export function usePricingRuleList(
   return useQuery({
     queryKey: globalRuleKeys.list("pricing", query),
     queryFn: async () => {
-      const { data } = await apiClient.get<Page<PricingRule>>(`${BASE}/pricing`, {
-        params: query,
-      });
+      const { data } = await apiClient.get<Page<PricingRule>>(
+        `${BASE}/pricing`,
+        {
+          params: query,
+        },
+      );
       return data;
     },
   });
 }
 
-export function usePricingRule(
-  id: string | null,
-): UseQueryResult<PricingRule> {
+export function usePricingRule(id: string | null): UseQueryResult<PricingRule> {
   return useQuery({
     queryKey: globalRuleKeys.detail("pricing", id ?? ""),
     queryFn: async () => {
-      const { data } = await apiClient.get<PricingRule>(`${BASE}/pricing/${id}`);
+      const { data } = await apiClient.get<PricingRule>(
+        `${BASE}/pricing/${id}`,
+      );
       return data;
     },
     // Without this a null id would fire a request to `/pricing/null`.
@@ -276,9 +275,12 @@ export function useShippingRuleList(
   return useQuery({
     queryKey: globalRuleKeys.list("shipping", query),
     queryFn: async () => {
-      const { data } = await apiClient.get<Page<ShippingRule>>(`${BASE}/shipping`, {
-        params: query,
-      });
+      const { data } = await apiClient.get<Page<ShippingRule>>(
+        `${BASE}/shipping`,
+        {
+          params: query,
+        },
+      );
       return data;
     },
   });
@@ -290,7 +292,9 @@ export function useShippingRule(
   return useQuery({
     queryKey: globalRuleKeys.detail("shipping", id ?? ""),
     queryFn: async () => {
-      const { data } = await apiClient.get<ShippingRule>(`${BASE}/shipping/${id}`);
+      const { data } = await apiClient.get<ShippingRule>(
+        `${BASE}/shipping/${id}`,
+      );
       return data;
     },
     enabled: Boolean(id),
@@ -316,10 +320,21 @@ function invalidateRule(
   // and the cause of CI flakes in global-rules.spec.ts (N-5).
   const pending: Promise<unknown>[] = [
     queryClient.invalidateQueries({ queryKey: globalRuleKeys.lists(kind) }),
+    // A changed rule changes what it would do to drafts: the Impact tab's
+    // proposed prices and the per-draft resolution are stale the moment a
+    // rule is saved, and "Apply" acts on what the tab shows.
+    queryClient.invalidateQueries({
+      queryKey: [...globalRuleKeys.all, "impact"],
+    }),
+    queryClient.invalidateQueries({
+      queryKey: [...globalRuleKeys.all, "resolve"],
+    }),
   ];
   if (id) {
     pending.push(
-      queryClient.invalidateQueries({ queryKey: globalRuleKeys.detail(kind, id) }),
+      queryClient.invalidateQueries({
+        queryKey: globalRuleKeys.detail(kind, id),
+      }),
       queryClient.invalidateQueries({
         queryKey: [...globalRuleKeys.kind(kind), "history", id],
       }),
@@ -336,7 +351,10 @@ export function useCreatePricingRule(): UseMutationResult<
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: PricingRuleCreate) => {
-      const { data } = await apiClient.post<PricingRule>(`${BASE}/pricing`, payload);
+      const { data } = await apiClient.post<PricingRule>(
+        `${BASE}/pricing`,
+        payload,
+      );
       return data;
     },
     onSuccess: (rule) => invalidateRule(queryClient, "pricing", rule.id),
@@ -383,7 +401,10 @@ export function useCreateShippingRule(): UseMutationResult<
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: ShippingRuleCreate) => {
-      const { data } = await apiClient.post<ShippingRule>(`${BASE}/shipping`, payload);
+      const { data } = await apiClient.post<ShippingRule>(
+        `${BASE}/shipping`,
+        payload,
+      );
       return data;
     },
     onSuccess: (rule) => invalidateRule(queryClient, "shipping", rule.id),
@@ -449,11 +470,16 @@ export function useRuleHistory(
 }
 
 export function useResolveRule(
-  params: Pick<PreviewRequest, "productId" | "variantId" | "storeId" | "categoryId">,
+  params: Pick<
+    PreviewRequest,
+    "productId" | "variantId" | "storeId" | "categoryId"
+  >,
   enabled = true,
 ): UseQueryResult<RuleResolution> {
   return useQuery({
-    queryKey: globalRuleKeys.resolve(params as Record<string, string | null | undefined>),
+    queryKey: globalRuleKeys.resolve(
+      params as Record<string, string | null | undefined>,
+    ),
     queryFn: async () => {
       const { data } = await apiClient.get<RuleResolution>(`${BASE}/resolve`, {
         params,
@@ -490,11 +516,24 @@ export function useRuleTargets(
 ): UseQueryResult<Page<RuleTarget>> {
   const { enabled = true, productId = null } = options;
   return useQuery({
-    queryKey: [...globalRuleKeys.all, "targets", kind, search, productId] as const,
+    queryKey: [
+      ...globalRuleKeys.all,
+      "targets",
+      kind,
+      search,
+      productId,
+    ] as const,
     queryFn: async () => {
-      const { data } = await apiClient.get<Page<RuleTarget>>(`${BASE}/targets/${kind}`, {
-        params: { search: search || undefined, size: 20, productId: productId || undefined },
-      });
+      const { data } = await apiClient.get<Page<RuleTarget>>(
+        `${BASE}/targets/${kind}`,
+        {
+          params: {
+            search: search || undefined,
+            size: 20,
+            productId: productId || undefined,
+          },
+        },
+      );
       return data;
     },
     enabled,
@@ -572,35 +611,28 @@ export function useDraftImpact(query: ImpactQuery): UseQueryResult<ImpactPage> {
   return useQuery({
     queryKey: [...globalRuleKeys.all, "impact", query] as const,
     queryFn: async () => {
-      const { data } = await apiClient.get<ImpactPage>(`${BASE}/drafts/impact`, {
-        params: {
-          page: query.page ?? 1,
-          size: query.size ?? 25,
-          search: query.search || undefined,
-          needsReviewOnly: query.needsReviewOnly || undefined,
-          safeOnly: query.safeOnly || undefined,
+      const { data } = await apiClient.get<ImpactPage>(
+        `${BASE}/drafts/impact`,
+        {
+          params: {
+            page: query.page ?? 1,
+            size: query.size ?? 25,
+            search: query.search || undefined,
+            needsReviewOnly: query.needsReviewOnly || undefined,
+            safeOnly: query.safeOnly || undefined,
+          },
         },
-      });
+      );
       return data;
     },
   });
 }
 
 export type ApplicationStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "partial"
-  | "failed"
-  | "cancelled";
+  "pending" | "running" | "completed" | "partial" | "failed" | "cancelled";
 
 export type ApplicationOutcome =
-  | "applied"
-  | "skipped"
-  | "needs_review"
-  | "stale"
-  | "published"
-  | "failed";
+  "applied" | "skipped" | "needs_review" | "stale" | "published" | "failed";
 
 export const TERMINAL_STATUSES: readonly ApplicationStatus[] = [
   "completed",
@@ -650,11 +682,18 @@ export interface ApplyPayload {
   expectedRuleVersion?: number | null;
 }
 
-export function useApplyToDrafts(): UseMutationResult<Application, Error, ApplyPayload> {
+export function useApplyToDrafts(): UseMutationResult<
+  Application,
+  Error,
+  ApplyPayload
+> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: ApplyPayload) => {
-      const { data } = await apiClient.post<Application>(`${BASE}/drafts/apply`, payload);
+      const { data } = await apiClient.post<Application>(
+        `${BASE}/drafts/apply`,
+        payload,
+      );
       return data;
     },
     onSuccess: () => {
@@ -680,7 +719,11 @@ export function useApplication(
 ): UseQueryResult<Application> {
   const { poll = true } = options;
   return useQuery({
-    queryKey: [...globalRuleKeys.all, "application", applicationId ?? ""] as const,
+    queryKey: [
+      ...globalRuleKeys.all,
+      "application",
+      applicationId ?? "",
+    ] as const,
     queryFn: async () => {
       const { data } = await apiClient.get<Application>(
         `${BASE}/applications/${applicationId}`,
@@ -738,7 +781,10 @@ export function usePreviewRule(): UseMutationResult<
 > {
   return useMutation({
     mutationFn: async (payload: PreviewRequest) => {
-      const { data } = await apiClient.post<PreviewResult>(`${BASE}/preview`, payload);
+      const { data } = await apiClient.post<PreviewResult>(
+        `${BASE}/preview`,
+        payload,
+      );
       return data;
     },
   });

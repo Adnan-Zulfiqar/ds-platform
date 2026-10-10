@@ -15,6 +15,10 @@ Results are transient status records, so Redis is the right home for those.
 
 from __future__ import annotations
 
+import os
+import threading
+import time
+from pathlib import Path
 from typing import Any
 
 from celery import Celery
@@ -24,6 +28,7 @@ from celery.signals import (
     task_prerun,
     worker_init,
     worker_process_init,
+    worker_ready,
 )
 
 from app.core.config import settings
@@ -46,6 +51,47 @@ def _worker_database(**_: Any) -> None:
     from app.database.session import use_null_pool_for_worker
 
     use_null_pool_for_worker()
+
+
+#: Touched when the worker starts and after every task. The container health
+#: check reads its age instead of running ``celery inspect ping``, which
+#: imports the whole application (about 11s and a full CPU core, every
+#: 30s on 2026-10-10). Beat schedules ``workers.health`` every minute so an
+#: idle worker keeps touching it; a worker that stops consuming, or a beat
+#: that stops scheduling, both show as "unhealthy" within a few minutes.
+WORKER_HEARTBEAT_FILE = Path(
+    os.environ.get("CELERY_WORKER_HEARTBEAT_FILE", "/tmp/celery-worker-heartbeat")  # noqa: S108 — tmpfs in the container, not shared
+)
+
+
+def touch_worker_heartbeat(path: Path = WORKER_HEARTBEAT_FILE) -> bool:
+    """Best effort: a health file that cannot be written must not fail a
+    task, and the health check will report the missing file."""
+    try:
+        path.touch()
+    except OSError as exc:
+        logger.warning("worker_heartbeat_not_written", path=str(path), error=str(exc))
+        return False
+    return True
+
+
+def _heartbeat_forever(interval_seconds: float) -> None:
+    while True:
+        touch_worker_heartbeat()
+        time.sleep(interval_seconds)
+
+
+@worker_ready.connect
+def _worker_heartbeat_on_ready(**_: Any) -> None:
+    """Touch now, then every 30s from a daemon thread in the main worker
+    process. The thread proves the process is alive; the ``workers.health``
+    beat task and ``task_postrun`` prove it still consumes. With several
+    replicas only one receives each beat task, so without the thread an
+    idle replica would go stale and be restarted for nothing."""
+    touch_worker_heartbeat()
+    threading.Thread(
+        target=_heartbeat_forever, args=(30.0,), name="worker-heartbeat", daemon=True
+    ).start()
 
 
 celery_app.conf.update(
@@ -119,6 +165,12 @@ celery_app.conf.update(
     # tenants' supplier quota, and the windows overlap the interval so a missed
     # beat leaves overlap rather than a gap.
     beat_schedule={
+        # Keeps the worker's heartbeat file fresh while idle (see
+        # WORKER_HEARTBEAT_FILE). Broker-only: no database, no Redis.
+        "workers-heartbeat": {
+            "task": "workers.health",
+            "schedule": 60,
+        },
         # Track E3: notification email outbox. Two minutes keeps a failure
         # alert timely; an idle sweep is one indexed query per workspace.
         "notifications-send-emails": {
@@ -251,6 +303,11 @@ def _bind_task_context(
         task_id=task_id,
         task_name=getattr(task, "name", None),
     )
+
+
+@task_postrun.connect
+def _worker_heartbeat_after_task(**_: Any) -> None:
+    touch_worker_heartbeat()
 
 
 @task_postrun.connect
