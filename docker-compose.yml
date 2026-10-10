@@ -138,17 +138,14 @@ services:
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     healthcheck:
-      # 30s, not 10s: `inspect ping` opens a broker connection and waits for
-      # the reply; measured at 11s on 2026-10-10, which marked a working
-      # worker unhealthy.
-      test:
-        [
-          "CMD-SHELL",
-          "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1",
-        ]
+      # The worker touches /tmp/celery-worker-heartbeat on start and after every
+      # task, and beat schedules workers.health every minute, so the file is
+      # fresh while the worker consumes. Cheaper than `celery inspect ping`,
+      # which imported the whole application (11s, a full core) every 30s.
+      test: ["CMD-SHELL", "find /tmp -maxdepth 1 -name celery-worker-heartbeat -mmin -3 | grep -q ."]
       interval: 30s
-      timeout: 30s
-      start_period: 40s
+      timeout: 5s
+      start_period: 60s
       retries: 3
     networks: [droppilot]
 

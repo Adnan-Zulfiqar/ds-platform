@@ -87,7 +87,11 @@ USER droppilot
 #
 # `--concurrency` is left unset: Celery defaults to the CPU count, and the
 # container's CPU limit is the orchestrator's decision.
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD celery -A app.workers.celery_app.celery_app inspect ping --destination celery@$HOSTNAME || exit 1
+# The worker touches /tmp/celery-worker-heartbeat on start and after every
+# task, and beat schedules workers.health every minute, so the file is
+# fresh while the worker consumes. Cheaper than `celery inspect ping`,
+# which imported the whole application (11s, a full core) every 30s.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD find /tmp -maxdepth 1 -name celery-worker-heartbeat -mmin -3 | grep -q .
 
 CMD ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info"]
