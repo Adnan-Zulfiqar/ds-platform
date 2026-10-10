@@ -225,9 +225,12 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
+      # 30s, not 10s: `inspect ping` opens a broker connection and waits for
+      # the reply; measured at 11s on 2026-10-10, which marked a working
+      # worker unhealthy.
       test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       start_period: 45s
       retries: 3
     read_only: true

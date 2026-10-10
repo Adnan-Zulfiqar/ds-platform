@@ -11,6 +11,7 @@ and a per-call client would exhaust file descriptors under load.
 
 from __future__ import annotations
 
+import asyncio
 from enum import StrEnum
 from typing import Any
 
@@ -34,8 +35,16 @@ class RedisPurpose(StrEnum):
 
 
 #: ``Redis[str]`` because every client is built with ``decode_responses=True``,
-#: so replies arrive as ``str`` rather than ``bytes``.
-_clients: dict[RedisPurpose, Redis[str]] = {}
+#: so replies arrive as ``str`` rather than ``bytes``. Each client is kept
+#: with the event loop it first ran on: see :func:`get_redis`.
+_clients: dict[RedisPurpose, tuple[asyncio.AbstractEventLoop | None, Redis[str]]] = {}
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:  # called outside any loop (import time, sync code)
+        return None
 
 
 def _dsn_for(purpose: RedisPurpose) -> str:
@@ -53,8 +62,28 @@ def get_redis(purpose: RedisPurpose = RedisPurpose.CACHE) -> Redis[str]:
 
     The rate-limit client uses a much shorter timeout than the others because it
     sits on the per-request hot path; see ``fast_path_timeout_seconds``.
+
+    **One client per event loop.** A Celery task runs its async work with
+    ``asyncio.run``, a fresh loop each time, and a retry runs again in the
+    same process. A Redis connection belongs to the loop that opened it, so
+    the second loop would find a socket bound to a closed one ("got Future
+    attached to a different loop", then "Event loop is closed"); the order
+    sync's retries failed this way on 2026-10-10. The client is therefore
+    bound to the loop it first runs on and rebuilt when a different loop
+    asks. The API process has one loop, so it keeps one client as before.
+    The old client is dropped, not closed: its loop is gone, and closing a
+    connection on a closed loop is itself the error being avoided.
     """
-    client = _clients.get(purpose)
+    loop = _running_loop()
+    entry = _clients.get(purpose)
+    client: Redis[str] | None = None
+    if entry is not None:
+        bound, client = entry
+        if bound is None and loop is not None:
+            _clients[purpose] = (loop, client)  # first use inside a loop: adopt it
+        elif bound is not None and loop is not None and (bound is not loop or bound.is_closed()):
+            logger.info("redis_client_rebound_to_new_loop", purpose=purpose.value)
+            client = None
     if client is None:
         timeout: float = (
             settings.redis.fast_path_timeout_seconds
@@ -74,13 +103,13 @@ def get_redis(purpose: RedisPurpose = RedisPurpose.CACHE) -> Redis[str]:
             max_connections=settings.redis.max_connections,
             health_check_interval=30,
         )
-        _clients[purpose] = client
+        _clients[purpose] = (loop, client)
     return client
 
 
 async def close_redis_clients() -> None:
     """Close every client. Called on application shutdown."""
-    for purpose, client in list(_clients.items()):
+    for purpose, (_, client) in list(_clients.items()):
         # `aclose` is the correct API in redis-py 5+ (`close` is deprecated).
         # It exists at runtime but is missing from the shipped type stubs.
         await client.aclose()  # type: ignore[attr-defined]
