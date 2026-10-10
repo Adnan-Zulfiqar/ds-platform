@@ -7,7 +7,7 @@ import { ImportProductDialog } from "@/components/products/import-product-dialog
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import type { ChannelSummary } from "./home-rules";
+import { anySalesChannelUsable, joinOr, offeredSalesChannels, type ChannelSummary } from "./home-rules";
 
 interface EmptyWorkspaceProps {
   channels: ChannelSummary[];
@@ -21,9 +21,17 @@ interface EmptyWorkspaceProps {
  * performs it — the Integrations page and the existing import dialog. Step
  * state comes from the channel summaries, so a step ticks itself off the
  * moment the connection exists; nothing is assumed.
+ *
+ * The store step names every sales channel this server can connect, each
+ * with its own button to its card on Integrations, and ticks off on any one
+ * of them. A channel the operator has not configured is left out rather
+ * than offered as a button that leads to "unavailable".
  */
 export function EmptyWorkspace({ channels }: EmptyWorkspaceProps) {
-  const shopifyDone = channels.some((c) => c.id === "shopify" && c.usable);
+  const storeDone = anySalesChannelUsable(channels);
+  // Before the statuses arrive the card is not shown at all (Home waits on
+  // them), so an empty list here means none is configured.
+  const offered = offeredSalesChannels(channels);
   const aliexpressDone = channels.some((c) => c.id === "aliexpress" && c.usable);
 
   const steps = [
@@ -36,14 +44,25 @@ export function EmptyWorkspace({ channels }: EmptyWorkspaceProps) {
       action: <ImportProductDialog />,
     },
     {
-      id: "shopify",
-      done: shopifyDone,
+      id: "store",
+      done: storeDone,
       title: "Connect your store",
-      detail: "Required when you publish — Shopify (or another sales channel) is where listings go live.",
-      action: (
-        <Button variant={shopifyDone ? "outline" : "default"} size="sm" asChild>
-          <Link href="/settings/integrations">{shopifyDone ? "Manage" : "Connect Shopify"}</Link>
+      detail:
+        offered.length > 0
+          ? `Required when you publish — ${joinOr(offered.map((c) => c.label))} is where listings go live.`
+          : "Required when you publish. No sales channel can be connected on this server yet — ask your DropPilot operator.",
+      action: storeDone ? (
+        <Button variant="outline" size="sm" asChild>
+          <Link href="/settings/integrations">Manage</Link>
         </Button>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {offered.map((channel) => (
+            <Button key={channel.id} size="sm" asChild>
+              <Link href={`/settings/integrations#channel-${channel.id}`}>Connect {channel.label}</Link>
+            </Button>
+          ))}
+        </div>
       ),
     },
     {

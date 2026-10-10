@@ -1,4 +1,5 @@
 import type { AppNotification, NotificationKind } from "@/services/notifications";
+import type { Store } from "@/services/stores";
 import type {
   AliExpressStatus,
   EbayStatus,
@@ -34,7 +35,7 @@ export type ChannelState =
   | "not-configured";
 
 export interface ChannelSummary {
-  id: "shopify" | "aliexpress" | "ebay";
+  id: "shopify" | "aliexpress" | "ebay" | "woocommerce";
   label: string;
   state: ChannelState;
   /** One line a merchant can act on: what is true and, if needed, what to do. */
@@ -60,7 +61,7 @@ export interface AttentionItem {
 
 export interface NextStep {
   /** Which rule produced this step — surfaced in tests, not in the UI. */
-  rule: "connect-shopify" | "connect-aliexpress" | "import-first-product" | "continue-draft";
+  rule: "connect-store" | "connect-aliexpress" | "import-first-product" | "continue-draft";
   title: string;
   detail: string;
   href: string;
@@ -92,10 +93,41 @@ export function connectedShopifyCount(status: ShopifyStatus | undefined): number
   return status?.connections.filter((c) => c.status === "connected").length ?? 0;
 }
 
+/**
+ * The channels a listing can be published to. Home's "connect a store" step
+ * and next step are satisfied by any one of them: a WooCommerce-only or
+ * eBay-only merchant used to be told to connect Shopify forever.
+ */
+export const SALES_CHANNEL_IDS: ReadonlySet<ChannelSummary["id"]> = new Set<ChannelSummary["id"]>([
+  "shopify",
+  "woocommerce",
+  "ebay",
+]);
+
+/** Sales channels this server can connect — "not configured" ones are left out, so no step points at a card that cannot work. */
+export function offeredSalesChannels(channels: ChannelSummary[]): ChannelSummary[] {
+  return channels.filter((c) => SALES_CHANNEL_IDS.has(c.id) && c.state !== "not-configured");
+}
+
+/**
+ * Whether every channel status Home reasons with has arrived. A
+ * WooCommerce- or eBay-only merchant would otherwise be shown the setup
+ * checklist, or told to connect a store, until their status loaded.
+ */
+export function channelsKnown(channels: ChannelSummary[]): boolean {
+  const ids = new Set(channels.map((c) => c.id));
+  return (["shopify", "aliexpress", "ebay", "woocommerce"] as const).every((id) => ids.has(id));
+}
+
+export function anySalesChannelUsable(channels: ChannelSummary[]): boolean {
+  return channels.some((c) => SALES_CHANNEL_IDS.has(c.id) && c.usable);
+}
+
 export function summariseChannels(input: {
   shopify?: ShopifyStatus;
   aliexpress?: AliExpressStatus;
   ebay?: EbayStatus;
+  woocommerce?: Store[];
 }): ChannelSummary[] {
   const out: ChannelSummary[] = [];
 
@@ -202,6 +234,37 @@ export function summariseChannels(input: {
         label: "eBay",
         state: "not-connected",
         detail: "Not connected.",
+        usable: false,
+      });
+    }
+  }
+
+  if (input.woocommerce) {
+    // A store the merchant disconnected on purpose is not a fault; only one
+    // whose connection broke ("error") asks for attention.
+    const stores = input.woocommerce.filter((s) => s.platform === "woocommerce");
+    const connected = stores.filter((s) => s.status === "connected").length;
+    const broken = stores.filter((s) => s.status === "error").length;
+    if (connected > 0) {
+      out.push({
+        id: "woocommerce",
+        label: "WooCommerce",
+        state: broken > 0 ? "needs-attention" : "connected",
+        detail:
+          broken > 0
+            ? `${connected} connected · ${broken} ${broken === 1 ? "store needs" : "stores need"} reconnecting.`
+            : `${connected} ${connected === 1 ? "store" : "stores"} connected.`,
+        usable: true,
+      });
+    } else {
+      out.push({
+        id: "woocommerce",
+        label: "WooCommerce",
+        state: broken > 0 ? "needs-attention" : "not-connected",
+        detail:
+          broken > 0
+            ? `${broken} ${broken === 1 ? "store needs" : "stores need"} reconnecting.`
+            : "No store connected.",
         usable: false,
       });
     }
@@ -323,9 +386,8 @@ export function deriveNextStep(input: {
   counts?: ProductWorkspaceCounts;
   recentDrafts?: Product[];
 }): NextStep | null {
-  const shopify = input.channels.find((c) => c.id === "shopify");
   const aliexpress = input.channels.find((c) => c.id === "aliexpress");
-  if (!shopify || !aliexpress || !input.counts) return null;
+  if (!channelsKnown(input.channels) || !aliexpress || !input.counts) return null;
 
   // A broken AliExpress grant still matters for orders/tracking — surface it
   // before "continue editing". A workspace that never connected AE is fine
@@ -348,13 +410,15 @@ export function deriveNextStep(input: {
       action: "Go to Drafts",
     };
   }
-  if (!shopify.usable) {
+  if (!anySalesChannelUsable(input.channels)) {
+    const repair = input.channels.find((c) => SALES_CHANNEL_IDS.has(c.id) && c.state === "needs-attention");
+    const offered = offeredSalesChannels(input.channels).map((c) => c.label);
     return {
-      rule: "connect-shopify",
-      title: shopify.state === "needs-attention" ? "Repair your Shopify connection" : "Connect your Shopify store",
-      detail: "Connect a store before you publish. Import and editing do not need it.",
+      rule: "connect-store",
+      title: repair ? `Repair your ${repair.label} connection` : "Connect a store",
+      detail: `Connect ${joinOr(offered.length > 0 ? offered : ["a sales channel"])} before you publish. Import and editing do not need it.`,
       href: "/settings/integrations",
-      action: shopify.state === "needs-attention" ? "Open Integrations" : "Connect Shopify",
+      action: repair ? "Open Integrations" : "Connect a store",
     };
   }
   const latest = input.recentDrafts?.[0];
@@ -376,11 +440,15 @@ export function isEmptyWorkspace(input: {
   counts?: ProductWorkspaceCounts;
   channels: ChannelSummary[];
 }): boolean | undefined {
-  const shopify = input.channels.find((c) => c.id === "shopify");
-  const aliexpress = input.channels.find((c) => c.id === "aliexpress");
-  if (!input.counts || !shopify || !aliexpress) return undefined;
-  const anyConnected = [shopify, aliexpress].some((c) => c.usable);
+  if (!input.counts || !channelsKnown(input.channels)) return undefined;
+  const anyConnected = input.channels.some((c) => c.usable);
   return input.counts.drafts === 0 && input.counts.products === 0 && !anyConnected;
+}
+
+/** "Shopify", "Shopify or eBay", "Shopify, WooCommerce or eBay". */
+export function joinOr(items: string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} or ${items[items.length - 1]}`;
 }
 
 /** "3 min ago", "2 h ago", "4 d ago" — relative to `now`, in the viewer's locale. */
