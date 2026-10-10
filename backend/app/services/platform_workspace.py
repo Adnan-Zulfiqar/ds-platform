@@ -83,7 +83,7 @@ from app.repositories.store import StoreRepository
 from app.repositories.supplier_order import SupplierOrderRepository
 from app.repositories.user import UserRepository
 from app.schemas.common import ListQueryParams, SortDirection
-from app.services.automation_service import AutomationService
+from app.services.automation_service import AutomationRunFailed, AutomationService
 from app.services.base import BaseService
 from app.services.billing import PLANS, BillingService
 from app.services.feature_flags import KNOWN_FLAGS
@@ -824,6 +824,8 @@ class PlatformJobActions(PlatformWorkspaceActions):
             raise NotFoundError.for_resource("Automation run", run_id)
         try:
             run = await AutomationService(self.session).run_rule(previous.rule_id, trigger="manual")
+        except AutomationRunFailed as failed:
+            run = failed.run  # ran and failed: a real run, recorded as such below
         except Exception as exc:
             await self._failed("workspace_automation_retried", reason, exc)
             raise

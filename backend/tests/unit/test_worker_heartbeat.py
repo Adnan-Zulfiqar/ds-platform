@@ -3,12 +3,16 @@ running ``celery inspect ping`` (which imports the whole application)."""
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
 
-from app.workers import celery_app as worker_module
 from app.workers.celery_app import celery_app, touch_worker_heartbeat
+
+# The package attribute `app.workers.celery_app` is the Celery object, not the
+# module, so the module is fetched by name.
+worker_module = importlib.import_module("app.workers.celery_app")
 
 pytestmark = pytest.mark.unit
 

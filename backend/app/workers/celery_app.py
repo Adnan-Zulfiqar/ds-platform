@@ -16,6 +16,8 @@ Results are transient status records, so Redis is the right home for those.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -73,9 +75,23 @@ def touch_worker_heartbeat(path: Path = WORKER_HEARTBEAT_FILE) -> bool:
     return True
 
 
+def _heartbeat_forever(interval_seconds: float) -> None:
+    while True:
+        touch_worker_heartbeat()
+        time.sleep(interval_seconds)
+
+
 @worker_ready.connect
 def _worker_heartbeat_on_ready(**_: Any) -> None:
+    """Touch now, then every 30s from a daemon thread in the main worker
+    process. The thread proves the process is alive; the ``workers.health``
+    beat task and ``task_postrun`` prove it still consumes. With several
+    replicas only one receives each beat task, so without the thread an
+    idle replica would go stale and be restarted for nothing."""
     touch_worker_heartbeat()
+    threading.Thread(
+        target=_heartbeat_forever, args=(30.0,), name="worker-heartbeat", daemon=True
+    ).start()
 
 
 celery_app.conf.update(

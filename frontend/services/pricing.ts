@@ -78,17 +78,23 @@ export interface PricingRuleCreatePayload {
 export const pricingKeys = {
   all: ["pricing"] as const,
   list: (query: ListQuery) => [...pricingKeys.all, "list", query] as const,
-  changes: (query: ListQuery) => [...pricingKeys.all, "changes", query] as const,
+  changes: (query: ListQuery) =>
+    [...pricingKeys.all, "changes", query] as const,
 };
 
 /** `GET /pricing/changes`: the audit trail, which had no screen. */
-export function usePriceChanges(query: ListQuery = {}): UseQueryResult<Page<PriceChange>> {
+export function usePriceChanges(
+  query: ListQuery = {},
+): UseQueryResult<Page<PriceChange>> {
   return useQuery({
     queryKey: pricingKeys.changes(query),
     queryFn: async () => {
-      const { data } = await apiClient.get<Page<PriceChange>>("/pricing/changes", {
-        params: query,
-      });
+      const { data } = await apiClient.get<Page<PriceChange>>(
+        "/pricing/changes",
+        {
+          params: query,
+        },
+      );
       return data;
     },
   });
@@ -100,9 +106,12 @@ export function usePricingRules(
   return useQuery({
     queryKey: pricingKeys.list(query),
     queryFn: async () => {
-      const { data } = await apiClient.get<Page<PricingRule>>("/pricing/rules", {
-        params: query,
-      });
+      const { data } = await apiClient.get<Page<PricingRule>>(
+        "/pricing/rules",
+        {
+          params: query,
+        },
+      );
       return data;
     },
   });
@@ -112,11 +121,20 @@ export function useCreatePricingRule() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: PricingRuleCreatePayload) => {
-      const { data } = await apiClient.post<PricingRule>("/pricing/rules", payload);
+      const { data } = await apiClient.post<PricingRule>(
+        "/pricing/rules",
+        payload,
+      );
       return data;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: pricingKeys.all });
+      // /pricing/apply rewrites product sell prices, so every list that shows
+      // a price is stale too. Literal keys, not imports: products.ts and
+      // drafts.ts import from here, and a cycle would break the bundle.
+      for (const root of ["products", "drafts", "inventory"]) {
+        void queryClient.invalidateQueries({ queryKey: [root] });
+      }
     },
   });
 }
@@ -135,8 +153,14 @@ export interface PricingRuleUpdatePayload {
 export function useUpdatePricingRule() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, ...payload }: PricingRuleUpdatePayload & { id: string }) => {
-      const { data } = await apiClient.patch<PricingRule>(`/pricing/rules/${id}`, payload);
+    mutationFn: async ({
+      id,
+      ...payload
+    }: PricingRuleUpdatePayload & { id: string }) => {
+      const { data } = await apiClient.patch<PricingRule>(
+        `/pricing/rules/${id}`,
+        payload,
+      );
       return data;
     },
     onSuccess: () => {
@@ -173,7 +197,10 @@ export function useApplyPricing() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: { storeId?: string; limit?: number } = {}) => {
-      const { data } = await apiClient.post<PriceChange[]>("/pricing/apply", payload);
+      const { data } = await apiClient.post<PriceChange[]>(
+        "/pricing/apply",
+        payload,
+      );
       return data;
     },
     onSuccess: () => {

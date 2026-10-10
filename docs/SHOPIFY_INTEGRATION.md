@@ -43,8 +43,7 @@ Never put secrets in `NEXT_PUBLIC_*` variables.
 | Direction | Mechanism |
 |---|---|
 | Product publish | `POST /integrations/shopify/publish` — idempotent via `store_listings` |
-| Inventory push | Celery `shopify.push_inventory` / sync service |
-| Price push | Celery `shopify.push_price` — records previous/new/reason in logs |
+| Inventory and price push | Celery `shopify.push_price_quantity`, one task per product, queued after a commit that changed stock or price (the earlier `push_inventory` / `push_price` tasks were removed in 2026-10 as unused) |
 | Order import | Poll `shopify.sync_orders_*` + webhooks `orders/create|updated` |
 
 Fulfilment push is **out of scope** for Phase 8.

@@ -9,12 +9,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.api.deps import require_verified
+from app.core.config import settings
 from app.core.context import AuthenticatedUser, set_tenant_id
 from app.core.exceptions import NotFoundError, PermissionDeniedError, ValidationError
 from app.models.user import User
 from app.services.email_verification import (
     EmailVerificationService,
     EmailVerificationTokenRepository,
+    verification_link,
 )
 
 pytestmark = pytest.mark.unit
@@ -68,6 +70,27 @@ class TestEmailVerificationService:
         user.email = "a@example.com"
         with pytest.raises(ValidationError):
             await service.request_for_user(user)
+
+    @pytest.mark.asyncio
+    async def test_the_email_links_to_the_page_that_consumes_the_token(self) -> None:
+        """Until 2026-10-10 the email carried a raw token and no page could
+        use it; with verification required, every new account was locked out."""
+        session = MagicMock()
+        session.flush = AsyncMock()
+        service = EmailVerificationService(session)
+        service.tokens.create = AsyncMock()  # type: ignore[method-assign]
+        service.mailer = MagicMock()
+        service.mailer.send = AsyncMock()
+        user = MagicMock(spec=User)
+        user.id = uuid.uuid4()
+        user.is_verified = False
+        user.email = "a@example.com"
+
+        raw = await service.request_for_user(user)
+
+        [message] = service.mailer.send.call_args.args
+        assert f"/verify-email#token={raw}" in message.body_text
+        assert verification_link(raw).startswith(settings.email.app_base_url.rstrip("/"))
 
     @pytest.mark.asyncio
     async def test_confirm_rejects_foreign_user_token(

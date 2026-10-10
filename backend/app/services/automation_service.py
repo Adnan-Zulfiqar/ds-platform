@@ -35,6 +35,17 @@ _SCHEDULE_DELTA = {
 }
 
 
+class AutomationRunFailed(Exception):
+    """The rule's action raised. The run row carries the failure; callers that
+    answer a request return it rather than letting the request roll it back
+    (found 2026-10-10: a manual run that failed left no run, no notification
+    and no failure count)."""
+
+    def __init__(self, run: AutomationRun) -> None:
+        super().__init__(run.error_message or "Automation run failed.")
+        self.run = run
+
+
 class AutomationService(BaseService):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
@@ -116,7 +127,7 @@ class AutomationService(BaseService):
                 href="/automation",
                 payload={"ruleId": str(rule.id), "runId": str(run.id)},
             )
-            raise
+            raise AutomationRunFailed(run) from exc
 
     async def run_due(self, *, now: datetime | None = None) -> int:
         """Execute every due scheduled rule. Returns how many ran."""

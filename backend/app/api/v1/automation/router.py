@@ -15,7 +15,7 @@ from app.schemas.automation import (
     AutomationRunRead,
 )
 from app.schemas.common import ListQueryParams, Page, list_query_params
-from app.services.automation_service import AutomationService
+from app.services.automation_service import AutomationRunFailed, AutomationService
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 
@@ -75,7 +75,13 @@ async def run_rule(
     _authorized: RequireAdmin,
     rule_id: Annotated[uuid.UUID, Path()],
 ) -> AutomationRunRead:
-    run = await AutomationService(session).run_rule(rule_id, trigger="manual")
+    # A run whose action failed is still a run: it is returned with
+    # ``status=failed`` and its error, and committed with its notification and
+    # the rule's failure count. Raising here would roll all of that back.
+    try:
+        run = await AutomationService(session).run_rule(rule_id, trigger="manual")
+    except AutomationRunFailed as failed:
+        run = failed.run
     return AutomationRunRead.model_validate(run)
 
 
