@@ -1,6 +1,7 @@
 import type { Page, Route } from "@playwright/test";
 
 import type { AppNotification } from "@/services/notifications";
+import type { Store } from "@/services/stores";
 import type {
   AliExpressStatus,
   EbayStatus,
@@ -12,6 +13,7 @@ import type {
   ShopifyStatus,
 } from "@/types/api";
 
+import { storeRecord } from "./channels-fixture";
 import { buildSyntheticProduct, mockAuthResponse } from "./editor-fixture";
 
 /**
@@ -29,6 +31,8 @@ export interface HomeScenario {
   shopify: ShopifyStatus;
   aliexpress: AliExpressStatus;
   ebay: EbayStatus;
+  /** `GET /integrations/woocommerce/stores`. */
+  woocommerce: Store[];
   drafts: Product[];
   imports: ProductImportRecord[];
   orderStatistics: OrderStatistics;
@@ -44,6 +48,7 @@ export type HomeEndpoint =
   | "shopify"
   | "aliexpress"
   | "ebay"
+  | "woocommerce"
   | "drafts"
   | "imports"
   | "orderStatistics"
@@ -112,6 +117,16 @@ export const EXPIRED_ALIEXPRESS: AliExpressStatus = {
 
 export const NO_ALIEXPRESS: AliExpressStatus = { connected: false, connection: null };
 export const UNCONFIGURED_EBAY: EbayStatus = { configured: false, connected: false, connection: null };
+/** The server has eBay app credentials; this workspace has not connected. */
+export const CONFIGURED_EBAY: EbayStatus = { configured: true, connected: false, connection: null };
+export const CONNECTED_WOO_STORE: Store = storeRecord({
+  id: "77777777-7777-4777-8777-777777777777",
+  name: "Woo Shop",
+  slug: "woo-shop",
+  platform: "woocommerce",
+  storefrontUrl: "https://woo.example",
+  externalStoreId: "https://woo.example",
+});
 
 export const ZERO_ORDERS: OrderStatistics = {
   totalOrders: 0,
@@ -131,6 +146,7 @@ export function populatedScenario(): HomeScenario {
     shopify: CONNECTED_SHOPIFY,
     aliexpress: CONNECTED_ALIEXPRESS,
     ebay: UNCONFIGURED_EBAY,
+    woocommerce: [],
     drafts: [
       draft(HOME_DRAFT_IDS[0], {
         title: "Wireless Desk Lamp with USB Charging",
@@ -197,6 +213,7 @@ export function emptyScenario(): HomeScenario {
     shopify: NO_SHOPIFY,
     aliexpress: NO_ALIEXPRESS,
     ebay: UNCONFIGURED_EBAY,
+    woocommerce: [],
     drafts: [],
     imports: [],
     orderStatistics: ZERO_ORDERS,
@@ -332,7 +349,8 @@ export async function mockHomeApi(page: Page, scenario: HomeScenario): Promise<R
     if (path === "/integrations/aliexpress/status")
       return answer(route, scenario, "aliexpress", () => scenario.aliexpress);
     if (path === "/integrations/ebay/status") return answer(route, scenario, "ebay", () => scenario.ebay);
-    if (path === "/integrations/woocommerce/stores") return json([]);
+    if (path === "/integrations/woocommerce/stores")
+      return answer(route, scenario, "woocommerce", () => scenario.woocommerce);
     if (path === "/drafts") {
       log.drafts.push(url.search);
       return answer(route, scenario, "drafts", () => paged(scenario.drafts));

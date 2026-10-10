@@ -5,7 +5,9 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/provider-isolation";
 import { resolveSuiteShotRoot } from "./helpers/evidence-paths";
 import {
+  CONFIGURED_EBAY,
   CONNECTED_SHOPIFY,
+  CONNECTED_WOO_STORE,
   HOME_DRAFT_IDS,
   NO_ALIEXPRESS,
   NO_SHOPIFY,
@@ -212,10 +214,18 @@ test.describe("Home — empty workspace", () => {
     await expect(steps.nth(0)).toContainText("Import your first product");
     await expect(steps.nth(1)).toContainText("Connect your store");
     await expect(steps.nth(2)).toContainText("Connect AliExpress (orders & tracking)");
+    // Every sales channel this server can connect, each to its own card.
+    // eBay has no app credentials in this scenario, so it is not offered.
     await expect(setup.getByRole("link", { name: "Connect Shopify" })).toHaveAttribute(
       "href",
-      "/settings/integrations",
+      "/settings/integrations#channel-shopify",
     );
+    await expect(setup.getByRole("link", { name: "Connect WooCommerce" })).toHaveAttribute(
+      "href",
+      "/settings/integrations#channel-woocommerce",
+    );
+    await expect(setup.getByRole("link", { name: "Connect eBay" })).toHaveCount(0);
+    await expect(steps.nth(1)).toContainText("Shopify or WooCommerce is where listings go live");
 
     // No zero tiles, no analytics, no summary grid.
     await expect(page.getByTestId("catalogue-summary")).toHaveCount(0);
@@ -227,6 +237,39 @@ test.describe("Home — empty workspace", () => {
     await expect(page.getByRole("dialog", { name: "Import as Draft from AliExpress" })).toBeVisible();
     await page.keyboard.press("Escape");
     await shoot(page, "desktop-light-empty");
+  });
+
+  test("the store step offers eBay too once the server can connect it", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.desktop);
+    const scenario = emptyScenario();
+    scenario.ebay = CONFIGURED_EBAY;
+    await mockHomeApi(page, scenario);
+    await page.goto("/dashboard");
+    const store = page.getByTestId("empty-workspace").getByRole("listitem").nth(1);
+    await expect(store).toContainText("Shopify, eBay or WooCommerce is where listings go live");
+    for (const [name, id] of [
+      ["Shopify", "shopify"],
+      ["eBay", "ebay"],
+      ["WooCommerce", "woocommerce"],
+    ]) {
+      await expect(store.getByRole("link", { name: `Connect ${name}` })).toHaveAttribute(
+        "href",
+        `/settings/integrations#channel-${id}`,
+      );
+    }
+  });
+
+  test("a WooCommerce store alone counts as a connected store", async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS.desktop);
+    const scenario = emptyScenario();
+    scenario.woocommerce = [CONNECTED_WOO_STORE];
+    await mockHomeApi(page, scenario);
+    await page.goto("/dashboard");
+    // Not empty any more, and the next step is the import, not "connect a store".
+    await expect(page.getByTestId("empty-workspace")).toHaveCount(0);
+    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "import-first-product");
+    await expect(page.getByTestId("channel-woocommerce")).toHaveAttribute("data-state", "connected");
+    await expect(page.getByTestId("channel-woocommerce")).toContainText("1 store connected.");
   });
 
   test("a step ticks itself off once its connection exists", async ({ page }) => {
@@ -263,25 +306,26 @@ test.describe("Home — empty workspace", () => {
 test.describe("Home — next step rules", () => {
   test.use({ viewport: VIEWPORTS.desktop });
 
-  test("1. no Shopify store → connect Shopify", async ({ page }) => {
+  test("1. no store on any channel → connect a store", async ({ page }) => {
     const s = populatedScenario();
     s.shopify = NO_SHOPIFY;
     await mockHomeApi(page, s);
     await page.goto("/dashboard");
     const next = page.getByTestId("next-step");
-    await expect(next).toHaveAttribute("data-rule", "connect-shopify");
-    await expect(next.getByRole("link", { name: "Connect Shopify" })).toHaveAttribute("href", "/settings/integrations");
+    await expect(next).toHaveAttribute("data-rule", "connect-store");
+    await expect(next).toContainText("Connect Shopify or WooCommerce before you publish");
+    await expect(next.getByRole("link", { name: "Connect a store" })).toHaveAttribute("href", "/settings/integrations");
     // Not connected is a next step, never an attention item.
     await expect(page.getByTestId("attention-clear")).toBeVisible();
   });
 
-  test("2. drafts exist, Shopify not connected → connect store to publish", async ({ page }) => {
+  test("2. drafts exist, no store connected → connect store to publish", async ({ page }) => {
     const s = populatedScenario();
     s.shopify = NO_SHOPIFY;
     s.aliexpress = NO_ALIEXPRESS;
     await mockHomeApi(page, s);
     await page.goto("/dashboard");
-    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "connect-shopify");
+    await expect(page.getByTestId("next-step")).toHaveAttribute("data-rule", "connect-store");
   });
 
   test("3. no drafts → import the first product (AliExpress OAuth not required)", async ({ page }) => {

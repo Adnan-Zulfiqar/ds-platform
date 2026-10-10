@@ -263,7 +263,7 @@ test.describe("Hardening — cross-app journeys", () => {
     const setup = page.getByTestId("empty-workspace");
     await expect(setup).toBeVisible({ timeout: 30_000 });
     const connect = setup.getByRole("link", { name: "Connect Shopify" });
-    await expect(connect).toHaveAttribute("href", "/settings/integrations");
+    await expect(connect).toHaveAttribute("href", "/settings/integrations#channel-shopify");
     // Nowhere on Home is there a manual store path or an "Add store".
     await expect(page.getByRole("link", { name: /Add store/i })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Add store/i })).toHaveCount(0);
@@ -272,7 +272,7 @@ test.describe("Hardening — cross-app journeys", () => {
 
     await mockChannelsApi(page, channelsWorld());
     await connect.click();
-    await expect(page).toHaveURL(/\/settings\/integrations$/);
+    await expect(page).toHaveURL(/\/settings\/integrations#channel-shopify$/);
     await expect(page.getByRole("button", { name: "Connect Shopify" })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("button", { name: /^Connect (Shopify|another store)$/ })).toHaveCount(1);
   });

@@ -22,6 +22,7 @@ import {
   useAliExpressStatus,
   useEbayStatus,
   useShopifyStatus,
+  useWooCommerceStores,
 } from "@/services/integrations";
 import { useNotifications } from "@/services/notifications";
 import { useOrderStatistics } from "@/services/orders";
@@ -47,8 +48,9 @@ import { useProductImports, useProductWorkspaceCounts } from "@/services/product
  *
  * **Error isolation.** Each block owns its query. A block that fails shows a
  * local error with its own retry; the others render normally. Only the two
- * inputs the page cannot reason without — workspace counts and Shopify /
- * AliExpress status — gate the empty-workspace decision, and while they load
+ * inputs the page cannot reason without — workspace counts and every
+ * channel status (any sales channel counts as "a store") — gate the
+ * empty-workspace decision, and while they load
  * the page keeps its shape with skeletons rather than jumping.
  */
 export default function HomePage() {
@@ -59,6 +61,7 @@ export default function HomePage() {
   const shopify = useShopifyStatus();
   const aliexpress = useAliExpressStatus();
   const ebay = useEbayStatus();
+  const woocommerce = useWooCommerceStores();
   const recentDrafts = useDrafts({ size: 5, sortBy: "updated_at", sortDir: "desc" });
   const recentImports = useProductImports({ size: 10 });
   const orderStatistics = useOrderStatistics();
@@ -71,9 +74,10 @@ export default function HomePage() {
     shopify: shopify.data,
     aliexpress: aliexpress.data,
     ebay: ebay.data,
+    woocommerce: woocommerce.data,
   });
-  const channelsPending = shopify.isPending || aliexpress.isPending || ebay.isPending;
-  const channelsError = shopify.isError || aliexpress.isError || ebay.isError;
+  const channelsPending = shopify.isPending || aliexpress.isPending || ebay.isPending || woocommerce.isPending;
+  const channelsError = shopify.isError || aliexpress.isError || ebay.isError || woocommerce.isError;
 
   const empty = isEmptyWorkspace({ counts: counts.data, channels });
 
@@ -101,6 +105,7 @@ export default function HomePage() {
     void shopify.refetch();
     void aliexpress.refetch();
     void ebay.refetch();
+    void woocommerce.refetch();
   };
 
   return (
@@ -120,7 +125,7 @@ export default function HomePage() {
       {empty === undefined ? (
         // Counts and channel status decide which Home this is; until they
         // arrive, hold the space rather than draw one layout and swap it.
-        counts.isError || shopify.isError || aliexpress.isError ? (
+        counts.isError || channelsError ? (
           <BlockError
             what="your workspace"
             onRetry={() => {
