@@ -1,3 +1,5 @@
+import type { Page } from "@playwright/test";
+
 import { expect, test } from "./fixtures/provider-isolation";
 import { mockAuthResponse } from "./helpers/editor-fixture";
 import { mockShellApi } from "./helpers/shell-fixture";
@@ -11,10 +13,10 @@ import { mockShellApi } from "./helpers/shell-fixture";
 
 const TOKEN = "abcdefghijklmnopqrstuvwxyz0123456789";
 
-test("the link confirms the email and shows the result", async ({ page }) => {
+/** The shell's mocked user is verified, and a verified user is (rightly)
+ * shown the done state without a request. These tests need one who is not. */
+async function signInUnverified(page: Page): Promise<void> {
   await mockShellApi(page);
-  // The shell's mocked user is verified; this user is not, or the page would
-  // (rightly) skip the request.
   const auth = mockAuthResponse();
   auth.identity.user.isVerified = false;
   for (const path of ["/auth/me", "/auth/refresh"]) {
@@ -26,6 +28,10 @@ test("the link confirms the email and shows the result", async ({ page }) => {
       }),
     );
   }
+}
+
+test("the link confirms the email and shows the result", async ({ page }) => {
+  await signInUnverified(page);
   const bodies: unknown[] = [];
   await page.route("**/api/v1/auth/verify-email/confirm", (route) => {
     bodies.push(route.request().postDataJSON());
@@ -45,7 +51,7 @@ test("the link confirms the email and shows the result", async ({ page }) => {
 test("an expired link explains itself and points to the profile", async ({
   page,
 }) => {
-  await mockShellApi(page);
+  await signInUnverified(page);
   await page.route("**/api/v1/auth/verify-email/confirm", (route) =>
     route.fulfill({
       status: 404,
@@ -67,9 +73,23 @@ test("an expired link explains itself and points to the profile", async ({
 });
 
 test("without a token the page asks for the email link", async ({ page }) => {
-  await mockShellApi(page);
+  await signInUnverified(page);
   await page.goto("/verify-email");
   await expect(page.getByTestId("verify-email")).toContainText(
     "needs the link",
   );
+});
+
+test("an already verified user is told so, with no request", async ({
+  page,
+}) => {
+  await mockShellApi(page); // the shell's user is verified
+  const calls: string[] = [];
+  await page.route("**/api/v1/auth/verify-email/confirm", (route) => {
+    calls.push(route.request().url());
+    return route.fulfill({ status: 500, body: "" });
+  });
+  await page.goto(`/verify-email#token=${TOKEN}`);
+  await expect(page.getByTestId("verify-email")).toContainText("is verified");
+  expect(calls).toEqual([]);
 });
