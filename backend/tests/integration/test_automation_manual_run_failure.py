@@ -43,7 +43,8 @@ async def test_a_failed_manual_run_is_returned_and_listed_with_its_error(
 
     runs = (await client.get("/api/v1/automation/runs", headers=headers)).json()
     assert [r["id"] for r in runs["items"]] == [run.json()["id"]]
-    rule = (await client.get(f"{RULES}/{rule_id}", headers=headers)).json()
+    rules = (await client.get(RULES, headers=headers)).json()["items"]
+    [rule] = [r for r in rules if r["id"] == rule_id]
     assert rule["consecutiveFailures"] == 1
 
     notifications = (await client.get("/api/v1/notifications", headers=headers)).json()
