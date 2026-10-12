@@ -4,6 +4,7 @@ import {
   buildSyntheticProduct,
   DEMO_STORE_ID,
   mockPublishReadiness,
+  mockShopifyStoresResponse,
   openMockedEditor,
 } from "./helpers/editor-fixture";
 
@@ -345,6 +346,18 @@ test.describe("UX-L2B save-before-publish integrity", () => {
       requiresShipping: true,
     });
     await openMockedEditor(page, { product });
+    // A lone store is chosen for the merchant, so "choose a store" exists
+    // only when there is a choice to make.
+    const stores = mockShopifyStoresResponse();
+    stores.items.push({
+      ...stores.items[0],
+      id: "57575757-5757-4757-8757-575757575757",
+      name: "Second Shopify",
+    });
+    await page.route("**/api/v1/stores**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(stores) }),
+    );
+    await page.goto(`/drafts/${product.id}`);
     await expect(page.getByTestId("draft-editor")).toBeVisible({ timeout: 30_000 });
     await openReview(page);
     await expect(page.getByTestId("publish-status-summary")).toContainText(/Choose a store/i);
