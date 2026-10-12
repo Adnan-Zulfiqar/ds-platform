@@ -202,8 +202,13 @@ async def test_readiness_names_what_eBay_would_refuse(
 
     assert response.status_code == 200, response.text
     codes = {b["code"] for b in response.json()["blockers"]}
-    assert codes == {"ebay_title_too_long", "quantity_missing", "selling_currency_mismatch"}
+    assert codes == {"quantity_missing", "selling_currency_mismatch"}
     assert response.json()["canPublish"] is False
+    # An over-long title no longer blocks: eBay gets it fitted, and says so.
+    [fitted] = [
+        r for r in response.json()["recommendations"] if r["code"] == "title_adjusted_for_channel"
+    ]
+    assert "x" * 80 in fitted["message"] and "x" * 81 not in fitted["message"]
 
 
 async def test_publish_sends_the_listing_and_records_it(

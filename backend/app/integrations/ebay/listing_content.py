@@ -13,11 +13,12 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.domain.listing_title import TITLE_LIMITS, channel_title
 from app.domain.money import normalise_currency
 from app.models.product import Product, ProductVariant
 
-#: eBay's title limit.
-EBAY_TITLE_MAX = 80
+#: eBay's title limit; ``channel_title`` fits titles to it.
+EBAY_TITLE_MAX = TITLE_LIMITS["ebay"]
 #: eBay accepts up to 24 pictures per listing.
 EBAY_MAX_IMAGES = 24
 
@@ -94,9 +95,13 @@ def image_urls(product: Product) -> list[str]:
     return [image.url for image in images if image.url.startswith("https://")][:EBAY_MAX_IMAGES]
 
 
-def listing_text(product: Product) -> tuple[str, str]:
-    """``(title, description)`` as eBay receives them: the draft's own text."""
-    title = (product.title or "").strip()
+def listing_text(product: Product, *, channel: str = "ebay") -> tuple[str, str]:
+    """``(title, description)`` as ``channel`` receives them.
+
+    The title is the draft's, fitted to the channel (``channel_title``); the
+    description is the draft's own, or the title when it has none.
+    """
+    title = channel_title(product.title or "", channel)
     description = (product.description or "").strip() or title
     return title, description
 

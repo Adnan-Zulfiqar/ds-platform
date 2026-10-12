@@ -93,7 +93,7 @@ class WooCommercePublishService:
         client = self.connections.client_for(store)
 
         terms = offer_terms(product)
-        title, description = listing_text(product)
+        title, description = listing_text(product, channel="woocommerce")
         sku = woocommerce_sku(product.id)
         body: dict[str, Any] = {
             "name": title,

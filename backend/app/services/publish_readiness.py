@@ -18,12 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.domain.listing_title import TITLE_LIMITS, channel_title, clean_title
 from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.ebay.connection import EbayConnectionService
 from app.integrations.ebay.exceptions import EbayRateLimitedError, EbaySellerApiUnavailableError
 from app.integrations.ebay.listing_content import (
-    EBAY_TITLE_MAX,
     image_urls,
     listing_text,
     offer_terms,
@@ -72,7 +72,10 @@ CODE_EBAY_ASPECTS_MISSING = "ebay_aspects_missing"
 CODE_EBAY_REQUIREMENTS_UNAVAILABLE = "ebay_requirements_unavailable"
 CODE_EBAY_MULTIPLE_VARIANTS = "ebay_multiple_variants"
 CODE_WOOCOMMERCE_MULTIPLE_VARIANTS = "woocommerce_multiple_variants"
-CODE_EBAY_TITLE_TOO_LONG = "ebay_title_too_long"
+#: A recommendation, not a blocker: the channel gets a cleaned or
+#: shortened title, and the message quotes it (owner request
+#: 2026-10-12). Replaced the eBay-only ``ebay_title_too_long`` blocker.
+CODE_TITLE_ADJUSTED = "title_adjusted_for_channel"
 CODE_PRICE_MISSING = "price_missing"
 CODE_QUANTITY_MISSING = "quantity_missing"
 
@@ -104,6 +107,36 @@ class PublishReadinessResult:
 
 def _sorted_items(items: list[PublishCheckItem]) -> tuple[PublishCheckItem, ...]:
     return tuple(sorted(items, key=lambda item: (item.code, item.field or "", item.message)))
+
+
+_CHANNEL_LABEL = {
+    CHANNEL_SHOPIFY: "Shopify",
+    CHANNEL_EBAY: "eBay",
+    CHANNEL_WOOCOMMERCE: "WooCommerce",
+}
+
+
+def _title_adjustment(product: Product, channel: str) -> PublishCheckItem | None:
+    """Say which title ``channel`` will get, when it is not the draft's own.
+
+    Publishing sends ``channel_title``; quoting it here means the merchant
+    sees the exact words before they go live, not after. (On Shopify an
+    approved AI version's title, if one is live, is sent instead.)
+    """
+    original = " ".join((product.title or "").split())
+    fitted = channel_title(product.title or "", channel)
+    if not fitted or fitted == original:
+        return None
+    limit = TITLE_LIMITS.get(channel)
+    shortened = limit is not None and len(clean_title(product.title or "")) > limit
+    why = f" (its limit is {limit} characters)" if shortened else ""
+    return PublishCheckItem(
+        code=CODE_TITLE_ADJUSTED,
+        message=f"{_CHANNEL_LABEL[channel]} will get this title{why}: \u201c{fitted}\u201d",
+        field="title",
+        section="overview",
+        action="Go to Overview",
+    )
 
 
 def _strip_html(value: str | None) -> str:
@@ -296,7 +329,7 @@ class PublishReadinessService(BaseService):
                         action="Go to Stock",
                     )
                 )
-        title, _ = listing_text(product)
+        title, _ = listing_text(product, channel="woocommerce")
         if not title:
             items.append(
                 PublishCheckItem(
@@ -360,14 +393,11 @@ class PublishReadinessService(BaseService):
             )
 
         title, _ = listing_text(product)
-        if len(title) > EBAY_TITLE_MAX:
+        if not title:
             items.append(
                 PublishCheckItem(
-                    code=CODE_EBAY_TITLE_TOO_LONG,
-                    message=(
-                        f"eBay titles are at most {EBAY_TITLE_MAX} characters; "
-                        f"this one has {len(title)}."
-                    ),
+                    code=CODE_TITLE_THIN,
+                    message="Give the product a title before publishing.",
                     field="title",
                     section="overview",
                     action="Go to Overview",
@@ -638,6 +668,11 @@ class PublishReadinessService(BaseService):
                     action=None,
                 )
             )
+
+        if store.platform is _CHANNEL_PLATFORM[normalised_channel]:
+            adjusted = _title_adjustment(product, normalised_channel)
+            if adjusted is not None:
+                recommendations.append(adjusted)
 
         ordered_blockers = _sorted_items(blockers)
         return PublishReadinessResult(

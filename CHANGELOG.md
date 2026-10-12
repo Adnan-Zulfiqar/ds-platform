@@ -10,6 +10,35 @@ production release.
 
 ## [Unreleased]
 
+### Added - titles fitted to each channel (2026-10-12, owner request)
+
+- **One rule, every publisher.** `app.domain.listing_title.channel_title`
+  is what Shopify, eBay and WooCommerce receive as the title. Rule-based,
+  not AI (owner decision 2026-10-12): it runs offline and gives the same
+  answer at readiness and at publish.
+  - Every channel: AliExpress seller filler is removed ("Free Shipping",
+    "Hot Sale", "Hot Selling", "Dropshipping", "Drop Shipping",
+    "Dropship"), with spacing and separators tidied.
+  - eBay (80 characters) and Shopify (255): an over-long title first loses
+    repeated words (numbers and connectors may repeat), then is cut at a
+    whole word and never ends on "for", "with", "-" and similar.
+    WooCommerce has no limit applied.
+- **eBay no longer blocks a long title.** The `ebay_title_too_long` blocker
+  is replaced by a `title_adjusted_for_channel` recommendation that quotes
+  the exact title the channel will get, on the Publishing tab, before
+  anything is sent. The owner's own 127-character AliExpress title used to
+  stop an eBay publish.
+- **Not changed:** an approved AI version's title live on Shopify is still
+  sent verbatim (it was reviewed as written). The draft's stored title is
+  never rewritten; only what is sent is.
+- **Known limitation:** the filler list is short and fixed on purpose, so
+  words that can be part of a real product name ("wholesale", "new") stay.
+  There is no per-channel title the merchant can edit by hand yet; to
+  change what eBay gets, edit the draft title.
+- Verified: unit `test_listing_title.py` (the owner's title, filler,
+  repeats, limits), integration `test_ebay_c3_publish.py` (readiness
+  recommends instead of blocking), full unit suite (2440 passed).
+
 ### Fixed - full project audit (2026-10-10)
 
 - **Shopify and AliExpress background jobs never ran in Docker.** `task_routes`
