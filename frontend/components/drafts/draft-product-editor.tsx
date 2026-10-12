@@ -64,6 +64,7 @@ import {
   usePublishReadiness,
 } from "@/services/publish-readiness";
 import { useProductVersions } from "@/services/products";
+import { useEbayStatus } from "@/services/integrations";
 import { useStores } from "@/services/stores";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
@@ -161,6 +162,9 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   // at the cost of four requests a minute per tab. Publication authority was
   // never here; the server's readiness check is what gates publishing.
   const storesQuery = useStores({ size: 50 });
+  // Only to explain a missing eBay option: a connected eBay account has no
+  // store to publish to until its listing setup (policies, location) is saved.
+  const ebayStatus = useEbayStatus();
 
   const [title, setTitle] = useState("");
   const [brand, setBrand] = useState("");
@@ -194,6 +198,7 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
   const dirtyEpochRef = useRef(0);
   const saveEpochRef = useRef(0);
   const [publishStoreId, setPublishStoreId] = useState("");
+  const [storeAutoPicked, setStoreAutoPicked] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishPending, setPublishPending] = useState(false);
   const [publishOk, setPublishOk] = useState<string | null>(null);
@@ -1007,6 +1012,22 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
         ((store.platform === "ebay" || store.platform === "woocommerce") &&
           store.status === "connected"),
     ) ?? [];
+  // A workspace with exactly one store has nothing to choose: pick it once,
+  // so the tab opens on that store's checks instead of an empty selector.
+  // Once only, so choosing "Select a store…" afterwards is respected.
+  if (!storeAutoPicked && storesQuery.isSuccess) {
+    setStoreAutoPicked(true);
+    const onlyStore = publishStores.length === 1 ? publishStores[0] : undefined;
+    if (!publishStoreId && onlyStore) {
+      setPublishStoreId(onlyStore.id);
+    }
+  }
+  const ebaySetupPending =
+    Boolean(ebayStatus.data?.connected) &&
+    storesQuery.isSuccess &&
+    !storesQuery.data.items.some(
+      (store) => store.platform === "ebay" && store.status === "connected",
+    );
   const syncedListing =
     listingsQuery.data?.find((row) => row.status === "synced") ??
     listingsQuery.data?.[0] ??
@@ -1659,7 +1680,12 @@ export function DraftProductEditor({ productId }: DraftProductEditorProps) {
                 id: store.id,
                 name: store.name,
                 status: store.status,
+                channel:
+                  store.platform === "ebay" || store.platform === "woocommerce"
+                    ? CHANNEL_NAME[store.platform]
+                    : CHANNEL_NAME.shopify,
               }))}
+              ebaySetupPending={ebaySetupPending}
               storeId={publishStoreId}
               channelName={CHANNEL_NAME[publishChannel]}
               dirty={dirty}
