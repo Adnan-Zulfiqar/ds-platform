@@ -10,6 +10,33 @@ production release.
 
 ## [Unreleased]
 
+### Added - listed stock setting (2026-10-12, owner request)
+
+- **Global Rules → Stock.** A workspace can list one quantity (e.g. 14) for
+  every product on Shopify, eBay and WooCommerce instead of AliExpress's
+  warehouse total. `GET/PUT /api/v1/global-rules/stock`; changing it needs
+  owner or admin.
+- **One rule for every channel.** `app.services.stock_settings.listed_quantity`
+  is what Shopify (publish and inventory push), eBay and WooCommerce (both
+  through `offer_terms`, at publish and on each price/quantity push) send.
+  With a setting: that quantity, **except 0 when the supplier has none**, so
+  a sold-out product stops selling (owner decision 2026-10-12). Without one:
+  the supplier's stock, exactly as before.
+- **Schema change, announced:** migration `0058` adds the tenant-scoped
+  `stock_settings` table (one row per workspace, `publish_quantity` NULL or
+  1-10000, enforced by a CHECK as well as the request schema). No existing
+  table changes; `downgrade()` drops it.
+- **Known limitation:** saving the setting does not re-send existing
+  listings. Each picks it up at its next publish or stock/price push (after
+  an AliExpress stock change, a repricing, or a manual sync). Publish
+  readiness is unchanged: it only asks whether stock is above zero, which
+  the setting never changes.
+- Verified: unit (`test_stock_settings.py`: the rule, `offer_terms`,
+  repository tenant scoping), integration on Postgres
+  (`test_stock_settings.py`: save/clear/validation, other workspace,
+  member read-only, a WooCommerce publish sends 14 for a 9000-stock product),
+  Playwright `global-rules-stock.spec.ts` against the real backend.
+
 ### Fixed - full project audit (2026-10-10)
 
 - **Shopify and AliExpress background jobs never ran in Docker.** `task_routes`
