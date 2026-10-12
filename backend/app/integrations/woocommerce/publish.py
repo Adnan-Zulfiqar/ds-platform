@@ -97,7 +97,7 @@ class WooCommercePublishService:
             product,
             publish_quantity=await StockSettingsService(self.session).publish_quantity(),
         )
-        title, description = listing_text(product)
+        title, description = listing_text(product, channel="woocommerce")
         sku = woocommerce_sku(product.id)
         body: dict[str, Any] = {
             "name": title,

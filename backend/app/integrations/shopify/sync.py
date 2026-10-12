@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.core.sanitize import sanitize_html
+from app.domain.listing_title import channel_title
 from app.domain.money import normalise_currency
 from app.integrations.aliexpress.countries import country_display_name
 from app.integrations.shopify.client import ShopifyClient
@@ -334,7 +335,9 @@ class ShopifySyncService(BaseService):
         # deterministic idempotency handle so retries never invent a new product.
         create_handle = (product.slug or "").strip() or _deterministic_handle(product_id)
         product_body: dict[str, Any] = {
-            "title": product.title,
+            # The draft's title, fitted to Shopify. An approved AI
+            # version's title replaces it below, verbatim.
+            "title": channel_title(product.title or "", "shopify"),
             "body_html": getattr(product, "description", None) or "",
             "vendor": product.vendor or product.brand or "",
             "product_type": product.category_name or "",
