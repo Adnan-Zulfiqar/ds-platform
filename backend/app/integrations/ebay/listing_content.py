@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from app.domain.money import normalise_currency
 from app.models.product import Product, ProductVariant
+from app.services.stock_settings import listed_quantity
 
 #: eBay's title limit.
 EBAY_TITLE_MAX = 80
@@ -52,8 +53,13 @@ def _live_variants(product: Product) -> list[ProductVariant]:
     ]
 
 
-def offer_terms(product: Product) -> OfferTerms:
+def offer_terms(product: Product, *, publish_quantity: int | None = None) -> OfferTerms:
     """Price, currency and quantity eBay would be sent.
+
+    ``publish_quantity`` is the workspace's listed-stock setting
+    (``StockSettingsService.publish_quantity``); ``None`` lists the supplier's
+    stock. Readiness passes nothing: it only asks whether the quantity is
+    above zero, which the setting never changes.
 
     Only ``sell_price`` counts — the merchant's price from the Pricing tab —
     never the supplier ``list_price`` fallback Shopify publish tolerates:
@@ -68,14 +74,14 @@ def offer_terms(product: Product) -> OfferTerms:
         return OfferTerms(
             price=variant.sell_price,
             currency=normalise_currency(currency) if currency else None,
-            quantity=int(variant.stock_quantity or 0),
+            quantity=listed_quantity(variant.stock_quantity, publish_quantity),
             variant=variant,
             multiple_variants=False,
         )
     return OfferTerms(
         price=product.sell_price,
         currency=normalise_currency(product.currency) if product.currency else None,
-        quantity=int(product.stock_quantity or 0),
+        quantity=listed_quantity(product.stock_quantity, publish_quantity),
         variant=None,
         multiple_variants=False,
     )

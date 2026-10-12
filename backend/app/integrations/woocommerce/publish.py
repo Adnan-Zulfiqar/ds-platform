@@ -37,6 +37,7 @@ from app.repositories.product import ProductRepository
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
 from app.services.publish_readiness import CHANNEL_WOOCOMMERCE, PublishReadinessService
+from app.services.stock_settings import StockSettingsService
 
 logger = get_logger(__name__)
 
@@ -92,7 +93,10 @@ class WooCommercePublishService:
         product = await self._load_product(product_id)
         client = self.connections.client_for(store)
 
-        terms = offer_terms(product)
+        terms = offer_terms(
+            product,
+            publish_quantity=await StockSettingsService(self.session).publish_quantity(),
+        )
         title, description = listing_text(product)
         sku = woocommerce_sku(product.id)
         body: dict[str, Any] = {

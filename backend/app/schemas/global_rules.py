@@ -348,6 +348,18 @@ class PreviewResponse(CamelCaseModel):
     review_reasons: list[str]
 
 
+class StockSettingsRead(CamelCaseModel):
+    #: The quantity every channel lists, or ``None`` for the supplier's stock.
+    publish_quantity: int | None
+
+
+class StockSettingsUpdate(CamelCaseModel):
+    #: ``None`` goes back to listing the supplier's stock. The upper bound is
+    #: a guard against a typo listing 1,000,000 of something, not a channel
+    #: limit; the database CHECK holds the same range.
+    publish_quantity: int | None = Field(default=None, ge=1, le=10000)
+
+
 __all__ = [
     "PreviewRequest",
     "PreviewResponse",
@@ -360,4 +372,6 @@ __all__ = [
     "ShippingRuleCreateRequest",
     "ShippingRuleRead",
     "ShippingRuleUpdateRequest",
+    "StockSettingsRead",
+    "StockSettingsUpdate",
 ]

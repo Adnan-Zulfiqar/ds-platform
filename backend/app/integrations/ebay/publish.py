@@ -44,6 +44,7 @@ from app.repositories.product import (
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
 from app.services.publish_readiness import CHANNEL_EBAY, PublishReadinessService
+from app.services.stock_settings import StockSettingsService
 
 logger = get_logger(__name__)
 
@@ -106,7 +107,10 @@ class EbayPublishService:
             # Readiness has just checked all three under the lock.
             raise EbayNotConnectedError()
 
-        terms = offer_terms(product)
+        terms = offer_terms(
+            product,
+            publish_quantity=await StockSettingsService(self.session).publish_quantity(),
+        )
         title, description = listing_text(product)
         sku = ebay_sku(product.id, marketplace.country)
         existing = await self.listings.get_for_product(store_id=store.id, product_id=product.id)

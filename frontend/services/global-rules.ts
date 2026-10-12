@@ -789,3 +789,37 @@ export function usePreviewRule(): UseMutationResult<
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Listed stock
+// ---------------------------------------------------------------------------
+
+export interface StockSettings {
+  /** The quantity every sales channel lists, or null for the supplier's stock. */
+  publishQuantity: number | null;
+}
+
+const stockSettingsKey = [...globalRuleKeys.all, "stock"] as const;
+
+export function useStockSettings(): UseQueryResult<StockSettings> {
+  return useQuery({
+    queryKey: stockSettingsKey,
+    queryFn: async () => {
+      const { data } = await apiClient.get<StockSettings>(`${BASE}/stock`);
+      return data;
+    },
+  });
+}
+
+export function useUpdateStockSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: StockSettings) => {
+      const { data } = await apiClient.put<StockSettings>(`${BASE}/stock`, payload);
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(stockSettingsKey, data);
+    },
+  });
+}

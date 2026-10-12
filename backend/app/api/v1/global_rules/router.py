@@ -1,4 +1,5 @@
-"""Global pricing and shipping rule management (M3A-2).
+"""Global pricing and shipping rule management (M3A-2), and the
+workspace's listed-stock setting.
 
 Mounted at ``/api/v1/global-rules`` alongside the existing ``/pricing``
 router rather than replacing it: ``/pricing`` owns catalogue preview and
@@ -32,9 +33,12 @@ from app.schemas.global_rules import (
     ShippingRuleCreateRequest,
     ShippingRuleRead,
     ShippingRuleUpdateRequest,
+    StockSettingsRead,
+    StockSettingsUpdate,
 )
 from app.services.global_rules import GlobalRuleService, PreviewInputs
 from app.services.pricing_engine import compute_sell_price_before_rounding
+from app.services.stock_settings import StockSettingsService
 
 # A tighter quota than the broad middleware allowance, through the same
 # limiter. The calculator fires on a 400ms debounce, so continuous typing for
@@ -138,6 +142,32 @@ async def set_pricing_activation(
         note=payload.note,
     )
     return PricingRuleRead.model_validate(rule, from_attributes=True)
+
+
+# ----------------------------------------------------------------- stock
+@router.get(
+    "/stock",
+    response_model=StockSettingsRead,
+    summary="The quantity every sales channel lists",
+)
+async def get_stock_settings(session: DbSession, _authorized: RequireViewer) -> StockSettingsRead:
+    return StockSettingsRead(
+        publish_quantity=await StockSettingsService(session).publish_quantity()
+    )
+
+
+@router.put(
+    "/stock",
+    response_model=StockSettingsRead,
+    summary="Set the listed quantity, or go back to the supplier's stock",
+)
+async def update_stock_settings(
+    payload: StockSettingsUpdate, session: DbSession, _authorized: RequireAdmin
+) -> StockSettingsRead:
+    """Applies at the next publish and the next stock push for each listing;
+    existing listings are not re-sent here."""
+    quantity = await StockSettingsService(session).set_publish_quantity(payload.publish_quantity)
+    return StockSettingsRead(publish_quantity=quantity)
 
 
 # -------------------------------------------------------------- shipping

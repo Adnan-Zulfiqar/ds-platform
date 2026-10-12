@@ -45,6 +45,7 @@ from app.models.inventory import (
     InventoryChange,
     InventoryChangeReason,
     InventorySyncRun,
+    StockSettings,
 )
 from app.models.invitation import UserInvitation
 from app.models.notification import Notification, NotificationEmailPreference, NotificationKind
@@ -189,6 +190,7 @@ __all__ = [
     "ShipmentStatus",
     "ShopifyConnection",
     "SoftDeleteMixin",
+    "StockSettings",
     "Store",
     "StoreListing",
     "StorePlatform",

@@ -9,6 +9,7 @@ import { LivePreviewPanel } from "@/components/global-rules/live-preview-panel";
 import { PricingRulesPanel } from "@/components/global-rules/pricing-rules-panel";
 import { RuleHistoryPanel } from "@/components/global-rules/rule-history-panel";
 import { ShippingRulesPanel } from "@/components/global-rules/shipping-rules-panel";
+import { StockSettingsPanel } from "@/components/global-rules/stock-settings-panel";
 import { Callout, Select } from "@/components/global-rules/rule-primitives";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -40,6 +41,7 @@ import { useStores } from "@/services/stores";
 const SECTIONS = [
   { id: "pricing", label: "Pricing Rules" },
   { id: "shipping", label: "Shipping Rules" },
+  { id: "stock", label: "Stock" },
   { id: "behaviour", label: "Application Behaviour" },
   { id: "preview", label: "Live Preview" },
   { id: "impact", label: "Preview and Impact" },
@@ -179,7 +181,7 @@ export function GlobalRulesWorkspace() {
     <div className="space-y-6">
       <PageHeader
         title="Global Rules"
-        description="Pricing and shipping rules applied across your catalogue."
+        description="Pricing, shipping and stock rules applied across your catalogue."
       />
 
       <Callout>
@@ -206,6 +208,8 @@ export function GlobalRulesWorkspace() {
         {active === "shipping" && (
           <ShippingRulesPanel canManage={canManage} stores={storeList} />
         )}
+
+        {active === "stock" && <StockSettingsPanel canManage={canManage} />}
 
         {active === "behaviour" &&
           (pricing.isLoading ? (
