@@ -33,7 +33,7 @@ production release.
   the setting never changes.
 - Verified: unit (`test_stock_settings.py`: the rule, `offer_terms`,
   repository tenant scoping), integration on Postgres
-  (`test_stock_settings.py`: save/clear/validation, other workspace,
+  (`test_stock_settings_api.py`: save/clear/validation, other workspace,
   member read-only, a WooCommerce publish sends 14 for a 9000-stock product),
   Playwright `global-rules-stock.spec.ts` against the real backend.
 
