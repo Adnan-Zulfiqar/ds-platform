@@ -667,8 +667,8 @@ jobs:
         run: |
           set -euo pipefail
           current="$(alembic current 2>/dev/null | awk '{print $1}')"
-          if [ "$current" != "0057" ]; then
-            echo "::error::Expected Alembic head 0057, got ${current:-<none>}"
+          if [ "$current" != "0058" ]; then
+            echo "::error::Expected Alembic head 0058, got ${current:-<none>}"
             exit 1
           fi
           python - <<'PY'

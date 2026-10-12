@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -140,8 +142,35 @@ class InventoryChange(TenantScopedBase):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class StockSettings(TenantScopedBase):
+    """How much stock the workspace lists on its sales channels.
+
+    One row per workspace; a missing row, or an empty ``publish_quantity``,
+    means "list the supplier's stock as it is" -- the behaviour before this
+    setting existed. A dropshipper usually wants a steady number instead of
+    AliExpress's warehouse total (which can be in the tens of thousands and
+    says nothing about what they can actually fulfil), so a set quantity is
+    listed for every product. It never hides a sell-out: a product whose
+    supplier stock is 0 is still listed at 0 (owner decision 2026-10-12),
+    see ``app.services.stock_settings.listed_quantity``.
+    """
+
+    __tablename__ = "stock_settings"
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="uq_stock_settings_tenant"),
+        CheckConstraint(
+            "publish_quantity IS NULL OR publish_quantity BETWEEN 1 AND 10000",
+            name="ck_stock_settings_publish_quantity_range",
+        ),
+    )
+
+    publish_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 __all__ = [
     "InventoryChange",
     "InventoryChangeReason",
     "InventorySyncRun",
+    "StockSettings",
 ]

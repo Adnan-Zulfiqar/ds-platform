@@ -35,6 +35,7 @@ from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
 from app.services.base import BaseService
 from app.services.import_destination import country_from_store_settings
+from app.services.stock_settings import StockSettingsService, listed_quantity
 
 logger = get_logger(__name__)
 
@@ -286,6 +287,7 @@ class ShopifySyncService(BaseService):
         # Provider client only after auth, ownership, version, readiness, lock.
         client, connection = await self.shopify.client_for_store(store_id)
 
+        publish_quantity = await StockSettingsService(self.session).publish_quantity()
         variants_payload: list[dict[str, Any]] = []
         for variant in product.variants:
             if getattr(variant, "deleted_at", None) is not None:
@@ -299,7 +301,7 @@ class ShopifySyncService(BaseService):
                 "sku": sku,
                 "price": str(price or "0"),
                 "inventory_management": "shopify",
-                "inventory_quantity": int(variant.stock_quantity or 0),
+                "inventory_quantity": listed_quantity(variant.stock_quantity, publish_quantity),
                 "option1": variant.label or "Default",
             }
             compare_at = getattr(variant, "compare_at_price", None)
@@ -312,7 +314,7 @@ class ShopifySyncService(BaseService):
                     "sku": str(product.id)[:32],
                     "price": str(product.sell_price or "0"),
                     "inventory_management": "shopify",
-                    "inventory_quantity": int(product.stock_quantity or 0),
+                    "inventory_quantity": listed_quantity(product.stock_quantity, publish_quantity),
                     "option1": "Default",
                 }
             )
@@ -554,6 +556,7 @@ class ShopifySyncService(BaseService):
             raise NotFoundError("Shopify shop has no locations for inventory.")
         location_id = locations[0]["id"]
 
+        publish_quantity = await StockSettingsService(self.session).publish_quantity()
         updated = 0
         for variant in product.variants:
             inv_item = listing.inventory_item_map.get(str(variant.id))
@@ -564,7 +567,7 @@ class ShopifySyncService(BaseService):
                 json_body={
                     "location_id": location_id,
                     "inventory_item_id": int(inv_item),
-                    "available": int(variant.stock_quantity or 0),
+                    "available": listed_quantity(variant.stock_quantity, publish_quantity),
                 },
             )
             updated += 1

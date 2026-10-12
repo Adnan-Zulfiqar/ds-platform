@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.inventory import InventoryChange, InventorySyncRun
+from app.models.inventory import InventoryChange, InventorySyncRun, StockSettings
 from app.models.order import SyncRunStatus
 from app.repositories.base import TenantScopedRepository
 from app.schemas.common import ListQueryParams
@@ -48,3 +48,11 @@ class InventoryChangeRepository(TenantScopedRepository[InventoryChange]):
     ) -> tuple[list[InventoryChange], int]:
         rows, total = await self.list(params, filters={"product_id": product_id})
         return list(rows), total
+
+
+class StockSettingsRepository(TenantScopedRepository[StockSettings]):
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session, StockSettings)
+
+    async def current(self) -> StockSettings | None:
+        return (await self.session.execute(self._base_query())).scalar_one_or_none()

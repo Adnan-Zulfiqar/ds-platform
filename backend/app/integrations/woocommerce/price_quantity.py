@@ -35,6 +35,7 @@ from app.models.store import Store, StorePlatform
 from app.repositories.product import ProductRepository
 from app.repositories.shopify import StoreListingRepository
 from app.repositories.store import StoreRepository
+from app.services.stock_settings import StockSettingsService
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,10 @@ class WooCommercePriceQuantitySync:
         product = await self._load_product(product_id)
         if product is None:  # soft-deleted since the change was queued
             return outcome
-        terms = offer_terms(product)
+        terms = offer_terms(
+            product,
+            publish_quantity=await StockSettingsService(self.session).publish_quantity(),
+        )
 
         for listing, store in targets:
             if store.sync_paused_at is not None:  # an operator paused it (D-019)
