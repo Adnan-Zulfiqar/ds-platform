@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Store } from "lucide-react";
+import Link from "next/link";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,9 @@ type StoreOption = {
   id: string;
   name: string;
   status: string;
+  /** "Shopify", "eBay", "WooCommerce" — shown beside the name, since a
+   * store's name alone rarely says which channel it is. */
+  channel?: string;
 };
 
 export type PublishSaveFailureReason =
@@ -45,6 +49,10 @@ type ReviewPublishPanelProps = {
   stores: StoreOption[];
   storeId: string;
   onStoreChange: (storeId: string) => void;
+  /** eBay is connected but has no store yet: its listing setup (business
+   * policies and item location) has not been saved, so there is nothing on
+   * eBay to publish to. Said here, or eBay is simply missing from the list. */
+  ebaySetupPending?: boolean;
   /** The chosen store's channel, for copy (EBAY-C3). Defaults to Shopify. */
   channelName?: string;
   dirty: boolean;
@@ -153,6 +161,7 @@ export function ReviewPublishPanel({
   productId,
   stores,
   storeId,
+  ebaySetupPending = false,
   channelName = "Shopify",
   onStoreChange,
   dirty,
@@ -269,10 +278,34 @@ export function ReviewPublishPanel({
           {stores.map((store) => (
             <option key={store.id} value={store.id}>
               {store.name}
+              {store.channel ? ` · ${store.channel}` : ""}
               {store.status !== "connected" ? ` (${store.status})` : ""}
             </option>
           ))}
         </select>
+        {stores.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="publish-no-stores">
+            No store is connected yet.{" "}
+            <Link href="/settings/integrations" className="font-medium text-primary underline-offset-4 hover:underline">
+              Connect a store
+            </Link>
+          </p>
+        ) : null}
+        {ebaySetupPending ? (
+          <Alert data-testid="publish-ebay-setup-pending">
+            <AlertDescription>
+              Your eBay account is connected, but eBay isn&apos;t in this list until its listing
+              setup is saved: choose your shipping, payment and return policies and an item location
+              once.{" "}
+              <Link
+                href="/settings/integrations#channel-ebay"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Finish eBay setup
+              </Link>
+            </AlertDescription>
+          </Alert>
+        ) : null}
       </div>
 
       <div
